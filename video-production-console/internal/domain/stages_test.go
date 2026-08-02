@@ -41,3 +41,11 @@ func TestCanMoveAllowsRollbackButArchiveIsExplicit(t *testing.T) {
 		t.Fatal("forward stage skipping succeeded")
 	}
 }
+
+func TestCanMoveRejectsUnknownStagesBeforeSpecialCases(t *testing.T) {
+	for _, move := range []struct{ from, to ProjectStage }{{"invalid", "invalid"}, {"invalid", StageArchived}, {StageTopic, "invalid"}} {
+		if err := CanMove(move.from, move.to, nil); err == nil {
+			t.Fatalf("CanMove(%q,%q) succeeded", move.from, move.to)
+		}
+	}
+}

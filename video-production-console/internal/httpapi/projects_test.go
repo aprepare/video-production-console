@@ -2,21 +2,94 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"video-production-console/internal/assets"
+	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
+
+type failingProjectStore struct{ getErr, listErr, backgroundErr error }
+
+func (s *failingProjectStore) CreateProject(context.Context, domain.Project) error { return nil }
+func (s *failingProjectStore) ListProjects(context.Context, string, domain.ProjectStage, string) ([]domain.Project, error) {
+	return nil, nil
+}
+func (s *failingProjectStore) GetProject(context.Context, string) (domain.Project, error) {
+	return domain.Project{ID: uuid.NewString(), Stage: domain.StageAssets}, s.getErr
+}
+func (s *failingProjectStore) MoveProject(context.Context, string, domain.ProjectStage, time.Time) (domain.Project, error) {
+	panic("must not move after failed pre-read")
+}
+func (s *failingProjectStore) SetTopicCardPath(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (s *failingProjectStore) AddAsset(context.Context, *domain.Asset) (store.CommitState, error) {
+	return store.CommitCommitted, nil
+}
+func (s *failingProjectStore) ListAssets(context.Context, string) ([]domain.Asset, error) {
+	return nil, s.listErr
+}
+func (s *failingProjectStore) Background(context.Context, string) (domain.Asset, error) {
+	return domain.Asset{}, s.backgroundErr
+}
+
+func TestProjectReadAndMoveReturn500ForDatabasePreReadFailures(t *testing.T) {
+	id := uuid.NewString()
+	dbErr := errors.New("database unavailable")
+	for _, tt := range []struct {
+		name  string
+		store *failingProjectStore
+		path  string
+	}{
+		{"detail get", &failingProjectStore{getErr: dbErr}, "/api/projects/" + id},
+		{"detail assets", &failingProjectStore{listErr: dbErr}, "/api/projects/" + id},
+		{"detail background", &failingProjectStore{backgroundErr: dbErr}, "/api/projects/" + id},
+		{"move get", &failingProjectStore{getErr: dbErr}, "/api/projects/" + id + "/move"},
+		{"move assets", &failingProjectStore{listErr: dbErr}, "/api/projects/" + id + "/move"},
+		{"move background", &failingProjectStore{backgroundErr: dbErr}, "/api/projects/" + id + "/move"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newProjectsHandler(tt.store, assets.NewService(t.TempDir()))
+			method := http.MethodGet
+			var input any
+			if strings.Contains(tt.path, "/move") {
+				method = http.MethodPost
+				input = map[string]string{"stage": "mixing"}
+			}
+			r := performJSON(t, h, method, tt.path, input)
+			if r.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("status=%d", r.StatusCode)
+			}
+		})
+	}
+}
+
+func TestProjectReadTreatsOnlySQLNoRowsAsMissingOptionalData(t *testing.T) {
+	id := uuid.NewString()
+	h := newProjectsHandler(&failingProjectStore{listErr: sql.ErrNoRows, backgroundErr: sql.ErrNoRows}, assets.NewService(t.TempDir()))
+	response := performJSON(t, h, http.MethodGet, "/api/projects/"+id, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("detail status=%d", response.StatusCode)
+	}
+	move := performJSON(t, h, http.MethodPost, "/api/projects/"+id+"/move", map[string]string{"stage": "mixing"})
+	if move.StatusCode != http.StatusConflict {
+		t.Fatalf("move missing-assets status=%d", move.StatusCode)
+	}
+}
 
 func TestProjectLifecycleUploadVersionsAndGates(t *testing.T) {
 	handler, db, root, accountID := newProjectsTestHandler(t, "active")

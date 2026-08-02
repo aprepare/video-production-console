@@ -17,6 +17,10 @@ func (e *MissingAssetsError) Error() string {
 
 func CanMove(from, to ProjectStage, available map[AssetType]bool) error {
 	order := map[ProjectStage]int{StageTopic: 0, StageScript: 1, StageAssets: 2, StageMixing: 3, StageReview: 4, StageReady: 5, StagePublished: 6}
+	known := func(stage ProjectStage) bool { _, ok := order[stage]; return ok || stage == StageArchived }
+	if !known(from) || !known(to) {
+		return fmt.Errorf("invalid stage move from %s to %s", from, to)
+	}
 	fromOrder, fromOK := order[from]
 	toOrder, toOK := order[to]
 	if from == StageArchived && to != StageArchived {

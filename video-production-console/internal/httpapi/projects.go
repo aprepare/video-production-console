@@ -118,7 +118,7 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.repository.GetProject(r.Context(), id)
-	if errors.Is(err, store.ErrProjectNotFound) {
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "project_not_found", "The project was not found.")
 		return
 	}
@@ -126,12 +126,20 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "project_read_failed", "Project could not be read.")
 		return
 	}
-	all, err := h.repository.ListAssets(r.Context(), id)
 	if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	all, err := h.repository.ListAssets(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 500, "project_assets_failed", "Project assets could not be read.")
 		return
 	}
-	background, _ := h.repository.Background(r.Context(), id)
+	background, backgroundErr := h.repository.Background(r.Context(), id)
+	if backgroundErr != nil && !errors.Is(backgroundErr, sql.ErrNoRows) {
+		writeError(w, 500, "project_background_failed", "Project background could not be read.")
+		return
+	}
 	current := map[string]assetView{}
 	history := map[string][]assetView{}
 	available := map[domain.AssetType]bool{}
@@ -158,8 +166,11 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) {
+	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "project_not_found", "The project was not found.")
+		return
+	} else if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
 		return
 	}
 	typ := domain.AssetType(r.PathValue("type"))
@@ -223,16 +234,29 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.repository.GetProject(r.Context(), id)
-	if errors.Is(err, store.ErrProjectNotFound) {
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "project_not_found", "The project was not found.")
 		return
 	}
-	all, _ := h.repository.ListAssets(r.Context(), id)
+	if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	all, err := h.repository.ListAssets(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, "project_assets_failed", "Project assets could not be read.")
+		return
+	}
 	available := map[domain.AssetType]bool{}
 	for _, a := range all {
 		available[a.Type] = true
 	}
-	if bg, _ := h.repository.Background(r.Context(), id); bg.ID != "" {
+	bg, err := h.repository.Background(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, "project_background_failed", "Project background could not be read.")
+		return
+	}
+	if bg.ID != "" {
 		available[domain.AssetAccountBackground] = true
 	}
 	if err := domain.CanMove(p.Stage, in.Stage, available); err != nil {

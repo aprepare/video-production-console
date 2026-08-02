@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
@@ -210,7 +212,56 @@ func TestSaveProjectAssetValidatesContentAndUsesControlledPath(t *testing.T) {
 }
 
 func minimalMP4() []byte {
-	return []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 0, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '2'}
+	return isoFile("vide")
+}
+
+func TestSaveProjectAssetParsesISOBaseMediaHandlers(t *testing.T) {
+	svc := NewService(t.TempDir())
+	id := uuid.NewString()
+	for _, tt := range []struct {
+		name     string
+		typ      domain.AssetType
+		filename string
+		data     []byte
+		ok       bool
+	}{
+		{"audio m4a", domain.AssetAudio, "voice.m4a", isoFile("soun"), true},
+		{"video mp4", domain.AssetFinalVideo, "video.mp4", isoFile("vide"), true},
+		{"av mp4", domain.AssetMixDraft, "mix.mp4", isoFile("soun", "vide"), true},
+		{"video disguised m4a", domain.AssetAudio, "fake.m4a", isoFile("vide"), false},
+		{"audio disguised mp4", domain.AssetFinalVideo, "fake.mp4", isoFile("soun"), false},
+		{"truncated box", domain.AssetFinalVideo, "bad.mp4", append(isoFile("vide"), 0, 0, 0, 20, 'm', 'o', 'o', 'v'), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			saved, err := svc.SaveProjectAsset(id, tt.typ, tt.filename, bytes.NewReader(tt.data))
+			if tt.ok && err != nil {
+				t.Fatalf("error=%v", err)
+			}
+			if !tt.ok && !errors.Is(err, ErrInvalidProjectAsset) {
+				t.Fatalf("error=%v", err)
+			}
+			if saved.Path != "" {
+				_ = os.Remove(saved.Path)
+			}
+		})
+	}
+}
+
+func isoFile(handlers ...string) []byte {
+	box := func(kind string, payload []byte) []byte {
+		size := 8 + len(payload)
+		out := []byte{byte(size >> 24), byte(size >> 16), byte(size >> 8), byte(size)}
+		out = append(out, kind...)
+		return append(out, payload...)
+	}
+	ftyp := box("ftyp", []byte("isom\x00\x00\x00\x00isommp42"))
+	var tracks []byte
+	for _, handler := range handlers {
+		hdlrPayload := make([]byte, 24)
+		copy(hdlrPayload[8:12], handler)
+		tracks = append(tracks, box("trak", box("mdia", box("hdlr", hdlrPayload)))...)
+	}
+	return append(ftyp, box("moov", tracks)...)
 }
 
 func malformedWebP() []byte {

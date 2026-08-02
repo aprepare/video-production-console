@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -107,6 +108,19 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 }
 
 func validateProjectFile(path string, assetType domain.AssetType, ext string) (string, error) {
+	if ext == ".m4a" || ext == ".mp4" {
+		handlers, err := isoBMFFHandlers(path)
+		if err != nil {
+			return "", nil
+		}
+		if ext == ".m4a" && assetType == domain.AssetAudio && handlers["soun"] {
+			return "audio/mp4", nil
+		}
+		if ext == ".mp4" && (assetType == domain.AssetMixDraft || assetType == domain.AssetFinalVideo) && handlers["vide"] {
+			return "video/mp4", nil
+		}
+		return "", nil
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -153,20 +167,81 @@ func validateProjectData(assetType domain.AssetType, ext string, data []byte) st
 			if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
 				return "audio/wav"
 			}
-		case ".m4a":
-			if hasFTYP(data) {
-				return "audio/mp4"
-			}
 		}
 		return ""
-	}
-	if (assetType == domain.AssetMixDraft || assetType == domain.AssetFinalVideo) && ext == ".mp4" && hasFTYP(data) {
-		return "video/mp4"
 	}
 	return ""
 }
 
-func hasFTYP(data []byte) bool { return len(data) >= 12 && string(data[4:8]) == "ftyp" }
+func isoBMFFHandlers(path string) (map[string]bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	handlers := map[string]bool{}
+	seenFTYP := false
+	seenMOOV := false
+	err = walkISOBoxes(file, 0, info.Size(), "root", handlers, func(kind string) {
+		if kind == "ftyp" {
+			seenFTYP = true
+		}
+		if kind == "moov" {
+			seenMOOV = true
+		}
+	})
+	if err != nil || !seenFTYP || !seenMOOV {
+		return nil, ErrInvalidProjectAsset
+	}
+	return handlers, nil
+}
+
+func walkISOBoxes(file *os.File, start, end int64, parent string, handlers map[string]bool, seen func(string)) error {
+	for offset := start; offset < end; {
+		if end-offset < 8 {
+			return ErrInvalidProjectAsset
+		}
+		header := make([]byte, 8)
+		if _, err := file.ReadAt(header, offset); err != nil {
+			return ErrInvalidProjectAsset
+		}
+		size := int64(binary.BigEndian.Uint32(header[:4]))
+		if size < 8 || size > end-offset {
+			return ErrInvalidProjectAsset
+		}
+		kind := string(header[4:8])
+		if parent == "root" && kind == "ftyp" && size < 16 {
+			return ErrInvalidProjectAsset
+		}
+		seen(kind)
+		payloadStart := offset + 8
+		boxEnd := offset + size
+		switch {
+		case parent == "root" && kind == "moov", parent == "moov" && kind == "trak", parent == "trak" && kind == "mdia":
+			if err := walkISOBoxes(file, payloadStart, boxEnd, kind, handlers, func(string) {}); err != nil {
+				return err
+			}
+		case parent == "mdia" && kind == "hdlr":
+			if boxEnd-payloadStart < 24 {
+				return ErrInvalidProjectAsset
+			}
+			payload := make([]byte, 12)
+			if _, err := file.ReadAt(payload, payloadStart); err != nil {
+				return ErrInvalidProjectAsset
+			}
+			handler := string(payload[8:12])
+			if handler == "soun" || handler == "vide" {
+				handlers[handler] = true
+			}
+		}
+		offset = boxEnd
+	}
+	return nil
+}
 func bytesContainsNUL(data []byte) bool {
 	for _, b := range data {
 		if b == 0 {
