@@ -20,4 +20,7 @@ func TestDefault(t *testing.T) {
 	if got.CodexBinaryPath != "codex" {
 		t.Errorf("CodexBinaryPath = %q", got.CodexBinaryPath)
 	}
+	if got.ObsidianVault != "" {
+		t.Errorf("ObsidianVault = %q", got.ObsidianVault)
+	}
 }

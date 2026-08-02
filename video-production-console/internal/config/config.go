@@ -7,6 +7,7 @@ type Config struct {
 	DatabasePath    string
 	BaokuanBaseURL  string
 	CodexBinaryPath string
+	ObsidianVault   string
 }
 
 // Default returns settings suitable for running the console locally.
@@ -17,5 +18,6 @@ func Default() Config {
 		DatabasePath:    "./video-console-data/console.db",
 		BaokuanBaseURL:  "http://127.0.0.1:2022",
 		CodexBinaryPath: "codex",
+		ObsidianVault:   "",
 	}
 }
