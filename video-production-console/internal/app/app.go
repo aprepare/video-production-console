@@ -15,6 +15,7 @@ import (
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/store"
+	"video-production-console/internal/webui"
 )
 
 // Options provides dependencies and settings used by the application.
@@ -135,6 +136,7 @@ func New(options Options) *App {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(options.Obsidian.Health())
 	})
+	mux.Handle("/", webui.Handler())
 	return &App{handler: mux}
 }
 
