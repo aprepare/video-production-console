@@ -5,7 +5,7 @@ import "testing"
 func TestDefault(t *testing.T) {
 	got := Default()
 
-	if got.ListenAddr != "127.0.0.1:2030" {
+	if got.ListenAddr != "0.0.0.0:2030" {
 		t.Errorf("ListenAddr = %q", got.ListenAddr)
 	}
 	if got.DataRoot != "./video-console-data" {

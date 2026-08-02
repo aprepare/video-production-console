@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -102,7 +103,7 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request, taskID string) {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"localhost", "127.0.0.1", "[::1]"}})
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
 	}
@@ -148,5 +149,10 @@ func localOrigin(r *http.Request) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+	requestHost := r.Host
+	if parsed, _, splitErr := net.SplitHostPort(r.Host); splitErr == nil {
+		requestHost = parsed
+	}
+	requestHost = strings.Trim(strings.ToLower(requestHost), "[]")
+	return host == requestHost || host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
 }
