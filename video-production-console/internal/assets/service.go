@@ -113,7 +113,7 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		if err != nil {
 			return "", nil
 		}
-		if ext == ".m4a" && assetType == domain.AssetAudio && handlers["soun"] {
+		if ext == ".m4a" && assetType == domain.AssetAudio && handlers["soun"] && !handlers["vide"] {
 			return "audio/mp4", nil
 		}
 		if ext == ".mp4" && (assetType == domain.AssetMixDraft || assetType == domain.AssetFinalVideo) && handlers["vide"] {

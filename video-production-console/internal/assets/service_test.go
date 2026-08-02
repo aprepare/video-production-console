@@ -229,6 +229,7 @@ func TestSaveProjectAssetParsesISOBaseMediaHandlers(t *testing.T) {
 		{"video mp4", domain.AssetFinalVideo, "video.mp4", isoFile("vide"), true},
 		{"av mp4", domain.AssetMixDraft, "mix.mp4", isoFile("soun", "vide"), true},
 		{"video disguised m4a", domain.AssetAudio, "fake.m4a", isoFile("vide"), false},
+		{"av disguised m4a", domain.AssetAudio, "fake-av.m4a", isoFile("soun", "vide"), false},
 		{"audio disguised mp4", domain.AssetFinalVideo, "fake.mp4", isoFile("soun"), false},
 		{"truncated box", domain.AssetFinalVideo, "bad.mp4", append(isoFile("vide"), 0, 0, 0, 20, 'm', 'o', 'o', 'v'), false},
 	} {
