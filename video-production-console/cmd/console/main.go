@@ -36,19 +36,28 @@ func main() {
 	}
 	taskRepo := store.NewTaskRepository(db)
 	makeCommand := func(task domain.CodexTask) (*exec.Cmd, string, error) {
-		root := filepath.Join(settings.DataRoot, "projects", task.ID)
+		projectID := task.ID
+		if task.ProjectID != nil && *task.ProjectID != "" {
+			projectID = *task.ProjectID
+		}
+		root := filepath.Join(settings.DataRoot, "projects", projectID)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			return nil, "", err
 		}
 		cmd := exec.Command(settings.CodexBinaryPath, "exec", "--json", "--skip-git-repo-check", "-C", root, "-")
-		cmd.Stdin = strings.NewReader(task.PromptSnapshot)
+		prompt := fmt.Sprintf("Use $%s for this isolated video project. Do not open WeChat Channels. Do not stop or restart the baokuan service. Write outputs only under %s.\n\nUser request:\n%s", task.SkillName, root, task.PromptSnapshot)
+		cmd.Stdin = strings.NewReader(prompt)
 		return cmd, root, nil
 	}
 	makeResume := func(task domain.CodexTask, answer string) (*exec.Cmd, string, error) {
 		if task.CodexSessionID == nil || *task.CodexSessionID == "" {
 			return nil, "", fmt.Errorf("missing codex session")
 		}
-		root := filepath.Join(settings.DataRoot, "projects", task.ID)
+		projectID := task.ID
+		if task.ProjectID != nil && *task.ProjectID != "" {
+			projectID = *task.ProjectID
+		}
+		root := filepath.Join(settings.DataRoot, "projects", projectID)
 		cmd := exec.Command(settings.CodexBinaryPath, "exec", "resume", *task.CodexSessionID, "--json", "-")
 		cmd.Stdin = strings.NewReader(answer)
 		return cmd, root, nil
