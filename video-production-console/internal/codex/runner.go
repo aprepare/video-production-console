@@ -3,7 +3,6 @@ package codex
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +23,8 @@ type Runner struct {
 	AssetRoot string
 	Broadcast func(Event)
 }
+
+type persistedEvent struct{ event Event }
 
 func NewRunner(command *exec.Cmd, tasks *store.TaskRepository, taskID, assetRoot string, broadcast func(Event)) *Runner {
 	return &Runner{Command: command, Tasks: tasks, TaskID: taskID, AssetRoot: assetRoot, Broadcast: broadcast}
@@ -51,11 +52,37 @@ func (r *Runner) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	var finalMu sync.Mutex
 	var final *Result
+	events := make(chan persistedEvent)
+	writerErr := make(chan error, 1)
+	go func() {
+		var firstErr error
+		for item := range events {
+			e := item.event
+			if e.SessionID != "" {
+				if err := r.Tasks.SetSession(ctx, r.TaskID, e.SessionID); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			if err := r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: e.Kind, Level: e.Level, DisplayText: e.DisplayText, RawJSON: string(e.RawJSON)}); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		writerErr <- firstErr
+	}()
 	wg.Add(2)
-	go func() { defer wg.Done(); r.readStdout(ctx, stdout, &finalMu, &final) }()
-	go func() { defer wg.Done(); r.readStderr(ctx, stderr) }()
-	waitErr := r.Command.Wait()
+	readerErrs := make(chan error, 2)
+	go func() { defer wg.Done(); readerErrs <- r.readStdout(ctx, stdout, events, &finalMu, &final) }()
+	go func() { defer wg.Done(); readerErrs <- r.readStderr(ctx, stderr, events) }()
 	wg.Wait()
+	waitErr := r.Command.Wait()
+	close(events)
+	var streamErr error
+	for i := 0; i < 2; i++ {
+		if err := <-readerErrs; err != nil && streamErr == nil {
+			streamErr = err
+		}
+	}
+	persistenceErr := <-writerErr
 	finalMu.Lock()
 	result := finalMuResult(final)
 	finalMu.Unlock()
@@ -65,7 +92,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	status := domain.TaskFailed
 	summary, code, message := "", "process_failed", ""
-	if result != nil {
+	if result != nil && waitErr == nil {
 		summary = result.Summary
 		switch result.Status {
 		case "needs_input":
@@ -79,8 +106,14 @@ func (r *Runner) Run(ctx context.Context) error {
 	if artifactErr != nil {
 		status, code, message = domain.TaskFailed, "artifact_registration_failed", artifactErr.Error()
 	}
-	if waitErr != nil && code == "" && status != domain.TaskWaitingInput {
+	if waitErr != nil {
 		message = waitErr.Error()
+	}
+	if streamErr != nil {
+		status, code, message = domain.TaskFailed, "stream_failed", streamErr.Error()
+	}
+	if persistenceErr != nil {
+		status, code, message = domain.TaskFailed, "event_persistence_failed", persistenceErr.Error()
 	}
 	if err := r.Tasks.UpdateStatus(ctx, r.TaskID, status, summary, code, message); err != nil {
 		return err
@@ -88,35 +121,43 @@ func (r *Runner) Run(ctx context.Context) error {
 	if waitErr != nil && status == domain.TaskFailed {
 		return waitErr
 	}
+	if streamErr != nil {
+		return streamErr
+	}
+	if persistenceErr != nil {
+		return persistenceErr
+	}
 	return nil
 }
 func finalMuResult(v *Result) *Result { return v }
-func (r *Runner) readStdout(ctx context.Context, reader io.Reader, mu *sync.Mutex, final **Result) {
+func (r *Runner) readStdout(ctx context.Context, reader io.Reader, events chan<- persistedEvent, mu *sync.Mutex, final **Result) error {
 	s := bufio.NewScanner(reader)
+	s.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for s.Scan() {
-		event, _ := ParseLine(s.Bytes())
-		if event.SessionID != "" {
-			_ = r.Tasks.SetSession(ctx, r.TaskID, event.SessionID)
+		event, err := ParseLine(s.Bytes())
+		if err != nil {
+			return err
 		}
 		if event.FinalResult != nil {
 			mu.Lock()
 			*final = event.FinalResult
 			mu.Unlock()
 		}
-		raw, _ := json.Marshal(event.RawJSON)
-		_ = raw
-		_ = r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: event.Kind, Level: event.Level, DisplayText: event.DisplayText, RawJSON: string(event.RawJSON)})
+		events <- persistedEvent{event: event}
 		if r.Broadcast != nil {
 			r.Broadcast(event)
 		}
 	}
+	return s.Err()
 }
-func (r *Runner) readStderr(ctx context.Context, reader io.Reader) {
+func (r *Runner) readStderr(ctx context.Context, reader io.Reader, events chan<- persistedEvent) error {
 	s := bufio.NewScanner(reader)
+	s.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for s.Scan() {
 		text := s.Text()
-		_ = r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: "technical_log", Level: "error", DisplayText: text, RawJSON: fmt.Sprintf("%q", text)})
+		events <- persistedEvent{event: Event{Kind: "technical_log", Level: "error", DisplayText: text, RawJSON: []byte(fmt.Sprintf("%q", text))}}
 	}
+	return s.Err()
 }
 
 func (r *Runner) registerArtifacts(ctx context.Context, artifacts []Artifact) error {
@@ -133,21 +174,25 @@ func (r *Runner) registerArtifacts(ctx context.Context, artifacts []Artifact) er
 		if err != nil {
 			return err
 		}
-		root, err := filepath.Abs(r.AssetRoot)
+		root, err := filepath.EvalSymlinks(r.AssetRoot)
 		if err != nil {
 			return err
 		}
-		if !withinRoot(root, abs) {
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return err
+		}
+		if !withinRoot(root, resolved) {
 			return fmt.Errorf("artifact path escapes asset root: %s", artifact.Path)
 		}
-		info, err := os.Stat(abs)
+		info, err := os.Stat(resolved)
 		if err != nil {
 			return err
 		}
 		if task.ProjectID == nil {
 			continue
 		}
-		_, err = r.Tasks.DB().ExecContext(ctx, `INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at,source_task_id) VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?)`, *task.ProjectID, task.AccountID, artifact.Type, abs, filepath.Base(abs), "application/octet-stream", info.Size(), "", 1, "ready", timeNow(), r.TaskID)
+		_, err = r.Tasks.DB().ExecContext(ctx, `INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at,source_task_id) VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?)`, *task.ProjectID, task.AccountID, artifact.Type, resolved, filepath.Base(resolved), "application/octet-stream", info.Size(), "", 1, "ready", timeNow(), r.TaskID)
 		if err != nil {
 			return err
 		}
