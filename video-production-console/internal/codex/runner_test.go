@@ -78,7 +78,16 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-File", fake, "completed")
 	var broadcasts []Event
-	if err := NewRunner(cmd, repo, "t1", t.TempDir(), func(e Event) { broadcasts = append(broadcasts, e) }).Run(context.Background()); err != nil {
+	var callbackCounts []int
+	if err := NewRunner(cmd, repo, "t1", t.TempDir(), func(e Event) {
+		broadcasts = append(broadcasts, e)
+		events, err := repo.Events(context.Background(), "t1")
+		if err != nil {
+			t.Errorf("read events in callback: %v", err)
+			return
+		}
+		callbackCounts = append(callbackCounts, len(events))
+	}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	task, err := repo.Get(context.Background(), "t1")
@@ -97,6 +106,11 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	}
 	if len(broadcasts) != 3 {
 		t.Fatalf("broadcasts=%d", len(broadcasts))
+	}
+	for i, count := range callbackCounts {
+		if count != i+1 {
+			t.Fatalf("broadcast %d observed %d persisted events", i, count)
+		}
 	}
 }
 

@@ -68,6 +68,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	go func() {
 		var firstErr error
 		for item := range events {
+			if firstErr != nil {
+				continue
+			}
 			e := item.event
 			if e.SessionID != "" {
 				if err := r.Tasks.SetSession(ctx, r.TaskID, e.SessionID); err != nil {
@@ -75,6 +78,7 @@ func (r *Runner) Run(ctx context.Context) error {
 						firstErr = err
 						terminate(err)
 					}
+					continue
 				}
 			}
 			if err := r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: e.Kind, Level: e.Level, DisplayText: e.DisplayText, RawJSON: string(e.RawJSON)}); err != nil {
@@ -82,6 +86,10 @@ func (r *Runner) Run(ctx context.Context) error {
 					firstErr = err
 					terminate(err)
 				}
+				continue
+			}
+			if r.Broadcast != nil {
+				r.Broadcast(e)
 			}
 		}
 		writerErr <- firstErr
@@ -150,6 +158,15 @@ func (r *Runner) Run(ctx context.Context) error {
 	if persistenceErr != nil {
 		return persistenceErr
 	}
+	if status == domain.TaskFailed {
+		if message != "" {
+			return fmt.Errorf("task failed: %s", message)
+		}
+		if summary != "" {
+			return fmt.Errorf("task failed: %s", summary)
+		}
+		return fmt.Errorf("task failed")
+	}
 	return nil
 }
 func finalMuResult(v *Result) *Result { return v }
@@ -171,9 +188,6 @@ func (r *Runner) readStdout(ctx context.Context, reader io.Reader, events chan<-
 		case events <- persistedEvent{event: event}:
 		case <-stop:
 			return fmt.Errorf("runner stopped")
-		}
-		if r.Broadcast != nil {
-			r.Broadcast(event)
 		}
 	}
 	if err := s.Err(); err != nil {
