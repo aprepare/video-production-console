@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -97,7 +98,24 @@ ON CONFLICT(key) DO NOTHING;`,
 }
 
 func migrate(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin migrations: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`); err != nil {
@@ -107,7 +125,7 @@ func migrate(db *sql.DB) error {
 	for i, migration := range migrations {
 		version := i + 1
 		var applied int
-		err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied)
+		err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied)
 		if err != nil {
 			return fmt.Errorf("check migration %d: %w", version, err)
 		}
@@ -115,21 +133,16 @@ func migrate(db *sql.DB) error {
 			continue
 		}
 
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin migration %d: %w", version, err)
-		}
-		if _, err := tx.Exec(migration); err != nil {
-			_ = tx.Rollback()
+		if _, err := conn.ExecContext(ctx, migration); err != nil {
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES (?)`, version); err != nil {
-			_ = tx.Rollback()
+		if _, err := conn.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (?)`, version); err != nil {
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d: %w", version, err)
-		}
 	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
+	}
+	committed = true
 	return nil
 }
