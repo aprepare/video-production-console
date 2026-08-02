@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,9 +9,19 @@ import (
 
 func TestBuildExecCommandUsesArgumentArrayAndSafeEnvironment(t *testing.T) {
 	root := t.TempDir()
-	cmd, err := BuildExecCommand(Config{CodexBinaryPath: "codex", ResultSchema: "schemas/codex-result.schema.json"}, TaskContext{
+	if err := os.Mkdir(filepath.Join(root, "project"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := TaskContext{
 		TaskType: "topic_select", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project"), ProjectID: "p1",
-	})
+	}
+	guard, err := OpenProjectDirGuard(ctx)
+	if err != nil {
+		t.Fatalf("OpenProjectDirGuard returned error: %v", err)
+	}
+	defer guard.Close()
+	ctx.ProjectDirGuard = guard
+	cmd, err := BuildExecCommand(Config{CodexBinaryPath: "codex", ResultSchema: "schemas/codex-result.schema.json"}, ctx)
 	if err != nil {
 		t.Fatalf("BuildExecCommand returned error: %v", err)
 	}
@@ -30,9 +41,45 @@ func TestBuildExecCommandUsesArgumentArrayAndSafeEnvironment(t *testing.T) {
 
 func TestBuildExecCommandRejectsUnsupportedTask(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "project"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := BuildExecCommand(Config{CodexBinaryPath: "codex"}, TaskContext{TaskType: "unknown", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project")}); err == nil {
 		t.Fatal("expected unsupported task type to fail")
 	}
+}
+
+func TestBuildExecCommandRejectsUnguardedContext(t *testing.T) {
+	root := t.TempDir()
+	if _, err := BuildExecCommand(Config{CodexBinaryPath: "codex"}, TaskContext{TaskType: "topic_select", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project")}); err == nil {
+		t.Fatal("expected unguarded command construction to fail")
+	}
+}
+
+func TestProjectDirGuardOwnsExclusiveLockForLifecycle(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "project"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := TaskContext{TaskType: "topic_select", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project")}
+	guard, err := OpenProjectDirGuard(ctx)
+	if err != nil {
+		t.Fatalf("OpenProjectDirGuard returned error: %v", err)
+	}
+	if guard.CanonicalProjectDir() != filepath.Join(root, "project") {
+		t.Fatalf("canonical project = %q", guard.CanonicalProjectDir())
+	}
+	if _, err := OpenProjectDirGuard(ctx); err == nil {
+		t.Fatal("expected second guard to be rejected while first is open")
+	}
+	if err := guard.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	guard2, err := OpenProjectDirGuard(ctx)
+	if err != nil {
+		t.Fatalf("expected guard to be reusable after close: %v", err)
+	}
+	defer guard2.Close()
 }
 
 func TestBuildResumeCommandUsesSessionAndStdin(t *testing.T) {

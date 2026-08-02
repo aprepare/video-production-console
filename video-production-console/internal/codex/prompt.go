@@ -17,14 +17,15 @@ var skills = map[string]string{
 
 // TaskContext is the complete, project-scoped context supplied to one Codex run.
 type TaskContext struct {
-	ProjectID    string
-	AccountName  string
-	TaskType     string
-	WorkspaceDir string
-	ProjectDir   string
-	AllowedDir   string
-	AssetPaths   []string
-	OtherProject string // test/support metadata; never included in the prompt
+	ProjectID       string
+	AccountName     string
+	TaskType        string
+	WorkspaceDir    string
+	ProjectDir      string
+	AllowedDir      string
+	AssetPaths      []string
+	ProjectDirGuard *ProjectDirGuard
+	OtherProject    string // test/support metadata; never included in the prompt
 }
 
 // SkillForTask resolves the small set of supported workflows.
@@ -47,6 +48,10 @@ func BuildPrompt(ctx TaskContext) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return buildPrompt(normalized, skill)
+}
+
+func buildPrompt(normalized TaskContext, skill string) (string, error) {
 	allowed := normalized.AllowedDir
 	var assets strings.Builder
 	for _, path := range normalized.AssetPaths {

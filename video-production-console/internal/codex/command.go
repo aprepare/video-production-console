@@ -1,10 +1,10 @@
 package codex
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -36,18 +36,22 @@ func (c Config) binary() string {
 }
 
 func BuildExecCommand(cfg Config, ctx TaskContext) (*exec.Cmd, error) {
-	if _, err := SkillForTask(ctx.TaskType); err != nil {
-		return nil, err
-	}
-	normalized, err := normalizeContext(ctx)
+	skill, err := SkillForTask(ctx.TaskType)
 	if err != nil {
 		return nil, err
 	}
-	prompt, err := BuildPrompt(ctx)
+	if !ctx.ProjectDirGuard.open() {
+		return nil, fmt.Errorf("project directory guard is required and must remain open")
+	}
+	normalized := ctx.ProjectDirGuard.normalized
+	normalized.ProjectID = ctx.ProjectID
+	normalized.AccountName = ctx.AccountName
+	normalized.TaskType = ctx.TaskType
+	prompt, err := buildPrompt(normalized, skill)
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", cfg.ResultSchema, "-C", filepath.Clean(normalized.ProjectDir), "-"}
+	args := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", cfg.ResultSchema, "-C", normalized.ProjectDir, "-"}
 	cmd := exec.Command(cfg.binary(), args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = cfg.SafeEnvironment()
