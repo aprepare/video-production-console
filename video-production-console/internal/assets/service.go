@@ -28,6 +28,20 @@ import (
 
 const MaxBackgroundSize int64 = 20 << 20
 const MaxProjectAssetSize int64 = 500 << 20
+const MaxTextAssetSize int64 = 5 << 20
+const MaxAudioAssetSize int64 = 200 << 20
+
+func MaxSizeForType(assetType domain.AssetType) int64 {
+	switch assetType {
+	case domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitle:
+		return MaxTextAssetSize
+	case domain.AssetAudio:
+		return MaxAudioAssetSize
+	case domain.AssetMixDraft, domain.AssetFinalVideo:
+		return MaxProjectAssetSize
+	}
+	return 0
+}
 
 var (
 	ErrInvalidImage        = errors.New("invalid background image")
@@ -64,6 +78,10 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 	if !allowed[assetType][ext] {
 		return SavedAsset{}, ErrInvalidProjectAsset
 	}
+	maxSize := MaxSizeForType(assetType)
+	if maxSize == 0 {
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
 	directory := filepath.Join(s.dataRoot, "projects", parsedID.String(), string(assetType))
 	if err = os.MkdirAll(directory, 0o755); err != nil {
 		return SavedAsset{}, fmt.Errorf("create project asset directory: %w", err)
@@ -80,11 +98,11 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 		}
 	}()
 	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(temporary, hash), io.LimitReader(reader, MaxProjectAssetSize+1))
+	size, err := io.Copy(io.MultiWriter(temporary, hash), io.LimitReader(reader, maxSize+1))
 	if err != nil {
 		return SavedAsset{}, fmt.Errorf("write project asset: %w", err)
 	}
-	if size > MaxProjectAssetSize {
+	if size > maxSize {
 		return SavedAsset{}, ErrProjectAssetTooBig
 	}
 	if err = temporary.Sync(); err != nil {
@@ -126,22 +144,172 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		return "", err
 	}
 	defer file.Close()
-	var data []byte
 	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitle {
-		data, err = io.ReadAll(file)
-	} else {
-		data = make([]byte, 512)
-		var n int
-		n, err = file.Read(data)
-		if errors.Is(err, io.EOF) {
-			err = nil
+		reader := bufio.NewReader(file)
+		for {
+			r, size, readErr := reader.ReadRune()
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil || r == '\x00' || r == utf8.RuneError && size == 1 {
+				return "", nil
+			}
 		}
-		data = data[:n]
+		if ext == ".md" {
+			return "text/markdown; charset=utf-8", nil
+		}
+		if ext == ".srt" {
+			return "application/x-subrip; charset=utf-8", nil
+		}
+		return "text/plain; charset=utf-8", nil
 	}
-	if err != nil {
+	if ext == ".wav" {
+		ok, err := validWAVFile(file)
+		if ok {
+			return "audio/wav", nil
+		}
 		return "", err
 	}
-	return validateProjectData(assetType, ext, data), nil
+	if ext == ".mp3" {
+		ok, err := validMP3File(file)
+		if ok {
+			return "audio/mpeg", nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+func validWAVFile(file *os.File) (bool, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	if info.Size() < 44 {
+		return false, nil
+	}
+	h := make([]byte, 12)
+	if _, err = file.ReadAt(h, 0); err != nil {
+		return false, err
+	}
+	if string(h[:4]) != "RIFF" || string(h[8:]) != "WAVE" || int64(binary.LittleEndian.Uint32(h[4:8]))+8 != info.Size() {
+		return false, nil
+	}
+	hasFmt, hasData := false, false
+	for off := int64(12); off < info.Size(); {
+		if info.Size()-off < 8 {
+			return false, nil
+		}
+		ch := make([]byte, 8)
+		if _, err = file.ReadAt(ch, off); err != nil {
+			return false, err
+		}
+		n := int64(binary.LittleEndian.Uint32(ch[4:]))
+		end := off + 8 + n
+		if end < off+8 || end > info.Size() {
+			return false, nil
+		}
+		switch string(ch[:4]) {
+		case "fmt ":
+			hasFmt = n >= 16
+		case "data":
+			hasData = true
+		}
+		off = end + (n & 1)
+		if off > info.Size() {
+			return false, nil
+		}
+	}
+	return hasFmt && hasData, nil
+}
+func validMP3File(file *os.File) (bool, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	off := int64(0)
+	if info.Size() >= 10 {
+		h := make([]byte, 10)
+		_, _ = file.ReadAt(h, 0)
+		if string(h[:3]) == "ID3" {
+			for _, b := range h[6:10] {
+				if b&0x80 != 0 {
+					return false, nil
+				}
+			}
+			size := int64(h[6])<<21 | int64(h[7])<<14 | int64(h[8])<<7 | int64(h[9])
+			off = 10 + size
+			if h[5]&0x10 != 0 {
+				off += 10
+			}
+			if off > info.Size() {
+				return false, nil
+			}
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if off+4 > info.Size() {
+			return false, nil
+		}
+		h := make([]byte, 4)
+		if _, err = file.ReadAt(h, off); err != nil {
+			return false, err
+		}
+		length := mpegFrameLength(h)
+		if length <= 4 || off+int64(length) > info.Size() {
+			return false, nil
+		}
+		off += int64(length)
+	}
+	return true, nil
+}
+func mpegFrameLength(h []byte) int {
+	if len(h) < 4 || h[0] != 0xff || h[1]&0xe0 != 0xe0 {
+		return 0
+	}
+	version := (h[1] >> 3) & 3
+	layer := (h[1] >> 1) & 3
+	br := (h[2] >> 4) & 15
+	sr := (h[2] >> 2) & 3
+	if version == 1 || layer == 0 || br == 0 || br == 15 || sr == 3 {
+		return 0
+	}
+	rates := []int{44100, 48000, 32000}
+	sample := rates[sr]
+	if version == 2 {
+		sample /= 2
+	} else if version == 0 {
+		sample /= 4
+	}
+	mpeg1 := version == 3
+	var kbps int
+	if layer == 3 {
+		table := []int{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448}
+		kbps = table[br]
+		return (12*kbps*1000/sample + int(h[2]>>1&1)) * 4
+	}
+	if layer == 2 {
+		if mpeg1 {
+			table := []int{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384}
+			kbps = table[br]
+		} else {
+			table := []int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
+			kbps = table[br]
+		}
+	} else {
+		if mpeg1 {
+			table := []int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
+			kbps = table[br]
+		} else {
+			table := []int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
+			kbps = table[br]
+		}
+	}
+	coef := 144
+	if layer == 1 && !mpeg1 {
+		coef = 72
+	}
+	return coef*kbps*1000/sample + int(h[2]>>1&1)
 }
 
 func validateProjectData(assetType domain.AssetType, ext string, data []byte) string {
@@ -209,8 +377,27 @@ func walkISOBoxes(file *os.File, start, end int64, parent string, handlers map[s
 		if _, err := file.ReadAt(header, offset); err != nil {
 			return ErrInvalidProjectAsset
 		}
-		size := int64(binary.BigEndian.Uint32(header[:4]))
-		if size < 8 || size > end-offset {
+		size32 := binary.BigEndian.Uint32(header[:4])
+		size := int64(size32)
+		headerSize := int64(8)
+		if size32 == 0 {
+			size = end - offset
+		} else if size32 == 1 {
+			if end-offset < 16 {
+				return ErrInvalidProjectAsset
+			}
+			large := make([]byte, 8)
+			if _, err := file.ReadAt(large, offset+8); err != nil {
+				return ErrInvalidProjectAsset
+			}
+			largeSize := binary.BigEndian.Uint64(large)
+			if largeSize > uint64(^uint64(0)>>1) {
+				return ErrInvalidProjectAsset
+			}
+			size = int64(largeSize)
+			headerSize = 16
+		}
+		if size < headerSize || size > end-offset {
 			return ErrInvalidProjectAsset
 		}
 		kind := string(header[4:8])
@@ -218,7 +405,7 @@ func walkISOBoxes(file *os.File, start, end int64, parent string, handlers map[s
 			return ErrInvalidProjectAsset
 		}
 		seen(kind)
-		payloadStart := offset + 8
+		payloadStart := offset + headerSize
 		boxEnd := offset + size
 		switch {
 		case parent == "root" && kind == "moov", parent == "moov" && kind == "trak", parent == "trak" && kind == "mdia":
@@ -448,4 +635,60 @@ func (s *Service) ReconcileAccountBackgrounds(ctx context.Context, db *sql.DB, l
 		cleanupErrors = append(cleanupErrors, err)
 	}
 	return errors.Join(cleanupErrors...)
+}
+
+func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger *log.Logger) error {
+	rows, err := db.QueryContext(ctx, `SELECT path FROM assets WHERE project_id IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("list project assets: %w", err)
+	}
+	refs := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return err
+		}
+		abs, _ := filepath.Abs(p)
+		refs[filepath.Clean(abs)] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	root, err := filepath.Abs(filepath.Join(s.dataRoot, "projects"))
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("projects data root is not a directory")
+	}
+	var errs []error
+	_ = filepath.WalkDir(root, func(path string, e os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			errs = append(errs, walkErr)
+			return nil
+		}
+		if e.IsDir() {
+			return nil
+		}
+		abs := filepath.Clean(path)
+		if refs[abs] && !strings.HasPrefix(e.Name(), ".upload-") {
+			return nil
+		}
+		if err := os.Remove(path); err != nil {
+			errs = append(errs, err)
+			if logger != nil {
+				logger.Printf("project asset reconciliation: %v", err)
+			}
+		}
+		return nil
+	})
+	return errors.Join(errs...)
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,7 +23,7 @@ type projectStore interface {
 	CreateProject(context.Context, domain.Project) error
 	ListProjects(context.Context, string, domain.ProjectStage, string) ([]domain.Project, error)
 	GetProject(context.Context, string) (domain.Project, error)
-	MoveProject(context.Context, string, domain.ProjectStage, time.Time) (domain.Project, error)
+	MoveProject(context.Context, string, domain.ProjectStage, domain.ProjectStage, time.Time) (domain.Project, error)
 	SetTopicCardPath(context.Context, string, string, time.Time) error
 	AddAsset(context.Context, *domain.Asset) (store.CommitState, error)
 	ListAssets(context.Context, string) ([]domain.Asset, error)
@@ -55,6 +56,9 @@ type projectView struct {
 	TopicCardPath *string             `json:"topic_card_path,omitempty"`
 	CreatedAt     time.Time           `json:"created_at"`
 	UpdatedAt     time.Time           `json:"updated_at"`
+	ReadyAt       *time.Time          `json:"ready_at"`
+	PublishedAt   *time.Time          `json:"published_at"`
+	PublishNote   *string             `json:"publish_note"`
 }
 type assetView struct {
 	ID        string           `json:"id"`
@@ -178,8 +182,9 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_asset_type", "The asset type is not uploadable.")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxProjectAssetSize+(1<<20))
-	if err := r.ParseMultipartForm(assets.MaxProjectAssetSize + (1 << 20)); err != nil {
+	maxSize := assets.MaxSizeForType(typ)
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+(1<<20))
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
 		var large *http.MaxBytesError
 		if errors.As(err, &large) {
 			writeError(w, 413, "payload_too_large", "The upload is too large.")
@@ -229,7 +234,14 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Stage domain.ProjectStage `json:"stage"`
 	}
-	if decodeJSON(r, &in) != nil || !validStage(in.Stage) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decodeErr := decodeJSON(r, &in)
+	var tooLarge *http.MaxBytesError
+	if errors.As(decodeErr, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
+		return
+	}
+	if decodeErr != nil || !validStage(in.Stage) {
 		writeError(w, 400, "invalid_stage", "A valid target stage is required.")
 		return
 	}
@@ -272,7 +284,15 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	p, err = h.repository.MoveProject(r.Context(), id, in.Stage, time.Now().UTC())
+	p, err = h.repository.MoveProject(r.Context(), id, p.Stage, in.Stage, time.Now().UTC())
+	if errors.Is(err, store.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if errors.Is(err, store.ErrProjectStageConflict) {
+		writeError(w, http.StatusConflict, "project_stage_conflict", "Project stage changed; refresh and retry.")
+		return
+	}
 	if err != nil {
 		writeError(w, 500, "stage_move_failed", "Project stage could not be updated.")
 		return
@@ -283,7 +303,14 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 func decodeJSON(r *http.Request, out any) error {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
-	return d.Decode(out)
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		return errors.New("request must contain one JSON value")
+	}
+	return nil
 }
 func projectID(w http.ResponseWriter, value string) (string, bool) {
 	id, err := uuid.Parse(value)
@@ -308,7 +335,7 @@ func uploadableType(t domain.AssetType) bool {
 	return false
 }
 func toProjectView(p domain.Project) projectView {
-	return projectView{p.ID, p.AccountID, p.Title, p.Stage, p.TopicCardPath, p.CreatedAt, p.UpdatedAt}
+	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, TopicCardPath: p.TopicCardPath, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote}
 }
 func toAssetView(a domain.Asset) assetView {
 	return assetView{a.ID, a.Type, a.Path, a.Filename, a.MIMEType, a.Size, a.SHA256, a.Version, a.CreatedAt}

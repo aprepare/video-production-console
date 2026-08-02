@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	ErrProjectNotFound = errors.New("project not found")
-	ErrAccountInactive = errors.New("account must be active")
+	ErrProjectNotFound      = errors.New("project not found")
+	ErrAccountInactive      = errors.New("account must be active")
+	ErrProjectStageConflict = errors.New("project stage changed")
 )
 
 type ProjectRepository struct{ db *sql.DB }
@@ -74,26 +75,41 @@ func (r *ProjectRepository) GetProject(ctx context.Context, id string) (domain.P
 	}
 	return p, err
 }
-func (r *ProjectRepository) MoveProject(ctx context.Context, id string, to domain.ProjectStage, now time.Time) (domain.Project, error) {
+func (r *ProjectRepository) MoveProject(ctx context.Context, id string, expectedFrom, to domain.ProjectStage, now time.Time) (domain.Project, error) {
+	if expectedFrom == to {
+		p, err := r.GetProject(ctx, id)
+		if err != nil {
+			return domain.Project{}, err
+		}
+		if p.Stage != expectedFrom {
+			return domain.Project{}, ErrProjectStageConflict
+		}
+		return p, nil
+	}
 	ready, published := "", ""
 	if to == domain.StageReady {
-		ready = ", ready_at=?"
+		ready = ", ready_at=COALESCE(ready_at,?)"
 	}
 	if to == domain.StagePublished {
-		published = ", published_at=?"
+		published = ", published_at=COALESCE(published_at,?)"
 	}
 	args := []any{to, now}
 	if ready != "" || published != "" {
 		args = append(args, now)
 	}
-	args = append(args, id)
-	result, err := r.db.ExecContext(ctx, "UPDATE projects SET stage=?, updated_at=?"+ready+published+" WHERE id=?", args...)
+	args = append(args, id, expectedFrom)
+	result, err := r.db.ExecContext(ctx, "UPDATE projects SET stage=?, updated_at=?"+ready+published+" WHERE id=? AND stage=?", args...)
 	if err != nil {
 		return domain.Project{}, err
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return domain.Project{}, ErrProjectNotFound
+		if _, getErr := r.GetProject(ctx, id); errors.Is(getErr, ErrProjectNotFound) {
+			return domain.Project{}, ErrProjectNotFound
+		} else if getErr != nil {
+			return domain.Project{}, getErr
+		}
+		return domain.Project{}, ErrProjectStageConflict
 	}
 	return r.GetProject(ctx, id)
 }
@@ -109,31 +125,35 @@ func (r *ProjectRepository) SetTopicCardPath(ctx context.Context, id, path strin
 }
 
 func (r *ProjectRepository) AddAsset(ctx context.Context, asset *domain.Asset) (state CommitState, err error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	conn, err := r.db.Conn(ctx)
 	if err != nil {
+		return CommitNotCommitted, err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return CommitNotCommitted, err
 	}
 	defer func() {
 		if state != CommitCommitted {
-			_ = tx.Rollback()
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 		}
 	}()
 	var accountID string
-	if err = tx.QueryRowContext(ctx, `SELECT account_id FROM projects WHERE id=?`, *asset.ProjectID).Scan(&accountID); errors.Is(err, sql.ErrNoRows) {
+	if err = conn.QueryRowContext(ctx, `SELECT account_id FROM projects WHERE id=?`, *asset.ProjectID).Scan(&accountID); errors.Is(err, sql.ErrNoRows) {
 		return CommitNotCommitted, ErrProjectNotFound
 	}
 	if err != nil {
 		return CommitNotCommitted, err
 	}
 	asset.AccountID = accountID
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0)+1 FROM assets WHERE project_id=? AND type=?`, *asset.ProjectID, asset.Type).Scan(&asset.Version); err != nil {
+	if err = conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0)+1 FROM assets WHERE project_id=? AND type=?`, *asset.ProjectID, asset.Type).Scan(&asset.Version); err != nil {
 		return CommitNotCommitted, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?)`, asset.ID, *asset.ProjectID, accountID, asset.Type, asset.Path, asset.Filename, asset.MIMEType, asset.Size, asset.SHA256, asset.Version, asset.CreatedAt)
+	_, err = conn.ExecContext(ctx, `INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?)`, asset.ID, *asset.ProjectID, accountID, asset.Type, asset.Path, asset.Filename, asset.MIMEType, asset.Size, asset.SHA256, asset.Version, asset.CreatedAt)
 	if err != nil {
 		return CommitNotCommitted, err
 	}
-	if err = tx.Commit(); err != nil {
+	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return CommitUnknown, err
 	}
 	state = CommitCommitted

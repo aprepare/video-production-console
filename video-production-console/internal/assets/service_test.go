@@ -185,6 +185,48 @@ func TestReconcileAccountBackgroundsReportsInvalidAccountsRoot(t *testing.T) {
 	}
 }
 
+func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	aid := uuid.NewString()
+	pid := uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	dir := filepath.Join(root, "projects", pid, "audio")
+	_ = os.MkdirAll(dir, 0755)
+	keep1 := filepath.Join(dir, "v1.mp3")
+	keep2 := filepath.Join(dir, "v2.mp3")
+	orphan := filepath.Join(dir, "orphan.mp3")
+	temp := filepath.Join(dir, ".upload-x")
+	for _, p := range []string{keep1, keep2, orphan, temp} {
+		_ = os.WriteFile(p, []byte("x"), 0600)
+	}
+	for i, p := range []string{keep1, keep2} {
+		_, err = db.Exec(`INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES(?,?,?,?,?,'x','audio/mpeg',1,'x',?,'active',?)`, uuid.NewString(), pid, aid, "audio", p, i+1, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := NewService(root).ReconcileProjectAssets(context.Background(), db, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{keep1, keep2} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("removed referenced %s", p)
+		}
+	}
+	for _, p := range []string{orphan, temp} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("kept orphan %s", p)
+		}
+	}
+}
+
 func TestSaveProjectAssetValidatesContentAndUsesControlledPath(t *testing.T) {
 	root := t.TempDir()
 	projectID := "f02addf5-275c-4456-a51f-3ebeb9c730ef"
@@ -246,6 +288,96 @@ func TestSaveProjectAssetParsesISOBaseMediaHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProjectAssetSizeLimitsByType(t *testing.T) {
+	for _, tt := range []struct {
+		typ  domain.AssetType
+		want int64
+	}{{domain.AssetContinuousScript, 5 << 20}, {domain.AssetSubtitle, 5 << 20}, {domain.AssetAudio, 200 << 20}, {domain.AssetFinalVideo, 500 << 20}} {
+		if got := MaxSizeForType(tt.typ); got != tt.want {
+			t.Errorf("MaxSizeForType(%s)=%d want %d", tt.typ, got, tt.want)
+		}
+	}
+}
+
+func TestAudioStructureValidation(t *testing.T) {
+	svc := NewService(t.TempDir())
+	id := uuid.NewString()
+	for _, tt := range []struct {
+		name, file string
+		data       []byte
+		ok         bool
+	}{
+		{"valid wav", "voice.wav", validWAV(), true}, {"truncated wav", "voice.wav", validWAV()[:20], false}, {"fake riff", "voice.wav", []byte("RIFF\x20\x00\x00\x00WAVE"), false},
+		{"valid mp3", "voice.mp3", validMP3(), true}, {"one mp3 frame", "voice.mp3", validMP3()[:417], false}, {"fake id3", "voice.mp3", []byte("ID3\x04\x00\x00\x00\x00\x00\x00fake"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.SaveProjectAsset(id, domain.AssetAudio, tt.file, bytes.NewReader(tt.data))
+			if tt.ok && err != nil {
+				t.Fatal(err)
+			}
+			if !tt.ok && !errors.Is(err, ErrInvalidProjectAsset) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestISOBoxExtendedAndToEndSizes(t *testing.T) {
+	svc := NewService(t.TempDir())
+	id := uuid.NewString()
+	for _, data := range [][]byte{isoFileWithTopSize("extended"), isoFileWithTopSize("to-end")} {
+		if _, err := svc.SaveProjectAsset(id, domain.AssetFinalVideo, "video.mp4", bytes.NewReader(data)); err != nil {
+			t.Fatalf("valid sized box: %v", err)
+		}
+	}
+	bad := isoFile("vide")
+	bad[0] = 0
+	bad[1] = 0
+	bad[2] = 0
+	bad[3] = 1
+	if _, err := svc.SaveProjectAsset(id, domain.AssetFinalVideo, "bad.mp4", bytes.NewReader(bad)); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("overflow error=%v", err)
+	}
+}
+
+func validWAV() []byte {
+	b := make([]byte, 46)
+	copy(b, "RIFF")
+	binary.LittleEndian.PutUint32(b[4:8], 38)
+	copy(b[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(b[16:20], 16)
+	binary.LittleEndian.PutUint16(b[20:22], 1)
+	binary.LittleEndian.PutUint16(b[22:24], 1)
+	binary.LittleEndian.PutUint32(b[24:28], 8000)
+	binary.LittleEndian.PutUint32(b[28:32], 8000)
+	binary.LittleEndian.PutUint16(b[32:34], 1)
+	binary.LittleEndian.PutUint16(b[34:36], 8)
+	copy(b[36:], "data")
+	binary.LittleEndian.PutUint32(b[40:44], 1)
+	b[44] = 128
+	return b
+}
+func validMP3() []byte {
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
+	return append(append([]byte{}, frame...), frame...)
+}
+func isoFileWithTopSize(mode string) []byte {
+	b := isoFile("vide")
+	ftypSize := int(binary.BigEndian.Uint32(b[:4]))
+	rest := b[ftypSize:]
+	if mode == "extended" {
+		ext := make([]byte, 16+ftypSize-8)
+		binary.BigEndian.PutUint32(ext[:4], 1)
+		copy(ext[4:8], "ftyp")
+		binary.BigEndian.PutUint64(ext[8:16], uint64(len(ext)))
+		copy(ext[16:], b[8:ftypSize])
+		return append(ext, rest...)
+	}
+	binary.BigEndian.PutUint32(rest[:4], 0)
+	return append(b[:ftypSize], rest...)
 }
 
 func isoFile(handlers ...string) []byte {

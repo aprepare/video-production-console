@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,5 +42,89 @@ func TestProjectRepositoryDefaultTitleAndTopicCard(t *testing.T) {
 	p, _ = repo.GetProject(context.Background(), projectID)
 	if p.TopicCardPath == nil || *p.TopicCardPath != "cards/topic.png" {
 		t.Fatalf("topic path=%v", p.TopicCardPath)
+	}
+}
+
+func TestMoveProjectUsesExpectedStageAndIsIdempotent(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "move.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	accountID := uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+	id := uuid.NewString()
+	repo := NewProjectRepository(db)
+	_ = repo.CreateProject(context.Background(), domain.Project{ID: id, AccountID: accountID, Title: "p", CreatedAt: now, UpdatedAt: now})
+	readyAt := now.Add(time.Minute)
+	p, err := repo.MoveProject(context.Background(), id, domain.StageTopic, domain.StageReady, readyAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := *p.ReadyAt
+	p, err = repo.MoveProject(context.Background(), id, domain.StageReady, domain.StageReady, readyAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.ReadyAt.Equal(original) || !p.UpdatedAt.Equal(readyAt) {
+		t.Fatalf("idempotent timestamps=%+v", p)
+	}
+	if _, err = repo.MoveProject(context.Background(), id, domain.StageTopic, domain.StagePublished, time.Now()); !errors.Is(err, ErrProjectStageConflict) {
+		t.Fatalf("conflict error=%v", err)
+	}
+}
+
+func TestAddAssetAllocatesUniqueVersionsAcrossDatabaseHandles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	db1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db1.Close()
+	db2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	now := time.Now().UTC()
+	aid, pid := uuid.NewString(), uuid.NewString()
+	_, _ = db1.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
+	_, _ = db1.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	repos := []*ProjectRepository{NewProjectRepository(db1), NewProjectRepository(db2)}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			a := domain.Asset{ID: uuid.NewString(), ProjectID: &pid, Type: domain.AssetAudio, Path: fmt.Sprintf("v%d.mp3", i), Filename: "v.mp3", MIMEType: "audio/mpeg", Size: 1, SHA256: "x", CreatedAt: now}
+			_, err := repos[i].AddAsset(context.Background(), &a)
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db1.Query(`SELECT version FROM assets WHERE project_id=? ORDER BY version`, pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var versions []int
+	for rows.Next() {
+		var v int
+		_ = rows.Scan(&v)
+		versions = append(versions, v)
+	}
+	if len(versions) != 2 || versions[0] != 1 || versions[1] != 2 {
+		t.Fatalf("versions=%v", versions)
 	}
 }

@@ -95,6 +95,7 @@ CREATE TABLE task_messages (
 
 INSERT INTO settings(key, value) VALUES ('max_codex_concurrency', '2')
 ON CONFLICT(key) DO NOTHING;`,
+	`CREATE UNIQUE INDEX assets_project_type_version_uq ON assets(project_id, type, version) WHERE project_id IS NOT NULL;`,
 }
 
 func migrate(db *sql.DB) error {

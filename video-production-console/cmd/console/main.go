@@ -23,6 +23,9 @@ func main() {
 	if err := assetService.ReconcileAccountBackgrounds(context.Background(), db, log.Default()); err != nil {
 		log.Printf("account background reconciliation completed with errors: %v", err)
 	}
+	if err := assetService.ReconcileProjectAssets(context.Background(), db, log.Default()); err != nil {
+		log.Printf("project asset reconciliation completed with errors: %v", err)
+	}
 	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService})
 	log.Printf("video production console listening on %s", settings.ListenAddr)
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {

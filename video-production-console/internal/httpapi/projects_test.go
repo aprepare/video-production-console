@@ -22,16 +22,26 @@ import (
 	"video-production-console/internal/store"
 )
 
-type failingProjectStore struct{ getErr, listErr, backgroundErr error }
+type failingProjectStore struct {
+	getErr, listErr, backgroundErr, moveErr error
+	stage                                   domain.ProjectStage
+}
 
 func (s *failingProjectStore) CreateProject(context.Context, domain.Project) error { return nil }
 func (s *failingProjectStore) ListProjects(context.Context, string, domain.ProjectStage, string) ([]domain.Project, error) {
 	return nil, nil
 }
 func (s *failingProjectStore) GetProject(context.Context, string) (domain.Project, error) {
-	return domain.Project{ID: uuid.NewString(), Stage: domain.StageAssets}, s.getErr
+	stage := s.stage
+	if stage == "" {
+		stage = domain.StageAssets
+	}
+	return domain.Project{ID: uuid.NewString(), Stage: stage}, s.getErr
 }
-func (s *failingProjectStore) MoveProject(context.Context, string, domain.ProjectStage, time.Time) (domain.Project, error) {
+func (s *failingProjectStore) MoveProject(context.Context, string, domain.ProjectStage, domain.ProjectStage, time.Time) (domain.Project, error) {
+	if s.moveErr != nil {
+		return domain.Project{}, s.moveErr
+	}
 	panic("must not move after failed pre-read")
 }
 func (s *failingProjectStore) SetTopicCardPath(context.Context, string, string, time.Time) error {
@@ -91,11 +101,53 @@ func TestProjectReadTreatsOnlySQLNoRowsAsMissingOptionalData(t *testing.T) {
 	}
 }
 
+func TestMoveMapsConcurrentStageConflict(t *testing.T) {
+	id := uuid.NewString()
+	h := newProjectsHandler(&failingProjectStore{stage: domain.StageTopic, moveErr: store.ErrProjectStageConflict}, assets.NewService(t.TempDir()))
+	r := performJSON(t, h, http.MethodPost, "/api/projects/"+id+"/move", map[string]string{"stage": "script"})
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d", r.StatusCode)
+	}
+}
+
+func TestProjectViewIncludesLifecycleFields(t *testing.T) {
+	now := time.Now().UTC()
+	note := "published manually"
+	view := toProjectView(domain.Project{ReadyAt: &now, PublishedAt: &now, PublishNote: &note})
+	data, _ := json.Marshal(view)
+	for _, field := range []string{"ready_at", "published_at", "publish_note"} {
+		if !bytes.Contains(data, []byte(`"`+field+`"`)) {
+			t.Fatalf("response missing %s: %s", field, data)
+		}
+	}
+}
+
+func TestMoveRejectsOversizedAndTrailingJSON(t *testing.T) {
+	id := uuid.NewString()
+	h := newProjectsHandler(&failingProjectStore{stage: domain.StageTopic}, assets.NewService(t.TempDir()))
+	for _, tt := range []struct {
+		name, body string
+		want       int
+	}{{"oversized", `{"stage":"script","padding":"` + strings.Repeat("x", 70<<10) + `"}`, http.StatusRequestEntityTooLarge}, {"trailing", `{"stage":"script"} {}`, http.StatusBadRequest}} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/projects/"+id+"/move", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tt.want {
+				t.Fatalf("status=%d", w.Code)
+			}
+		})
+	}
+}
+
 func TestProjectLifecycleUploadVersionsAndGates(t *testing.T) {
 	handler, db, root, accountID := newProjectsTestHandler(t, "active")
 	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID}))
 	if created.Stage != "topic" || created.Title == "" {
 		t.Fatalf("created = %+v", created)
+	}
+	if oversized := uploadProjectFile(t, handler, created.ID, "continuous_script", "large.txt", bytes.Repeat([]byte("x"), (6<<20))); oversized.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized script status=%d", oversized.StatusCode)
 	}
 
 	first := uploadProjectFile(t, handler, created.ID, "continuous_script", "script.md", []byte("# 第一版"))
@@ -137,7 +189,7 @@ func TestProjectLifecycleUploadVersionsAndGates(t *testing.T) {
 	for _, file := range []struct {
 		typ, name string
 		data      []byte
-	}{{"audio", "voice.mp3", append([]byte("ID3"), make([]byte, 16)...)}, {"subtitle", "captions.srt", []byte("1\n00:00:00,000 --> 00:00:01,000\n字幕\n")}} {
+	}{{"audio", "voice.mp3", validProjectMP3()}, {"subtitle", "captions.srt", []byte("1\n00:00:00,000 --> 00:00:01,000\n字幕\n")}} {
 		if r := uploadProjectFile(t, handler, created.ID, file.typ, file.name, file.data); r.StatusCode != http.StatusCreated {
 			t.Fatalf("upload %s=%d", file.typ, r.StatusCode)
 		}
@@ -264,4 +316,10 @@ func uploadProjectFile(t *testing.T, h http.Handler, id, typ, name string, data 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	return w.Result()
+}
+
+func validProjectMP3() []byte {
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
+	return append(append([]byte{}, frame...), frame...)
 }

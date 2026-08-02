@@ -100,6 +100,7 @@ func TestOpenCreatesRequiredIndexes(t *testing.T) {
 	}{
 		{name: "accounts_name_uq", want: "WHERE status='active'"},
 		{name: "assets_project_type_idx", want: "project_id, type, version DESC"},
+		{name: "assets_project_type_version_uq", want: "project_id, type, version"},
 	}
 	for _, tt := range tests {
 		var definition string
