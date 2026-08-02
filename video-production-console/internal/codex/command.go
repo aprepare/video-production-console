@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -34,12 +35,23 @@ func (c Config) binary() string {
 	return c.CodexBinaryPath
 }
 
-func BuildExecCommand(cfg Config, ctx TaskContext) *exec.Cmd {
-	args := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", cfg.ResultSchema, "-C", ctx.ProjectDir, "-"}
+func BuildExecCommand(cfg Config, ctx TaskContext) (*exec.Cmd, error) {
+	if _, err := SkillForTask(ctx.TaskType); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	prompt, err := BuildPrompt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", cfg.ResultSchema, "-C", filepath.Clean(normalized.ProjectDir), "-"}
 	cmd := exec.Command(cfg.binary(), args...)
-	cmd.Stdin = strings.NewReader(BuildPrompt(ctx))
+	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = cfg.SafeEnvironment()
-	return cmd
+	return cmd, nil
 }
 
 func BuildResumeCommand(cfg Config, sessionID, answer string) *exec.Cmd {

@@ -1,15 +1,20 @@
 package codex
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestBuildExecCommandUsesArgumentArrayAndSafeEnvironment(t *testing.T) {
-	cmd := BuildExecCommand(Config{CodexBinaryPath: "codex", ResultSchema: "schemas/codex-result.schema.json"}, TaskContext{
-		TaskType: "topic_select", ProjectDir: `C:\\console\\project`, ProjectID: "p1",
+	root := t.TempDir()
+	cmd, err := BuildExecCommand(Config{CodexBinaryPath: "codex", ResultSchema: "schemas/codex-result.schema.json"}, TaskContext{
+		TaskType: "topic_select", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project"), ProjectID: "p1",
 	})
-	want := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", "schemas/codex-result.schema.json", "-C", `C:\\console\\project`, "-"}
+	if err != nil {
+		t.Fatalf("BuildExecCommand returned error: %v", err)
+	}
+	want := []string{"exec", "--json", "--skip-git-repo-check", "--output-schema", "schemas/codex-result.schema.json", "-C", filepath.Join(root, "project"), "-"}
 	if strings.Join(cmd.Args[1:], "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("args = %#v, want %#v", cmd.Args[1:], want)
 	}
@@ -20,6 +25,13 @@ func TestBuildExecCommandUsesArgumentArrayAndSafeEnvironment(t *testing.T) {
 		if strings.HasPrefix(value, "CODEX_TEST_SECRET=") {
 			t.Fatal("secret environment variable leaked")
 		}
+	}
+}
+
+func TestBuildExecCommandRejectsUnsupportedTask(t *testing.T) {
+	root := t.TempDir()
+	if _, err := BuildExecCommand(Config{CodexBinaryPath: "codex"}, TaskContext{TaskType: "unknown", WorkspaceDir: root, ProjectDir: filepath.Join(root, "project")}); err == nil {
+		t.Fatal("expected unsupported task type to fail")
 	}
 }
 
