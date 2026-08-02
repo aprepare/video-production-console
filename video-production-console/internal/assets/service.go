@@ -3,7 +3,6 @@ package assets
 import (
 	"bufio"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
+	"golang.org/x/image/webp"
 )
 
 const MaxBackgroundSize int64 = 20 << 20
@@ -87,7 +87,7 @@ func (s *Service) SaveAccountBackground(accountID, _ string, reader io.Reader) (
 	if err := temporary.Close(); err != nil {
 		return SavedAsset{}, fmt.Errorf("close background: %w", err)
 	}
-	if !validImageFile(temporaryPath, mimeType, size) {
+	if !validImageFile(temporaryPath, mimeType) {
 		return SavedAsset{}, ErrInvalidImage
 	}
 
@@ -116,25 +116,20 @@ func detectedImageType(header []byte) (mimeType, extension string) {
 	}
 }
 
-func validImageFile(path, mimeType string, size int64) bool {
+func validImageFile(path, mimeType string) bool {
 	file, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer file.Close()
-	if mimeType == "image/png" || mimeType == "image/jpeg" {
+	switch mimeType {
+	case "image/png", "image/jpeg":
 		_, _, err := image.DecodeConfig(file)
 		return err == nil
-	}
-	if mimeType != "image/webp" || size < 20 {
+	case "image/webp":
+		_, err := webp.DecodeConfig(file)
+		return err == nil
+	default:
 		return false
 	}
-	header := make([]byte, 16)
-	if _, err := io.ReadFull(file, header); err != nil {
-		return false
-	}
-	declaredSize := int64(binary.LittleEndian.Uint32(header[4:8])) + 8
-	chunk := string(header[12:16])
-	return string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP" && declaredSize <= size &&
-		(chunk == "VP8 " || chunk == "VP8L" || chunk == "VP8X")
 }

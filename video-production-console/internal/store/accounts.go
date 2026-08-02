@@ -113,27 +113,29 @@ func (r *AccountRepository) Rename(ctx context.Context, id, name string, updated
 	return r.Get(ctx, id)
 }
 
-func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID string, background NewBackground, updatedAt time.Time) (account domain.Account, err error) {
+func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID string, background NewBackground, updatedAt time.Time) (account domain.Account, committed bool, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return domain.Account{}, fmt.Errorf("begin replace background: %w", err)
+		return domain.Account{}, false, fmt.Errorf("begin replace background: %w", err)
 	}
 	defer func() {
-		if err != nil {
+		if !committed {
 			_ = tx.Rollback()
 		}
 	}()
-	var exists int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE id = ?`, accountID).Scan(&exists); err != nil {
-		return domain.Account{}, fmt.Errorf("check account: %w", err)
+	account, err = scanAccount(tx.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_id, b.path,
+        a.color, a.status, a.created_at, a.updated_at
+        FROM accounts a LEFT JOIN assets b ON b.id = a.background_asset_id WHERE a.id = ?`, accountID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Account{}, false, ErrAccountNotFound
 	}
-	if exists == 0 {
-		return domain.Account{}, ErrAccountNotFound
+	if err != nil {
+		return domain.Account{}, false, fmt.Errorf("read account for background replacement: %w", err)
 	}
 	var version int
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM assets
-        WHERE account_id = ? AND type = 'account_background'`, accountID).Scan(&version); err != nil {
-		return domain.Account{}, fmt.Errorf("choose background version: %w", err)
+		WHERE account_id = ? AND type = 'account_background'`, accountID).Scan(&version); err != nil {
+		return domain.Account{}, false, fmt.Errorf("choose background version: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO assets
         (id, project_id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
@@ -141,15 +143,19 @@ func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID str
 		background.ID, accountID, background.Path, background.Filename, background.MIMEType,
 		background.Size, background.SHA256, version, updatedAt)
 	if err != nil {
-		return domain.Account{}, fmt.Errorf("insert replacement background: %w", err)
+		return domain.Account{}, false, fmt.Errorf("insert replacement background: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET background_asset_id = ?, updated_at = ? WHERE id = ?`, background.ID, updatedAt, accountID); err != nil {
-		return domain.Account{}, fmt.Errorf("update background pointer: %w", err)
+		return domain.Account{}, false, fmt.Errorf("update background pointer: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return domain.Account{}, fmt.Errorf("commit replace background: %w", err)
+		return domain.Account{}, false, fmt.Errorf("commit replace background: %w", err)
 	}
-	return r.Get(ctx, accountID)
+	committed = true
+	account.BackgroundAssetID = &background.ID
+	account.BackgroundPath = &background.Path
+	account.UpdatedAt = updatedAt
+	return account, true, nil
 }
 
 func (r *AccountRepository) Deactivate(ctx context.Context, id string, updatedAt time.Time) error {

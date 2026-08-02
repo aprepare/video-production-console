@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -190,6 +191,35 @@ func TestListRenameReplaceBackgroundAndDeactivateAccount(t *testing.T) {
 	defer reused.Body.Close()
 	if reused.StatusCode != http.StatusCreated {
 		t.Fatalf("reused name status = %d, want %d; body = %s", reused.StatusCode, http.StatusCreated, readBody(t, reused.Body))
+	}
+}
+
+func TestReplaceBackgroundKeepsCommittedFileWhenPostCommitAccountReadWouldFail(t *testing.T) {
+	handler, db, _ := newAccountsTestHandler(t)
+	created := createAccount(t, handler, "账号A")
+	_, err := db.Exec(fmt.Sprintf(`CREATE TRIGGER corrupt_account_timestamp_after_replacement
+        AFTER INSERT ON assets WHEN NEW.account_id = '%s' AND NEW.version = 2
+        BEGIN
+            UPDATE accounts SET created_at = 'not-a-timestamp' WHERE id = NEW.account_id;
+        END`, created.ID))
+	if err != nil {
+		t.Fatalf("create fault trigger: %v", err)
+	}
+
+	response := performAccountUpload(t, handler, "/api/accounts/"+created.ID+"/background", "", "new.jpg", encodeJPEG(t))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("replace status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, readBody(t, response.Body))
+	}
+	var assetID, path string
+	if err := db.QueryRow(`SELECT background_asset_id FROM accounts WHERE id = ?`, created.ID).Scan(&assetID); err != nil {
+		t.Fatalf("read committed pointer: %v", err)
+	}
+	if err := db.QueryRow(`SELECT path FROM assets WHERE id = ?`, assetID).Scan(&path); err != nil {
+		t.Fatalf("read committed asset: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("committed background file was deleted: %v", err)
 	}
 }
 

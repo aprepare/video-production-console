@@ -171,9 +171,11 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 		ID: uuid.NewString(), Path: saved.Path, Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType,
 		Size: saved.Size, SHA256: saved.SHA256,
 	}
-	account, err := h.repository.ReplaceBackground(request.Context(), id, background, time.Now().UTC())
+	account, committed, err := h.repository.ReplaceBackground(request.Context(), id, background, time.Now().UTC())
 	if err != nil {
-		_ = os.Remove(saved.Path)
+		if !committed {
+			_ = os.Remove(saved.Path)
+		}
 		if errors.Is(err, store.ErrAccountNotFound) {
 			writeError(response, http.StatusNotFound, "account_not_found", "The account was not found.")
 			return

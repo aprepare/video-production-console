@@ -67,6 +67,7 @@ func TestSaveAccountBackgroundRejectsInvalidInputsWithoutArtifacts(t *testing.T)
 		data      []byte
 	}{
 		{name: "text disguised as PNG", accountID: testAccountID, data: []byte("this is not a PNG")},
+		{name: "malformed WebP header", accountID: testAccountID, data: malformedWebP()},
 		{name: "path traversal account ID", accountID: "../outside", data: encodeImage(t, "png")},
 		{name: "oversized", accountID: testAccountID, data: bytes.Repeat([]byte{'x'}, int(MaxBackgroundSize+1))},
 	}
@@ -81,6 +82,14 @@ func TestSaveAccountBackgroundRejectsInvalidInputsWithoutArtifacts(t *testing.T)
 				t.Fatalf("files remain after failed upload: %v", files)
 			}
 		})
+	}
+}
+
+func malformedWebP() []byte {
+	return []byte{
+		'R', 'I', 'F', 'F', 12, 0, 0, 0,
+		'W', 'E', 'B', 'P', 'V', 'P', '8', 'X',
+		0, 0, 0, 0,
 	}
 }
 
