@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "required": ["status", "summary", "artifacts"],
+  "properties": {
+    "status": {"enum": ["completed", "needs_input", "failed"]},
+    "summary": {"type": "string"},
+    "question": {
+      "type": ["object", "null"],
+      "properties": {
+        "text": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["text", "options"]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "path", "description"],
+        "properties": {
+          "type": {"type": "string"},
+          "path": {"type": "string"},
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "topic_card_path": {"type": ["string", "null"]},
+    "next_recommended_action": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}
