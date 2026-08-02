@@ -2,8 +2,12 @@ package assets
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -12,6 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"video-production-console/internal/store"
 )
 
 const testAccountID = "b605e068-6ada-4e34-a966-dc730746d49f"
@@ -85,6 +92,96 @@ func TestSaveAccountBackgroundRejectsInvalidInputsWithoutArtifacts(t *testing.T)
 	}
 }
 
+func TestSaveAccountBackgroundRejectsTruncatedAndOversizedDimensions(t *testing.T) {
+	valid := encodeImage(t, "png")
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{name: "truncated after header", data: valid[:len(valid)-8], wantErr: ErrInvalidImage},
+		{name: "width over limit", data: encodeSizedPNG(t, 8193, 1), wantErr: ErrImageDimensions},
+		{name: "pixel count over limit", data: encodeSizedPNG(t, 7000, 7000), wantErr: ErrImageDimensions},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := NewService(root).SaveAccountBackground(testAccountID, "image.png", bytes.NewReader(tt.data))
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if files := allFiles(t, root); len(files) != 0 {
+				t.Fatalf("files remain after rejected image: %v", files)
+			}
+		})
+	}
+}
+
+func TestReconcileAccountBackgroundsRemovesOnlyOrphansAndTemps(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts (id, name, color, status, created_at, updated_at)
+        VALUES (?, 'account', '#fff', 'active', ?, ?)`, testAccountID, now, now); err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+	directory := filepath.Join(root, "accounts", testAccountID, "background")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatalf("mkdir background: %v", err)
+	}
+	referencedOld := filepath.Join(directory, "old.png")
+	referencedCurrent := filepath.Join(directory, "current.png")
+	orphan := filepath.Join(directory, "orphan.png")
+	temporary := filepath.Join(directory, ".upload-crash")
+	outside := filepath.Join(root, "outside.png")
+	for _, path := range []string{referencedOld, referencedCurrent, orphan, temporary, outside} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
+			t.Fatalf("write fixture %q: %v", path, err)
+		}
+	}
+	for version, path := range []string{referencedOld, referencedCurrent} {
+		assetID := []string{"6dc72973-372d-42f2-9102-a40133829d40", "8e95eab4-520f-4296-b4d0-97882125f063"}[version]
+		if _, err := db.Exec(`INSERT INTO assets
+            (id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
+            VALUES (?, ?, 'account_background', ?, 'file.png', 'image/png', 1, 'hash', ?, 'active', ?)`,
+			assetID, testAccountID, path, version+1, now); err != nil {
+			t.Fatalf("insert asset: %v", err)
+		}
+	}
+	if err := NewService(root).ReconcileAccountBackgrounds(context.Background(), db, nil); err != nil {
+		t.Fatalf("ReconcileAccountBackgrounds() error = %v", err)
+	}
+	for _, path := range []string{referencedOld, referencedCurrent, outside} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("preserved file %q: %v", path, err)
+		}
+	}
+	for _, path := range []string{orphan, temporary} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("orphan %q still exists, stat error = %v", path, err)
+		}
+	}
+}
+
+func TestReconcileAccountBackgroundsReportsInvalidAccountsRoot(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := os.WriteFile(filepath.Join(root, "accounts"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write invalid accounts root: %v", err)
+	}
+	if err := NewService(root).ReconcileAccountBackgrounds(context.Background(), db, nil); err == nil {
+		t.Fatal("ReconcileAccountBackgrounds() succeeded for non-directory accounts root")
+	}
+}
+
 func malformedWebP() []byte {
 	return []byte{
 		'R', 'I', 'F', 'F', 12, 0, 0, 0,
@@ -110,6 +207,24 @@ func encodeImage(t *testing.T, format string) []byte {
 	if err != nil {
 		t.Fatalf("encode test image: %v", err)
 	}
+	return buffer.Bytes()
+}
+
+func encodeSizedPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	data := make([]byte, 13)
+	binary.BigEndian.PutUint32(data[0:4], uint32(width))
+	binary.BigEndian.PutUint32(data[4:8], uint32(height))
+	data[8], data[9], data[10], data[11], data[12] = 8, 2, 0, 0, 0
+	var buffer bytes.Buffer
+	buffer.Write([]byte("\x89PNG\r\n\x1a\n"))
+	binary.Write(&buffer, binary.BigEndian, uint32(len(data)))
+	buffer.WriteString("IHDR")
+	buffer.Write(data)
+	crc := crc32.NewIEEE()
+	crc.Write([]byte("IHDR"))
+	crc.Write(data)
+	binary.Write(&buffer, binary.BigEndian, crc.Sum32())
 	return buffer.Bytes()
 }
 

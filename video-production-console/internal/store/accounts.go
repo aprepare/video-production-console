@@ -21,6 +21,14 @@ type AccountRepository struct {
 	db *sql.DB
 }
 
+type CommitState uint8
+
+const (
+	CommitNotCommitted CommitState = iota
+	CommitCommitted
+	CommitUnknown
+)
+
 type NewBackground struct {
 	ID       string
 	Path     string
@@ -34,10 +42,10 @@ func NewAccountRepository(db *sql.DB) *AccountRepository {
 	return &AccountRepository{db: db}
 }
 
-func (r *AccountRepository) CreateWithBackground(ctx context.Context, account domain.Account, background NewBackground) (err error) {
+func (r *AccountRepository) CreateWithBackground(ctx context.Context, account domain.Account, background NewBackground) (state CommitState, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin create account: %w", err)
+		return CommitNotCommitted, fmt.Errorf("begin create account: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -49,7 +57,7 @@ func (r *AccountRepository) CreateWithBackground(ctx context.Context, account do
         VALUES (?, ?, NULL, ?, 'active', ?, ?)`,
 		account.ID, account.Name, account.Color, account.CreatedAt, account.UpdatedAt)
 	if err != nil {
-		return classifyAccountError(err)
+		return CommitNotCommitted, classifyAccountError(err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO assets
         (id, project_id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
@@ -57,15 +65,15 @@ func (r *AccountRepository) CreateWithBackground(ctx context.Context, account do
 		background.ID, account.ID, background.Path, background.Filename, background.MIMEType,
 		background.Size, background.SHA256, account.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("insert background asset: %w", err)
+		return CommitNotCommitted, fmt.Errorf("insert background asset: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET background_asset_id = ? WHERE id = ?`, background.ID, account.ID); err != nil {
-		return fmt.Errorf("link background asset: %w", err)
+		return CommitNotCommitted, fmt.Errorf("link background asset: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit create account: %w", err)
+		return CommitUnknown, fmt.Errorf("commit create account: %w", err)
 	}
-	return nil
+	return CommitCommitted, nil
 }
 
 func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) {
@@ -113,13 +121,13 @@ func (r *AccountRepository) Rename(ctx context.Context, id, name string, updated
 	return r.Get(ctx, id)
 }
 
-func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID string, background NewBackground, updatedAt time.Time) (account domain.Account, committed bool, err error) {
+func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID string, background NewBackground, updatedAt time.Time) (account domain.Account, state CommitState, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return domain.Account{}, false, fmt.Errorf("begin replace background: %w", err)
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("begin replace background: %w", err)
 	}
 	defer func() {
-		if !committed {
+		if state != CommitCommitted {
 			_ = tx.Rollback()
 		}
 	}()
@@ -127,15 +135,15 @@ func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID str
         a.color, a.status, a.created_at, a.updated_at
         FROM accounts a LEFT JOIN assets b ON b.id = a.background_asset_id WHERE a.id = ?`, accountID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Account{}, false, ErrAccountNotFound
+		return domain.Account{}, CommitNotCommitted, ErrAccountNotFound
 	}
 	if err != nil {
-		return domain.Account{}, false, fmt.Errorf("read account for background replacement: %w", err)
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("read account for background replacement: %w", err)
 	}
 	var version int
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM assets
 		WHERE account_id = ? AND type = 'account_background'`, accountID).Scan(&version); err != nil {
-		return domain.Account{}, false, fmt.Errorf("choose background version: %w", err)
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("choose background version: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO assets
         (id, project_id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
@@ -143,19 +151,19 @@ func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID str
 		background.ID, accountID, background.Path, background.Filename, background.MIMEType,
 		background.Size, background.SHA256, version, updatedAt)
 	if err != nil {
-		return domain.Account{}, false, fmt.Errorf("insert replacement background: %w", err)
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("insert replacement background: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET background_asset_id = ?, updated_at = ? WHERE id = ?`, background.ID, updatedAt, accountID); err != nil {
-		return domain.Account{}, false, fmt.Errorf("update background pointer: %w", err)
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("update background pointer: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return domain.Account{}, false, fmt.Errorf("commit replace background: %w", err)
+		return domain.Account{}, CommitUnknown, fmt.Errorf("commit replace background: %w", err)
 	}
-	committed = true
+	state = CommitCommitted
 	account.BackgroundAssetID = &background.ID
 	account.BackgroundPath = &background.Path
 	account.UpdatedAt = updatedAt
-	return account, true, nil
+	return account, CommitCommitted, nil
 }
 
 func (r *AccountRepository) Deactivate(ctx context.Context, id string, updatedAt time.Time) error {

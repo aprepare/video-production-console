@@ -12,8 +12,9 @@ import (
 
 // Options provides dependencies and settings used by the application.
 type Options struct {
-	Config config.Config
-	DB     *sql.DB
+	Config       config.Config
+	DB           *sql.DB
+	AssetService *assets.Service
 }
 
 // App is the HTTP application.
@@ -29,7 +30,11 @@ func New(options Options) *App {
 		_ = json.NewEncoder(response).Encode(map[string]string{"status": "ok"})
 	})
 	if options.DB != nil {
-		accounts := httpapi.NewAccountsHandler(options.DB, assets.NewService(options.Config.DataRoot))
+		assetService := options.AssetService
+		if assetService == nil {
+			assetService = assets.NewService(options.Config.DataRoot)
+		}
+		accounts := httpapi.NewAccountsHandler(options.DB, assetService)
 		mux.Handle("/api/accounts", accounts)
 		mux.Handle("/api/accounts/", accounts)
 	}

@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -17,8 +19,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"video-production-console/internal/assets"
+	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
 
@@ -85,6 +89,28 @@ func TestCreateAccountValidation(t *testing.T) {
 	}
 }
 
+func TestAccountMultipartEndpointsRejectOversizedRequest(t *testing.T) {
+	handler, _, _ := newAccountsTestHandler(t)
+	created := createAccount(t, handler, "账号A")
+	systemTemp := t.TempDir()
+	t.Setenv("TMP", systemTemp)
+	t.Setenv("TEMP", systemTemp)
+	for _, target := range []string{"/api/accounts", "/api/accounts/" + created.ID + "/background"} {
+		t.Run(target, func(t *testing.T) {
+			response := performAccountUpload(t, handler, target, "账号B", "huge.png", bytes.Repeat([]byte{'x'}, (21<<20)+1))
+			defer response.Body.Close()
+			assertAPIError(t, response, http.StatusRequestEntityTooLarge, "payload_too_large")
+			entries, err := os.ReadDir(systemTemp)
+			if err != nil {
+				t.Fatalf("read system temp: %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("oversized multipart left system temp entries: %v", entries)
+			}
+		})
+	}
+}
+
 func TestCreateAccountRejectsDuplicateActiveName(t *testing.T) {
 	handler, _, dataRoot := newAccountsTestHandler(t)
 	first := performAccountUpload(t, handler, "/api/accounts", "账号A", "first.png", pngBytes(t))
@@ -113,7 +139,7 @@ func TestCreateAccountRemovesNewFileWhenDatabaseWriteFails(t *testing.T) {
 	}
 	response := performAccountUpload(t, handler, "/api/accounts", "账号A", "background.png", pngBytes(t))
 	defer response.Body.Close()
-	assertAPIError(t, response, http.StatusInternalServerError, "account_create_failed")
+	assertAPIError(t, response, http.StatusInternalServerError, "internal_error")
 	if files := backgroundFiles(t, root); len(files) != 0 {
 		t.Fatalf("background files remain after DB failure: %v", files)
 	}
@@ -222,6 +248,42 @@ func TestReplaceBackgroundKeepsCommittedFileWhenPostCommitAccountReadWouldFail(t
 		t.Fatalf("committed background file was deleted: %v", err)
 	}
 }
+
+func TestReplaceBackgroundDoesNotDeleteFileWhenCommitOutcomeIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	repository := &unknownCommitRepository{account: domain.Account{ID: "4d739048-2e42-45d3-8128-4dd9b1cae664", Name: "账号A"}}
+	handler := newAccountsHandler(repository, assets.NewService(root))
+	response := performAccountUpload(t, handler, "/api/accounts/"+repository.account.ID+"/background", "", "new.jpg", encodeJPEG(t))
+	defer response.Body.Close()
+	assertAPIError(t, response, http.StatusInternalServerError, "internal_error")
+	if repository.savedPath == "" {
+		t.Fatal("repository did not receive saved background")
+	}
+	if _, err := os.Stat(repository.savedPath); err != nil {
+		t.Fatalf("file was deleted for unknown commit outcome: %v", err)
+	}
+}
+
+type unknownCommitRepository struct {
+	account   domain.Account
+	savedPath string
+}
+
+func (r *unknownCommitRepository) List(context.Context) ([]domain.Account, error) { return nil, nil }
+func (r *unknownCommitRepository) CreateWithBackground(context.Context, domain.Account, store.NewBackground) (store.CommitState, error) {
+	return store.CommitCommitted, nil
+}
+func (r *unknownCommitRepository) Get(context.Context, string) (domain.Account, error) {
+	return r.account, nil
+}
+func (r *unknownCommitRepository) Rename(context.Context, string, string, time.Time) (domain.Account, error) {
+	return r.account, nil
+}
+func (r *unknownCommitRepository) ReplaceBackground(_ context.Context, _ string, background store.NewBackground, _ time.Time) (domain.Account, store.CommitState, error) {
+	r.savedPath = background.Path
+	return domain.Account{}, store.CommitUnknown, errors.New("simulated unknown commit result")
+}
+func (r *unknownCommitRepository) Deactivate(context.Context, string, time.Time) error { return nil }
 
 func TestAccountMutationErrorsAreStable(t *testing.T) {
 	handler, _, _ := newAccountsTestHandler(t)

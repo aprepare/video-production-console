@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,9 +20,20 @@ import (
 )
 
 type accountsHandler struct {
-	repository *store.AccountRepository
+	repository accountStore
 	assets     *assets.Service
 }
+
+type accountStore interface {
+	List(context.Context) ([]domain.Account, error)
+	CreateWithBackground(context.Context, domain.Account, store.NewBackground) (store.CommitState, error)
+	Get(context.Context, string) (domain.Account, error)
+	Rename(context.Context, string, string, time.Time) (domain.Account, error)
+	ReplaceBackground(context.Context, string, store.NewBackground, time.Time) (domain.Account, store.CommitState, error)
+	Deactivate(context.Context, string, time.Time) error
+}
+
+const maxMultipartRequestSize = assets.MaxBackgroundSize + (1 << 20)
 
 type accountResponse struct {
 	ID                string `json:"id"`
@@ -34,7 +47,11 @@ type accountResponse struct {
 }
 
 func NewAccountsHandler(db *sql.DB, assetService *assets.Service) http.Handler {
-	handler := &accountsHandler{repository: store.NewAccountRepository(db), assets: assetService}
+	return newAccountsHandler(store.NewAccountRepository(db), assetService)
+}
+
+func newAccountsHandler(repository accountStore, assetService *assets.Service) http.Handler {
+	handler := &accountsHandler{repository: repository, assets: assetService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/accounts", handler.list)
 	mux.HandleFunc("POST /api/accounts", handler.create)
@@ -58,8 +75,7 @@ func (h *accountsHandler) list(response http.ResponseWriter, request *http.Reque
 }
 
 func (h *accountsHandler) create(response http.ResponseWriter, request *http.Request) {
-	if err := request.ParseMultipartForm(21 << 20); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_multipart", "The multipart form could not be read.")
+	if !parseMultipart(response, request) {
 		return
 	}
 	defer request.MultipartForm.RemoveAll()
@@ -78,7 +94,7 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 	accountID := uuid.NewString()
 	saved, err := h.assets.SaveAccountBackground(accountID, header.Filename, file)
 	if err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_background", "Background must be a PNG, JPEG, or WebP image up to 20 MiB.")
+		writeUploadError(response, err)
 		return
 	}
 	assetID := uuid.NewString()
@@ -88,17 +104,22 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 		BackgroundPath: &saved.Path,
 		Color:          "#5B8FF9", Status: "active", CreatedAt: now, UpdatedAt: now,
 	}
-	err = h.repository.CreateWithBackground(request.Context(), account, store.NewBackground{
+	state, err := h.repository.CreateWithBackground(request.Context(), account, store.NewBackground{
 		ID: assetID, Path: saved.Path, Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType,
 		Size: saved.Size, SHA256: saved.SHA256,
 	})
 	if err != nil {
-		_ = os.Remove(saved.Path)
+		if state == store.CommitNotCommitted {
+			if removeErr := os.Remove(saved.Path); removeErr != nil {
+				log.Printf("remove uncommitted account background: %v", removeErr)
+			}
+		}
 		if errors.Is(err, store.ErrAccountNameConflict) {
 			writeError(response, http.StatusConflict, "account_name_conflict", "An active account with this name already exists.")
 			return
 		}
-		writeError(response, http.StatusInternalServerError, "account_create_failed", "The account could not be created.")
+		log.Printf("create account: %v", err)
+		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
 	writeJSON(response, http.StatusCreated, toAccountResponse(account))
@@ -151,8 +172,7 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 		writeError(response, http.StatusInternalServerError, "account_read_failed", "The account could not be read.")
 		return
 	}
-	if err := request.ParseMultipartForm(21 << 20); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_multipart", "The multipart form could not be read.")
+	if !parseMultipart(response, request) {
 		return
 	}
 	defer request.MultipartForm.RemoveAll()
@@ -164,23 +184,26 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 	defer file.Close()
 	saved, err := h.assets.SaveAccountBackground(id, header.Filename, file)
 	if err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_background", "Background must be a PNG, JPEG, or WebP image up to 20 MiB.")
+		writeUploadError(response, err)
 		return
 	}
 	background := store.NewBackground{
 		ID: uuid.NewString(), Path: saved.Path, Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType,
 		Size: saved.Size, SHA256: saved.SHA256,
 	}
-	account, committed, err := h.repository.ReplaceBackground(request.Context(), id, background, time.Now().UTC())
+	account, state, err := h.repository.ReplaceBackground(request.Context(), id, background, time.Now().UTC())
 	if err != nil {
-		if !committed {
-			_ = os.Remove(saved.Path)
+		if state == store.CommitNotCommitted {
+			if removeErr := os.Remove(saved.Path); removeErr != nil {
+				log.Printf("remove uncommitted replacement background: %v", removeErr)
+			}
 		}
 		if errors.Is(err, store.ErrAccountNotFound) {
 			writeError(response, http.StatusNotFound, "account_not_found", "The account was not found.")
 			return
 		}
-		writeError(response, http.StatusInternalServerError, "background_update_failed", "The background could not be updated.")
+		log.Printf("replace account background: %v", err)
+		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
 	writeJSON(response, http.StatusOK, toAccountResponse(account))
@@ -210,6 +233,34 @@ func accountID(response http.ResponseWriter, value string) (string, bool) {
 		return "", false
 	}
 	return id.String(), true
+}
+
+func parseMultipart(response http.ResponseWriter, request *http.Request) bool {
+	request.Body = http.MaxBytesReader(response, request.Body, maxMultipartRequestSize)
+	if err := request.ParseMultipartForm(maxMultipartRequestSize); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(response, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+			return false
+		}
+		writeError(response, http.StatusBadRequest, "invalid_multipart", "The multipart form could not be read.")
+		return false
+	}
+	return true
+}
+
+func writeUploadError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, assets.ErrBackgroundTooBig):
+		writeError(response, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+	case errors.Is(err, assets.ErrImageDimensions):
+		writeError(response, http.StatusBadRequest, "image_dimensions_exceeded", "Image dimensions exceed the allowed limits.")
+	case errors.Is(err, assets.ErrInvalidImage), errors.Is(err, assets.ErrInvalidAccountID):
+		writeError(response, http.StatusBadRequest, "invalid_background", "Background must be a valid PNG, JPEG, or WebP image.")
+	default:
+		log.Printf("save account background: %v", err)
+		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
+	}
 }
 
 func safeFilename(name string) string {
