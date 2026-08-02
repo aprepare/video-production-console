@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"video-production-console/internal/assets"
@@ -82,6 +83,41 @@ func New(options Options) *App {
 		if options.Scheduler != nil {
 			mux.Handle("/api/tasks", tasksHandler)
 		}
+		mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				var value string
+				if err := options.DB.QueryRowContext(r.Context(), `SELECT value FROM settings WHERE key='max_codex_concurrency'`).Scan(&value); err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"max_codex_concurrency":` + value + `}`))
+				return
+			}
+			if r.Method != http.MethodPut {
+				http.NotFound(w, r)
+				return
+			}
+			var in struct {
+				Max int `json:"max_codex_concurrency"`
+			}
+			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil || in.Max < 1 || in.Max > 4 {
+				http.Error(w, "max_codex_concurrency must be 1-4", 400)
+				return
+			}
+			if options.Scheduler != nil {
+				if err := options.Scheduler.SetLimit(in.Max); err != nil {
+					http.Error(w, err.Error(), 400)
+					return
+				}
+			}
+			if _, err := options.DB.ExecContext(r.Context(), `UPDATE settings SET value=? WHERE key='max_codex_concurrency'`, strconv.Itoa(in.Max)); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"max_codex_concurrency":` + strconv.Itoa(in.Max) + `}`))
+		})
 	}
 	client := options.BaokuanClient
 	if client == nil && options.Config.BaokuanBaseURL != "" {
