@@ -12,6 +12,30 @@ import (
 	"video-production-console/internal/store"
 )
 
+func TestRunnerKillsBlockedChildOnOversizedJSONL(t *testing.T) {
+	repo, _ := newTestRunner(t, "completed")
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", "$x='{' + ('x' * (16*1024*1024+1)) + '}'; [Console]::Out.Write($x); [Console]::Out.Flush(); Start-Sleep -Seconds 30")
+	runner := NewRunner(cmd, repo, "t1", t.TempDir(), nil)
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected oversized stream failure")
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("runner hung after oversized JSONL")
+	}
+	task, err := repo.Get(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != domain.TaskFailed {
+		t.Fatalf("status=%s", task.Status)
+	}
+}
+
 func newTestRunner(t *testing.T, mode string) (*store.TaskRepository, *Runner) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "task.db"))

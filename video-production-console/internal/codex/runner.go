@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -49,6 +48,18 @@ func (r *Runner) Run(ctx context.Context) error {
 		_ = r.Tasks.UpdateStatus(ctx, r.TaskID, domain.TaskFailed, "", "start_failed", err.Error())
 		return err
 	}
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	var stopErr error
+	terminate := func(err error) {
+		stopOnce.Do(func() {
+			stopErr = err
+			close(stop)
+			_ = stdout.Close()
+			_ = stderr.Close()
+			terminateProcess(r.Command)
+		})
+	}
 	var wg sync.WaitGroup
 	var finalMu sync.Mutex
 	var final *Result
@@ -59,20 +70,29 @@ func (r *Runner) Run(ctx context.Context) error {
 		for item := range events {
 			e := item.event
 			if e.SessionID != "" {
-				if err := r.Tasks.SetSession(ctx, r.TaskID, e.SessionID); err != nil && firstErr == nil {
-					firstErr = err
+				if err := r.Tasks.SetSession(ctx, r.TaskID, e.SessionID); err != nil {
+					if firstErr == nil {
+						firstErr = err
+						terminate(err)
+					}
 				}
 			}
-			if err := r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: e.Kind, Level: e.Level, DisplayText: e.DisplayText, RawJSON: string(e.RawJSON)}); err != nil && firstErr == nil {
-				firstErr = err
+			if err := r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: e.Kind, Level: e.Level, DisplayText: e.DisplayText, RawJSON: string(e.RawJSON)}); err != nil {
+				if firstErr == nil {
+					firstErr = err
+					terminate(err)
+				}
 			}
 		}
 		writerErr <- firstErr
 	}()
 	wg.Add(2)
 	readerErrs := make(chan error, 2)
-	go func() { defer wg.Done(); readerErrs <- r.readStdout(ctx, stdout, events, &finalMu, &final) }()
-	go func() { defer wg.Done(); readerErrs <- r.readStderr(ctx, stderr, events) }()
+	go func() {
+		defer wg.Done()
+		readerErrs <- r.readStdout(ctx, stdout, events, stop, terminate, &finalMu, &final)
+	}()
+	go func() { defer wg.Done(); readerErrs <- r.readStderr(ctx, stderr, events, stop, terminate) }()
 	wg.Wait()
 	waitErr := r.Command.Wait()
 	close(events)
@@ -115,6 +135,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	if persistenceErr != nil {
 		status, code, message = domain.TaskFailed, "event_persistence_failed", persistenceErr.Error()
 	}
+	if stopErr != nil && streamErr == nil && persistenceErr == nil {
+		status, code, message = domain.TaskFailed, "stream_failed", stopErr.Error()
+	}
 	if err := r.Tasks.UpdateStatus(ctx, r.TaskID, status, summary, code, message); err != nil {
 		return err
 	}
@@ -130,12 +153,13 @@ func (r *Runner) Run(ctx context.Context) error {
 	return nil
 }
 func finalMuResult(v *Result) *Result { return v }
-func (r *Runner) readStdout(ctx context.Context, reader io.Reader, events chan<- persistedEvent, mu *sync.Mutex, final **Result) error {
+func (r *Runner) readStdout(ctx context.Context, reader io.Reader, events chan<- persistedEvent, stop <-chan struct{}, terminate func(error), mu *sync.Mutex, final **Result) error {
 	s := bufio.NewScanner(reader)
 	s.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for s.Scan() {
 		event, err := ParseLine(s.Bytes())
 		if err != nil {
+			terminate(err)
 			return err
 		}
 		if event.FinalResult != nil {
@@ -143,21 +167,37 @@ func (r *Runner) readStdout(ctx context.Context, reader io.Reader, events chan<-
 			*final = event.FinalResult
 			mu.Unlock()
 		}
-		events <- persistedEvent{event: event}
+		select {
+		case events <- persistedEvent{event: event}:
+		case <-stop:
+			return fmt.Errorf("runner stopped")
+		}
 		if r.Broadcast != nil {
 			r.Broadcast(event)
 		}
 	}
-	return s.Err()
+	if err := s.Err(); err != nil {
+		terminate(err)
+		return err
+	}
+	return nil
 }
-func (r *Runner) readStderr(ctx context.Context, reader io.Reader, events chan<- persistedEvent) error {
+func (r *Runner) readStderr(ctx context.Context, reader io.Reader, events chan<- persistedEvent, stop <-chan struct{}, terminate func(error)) error {
 	s := bufio.NewScanner(reader)
 	s.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for s.Scan() {
 		text := s.Text()
-		events <- persistedEvent{event: Event{Kind: "technical_log", Level: "error", DisplayText: text, RawJSON: []byte(fmt.Sprintf("%q", text))}}
+		select {
+		case events <- persistedEvent{event: Event{Kind: "technical_log", Level: "error", DisplayText: text, RawJSON: []byte(fmt.Sprintf("%q", text))}}:
+		case <-stop:
+			return fmt.Errorf("runner stopped")
+		}
 	}
-	return s.Err()
+	if err := s.Err(); err != nil {
+		terminate(err)
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) registerArtifacts(ctx context.Context, artifacts []Artifact) error {
@@ -178,24 +218,24 @@ func (r *Runner) registerArtifacts(ctx context.Context, artifacts []Artifact) er
 		if err != nil {
 			return err
 		}
-		resolved, err := filepath.EvalSymlinks(abs)
+		file, resolved, info, err := openVerifiedArtifact(abs, root)
 		if err != nil {
 			return err
 		}
 		if !withinRoot(root, resolved) {
+			_ = file.Close()
 			return fmt.Errorf("artifact path escapes asset root: %s", artifact.Path)
 		}
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return err
-		}
 		if task.ProjectID == nil {
+			_ = file.Close()
 			continue
 		}
 		_, err = r.Tasks.DB().ExecContext(ctx, `INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at,source_task_id) VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?)`, *task.ProjectID, task.AccountID, artifact.Type, resolved, filepath.Base(resolved), "application/octet-stream", info.Size(), "", 1, "ready", timeNow(), r.TaskID)
 		if err != nil {
+			_ = file.Close()
 			return err
 		}
+		_ = file.Close()
 	}
 	return nil
 }
