@@ -51,6 +51,8 @@ func New(options Options) *App {
 		mux.Handle("/api/accounts/", accounts)
 		projects := httpapi.NewProjectsHandler(options.DB, assetService)
 		mux.Handle("/api/projects", projects)
+		assetsHandler := httpapi.NewAssetsHandler(options.DB, assetService)
+		mux.Handle("/api/assets/", assetsHandler)
 		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler)
 		mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "/tasks") && options.Scheduler != nil {

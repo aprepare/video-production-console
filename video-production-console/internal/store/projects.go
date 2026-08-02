@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrProjectNotFound      = errors.New("project not found")
+	ErrAssetNotFound        = errors.New("asset not found")
 	ErrAccountInactive      = errors.New("account must be active")
 	ErrProjectStageConflict = errors.New("project stage changed")
 )
@@ -174,6 +175,18 @@ func (r *ProjectRepository) ListAssets(ctx context.Context, projectID string) ([
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// GetAsset returns an asset by its stable identifier. Asset paths must not be
+// exposed without first resolving the owning database record.
+func (r *ProjectRepository) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
+	var a domain.Asset
+	err := r.db.QueryRowContext(ctx, `SELECT id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at,source_task_id FROM assets WHERE id=?`, id).
+		Scan(&a.ID, &a.ProjectID, &a.AccountID, &a.Type, &a.Path, &a.Filename, &a.MIMEType, &a.Size, &a.SHA256, &a.Version, &a.Status, &a.CreatedAt, &a.SourceTaskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Asset{}, ErrAssetNotFound
+	}
+	return a, err
 }
 func (r *ProjectRepository) Background(ctx context.Context, projectID string) (domain.Asset, error) {
 	var a domain.Asset

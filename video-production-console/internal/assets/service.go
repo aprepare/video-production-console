@@ -446,6 +446,56 @@ func NewService(dataRoot string) *Service {
 	return &Service{dataRoot: filepath.Clean(dataRoot)}
 }
 
+var ErrAssetPathInvalid = errors.New("asset path is outside the data root")
+
+// OpenAsset opens a database-referenced asset only when its resolved path is
+// inside the service data root and is not a symlink/reparse alias. The caller
+// owns the returned file and must close it.
+func (s *Service) OpenAsset(asset domain.Asset) (*os.File, os.FileInfo, error) {
+	if _, err := uuid.Parse(asset.ID); err != nil || strings.TrimSpace(asset.Path) == "" {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	root, err := filepath.Abs(s.dataRoot)
+	if err != nil {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	path, err := filepath.Abs(asset.Path)
+	if err != nil {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	// Resolve before opening to reject symlink/reparse paths. The final file is
+	// opened and served by handle, so the HTTP layer never reopens a pathname.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	resolvedRel, err := filepath.Rel(root, resolved)
+	if err != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(os.PathSeparator)) || resolved != path {
+		return nil, nil, ErrAssetPathInvalid
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, ErrAssetPathInvalid
+	}
+	return f, info, nil
+}
+
 func (s *Service) SaveAccountBackground(accountID, _ string, reader io.Reader) (saved SavedAsset, err error) {
 	parsedID, err := uuid.Parse(accountID)
 	if err != nil {
