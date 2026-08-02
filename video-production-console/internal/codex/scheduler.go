@@ -30,17 +30,18 @@ type scheduled struct {
 	cancelled bool
 }
 type TaskScheduler struct {
-	tasks        *store.TaskRepository
-	makeCommand  CommandFactory
-	makeResume   ResumeCommandFactory
-	broadcast    func(Event)
-	mu           sync.Mutex
-	limit        int
-	running      map[string]*scheduled
-	projectLocks map[string]string
-	wake         chan struct{}
-	stop         chan struct{}
-	done         chan struct{}
+	tasks         *store.TaskRepository
+	makeCommand   CommandFactory
+	makeResume    ResumeCommandFactory
+	broadcast     func(Event)
+	broadcastTask func(string, Event)
+	mu            sync.Mutex
+	limit         int
+	running       map[string]*scheduled
+	projectLocks  map[string]string
+	wake          chan struct{}
+	stop          chan struct{}
+	done          chan struct{}
 }
 
 func NewScheduler(tasks *store.TaskRepository, limit int, makeCommand CommandFactory, makeResume ResumeCommandFactory, broadcast func(Event)) (*TaskScheduler, error) {
@@ -137,7 +138,14 @@ func (s *TaskScheduler) dispatch() {
 	}
 }
 func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.Cmd, root, key string) {
-	r := NewRunner(cmd, s.tasks, t.ID, root, s.broadcast)
+	broadcast := s.broadcast
+	s.mu.Lock()
+	taskBroadcast := s.broadcastTask
+	s.mu.Unlock()
+	if taskBroadcast != nil {
+		broadcast = func(e Event) { taskBroadcast(t.ID, e) }
+	}
+	r := NewRunner(cmd, s.tasks, t.ID, root, broadcast)
 	err := r.Run(ctx)
 	s.mu.Lock()
 	item := s.running[t.ID]
@@ -150,6 +158,13 @@ func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.C
 	} else if err != nil { /* Runner persists failure details. */
 	}
 	s.signal()
+}
+
+// SetTaskBroadcast connects persisted runner events to a task-aware realtime hub.
+func (s *TaskScheduler) SetTaskBroadcast(fn func(string, Event)) {
+	s.mu.Lock()
+	s.broadcastTask = fn
+	s.mu.Unlock()
 }
 func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 	if t.ID == "" {

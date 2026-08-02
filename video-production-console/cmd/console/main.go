@@ -17,6 +17,7 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/obsidian"
+	"video-production-console/internal/realtime"
 	"video-production-console/internal/store"
 )
 
@@ -67,7 +68,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer scheduler.Close()
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Obsidian: obsidian.New(settings.ObsidianVault)})
+	hub := realtime.NewHub(taskRepo)
+	scheduler.SetTaskBroadcast(func(taskID string, _ codex.Event) {
+		events, err := taskRepo.Events(context.Background(), taskID)
+		if err == nil && len(events) > 0 {
+			hub.Publish(context.Background(), taskID, events[len(events)-1])
+		}
+	})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault)})
 	log.Printf("video production console listening on %s", settings.ListenAddr)
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
 		log.Fatal(err)

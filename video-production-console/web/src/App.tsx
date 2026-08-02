@@ -25,6 +25,7 @@ function App() {
   const [detail, setDetail] = useState<ProjectDetail | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
+  const activeTasks = useMemo(() => tasks.filter(t => ['queued', 'running', 'waiting_input'].includes(t.status)), [tasks])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,6 +60,16 @@ function App() {
     const timer = window.setInterval(() => void loadDetail(selected), 5000)
     return () => window.clearInterval(timer)
   }, [selected, loadDetail])
+  useEffect(() => {
+    if (!selected) return
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const sockets = activeTasks.map(task => {
+      const socket = new WebSocket(`${protocol}//${location.host}/api/tasks/${task.id}/events?after=0`)
+      socket.onmessage = () => void loadDetail(selected)
+      return socket
+    })
+    return () => sockets.forEach(socket => socket.close())
+  }, [selected, activeTasks, loadDetail])
   const visible = useMemo(() => account ? projects.filter(p => p.account_id === account) : projects, [projects, account])
   const updateLimit = async (v: number) => { setLimit(v); await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ max_codex_concurrency: v }) }) }
   const openProject = (project: Project) => { setSelected(project); setDetail(null); setTasks([]); void loadDetail(project) }
