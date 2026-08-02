@@ -8,8 +8,10 @@ import (
 
 	"video-production-console/internal/assets"
 	"video-production-console/internal/baokuan"
+	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/httpapi"
+	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/store"
 )
@@ -20,6 +22,8 @@ type Options struct {
 	DB            *sql.DB
 	AssetService  *assets.Service
 	Realtime      *realtime.Hub
+	Scheduler     codex.Scheduler
+	Obsidian      obsidian.Service
 	BaokuanClient *baokuan.Client
 	MCPExecutable string
 }
@@ -46,7 +50,14 @@ func New(options Options) *App {
 		mux.Handle("/api/accounts/", accounts)
 		projects := httpapi.NewProjectsHandler(options.DB, assetService)
 		mux.Handle("/api/projects", projects)
-		mux.Handle("/api/projects/", projects)
+		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler)
+		mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/tasks") && options.Scheduler != nil {
+				tasksHandler.ServeHTTP(w, r)
+				return
+			}
+			projects.ServeHTTP(w, r)
+		})
 		tasks := store.NewTaskRepository(options.DB)
 		hub := options.Realtime
 		if hub == nil {
@@ -66,6 +77,11 @@ func New(options Options) *App {
 			}
 			hub.Handler(w, r, taskID)
 		})
+		// Mount task commands separately; the event route above remains the
+		// narrowly-scoped WebSocket endpoint.
+		if options.Scheduler != nil {
+			mux.Handle("/api/tasks", tasksHandler)
+		}
 	}
 	client := options.BaokuanClient
 	if client == nil && options.Config.BaokuanBaseURL != "" {
@@ -77,6 +93,10 @@ func New(options Options) *App {
 		mux.Handle("/api/dependencies/", deps)
 		mux.Handle("/api/library/", deps)
 	}
+	mux.HandleFunc("GET /api/obsidian", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(options.Obsidian.Health())
+	})
 	return &App{handler: mux}
 }
 
