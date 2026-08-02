@@ -42,6 +42,7 @@ type Account struct {
 	ID                string
 	Name              string
 	BackgroundAssetID *string
+	BackgroundPath    *string
 	Color             string
 	Status            string
 	CreatedAt         time.Time
