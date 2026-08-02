@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"video-production-console/internal/config"
@@ -29,6 +30,17 @@ func TestHealth(t *testing.T) {
 	}
 	if got, want := string(body), "{\"status\":\"ok\"}\n"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestEmbeddedWebConsole(t *testing.T) {
+	response := httptest.NewRecorder()
+	New(Options{}).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), `<div id="root"></div>`) {
+		t.Fatal("embedded React root is missing")
 	}
 }
 
