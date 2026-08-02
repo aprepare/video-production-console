@@ -28,6 +28,69 @@ func (r *TaskRepository) Get(ctx context.Context, id string) (domain.CodexTask, 
 	}
 	return t, err
 }
+func (r *TaskRepository) List(ctx context.Context, projectID string, status domain.TaskStatus) ([]domain.CodexTask, error) {
+	q := `SELECT id,project_id,account_id,type,skill_name,status,codex_session_id,prompt_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at FROM codex_tasks WHERE 1=1`
+	args := []any{}
+	if projectID != "" {
+		q += " AND project_id=?"
+		args = append(args, projectID)
+	}
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	q += " ORDER BY created_at DESC"
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.CodexTask
+	for rows.Next() {
+		var t domain.CodexTask
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &t.Status, &t.CodexSessionID, &t.PromptSnapshot, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+func (r *TaskRepository) AddMessage(ctx context.Context, message domain.TaskMessage) error {
+	if message.ID == "" {
+		message.ID = uuid.NewString()
+	}
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = time.Now().UTC()
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO task_messages(id,task_id,role,content,question_schema,created_at) VALUES(?,?,?,?,?,?)`, message.ID, message.TaskID, message.Role, message.Content, nullablePtr(message.QuestionSchema), message.CreatedAt)
+	return err
+}
+func nullablePtr(v *string) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+func (r *TaskRepository) Messages(ctx context.Context, taskID string) ([]domain.TaskMessage, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,task_id,role,content,question_schema,created_at FROM task_messages WHERE task_id=? ORDER BY created_at,id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.TaskMessage
+	for rows.Next() {
+		var m domain.TaskMessage
+		var q sql.NullString
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.Role, &m.Content, &q, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		if q.Valid {
+			m.QuestionSchema = &q.String
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
 func (r *TaskRepository) SetSession(ctx context.Context, id, session string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET codex_session_id=? WHERE id=?`, session, id)
 	return err
