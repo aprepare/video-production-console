@@ -44,6 +44,13 @@ func TestBuildResumeCommandUsesSessionAndStdin(t *testing.T) {
 	if cmd.Stdin == nil {
 		t.Fatal("expected answer on stdin")
 	}
+	got, err := StdinText(cmd.Stdin)
+	if err != nil {
+		t.Fatalf("read stdin: %v", err)
+	}
+	if got != "answer" {
+		t.Fatalf("stdin = %q, want answer", got)
+	}
 }
 
 func TestSafeEnvironmentIsDeterministicallyOrdered(t *testing.T) {

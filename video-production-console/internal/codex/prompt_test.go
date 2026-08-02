@@ -42,7 +42,17 @@ func TestBuildPromptRejectsUnsupportedTaskAndOutsidePaths(t *testing.T) {
 		t.Fatal("expected outside project directory to fail")
 	}
 	ctx.ProjectDir = filepath.Join(root, "project")
+	ctx.AllowedDir = filepath.Join(root, "sibling-project", "out")
+	if _, err := BuildPrompt(ctx); err == nil {
+		t.Fatal("expected sibling allowed directory to fail")
+	}
+	ctx.AllowedDir = filepath.Join(root, "project", "out")
+	ctx.AssetPaths = []string{filepath.Join(root, "sibling-project", "source.mp4")}
+	if _, err := BuildPrompt(ctx); err == nil {
+		t.Fatal("expected sibling asset path to fail")
+	}
 	ctx.AllowedDir = filepath.Join(root, "..", "outside")
+	ctx.AssetPaths = nil
 	if _, err := BuildPrompt(ctx); err == nil {
 		t.Fatal("expected outside allowed directory to fail")
 	}
@@ -50,6 +60,35 @@ func TestBuildPromptRejectsUnsupportedTaskAndOutsidePaths(t *testing.T) {
 	ctx.AssetPaths = []string{filepath.Join(root, "..", "secret.txt")}
 	if _, err := BuildPrompt(ctx); err == nil {
 		t.Fatal("expected outside asset path to fail")
+	}
+}
+
+func TestBuildPromptRejectsSymlinkEscapes(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	outside := t.TempDir()
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(project, "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	projectLink := filepath.Join(root, "project-link")
+	if err := os.Symlink(outside, projectLink); err != nil {
+		t.Skipf("project symlink unavailable: %v", err)
+	}
+	if _, err := BuildPrompt(TaskContext{TaskType: "remix", WorkspaceDir: root, ProjectDir: projectLink}); err == nil {
+		t.Fatal("expected symlinked project directory to fail")
+	}
+	ctx := TaskContext{TaskType: "remix", WorkspaceDir: root, ProjectDir: project, AllowedDir: filepath.Join(link, "out")}
+	if _, err := BuildPrompt(ctx); err == nil {
+		t.Fatal("expected symlinked allowed directory to fail")
+	}
+	ctx.AllowedDir = filepath.Join(project, "out")
+	ctx.AssetPaths = []string{filepath.Join(link, "source.mp4")}
+	if _, err := BuildPrompt(ctx); err == nil {
+		t.Fatal("expected symlinked asset path to fail")
 	}
 }
 

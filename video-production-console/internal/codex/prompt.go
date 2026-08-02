@@ -2,6 +2,7 @@ package codex
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -76,7 +77,7 @@ func normalizeContext(ctx TaskContext) (TaskContext, error) {
 	if strings.TrimSpace(ctx.WorkspaceDir) == "" {
 		return TaskContext{}, fmt.Errorf("workspace boundary is required")
 	}
-	workspace, err := filepath.Abs(filepath.Clean(ctx.WorkspaceDir))
+	workspace, err := resolvePath(ctx.WorkspaceDir)
 	if err != nil {
 		return TaskContext{}, fmt.Errorf("normalize workspace boundary: %w", err)
 	}
@@ -88,7 +89,7 @@ func normalizeContext(ctx TaskContext) (TaskContext, error) {
 	if allowed == "" {
 		allowed = project
 	}
-	allowed, err = normalizeInside("allowed directory", allowed, workspace)
+	allowed, err = normalizeInside("allowed directory", allowed, project)
 	if err != nil {
 		return TaskContext{}, err
 	}
@@ -97,7 +98,7 @@ func normalizeContext(ctx TaskContext) (TaskContext, error) {
 		if path == "" {
 			continue
 		}
-		normalized, err := normalizeInside("asset path", path, workspace)
+		normalized, err := normalizeInside("asset path", path, project)
 		if err != nil {
 			return TaskContext{}, err
 		}
@@ -108,7 +109,7 @@ func normalizeContext(ctx TaskContext) (TaskContext, error) {
 }
 
 func normalizeInside(label, path, boundary string) (string, error) {
-	normalized, err := filepath.Abs(filepath.Clean(path))
+	normalized, err := resolvePath(path)
 	if err != nil {
 		return "", fmt.Errorf("normalize %s: %w", label, err)
 	}
@@ -120,4 +121,35 @@ func normalizeInside(label, path, boundary string) (string, error) {
 		return "", fmt.Errorf("%s %q is outside workspace boundary %q", label, path, boundary)
 	}
 	return normalized, nil
+}
+
+// resolvePath canonicalizes every existing component. For a new output path,
+// it resolves the nearest existing parent before appending the missing tail.
+func resolvePath(path string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	probe := abs
+	var missing []string
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			resolved, err := filepath.EvalSymlinks(probe)
+			if err != nil {
+				return "", err
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Abs(filepath.Clean(resolved))
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent, base := filepath.Dir(probe), filepath.Base(probe)
+		if parent == probe {
+			return "", fmt.Errorf("no existing parent for %q", path)
+		}
+		missing = append(missing, base)
+		probe = parent
+	}
 }
