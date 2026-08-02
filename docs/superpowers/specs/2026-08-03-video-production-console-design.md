@@ -144,7 +144,7 @@
 
 - `max_codex_concurrency`：整数 1—4，默认 2。
 - `codex_binary_path`。
-- `codex_profile_name`。
+- `codex_profile_name`：可选；为空时使用当前用户的 Codex CLI 全局配置。
 - `workspace_root`。
 - `obsidian_vault_path`。
 - `baokuan_base_url`，默认 `http://127.0.0.1:2022`。
@@ -282,7 +282,7 @@ CLI stdout 按行解析 JSONL；stderr 单独记录。解析器把不同 CLI 版
 
 ### 10.1 CLI MCP 配置
 
-当前 CLI 的 MCP 列表尚无爆款库服务。控制台安装检查必须验证专用 Codex 配置已注册爆款库 MCP，命令通过现有可执行文件的 `mcp --base http://127.0.0.1:2022` 模式启动。
+当前 CLI 的 MCP 列表尚无爆款库服务。控制台安装检查必须验证执行任务所用的 Codex 配置已注册爆款库 MCP，命令通过现有可执行文件的 `mcp --base http://127.0.0.1:2022` 模式启动。设置页可在用户明确点击后调用 `codex mcp add baokuan -- <程序> mcp --base <地址>`；已有同名配置不一致时只报告冲突，不自动删除或覆盖。
 
 控制台不在每个 Skill 内硬编码 MCP 命令。CLI 专用配置负责工具注册，Skill 只负责调用工具。
 
