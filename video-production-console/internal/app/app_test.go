@@ -52,3 +52,18 @@ func TestAccountRoutesAreMounted(t *testing.T) {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
+
+func TestProjectRoutesAreMounted(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}})
+	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/projects status = %d", response.Code)
+	}
+}

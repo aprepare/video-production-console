@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
 
@@ -180,6 +181,36 @@ func TestReconcileAccountBackgroundsReportsInvalidAccountsRoot(t *testing.T) {
 	if err := NewService(root).ReconcileAccountBackgrounds(context.Background(), db, nil); err == nil {
 		t.Fatal("ReconcileAccountBackgrounds() succeeded for non-directory accounts root")
 	}
+}
+
+func TestSaveProjectAssetValidatesContentAndUsesControlledPath(t *testing.T) {
+	root := t.TempDir()
+	projectID := "f02addf5-275c-4456-a51f-3ebeb9c730ef"
+	svc := NewService(root)
+	text, err := svc.SaveProjectAsset(projectID, domain.AssetContinuousScript, "script.md", bytes.NewReader([]byte("# 文案\n")))
+	if err != nil {
+		t.Fatalf("text upload: %v", err)
+	}
+	if text.MIMEType != "text/markdown; charset=utf-8" {
+		t.Fatalf("mime = %q", text.MIMEType)
+	}
+	wantDir := filepath.Join(root, "projects", projectID, string(domain.AssetContinuousScript))
+	if filepath.Dir(text.Path) != wantDir {
+		t.Fatalf("path = %q, want directory %q", text.Path, wantDir)
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetSubtitle, "bad.srt", bytes.NewReader([]byte{0xff, 0xfe})); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("invalid UTF-8 error = %v", err)
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetAudio, "fake.mp3", bytes.NewReader([]byte("not mp3"))); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("fake MP3 error = %v", err)
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetFinalVideo, "video.txt", bytes.NewReader(minimalMP4())); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("wrong extension error = %v", err)
+	}
+}
+
+func minimalMP4() []byte {
+	return []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 0, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '2'}
 }
 
 func malformedWebP() []byte {

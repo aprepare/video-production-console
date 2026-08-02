@@ -37,6 +37,9 @@ func New(options Options) *App {
 		accounts := httpapi.NewAccountsHandler(options.DB, assetService)
 		mux.Handle("/api/accounts", accounts)
 		mux.Handle("/api/accounts/", accounts)
+		projects := httpapi.NewProjectsHandler(options.DB, assetService)
+		mux.Handle("/api/projects", projects)
+		mux.Handle("/api/projects/", projects)
 	}
 	return &App{handler: mux}
 }

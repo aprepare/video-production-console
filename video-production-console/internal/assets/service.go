@@ -17,18 +17,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/image/webp"
+
+	"video-production-console/internal/domain"
 )
 
 const MaxBackgroundSize int64 = 20 << 20
+const MaxProjectAssetSize int64 = 500 << 20
 
 var (
-	ErrInvalidImage     = errors.New("invalid background image")
-	ErrBackgroundTooBig = errors.New("background image exceeds 20 MiB")
-	ErrImageDimensions  = errors.New("background image dimensions exceed limits")
-	ErrInvalidAccountID = errors.New("invalid account ID")
+	ErrInvalidImage        = errors.New("invalid background image")
+	ErrBackgroundTooBig    = errors.New("background image exceeds 20 MiB")
+	ErrImageDimensions     = errors.New("background image dimensions exceed limits")
+	ErrInvalidAccountID    = errors.New("invalid account ID")
+	ErrInvalidProjectAsset = errors.New("invalid project asset")
+	ErrProjectAssetTooBig  = errors.New("project asset exceeds 500 MiB")
 )
 
 const (
@@ -41,6 +47,133 @@ type SavedAsset struct {
 	MIMEType string
 	Size     int64
 	SHA256   string
+}
+
+func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType, filename string, reader io.Reader) (saved SavedAsset, err error) {
+	parsedID, parseErr := uuid.Parse(projectID)
+	if parseErr != nil {
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	allowed := map[domain.AssetType]map[string]bool{
+		domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true},
+		domain.AssetSubtitle: {".srt": true}, domain.AssetAudio: {".mp3": true, ".wav": true, ".m4a": true},
+		domain.AssetMixDraft: {".mp4": true}, domain.AssetFinalVideo: {".mp4": true},
+	}
+	if !allowed[assetType][ext] {
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
+	directory := filepath.Join(s.dataRoot, "projects", parsedID.String(), string(assetType))
+	if err = os.MkdirAll(directory, 0o755); err != nil {
+		return SavedAsset{}, fmt.Errorf("create project asset directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(directory, ".upload-*")
+	if err != nil {
+		return SavedAsset{}, fmt.Errorf("create project asset temp: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	hash := sha256.New()
+	size, err := io.Copy(io.MultiWriter(temporary, hash), io.LimitReader(reader, MaxProjectAssetSize+1))
+	if err != nil {
+		return SavedAsset{}, fmt.Errorf("write project asset: %w", err)
+	}
+	if size > MaxProjectAssetSize {
+		return SavedAsset{}, ErrProjectAssetTooBig
+	}
+	if err = temporary.Sync(); err != nil {
+		return SavedAsset{}, err
+	}
+	if err = temporary.Close(); err != nil {
+		return SavedAsset{}, err
+	}
+	mimeType, err := validateProjectFile(temporaryPath, assetType, ext)
+	if err != nil {
+		return SavedAsset{}, err
+	}
+	if mimeType == "" {
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
+	finalPath := filepath.Join(directory, uuid.NewString()+ext)
+	if err = os.Rename(temporaryPath, finalPath); err != nil {
+		return SavedAsset{}, fmt.Errorf("publish project asset: %w", err)
+	}
+	return SavedAsset{Path: finalPath, MIMEType: mimeType, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+func validateProjectFile(path string, assetType domain.AssetType, ext string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	var data []byte
+	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitle {
+		data, err = io.ReadAll(file)
+	} else {
+		data = make([]byte, 512)
+		var n int
+		n, err = file.Read(data)
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+		data = data[:n]
+	}
+	if err != nil {
+		return "", err
+	}
+	return validateProjectData(assetType, ext, data), nil
+}
+
+func validateProjectData(assetType domain.AssetType, ext string, data []byte) string {
+	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitle {
+		if !utf8.Valid(data) || bytesContainsNUL(data) {
+			return ""
+		}
+		if ext == ".md" {
+			return "text/markdown; charset=utf-8"
+		}
+		if ext == ".srt" {
+			return "application/x-subrip; charset=utf-8"
+		}
+		return "text/plain; charset=utf-8"
+	}
+	if assetType == domain.AssetAudio {
+		switch ext {
+		case ".mp3":
+			if len(data) >= 3 && string(data[:3]) == "ID3" || len(data) >= 2 && data[0] == 0xff && data[1]&0xe0 == 0xe0 {
+				return "audio/mpeg"
+			}
+		case ".wav":
+			if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
+				return "audio/wav"
+			}
+		case ".m4a":
+			if hasFTYP(data) {
+				return "audio/mp4"
+			}
+		}
+		return ""
+	}
+	if (assetType == domain.AssetMixDraft || assetType == domain.AssetFinalVideo) && ext == ".mp4" && hasFTYP(data) {
+		return "video/mp4"
+	}
+	return ""
+}
+
+func hasFTYP(data []byte) bool { return len(data) >= 12 && string(data[4:8]) == "ftyp" }
+func bytesContainsNUL(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 type Service struct {
