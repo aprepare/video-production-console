@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"video-production-console/internal/assets"
+	"video-production-console/internal/baokuan"
 	"video-production-console/internal/config"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/realtime"
@@ -15,10 +16,12 @@ import (
 
 // Options provides dependencies and settings used by the application.
 type Options struct {
-	Config       config.Config
-	DB           *sql.DB
-	AssetService *assets.Service
-	Realtime     *realtime.Hub
+	Config        config.Config
+	DB            *sql.DB
+	AssetService  *assets.Service
+	Realtime      *realtime.Hub
+	BaokuanClient *baokuan.Client
+	MCPExecutable string
 }
 
 // App is the HTTP application.
@@ -63,6 +66,16 @@ func New(options Options) *App {
 			}
 			hub.Handler(w, r, taskID)
 		})
+	}
+	client := options.BaokuanClient
+	if client == nil && options.Config.BaokuanBaseURL != "" {
+		client = baokuan.NewClient(options.Config.BaokuanBaseURL)
+	}
+	if client != nil {
+		deps := httpapi.NewDependenciesHandler(client, options.Config.CodexBinaryPath, options.MCPExecutable)
+		mux.Handle("/api/dependencies", deps)
+		mux.Handle("/api/dependencies/", deps)
+		mux.Handle("/api/library/", deps)
 	}
 	return &App{handler: mux}
 }
