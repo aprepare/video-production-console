@@ -33,3 +33,12 @@ func TestBuildResumeCommandUsesSessionAndStdin(t *testing.T) {
 		t.Fatal("expected answer on stdin")
 	}
 }
+
+func TestSafeEnvironmentIsDeterministicallyOrdered(t *testing.T) {
+	entries := (Config{}).SafeEnvironment()
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1] > entries[i] {
+			t.Fatalf("environment is not sorted: %q before %q", entries[i-1], entries[i])
+		}
+	}
+}

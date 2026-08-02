@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -22,6 +23,7 @@ func (c Config) SafeEnvironment() []string {
 			result = append(result, entry)
 		}
 	}
+	sort.Strings(result)
 	return result
 }
 
