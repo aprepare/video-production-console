@@ -19,12 +19,12 @@ import (
 // Public settings are read from the settings service and are never accepted
 // wholesale from the browser.
 type TaskManifestRequest struct {
-	SessionID           string
-	CandidateID         string
-	TopicCandidatesPath string
-	TopicCardPath       string
-	MachineProfilePath  string
-	ApprovalMode        string
+	SessionID           string `json:"session_id,omitempty"`
+	CandidateID         string `json:"candidate_id,omitempty"`
+	TopicCandidatesPath string `json:"topic_candidates_path,omitempty"`
+	TopicCardPath       string `json:"topic_card_path,omitempty"`
+	MachineProfilePath  string `json:"machine_profile_path,omitempty"`
+	ApprovalMode        string `json:"approval_mode,omitempty"`
 }
 
 // TaskManifestPreparer is called before a task is handed to the scheduler.
