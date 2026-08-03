@@ -7,6 +7,16 @@ import (
 
 type MissingAssetsError struct{ Missing []AssetType }
 
+type ProjectStatus string
+
+const (
+	ProjectDraft          ProjectStatus = "draft"
+	ProjectProducing      ProjectStatus = "producing"
+	ProjectReadyToPublish ProjectStatus = "ready_to_publish"
+	ProjectPublished      ProjectStatus = "published"
+	ProjectArchived       ProjectStatus = "archived"
+)
+
 func (e *MissingAssetsError) Error() string {
 	parts := make([]string, len(e.Missing))
 	for i, assetType := range e.Missing {
@@ -50,6 +60,34 @@ func CanMove(from, to ProjectStage, available map[AssetType]bool) error {
 	}
 	if len(missing) > 0 {
 		return &MissingAssetsError{Missing: missing}
+	}
+	return nil
+}
+
+func CanMovePublicationStatus(from, to ProjectStatus) error {
+	order := map[ProjectStatus]int{
+		ProjectDraft:          0,
+		ProjectProducing:      1,
+		ProjectReadyToPublish: 2,
+		ProjectPublished:      3,
+	}
+	known := func(status ProjectStatus) bool {
+		_, ok := order[status]
+		return ok || status == ProjectArchived
+	}
+	if !known(from) || !known(to) {
+		return fmt.Errorf("invalid publication status move from %s to %s", from, to)
+	}
+	if from == ProjectArchived && to != ProjectArchived {
+		return fmt.Errorf("archived project cannot be moved")
+	}
+	if from == to || to == ProjectArchived {
+		return nil
+	}
+	fromOrder, fromOK := order[from]
+	toOrder, toOK := order[to]
+	if !fromOK || !toOK || toOrder != fromOrder+1 {
+		return fmt.Errorf("invalid publication status move from %s to %s", from, to)
 	}
 	return nil
 }

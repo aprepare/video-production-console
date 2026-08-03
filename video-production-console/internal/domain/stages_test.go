@@ -49,3 +49,32 @@ func TestCanMoveRejectsUnknownStagesBeforeSpecialCases(t *testing.T) {
 		}
 	}
 }
+
+func TestCanMovePublicationStatus(t *testing.T) {
+	for _, move := range []struct{ from, to ProjectStatus }{
+		{ProjectDraft, ProjectProducing},
+		{ProjectProducing, ProjectReadyToPublish},
+		{ProjectReadyToPublish, ProjectPublished},
+		{ProjectProducing, ProjectProducing},
+		{ProjectDraft, ProjectArchived},
+		{ProjectPublished, ProjectArchived},
+	} {
+		if err := CanMovePublicationStatus(move.from, move.to); err != nil {
+			t.Fatalf("CanMovePublicationStatus(%q, %q): %v", move.from, move.to, err)
+		}
+	}
+}
+
+func TestCanMovePublicationStatusRejectsInvalidMovement(t *testing.T) {
+	for _, move := range []struct{ from, to ProjectStatus }{
+		{ProjectDraft, ProjectReadyToPublish},
+		{ProjectPublished, ProjectDraft},
+		{ProjectArchived, ProjectPublished},
+		{"invalid", ProjectArchived},
+		{ProjectDraft, "invalid"},
+	} {
+		if err := CanMovePublicationStatus(move.from, move.to); err == nil {
+			t.Fatalf("CanMovePublicationStatus(%q, %q) succeeded", move.from, move.to)
+		}
+	}
+}

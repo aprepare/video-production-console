@@ -15,27 +15,22 @@ const (
 	StageArchived  ProjectStage = "archived"
 )
 
-type AssetType string
-
-const (
-	AssetContinuousScript  AssetType = "continuous_script"
-	AssetSpokenScript      AssetType = "spoken_script"
-	AssetAudio             AssetType = "audio"
-	AssetSubtitle          AssetType = "subtitle"
-	AssetAccountBackground AssetType = "account_background"
-	AssetMixDraft          AssetType = "mix_draft"
-	AssetFinalVideo        AssetType = "final_video"
-)
-
 type TaskStatus string
 
 const (
-	TaskQueued       TaskStatus = "queued"
-	TaskRunning      TaskStatus = "running"
+	TaskQueued        TaskStatus = "queued"
+	TaskRunning       TaskStatus = "running"
+	TaskAwaitingInput TaskStatus = "awaiting_input"
+	TaskResuming      TaskStatus = "resuming"
+	TaskCompleted     TaskStatus = "completed"
+	TaskFailed        TaskStatus = "failed"
+	TaskCanceled      TaskStatus = "canceled"
+	TaskInterrupted   TaskStatus = "interrupted"
+
+	// Deprecated: retained while legacy task persistence is migrated.
 	TaskWaitingInput TaskStatus = "waiting_input"
-	TaskCompleted    TaskStatus = "completed"
-	TaskFailed       TaskStatus = "failed"
-	TaskCancelled    TaskStatus = "cancelled"
+	// Deprecated: retained while legacy task persistence is migrated.
+	TaskCancelled TaskStatus = "cancelled"
 )
 
 type Account struct {
@@ -54,6 +49,7 @@ type Project struct {
 	AccountID     string
 	Title         string
 	Stage         ProjectStage
+	Status        ProjectStatus
 	TopicCardPath *string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
