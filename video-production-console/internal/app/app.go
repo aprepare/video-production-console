@@ -75,8 +75,12 @@ func New(options Options) *App {
 		mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 			const prefix = "/api/tasks/"
 			path := r.URL.Path
-			if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "/events") {
+			if !strings.HasPrefix(path, prefix) {
 				http.NotFound(w, r)
+				return
+			}
+			if !strings.HasSuffix(path, "/events") {
+				tasksHandler.ServeHTTP(w, r)
 				return
 			}
 			taskID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/events")
