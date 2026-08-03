@@ -125,6 +125,12 @@ function App() {
     document.addEventListener('click', onTaskClick)
     return () => document.removeEventListener('click', onTaskClick)
   }, [tasks])
+  useEffect(() => {
+    if (!taskOpen) return
+    const latest = tasks.find(task => task.id === taskOpen.id)
+    if (!latest) { setTaskOpen(null); return }
+    if (latest.status !== taskOpen.status || latest.result_summary !== taskOpen.result_summary || latest.error_message !== taskOpen.error_message || latest.messages?.length !== taskOpen.messages?.length || latest.events?.length !== taskOpen.events?.length) setTaskOpen(latest)
+  }, [tasks, taskOpen])
 
   const login = async (event: FormEvent) => {
     event.preventDefault()
