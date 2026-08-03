@@ -144,14 +144,17 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Enqueue persists codex_tasks synchronously before signalling the worker.
+	// The message references that task through a foreign key, so its parent
+	// must exist before the conversation entry is inserted.
+	if e := h.scheduler.Enqueue(r.Context(), task); e != nil {
+		writeError(w, 500, "idea_task_failed", "Idea planning task could not be queued.")
+		return
+	}
 	taskMsg := msg
 	taskMsg.TaskID = &taskID
 	if e := h.repo.AddMessage(r.Context(), taskMsg); e != nil {
 		writeError(w, 500, "idea_message_failed", "Idea message could not be saved.")
-		return
-	}
-	if e := h.scheduler.Enqueue(r.Context(), task); e != nil {
-		writeError(w, 500, "idea_task_failed", "Idea planning task could not be queued.")
 		return
 	}
 	writeJSON(w, 202, map[string]any{"message": taskMsg, "task_id": taskID})
