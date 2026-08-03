@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-production-console.local/schemas/settings.schema.json",
+  "title": "Video production console settings",
+  "oneOf": [
+    { "$ref": "#/$defs/settingsView" },
+    { "$ref": "#/$defs/settingsUpdate" }
+  ],
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "maxLength": 32767,
+      "pattern": "^(?:[A-Za-z]:\\\\|/).+"
+    },
+    "optionalAbsolutePath": {
+      "oneOf": [
+        { "const": "" },
+        { "$ref": "#/$defs/absolutePath" }
+      ]
+    },
+    "publicSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "listen_addr",
+        "data_root",
+        "max_codex_concurrency",
+        "baokuan_base_url",
+        "baokuan_mcp_executable",
+        "obsidian_vault",
+        "topic_cards_dir",
+        "grok_base_url",
+        "grok_model",
+        "codex_binary_path",
+        "media_index_path",
+        "media_root",
+        "jianying_root"
+      ],
+      "properties": {
+        "listen_addr": {
+          "type": "string",
+          "maxLength": 263,
+          "pattern": "^(?:localhost|(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"
+        },
+        "data_root": { "$ref": "#/$defs/absolutePath" },
+        "max_codex_concurrency": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "baokuan_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]{1,5})?(?:/[^#]*)?)$"
+        },
+        "baokuan_mcp_executable": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "obsidian_vault": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "topic_cards_dir": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "grok_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "grok_model": { "type": "string", "maxLength": 256 },
+        "codex_binary_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "media_index_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "media_root": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "jianying_root": { "$ref": "#/$defs/optionalAbsolutePath" }
+      }
+    },
+    "secretInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "grok_api_key": { "type": "string", "maxLength": 16384 },
+        "pexels_api_key": { "type": "string", "maxLength": 16384 }
+      }
+    },
+    "secretStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configured", "masked"],
+      "properties": {
+        "configured": { "type": "boolean" },
+        "masked": { "type": "string" }
+      },
+      "if": {
+        "properties": { "configured": { "const": true } },
+        "required": ["configured"]
+      },
+      "then": {
+        "properties": { "masked": { "type": "string", "minLength": 1, "pattern": "^\\*+$" } }
+      },
+      "else": {
+        "properties": { "masked": { "const": "" } }
+      }
+    },
+    "secretView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grok_api_key", "pexels_api_key"],
+      "properties": {
+        "grok_api_key": { "$ref": "#/$defs/secretStatus" },
+        "pexels_api_key": { "$ref": "#/$defs/secretStatus" }
+      }
+    },
+    "settingsUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public", "secrets"],
+      "properties": {
+        "public": { "$ref": "#/$defs/publicSettings" },
+        "secrets": { "$ref": "#/$defs/secretInput" }
+      }
+    },
+    "settingsView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public", "settings_version", "secrets"],
+      "properties": {
+        "public": { "$ref": "#/$defs/publicSettings" },
+        "settings_version": { "type": "integer", "minimum": 0 },
+        "secrets": { "$ref": "#/$defs/secretView" }
+      }
+    }
+  }
+}
