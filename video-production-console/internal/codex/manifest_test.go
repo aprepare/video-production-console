@@ -176,6 +176,43 @@ func TestBuildManifestDerivesPrimaryRoleAndRejectsAssetIdentitySpoofing(t *testi
 	}
 }
 
+func TestBuildManifestUsesActionSpecificInputRoles(t *testing.T) {
+	root, projectID, accountID := t.TempDir(), uuid.NewString(), uuid.NewString()
+	file := filepath.Join(root, "input.txt")
+	if err := os.WriteFile(file, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		action domain.TaskAction
+		typ    domain.AssetType
+		want   string
+	}{
+		{domain.ActionRemixStandard, domain.AssetSourceScript, "primary_source"},
+		{domain.ActionRemixEnhanced, domain.AssetSourceScript, "primary_source"},
+		{domain.ActionRemixFromTopic, domain.AssetTopicCard, "topic_brief"},
+		{domain.ActionSpokenFormat, domain.AssetContinuousScript, "approved_script"},
+		{domain.ActionRemixReview, domain.AssetContinuousScript, "review_target"},
+	} {
+		t.Run(string(tt.action), func(t *testing.T) {
+			taskID := uuid.NewString()
+			manifest, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID}, Action: tt.action, OutputDir: filepath.Join(root, "tasks", taskID, "output"), SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, Inputs: []domain.AssetVersion{manifestVersion(projectID, accountID, tt.typ, file)}, ExpectedOutputs: requiredOutputsForTest(tt.action)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manifest.Inputs[0].Role != tt.want {
+				t.Fatalf("role=%q want %q", manifest.Inputs[0].Role, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildManifestRequiresActionOutputs(t *testing.T) {
+	root, taskID := t.TempDir(), uuid.NewString()
+	if _, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicBrainstorm, OutputDir: filepath.Join(root, "tasks", taskID, "output"), ExpectedOutputs: []ExpectedOutput{}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session"}}); err == nil {
+		t.Fatal("missing topic_candidates output accepted")
+	}
+}
+
 func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 	root := t.TempDir()
 	projectRoot := filepath.Join(root, "projects", uuid.NewString())
@@ -213,7 +250,7 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := WriteManifest(manifest, ManifestRoots{Project: projectRoot, AccountAssets: accountRoot, Obsidian: obsidianRoot})
+	path, err := WriteManifest(manifest, ManifestRoots{Project: projectRoot, AccountAssets: accountRoot, Obsidian: obsidianRoot, MachineProfiles: projectRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +269,7 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 		t.Fatalf("output=%q", written.OutputDir)
 	}
 	manifest.NonSecretSettings.MediaRoot = "changed"
-	if _, err := WriteManifest(manifest, ManifestRoots{Project: projectRoot, AccountAssets: accountRoot, Obsidian: obsidianRoot}); err == nil {
+	if _, err := WriteManifest(manifest, ManifestRoots{Project: projectRoot, AccountAssets: accountRoot, Obsidian: obsidianRoot, MachineProfiles: projectRoot}); err == nil {
 		t.Fatal("expected non-overwrite rejection")
 	}
 }
@@ -346,7 +383,7 @@ func TestWriteManifestRejectsApprovalModeOutsideSchemaEnum(t *testing.T) {
 	}
 }
 
-func TestTaskManifestSchemaConstrainsExactTypeRolePairs(t *testing.T) {
+func TestTaskManifestSchemaConstrainsActionSpecificTypeRolePairs(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "task-manifest.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -355,27 +392,11 @@ func TestTaskManifestSchemaConstrainsExactTypeRolePairs(t *testing.T) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	properties := schema["properties"].(map[string]any)
-	inputs := properties["inputs"].(map[string]any)
-	items := inputs["items"].(map[string]any)
-	pairs, ok := items["oneOf"].([]any)
-	if !ok {
-		t.Fatal("input schema must define oneOf exact type/role pairs")
-	}
-	found := false
-	for _, raw := range pairs {
-		pair := raw.(map[string]any)["properties"].(map[string]any)
-		typ := pair["type"].(map[string]any)["const"]
-		role := pair["role"].(map[string]any)["const"]
-		if typ == "source_script" && role == "primary_source" {
-			found = true
+	text := string(data)
+	for _, want := range []string{"primary_source", "topic_brief", "approved_script", "review_target", "minContains"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("schema missing action role/output constraint %q", want)
 		}
-		if typ == "source_script" && role != "primary_source" {
-			t.Fatalf("source_script permits role %v", role)
-		}
-	}
-	if !found {
-		t.Fatal("source_script/primary_source pair missing")
 	}
 }
 
@@ -519,6 +540,37 @@ func TestBuildManifestAddsTopicActionSettingsAndEngineeringCandidateInput(t *tes
 	}
 }
 
+func TestWriteManifestBindsTrustedTopicRoots(t *testing.T) {
+	project, vault, taskID := t.TempDir(), t.TempDir(), uuid.NewString()
+	cards := filepath.Join(vault, "cards")
+	if err := os.MkdirAll(cards, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidates := filepath.Join(project, "candidates.json")
+	if err := os.WriteFile(candidates, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicCommit, OutputDir: filepath.Join(project, "tasks", taskID, "output"), ExpectedOutputs: []ExpectedOutput{{Type: "topic_card", Required: true}}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session", CandidateID: "candidate", TopicCandidatesPath: candidates, ObsidianVault: project, TopicCardsDir: project}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := WriteManifest(manifest, ManifestRoots{Project: project, Obsidian: vault, TopicCards: cards})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written TaskManifest
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.NonSecretSettings.ObsidianVault != vault || written.NonSecretSettings.TopicCardsDir != cards {
+		t.Fatalf("untrusted topic roots published: %#v", written.NonSecretSettings)
+	}
+}
+
 func TestBuildManifestRejectsExpectedOutputOutsideActionAllowlist(t *testing.T) {
 	root, taskID := t.TempDir(), uuid.NewString()
 	_, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicBrainstorm, OutputDir: filepath.Join(root, "tasks", taskID, "output"), ExpectedOutputs: []ExpectedOutput{{Type: "mix_draft", Required: true}}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session-1"}})
@@ -583,4 +635,15 @@ func manifestHasRole(manifest TaskManifest, role string) bool {
 		}
 	}
 	return false
+}
+
+func requiredOutputsForTest(action domain.TaskAction) []ExpectedOutput {
+	switch action {
+	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic:
+		return []ExpectedOutput{{Type: "continuous_script", Required: true}}
+	case domain.ActionSpokenFormat:
+		return []ExpectedOutput{{Type: "spoken_script", Required: true}}
+	default:
+		return []ExpectedOutput{}
+	}
 }

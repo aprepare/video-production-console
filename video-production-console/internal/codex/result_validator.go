@@ -28,6 +28,10 @@ var formalAssetTypes = map[domain.AssetType]bool{
 }
 
 func ValidateResultEnvelopeJSON(data []byte, expectedTaskID string, expectedAction domain.TaskAction, outputDir string) (ResultEnvelope, error) {
+	return ValidateResultEnvelopeJSONWithRoots(data, expectedTaskID, expectedAction, outputDir, ManifestRoots{})
+}
+
+func ValidateResultEnvelopeJSONWithRoots(data []byte, expectedTaskID string, expectedAction domain.TaskAction, outputDir string, roots ManifestRoots) (ResultEnvelope, error) {
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return ResultEnvelope{}, err
 	}
@@ -58,10 +62,34 @@ func ValidateResultEnvelopeJSON(data []byte, expectedTaskID string, expectedActi
 	if envelope.Status == "needs_input" {
 		envelope.Status = "awaiting_input"
 	}
-	if err := ValidateResultEnvelope(envelope, expectedTaskID, expectedAction, outputDir); err != nil {
+	if err := ValidateResultEnvelopeWithRoots(envelope, expectedTaskID, expectedAction, outputDir, roots); err != nil {
 		return ResultEnvelope{}, err
 	}
 	return envelope, nil
+}
+
+// ValidateResultEnvelopeAgainstManifest uses the same trusted roots that
+// published the manifest and enforces every required declared output.
+func ValidateResultEnvelopeAgainstManifest(envelope ResultEnvelope, manifest TaskManifest, roots ManifestRoots) error {
+	if err := ValidateResultEnvelopeWithRoots(envelope, manifest.TaskID, manifest.Action, manifest.OutputDir, roots); err != nil {
+		return err
+	}
+	if envelope.Status != "completed" {
+		return nil
+	}
+	delivered := map[string]bool{}
+	for _, artifact := range envelope.Artifacts {
+		delivered[artifact.Type] = true
+	}
+	for _, asset := range envelope.AssetOutputs {
+		delivered[string(asset.Type)] = true
+	}
+	for _, output := range manifest.ExpectedOutputs {
+		if output.Required && !delivered[output.Type] {
+			return fmt.Errorf("completed result did not deliver required output %q", output.Type)
+		}
+	}
+	return nil
 }
 
 func normalizeNestedResultFields(fields map[string]json.RawMessage) error {
@@ -263,6 +291,10 @@ func ParseResultEnvelope(data []byte, expectedTaskID string, expectedAction doma
 	return ValidateResultEnvelopeJSON(data, expectedTaskID, expectedAction, outputDir)
 }
 
+func ParseResultEnvelopeWithRoots(data []byte, expectedTaskID string, expectedAction domain.TaskAction, outputDir string, roots ManifestRoots) (ResultEnvelope, error) {
+	return ValidateResultEnvelopeJSONWithRoots(data, expectedTaskID, expectedAction, outputDir, roots)
+}
+
 func ValidateResultEnvelope(envelope ResultEnvelope, expectedTaskID string, expectedAction domain.TaskAction, outputDir string) error {
 	return ValidateResultEnvelopeWithRoots(envelope, expectedTaskID, expectedAction, outputDir, ManifestRoots{})
 }
@@ -326,8 +358,18 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 			return fmt.Errorf("artifact %d type %q is not allowed for action %q", i, artifact.Type, envelope.Action)
 		}
 		artifactRoot := root
+		receiptRoot := artifactRoot
 		if artifact.Type == "topic_card" {
-			artifactRoot, err = requiredDirectoryRoot("Obsidian", roots.Obsidian)
+			artifactRoot, err = requiredDirectoryRoot("topic cards", roots.TopicCards)
+			if err == nil {
+				vault, vaultErr := requiredDirectoryRoot("Obsidian", roots.Obsidian)
+				if vaultErr != nil || !pathInside(vault, artifactRoot) {
+					err = fmt.Errorf("topic cards root is not inside trusted Obsidian Vault")
+				}
+				if vaultErr == nil {
+					receiptRoot = vault
+				}
+			}
 			if err != nil {
 				return fmt.Errorf("artifact %d: %w", i, err)
 			}
@@ -341,12 +383,20 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 			return fmt.Errorf("artifact %d must name a regular file", i)
 		}
 		if artifact.Type == "topic_card" {
-			rel, err := filepath.Rel(artifactRoot, path)
+			rel, err := filepath.Rel(receiptRoot, path)
 			if err != nil || filepath.IsAbs(artifact.RelativePath) || filepath.Clean(artifact.RelativePath) != rel || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return fmt.Errorf("artifact %d relative_path does not match Vault path", i)
 			}
-			actual, err := hashResultFile(path)
-			if err != nil || !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
+			file, _, _, err := openVerifiedArtifact(path, artifactRoot)
+			if err != nil {
+				return fmt.Errorf("artifact %d open receipt: %w", i, err)
+			}
+			actual, hashErr := hashOpenFile(file)
+			_ = file.Close()
+			if hashErr != nil {
+				return fmt.Errorf("artifact %d hash receipt: %w", i, hashErr)
+			}
+			if !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
 				return fmt.Errorf("artifact %d sha256 does not match file content", i)
 			}
 		} else if artifact.RelativePath != "" || artifact.SHA256 != "" {
@@ -376,7 +426,7 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 				return fmt.Errorf("asset outputs overlap")
 			}
 		}
-		if err := validateAssetMetadata(asset, path); err != nil {
+		if err := validateAssetMetadata(asset, path, root); err != nil {
 			return fmt.Errorf("asset output %d: %w", i, err)
 		}
 		assetPaths = append(assetPaths, path)
@@ -421,7 +471,7 @@ func pathsOverlap(a, b string) bool {
 	return canonicalSamePath(a, b) || pathInside(a, b) || pathInside(b, a)
 }
 
-func validateAssetMetadata(asset AssetOutput, path string) error {
+func validateAssetMetadata(asset AssetOutput, path, root string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("inspect output: %w", err)
@@ -431,10 +481,12 @@ func validateAssetMetadata(asset AssetOutput, path string) error {
 	}
 	switch asset.StorageKind {
 	case domain.StorageFile:
-		if !info.Mode().IsRegular() {
+		file, _, openedInfo, err := openVerifiedArtifact(path, root)
+		if err != nil || !openedInfo.Mode().IsRegular() {
 			return fmt.Errorf("storage_kind=file does not name a regular file")
 		}
-		if asset.Size != info.Size() {
+		defer file.Close()
+		if asset.Size != openedInfo.Size() {
 			return fmt.Errorf("size does not match file")
 		}
 		if !sha256Pattern.MatchString(asset.SHA256) {
@@ -444,9 +496,9 @@ func validateAssetMetadata(asset AssetOutput, path string) error {
 		if parseErr != nil || !strings.Contains(mediaType, "/") || mediaType == "inode/directory" {
 			return fmt.Errorf("file MIME metadata is inconsistent")
 		}
-		actual, err := hashResultFile(path)
-		if err != nil {
-			return fmt.Errorf("hash file output: %w", err)
+		actual, hashErr := hashOpenFile(file)
+		if hashErr != nil {
+			return fmt.Errorf("hash file output: %w", hashErr)
 		}
 		if !strings.EqualFold(actual, asset.SHA256) {
 			return fmt.Errorf("sha256 does not match file content")
@@ -571,6 +623,13 @@ func hashResultFile(path string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
+	return hashOpenFile(file)
+}
+
+func hashOpenFile(file *os.File) (string, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", err

@@ -298,11 +298,11 @@ func TestValidateResultEnvelopeTopicCardUsesVaultReceiptAndActionMatrix(t *testi
 		t.Fatal(err)
 	}
 	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionTopicCommit, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{{Type: "topic_card", Path: card, RelativePath: "cards/card.md", SHA256: sha256HexForTest(t, card), Description: "card"}}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
-	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault}); err != nil {
+	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault, TopicCards: cards}); err != nil {
 		t.Fatal(err)
 	}
 	envelope.Artifacts[0].SHA256 = strings.Repeat("0", 64)
-	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault}); err == nil {
+	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault, TopicCards: cards}); err == nil {
 		t.Fatal("topic card accepted an invalid receipt hash")
 	}
 }
@@ -321,6 +321,15 @@ func TestValidateResultEnvelopeRejectsActionAssetMismatchAndMalformedMediaType(t
 	envelope.AssetOutputs[0].MIME = "text/plain; charset"
 	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
 		t.Fatal("malformed MIME parameters accepted")
+	}
+}
+
+func TestCompletedResultMustDeliverManifestRequiredOutputs(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	manifest := TaskManifest{TaskID: taskID, Action: domain.ActionRemixStandard, OutputDir: out, ExpectedOutputs: []ExpectedOutput{{Type: "continuous_script", Required: true}}}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionRemixStandard, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
+	if err := ValidateResultEnvelopeAgainstManifest(envelope, manifest, ManifestRoots{}); err == nil {
+		t.Fatal("completed result omitted required output")
 	}
 }
 

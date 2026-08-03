@@ -102,6 +102,7 @@ type ManifestSettings struct {
 	SessionID            string `json:"session_id,omitempty"`
 	CandidateID          string `json:"candidate_id,omitempty"`
 	TopicCandidatesPath  string `json:"topic_candidates_path,omitempty"`
+	TopicCardPath        string `json:"topic_card_path,omitempty"`
 	GrokBaseURL          string `json:"grok_base_url,omitempty"`
 	GrokModel            string `json:"grok_model,omitempty"`
 	CodexBinaryPath      string `json:"codex_binary_path,omitempty"`
@@ -161,7 +162,10 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		if pathsOverlap(manifestPath, inputPath) {
 			return TaskManifest{}, fmt.Errorf("input version %q overlaps task manifest path", version.ID)
 		}
-		role := manifestRole(version.Type)
+		role, err := manifestRole(in.Action, version.Type)
+		if err != nil {
+			return TaskManifest{}, err
+		}
 		roles[role] = true
 		inputs = append(inputs, ManifestInput{
 			AssetID: version.AssetID, VersionID: version.ID, Version: version.Version,
@@ -191,6 +195,9 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		in.NonSecretSettings.TopicCandidatesPath = path
 		engineeringInputs = append(engineeringInputs, EngineeringInput{Type: "topic_candidates", Path: path})
 	}
+	if in.Action == domain.ActionTopicDeepen && len(inputs) == 1 {
+		in.NonSecretSettings.TopicCardPath = inputs[0].Path
+	}
 	if strings.TrimSpace(in.NonSecretSettings.MachineProfilePath) != "" {
 		path, err := resolvePath(in.NonSecretSettings.MachineProfilePath)
 		if err != nil {
@@ -216,8 +223,12 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		ExpectedOutputs:   append([]ExpectedOutput(nil), in.ExpectedOutputs...), ApprovalMode: approval,
 		SkillSnapshotID: in.SkillSnapshot.ID, NonSecretSettings: in.NonSecretSettings,
 	}
+	if in.ExpectedOutputs != nil {
+		manifest.ExpectedOutputs = make([]ExpectedOutput, len(in.ExpectedOutputs))
+		copy(manifest.ExpectedOutputs, in.ExpectedOutputs)
+	}
 	if manifest.ExpectedOutputs == nil {
-		manifest.ExpectedOutputs = []ExpectedOutput{}
+		manifest.ExpectedOutputs = defaultExpectedOutputs(in.Action)
 	}
 	if in.Project != nil {
 		manifest.Project = &ManifestProject{ID: in.Project.ID, AccountID: in.Project.AccountID}
@@ -229,9 +240,11 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 }
 
 type ManifestRoots struct {
-	Project       string
-	AccountAssets string
-	Obsidian      string
+	Project         string
+	AccountAssets   string
+	Obsidian        string
+	TopicCards      string
+	MachineProfiles string
 }
 
 type manifestFileOperations struct {
@@ -272,6 +285,43 @@ func WriteManifest(manifest TaskManifest, roots ManifestRoots) (string, error) {
 	obsidianRoot, err := optionalResolvedRoot(roots.Obsidian)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize Obsidian root: %w", err)
+	}
+	if manifest.Action == domain.ActionTopicCommit || manifest.Action == domain.ActionTopicDeepen {
+		cardsRoot, err := requiredDirectoryRoot("topic cards", roots.TopicCards)
+		if err != nil {
+			return "", err
+		}
+		if obsidianRoot == "" || !pathInside(obsidianRoot, cardsRoot) {
+			return "", fmt.Errorf("topic cards root must be inside trusted Obsidian Vault")
+		}
+		manifest.NonSecretSettings.ObsidianVault = obsidianRoot
+		manifest.NonSecretSettings.TopicCardsDir = cardsRoot
+		if manifest.Action == domain.ActionTopicDeepen {
+			card, err := canonicalContained("topic card", manifest.NonSecretSettings.TopicCardPath, cardsRoot)
+			if err != nil || len(manifest.Inputs) != 1 || !canonicalSamePath(card, manifest.Inputs[0].Path) {
+				return "", fmt.Errorf("topic deepen card is outside trusted cards root")
+			}
+			manifest.NonSecretSettings.TopicCardPath = card
+		}
+	}
+	if manifest.Action == domain.ActionMontagePlan || manifest.Action == domain.ActionMontageExecute {
+		profileRoot, err := requiredDirectoryRoot("machine profiles", roots.MachineProfiles)
+		if err != nil {
+			return "", err
+		}
+		profile, err := canonicalContained("machine profile", manifest.NonSecretSettings.MachineProfilePath, profileRoot)
+		if err != nil {
+			return "", err
+		}
+		file, resolved, info, err := openVerifiedArtifact(profile, profileRoot)
+		if err != nil || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("machine profile must name a regular trusted file")
+		}
+		_ = file.Close()
+		if !pathInside(profileRoot, resolved) {
+			return "", fmt.Errorf("machine profile escaped trusted root")
+		}
+		manifest.NonSecretSettings.MachineProfilePath = resolved
 	}
 	output, _, err := canonicalTaskOutput(manifest.OutputDir, manifest.TaskID, projectRoot)
 	if err != nil {
@@ -412,11 +462,13 @@ func canonicalTaskOutput(path, taskID, projectRoot string) (string, string, erro
 	return expected, root, nil
 }
 
-func manifestRole(typ domain.AssetType) string {
-	if typ == domain.AssetSourceScript {
-		return "primary_source"
+func manifestRole(action domain.TaskAction, typ domain.AssetType) (string, error) {
+	roles := actionInputRoles[action]
+	role, ok := roles[typ]
+	if !ok {
+		return "", fmt.Errorf("asset type %q is not allowed for action %q", typ, action)
 	}
-	return string(typ)
+	return role, nil
 }
 
 func validateInputIdentity(project *domain.Project, version domain.AssetVersion) error {
@@ -477,7 +529,7 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 		return fmt.Errorf("unsupported approval_mode %q", manifest.ApprovalMode)
 	}
 	for i, input := range manifest.Inputs {
-		if err := validateManifestInput(input); err != nil {
+		if err := validateManifestInput(manifest.Action, input); err != nil {
 			return fmt.Errorf("input %d: %w", i, err)
 		}
 	}
@@ -500,11 +552,15 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 	return nil
 }
 
-func validateManifestInput(input ManifestInput) error {
+func validateManifestInput(action domain.TaskAction, input ManifestInput) error {
 	if !formalAssetTypes[input.Type] {
 		return fmt.Errorf("asset type %q is not formal", input.Type)
 	}
-	if input.Role != manifestRole(input.Type) {
+	wantRole, err := manifestRole(action, input.Type)
+	if err != nil {
+		return err
+	}
+	if input.Role != wantRole {
 		return fmt.Errorf("role %q does not match asset type %q", input.Role, input.Type)
 	}
 	if input.Version < 1 {
@@ -516,10 +572,11 @@ func validateManifestInput(input ManifestInput) error {
 	if input.StorageKind != domain.StorageFile {
 		return fmt.Errorf("storage_kind must be file")
 	}
-	info, err := os.Stat(input.Path)
+	file, _, info, err := openVerifiedArtifact(input.Path, filepath.Dir(input.Path))
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("path must name a regular file")
 	}
+	defer file.Close()
 	if input.Size != info.Size() {
 		return fmt.Errorf("size does not match file")
 	}
@@ -533,7 +590,7 @@ func validateManifestInput(input ManifestInput) error {
 	if !sha256Pattern.MatchString(input.SHA256) {
 		return fmt.Errorf("sha256 must be 64 hexadecimal characters")
 	}
-	actual, err := hashResultFile(input.Path)
+	actual, err := hashOpenFile(file)
 	if err != nil || !strings.EqualFold(actual, input.SHA256) {
 		return fmt.Errorf("sha256 does not match file content")
 	}
@@ -566,9 +623,35 @@ var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 	domain.ActionMontageExecute: {"production_plan": true, "mix_draft": true},
 }
 
+var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
+	domain.ActionTopicDeepen:    {domain.AssetTopicCard: "topic_card"},
+	domain.ActionRemixStandard:  {domain.AssetSourceScript: "primary_source"},
+	domain.ActionRemixEnhanced:  {domain.AssetSourceScript: "primary_source"},
+	domain.ActionRemixFromTopic: {domain.AssetTopicCard: "topic_brief"},
+	domain.ActionSpokenFormat:   {domain.AssetContinuousScript: "approved_script"},
+	domain.ActionRemixReview:    {domain.AssetSourceScript: "review_target", domain.AssetContinuousScript: "review_target"},
+	domain.ActionMontagePlan:    {domain.AssetSpokenScript: "spoken_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
+	domain.ActionMontageExecute: {domain.AssetSpokenScript: "spoken_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
+}
+
+var requiredExpectedOutputTypes = map[domain.TaskAction][]string{
+	domain.ActionTopicBrainstorm: {"topic_candidates"}, domain.ActionTopicCommit: {"topic_card"}, domain.ActionTopicDeepen: {"topic_card"},
+	domain.ActionRemixStandard: {"continuous_script"}, domain.ActionRemixEnhanced: {"continuous_script"}, domain.ActionRemixFromTopic: {"continuous_script"},
+	domain.ActionSpokenFormat: {"spoken_script"}, domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "mix_draft"},
+}
+
+func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
+	types := requiredExpectedOutputTypes[action]
+	outputs := make([]ExpectedOutput, len(types))
+	for i, typ := range types {
+		outputs[i] = ExpectedOutput{Type: typ, Required: true}
+	}
+	return outputs
+}
+
 var requiredInputRoles = map[domain.TaskAction][]string{
 	domain.ActionRemixStandard: {"primary_source"}, domain.ActionRemixEnhanced: {"primary_source"},
-	domain.ActionRemixFromTopic: {string(domain.AssetTopicCard)}, domain.ActionSpokenFormat: {string(domain.AssetContinuousScript)},
+	domain.ActionRemixFromTopic: {"topic_brief"}, domain.ActionSpokenFormat: {"approved_script"},
 	domain.ActionMontagePlan:    {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 	domain.ActionMontageExecute: {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 }
@@ -582,6 +665,18 @@ func validateActionManifestContract(manifest TaskManifest) error {
 		if !allowed[output.Type] {
 			return fmt.Errorf("expected output %q is not allowed for action %q", output.Type, manifest.Action)
 		}
+		if !output.Required {
+			return fmt.Errorf("expected output %q must be required", output.Type)
+		}
+	}
+	seen := map[string]bool{}
+	for _, output := range manifest.ExpectedOutputs {
+		seen[output.Type] = true
+	}
+	for _, typ := range requiredExpectedOutputTypes[manifest.Action] {
+		if !seen[typ] {
+			return fmt.Errorf("expected output %q is required for action %q", typ, manifest.Action)
+		}
 	}
 	s := manifest.NonSecretSettings
 	switch manifest.Action {
@@ -594,7 +689,7 @@ func validateActionManifestContract(manifest TaskManifest) error {
 			return fmt.Errorf("topic commit requires session_id, candidate_id, and topic candidates input")
 		}
 	case domain.ActionTopicDeepen:
-		if strings.TrimSpace(s.SessionID) == "" || len(manifest.Inputs) != 1 || manifest.Inputs[0].Type != domain.AssetTopicCard {
+		if strings.TrimSpace(s.SessionID) == "" || len(manifest.Inputs) != 1 || manifest.Inputs[0].Type != domain.AssetTopicCard || !canonicalSamePath(s.TopicCardPath, manifest.Inputs[0].Path) {
 			return fmt.Errorf("topic deepen requires session_id and exactly one topic_card input")
 		}
 	case domain.ActionMontagePlan, domain.ActionMontageExecute:
