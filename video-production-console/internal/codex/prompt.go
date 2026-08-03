@@ -12,7 +12,12 @@ var skills = map[string]string{
 	"topic_deepen":  "finance-topic-selector",
 	"remix":         "finance-viral-remix",
 	"spoken_format": "finance-viral-remix",
-	"montage":       "chatcut-finance-video",
+	"montage":       "jianying-montage-draft",
+}
+
+var legacyWireActions = map[string]string{
+	"topic_select": "brainstorm", "topic_deepen": "deepen", "remix": "standard",
+	"spoken_format": "spoken_format", "montage": "plan",
 }
 
 // TaskContext is the complete, project-scoped context supplied to one Codex run.
@@ -52,30 +57,41 @@ func BuildPrompt(ctx TaskContext) (string, error) {
 }
 
 func buildPrompt(normalized TaskContext, skill string) (string, error) {
-	allowed := normalized.AllowedDir
-	var assets strings.Builder
-	for _, path := range normalized.AssetPaths {
-		fmt.Fprintf(&assets, "- %s\n", path)
+	manifestPath := filepath.Join(normalized.AllowedDir, "task_manifest.json")
+	return formatManifestPrompt(skill, legacyWireActions[normalized.TaskType], manifestPath)
+}
+
+// BuildManifestPrompt returns the complete bounded instruction for a V2 task.
+// The manifest is the only source of input paths; none are copied into Prompt.
+func BuildManifestPrompt(manifest TaskManifest, manifestPath string) (string, error) {
+	resolved, err := ResolveAction(manifest.Action)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf(`You are running one isolated video-production task.
+	if manifest.Skill != resolved.Skill {
+		return "", fmt.Errorf("manifest skill %q does not match action %q", manifest.Skill, manifest.Action)
+	}
+	if strings.TrimSpace(manifestPath) == "" || secretValue.MatchString(strings.ReplaceAll(strings.ToLower(manifestPath), "%20", " ")) {
+		return "", fmt.Errorf("manifest path is empty or resembles secret material")
+	}
+	return formatManifestPrompt(manifest.Skill, resolved.WireAction, manifestPath)
+}
 
-Task type: %s
-Project ID: %s
-Account name: %s
-Use the skill: $%s
-Project directory: %s
-Allowed output directory: %s
-Project assets:
-%s
-
-Rules:
-- Work only on this project and its listed assets. Do not access any other project, workspace, vault, or unrelated path.
-- Write every artifact only inside the allowed output directory.
-- Return exactly one JSON object matching the configured codex-result schema.
-- If a human decision is required, return status "needs_input" with a question and end this turn.
-- Do not open, automate, or test WeChat Channels.
-- Do not start, stop, modify, or proxy the existing baokuan process.
-`, normalized.TaskType, normalized.ProjectID, normalized.AccountName, skill, normalized.ProjectDir, allowed, assets.String()), nil
+func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error) {
+	if skill == "" || wireAction == "" {
+		return "", fmt.Errorf("skill and wire action are required")
+	}
+	prompt := fmt.Sprintf(`Use the $%s skill.
+Execute action=%s using the task manifest at %s.
+Treat manifest inputs as authoritative and do not ask for paths already present.
+Write declared artifacts only under output_dir.
+Return exactly one JSON object matching the configured result schema.
+Do not open WeChat Channels.
+Do not launch Jianying; this manifest protocol contains no UI authorization.`, skill, wireAction, manifestPath)
+	if len(prompt) > 1200 {
+		return "", fmt.Errorf("prompt exceeds bounded length")
+	}
+	return prompt, nil
 }
 
 func normalizeContext(ctx TaskContext) (TaskContext, error) {

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.video-console/schemas/task-manifest-2.0.json",
+  "title": "Video Console Task Manifest 2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "job_id", "skill", "action", "inputs", "output_dir", "expected_outputs", "approval_mode", "skill_snapshot_id", "non_secret_settings"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "job_id": {"type": "string", "format": "uuid"},
+    "skill": {"enum": ["finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"]},
+    "action": {"enum": ["topic.brainstorm", "topic.commit", "topic.deepen", "remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.spoken_format", "remix.review", "montage.plan", "montage.execute"]},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "account_id"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "account_id": {"type": "string", "format": "uuid"}
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asset_id", "version_id", "version", "type", "role", "path", "mime", "size", "sha256", "required"],
+        "properties": {
+          "asset_id": {"type": "string", "format": "uuid"},
+          "version_id": {"type": "string", "format": "uuid"},
+          "version": {"type": "integer", "minimum": 1},
+          "type": {"$ref": "#/$defs/assetType"},
+          "role": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "mime": {"type": "string", "minLength": 1},
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+          "required": {"type": "boolean"}
+        },
+        "oneOf": [
+          {"properties": {"type": {"const": "source_script"}, "role": {"const": "primary_source"}}},
+          {"properties": {"type": {"const": "topic_card"}, "role": {"const": "topic_card"}}},
+          {"properties": {"type": {"const": "continuous_script"}, "role": {"const": "continuous_script"}}},
+          {"properties": {"type": {"const": "spoken_script"}, "role": {"const": "spoken_script"}}},
+          {"properties": {"type": {"const": "narration"}, "role": {"const": "narration"}}},
+          {"properties": {"type": {"const": "subtitle_srt"}, "role": {"const": "subtitle_srt"}}},
+          {"properties": {"type": {"const": "account_background"}, "role": {"const": "account_background"}}},
+          {"properties": {"type": {"const": "mix_draft"}, "role": {"const": "mix_draft"}}},
+          {"properties": {"type": {"const": "final_video"}, "role": {"const": "final_video"}}}
+        ]
+      }
+    },
+    "output_dir": {"type": "string", "minLength": 1, "pattern": "[/\\\\]tasks[/\\\\][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}[/\\\\]output$"},
+    "expected_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "required", "description"],
+        "properties": {
+          "type": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "approval_mode": {"enum": ["plan_then_wait", "plan_only", "auto_after_valid_plan"]},
+    "skill_snapshot_id": {"type": "string", "format": "uuid"},
+    "non_secret_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listen_addr": {"type": "string"},
+        "data_root": {"type": "string"},
+        "max_codex_concurrency": {"type": "integer", "minimum": 0},
+        "baokuan_base_url": {"type": "string"},
+        "baokuan_mcp_executable": {"type": "string"},
+        "obsidian_vault": {"type": "string"},
+        "topic_cards_dir": {"type": "string"},
+        "grok_base_url": {"type": "string"},
+        "grok_model": {"type": "string"},
+        "codex_binary_path": {"type": "string"},
+        "media_index_path": {"type": "string"},
+        "media_root": {"type": "string"},
+        "jianying_root": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "assetType": {"enum": ["source_script", "topic_card", "continuous_script", "spoken_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]}
+  }
+}

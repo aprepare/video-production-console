@@ -1,99 +1,44 @@
 package codex
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"video-production-console/internal/domain"
 )
 
-func TestBuildPromptMapsTaskAndIsolatesProject(t *testing.T) {
-	t.Setenv("CODEX_TEST_SECRET", "do-not-leak")
-	root := t.TempDir()
-	projectDir := filepath.Join(root, "projects", "project-123")
-	prompt, err := BuildPrompt(TaskContext{
-		ProjectID: "project-123", AccountName: "finance", TaskType: "remix",
-		WorkspaceDir: root, ProjectDir: projectDir, AllowedDir: filepath.Join(projectDir, "out"),
-		AssetPaths:   []string{filepath.Join(projectDir, "source.mp4")},
-		OtherProject: filepath.Join(root, "projects", "project-999"),
-	})
+func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
+	taskID := uuid.NewString()
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Inputs: []ManifestInput{{Path: `C:\secret-project\source.md`}}, OutputDir: `C:\managed\output`, NonSecretSettings: ManifestSettings{MediaRoot: "safe"}}
+	manifestPath := filepath.Join(`C:\managed`, "tasks", taskID, "task_manifest.json")
+	prompt, err := BuildManifestPrompt(manifest, manifestPath)
 	if err != nil {
-		t.Fatalf("BuildPrompt returned error: %v", err)
+		t.Fatal(err)
 	}
-	for _, want := range []string{"project-123", "finance", "finance-viral-remix", filepath.Join(projectDir, "source.mp4")} {
+	for _, want := range []string{"$finance-viral-remix", "action=enhanced", manifestPath, "manifest inputs as authoritative", "output_dir", "exactly one JSON object", "Do not open WeChat Channels", "Do not launch Jianying"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q: %s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "project-999") || strings.Contains(prompt, os.Getenv("CODEX_TEST_SECRET")) {
-		t.Fatalf("prompt leaked out-of-scope value: %s", prompt)
+	for _, forbidden := range []string{manifest.Inputs[0].Path, manifest.OutputDir, "safe", "needs_input"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("prompt leaked %q: %s", forbidden, prompt)
+		}
+	}
+	if len(prompt) > 1200 {
+		t.Fatalf("prompt is unbounded: %d", len(prompt))
 	}
 }
 
-func TestBuildPromptRejectsUnsupportedTaskAndOutsidePaths(t *testing.T) {
-	root := t.TempDir()
-	ctx := TaskContext{WorkspaceDir: root, ProjectDir: filepath.Join(root, "project"), TaskType: "unknown"}
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected unsupported task type to fail")
+func TestPromptRejectsMismatchedSkillActionAndSecretPath(t *testing.T) {
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: uuid.NewString(), Skill: "finance-topic-selector", Action: domain.ActionMontagePlan}
+	if _, err := BuildManifestPrompt(manifest, `C:\tasks\task_manifest.json`); err == nil {
+		t.Fatal("expected skill mismatch rejection")
 	}
-	ctx.TaskType = "remix"
-	ctx.ProjectDir = filepath.Join(root, "..", "other-project")
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected outside project directory to fail")
-	}
-	ctx.ProjectDir = filepath.Join(root, "project")
-	ctx.AllowedDir = filepath.Join(root, "sibling-project", "out")
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected sibling allowed directory to fail")
-	}
-	ctx.AllowedDir = filepath.Join(root, "project", "out")
-	ctx.AssetPaths = []string{filepath.Join(root, "sibling-project", "source.mp4")}
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected sibling asset path to fail")
-	}
-	ctx.AllowedDir = filepath.Join(root, "..", "outside")
-	ctx.AssetPaths = nil
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected outside allowed directory to fail")
-	}
-	ctx.AllowedDir = filepath.Join(root, "project", "out")
-	ctx.AssetPaths = []string{filepath.Join(root, "..", "secret.txt")}
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected outside asset path to fail")
-	}
-}
-
-func TestBuildPromptRejectsSymlinkEscapes(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	outside := t.TempDir()
-	if err := os.MkdirAll(project, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(project, "linked")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	projectLink := filepath.Join(root, "project-link")
-	if err := os.Symlink(outside, projectLink); err != nil {
-		t.Skipf("project symlink unavailable: %v", err)
-	}
-	if _, err := BuildPrompt(TaskContext{TaskType: "remix", WorkspaceDir: root, ProjectDir: projectLink}); err == nil {
-		t.Fatal("expected symlinked project directory to fail")
-	}
-	ctx := TaskContext{TaskType: "remix", WorkspaceDir: root, ProjectDir: project, AllowedDir: filepath.Join(link, "out")}
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected symlinked allowed directory to fail")
-	}
-	ctx.AllowedDir = filepath.Join(project, "out")
-	ctx.AssetPaths = []string{filepath.Join(link, "source.mp4")}
-	if _, err := BuildPrompt(ctx); err == nil {
-		t.Fatal("expected symlinked asset path to fail")
-	}
-}
-
-func TestSkillForTaskRejectsUnknownTask(t *testing.T) {
-	if _, err := SkillForTask("unknown"); err == nil {
-		t.Fatal("expected unknown task type to fail")
+	manifest.Skill = "jianying-montage-draft"
+	if _, err := BuildManifestPrompt(manifest, `C:\token=plaintext\task_manifest.json`); err == nil {
+		t.Fatal("expected secret-like path rejection")
 	}
 }

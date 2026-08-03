@@ -1,31 +1,65 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.video-console/schemas/codex-result-2.0.json",
+  "title": "Video Console Codex Result 2.0",
   "type": "object",
-  "required": ["status", "summary", "artifacts"],
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "action", "status", "summary", "questions", "artifacts", "asset_outputs", "warnings"],
   "properties": {
-    "status": {"enum": ["completed", "needs_input", "failed"]},
+    "schema_version": {"const": "2.0"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "action": {"enum": ["topic.brainstorm", "topic.commit", "topic.deepen", "remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.spoken_format", "remix.review", "montage.plan", "montage.execute"]},
+    "status": {"enum": ["completed", "awaiting_input", "failed"]},
     "summary": {"type": "string"},
-    "question": {
-      "type": ["object", "null"],
-      "properties": {
-        "text": {"type": "string"},
-        "options": {"type": "array", "items": {"type": "string"}}
-      },
-      "required": ["text", "options"]
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "options"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "options": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}}
+        }
+      }
     },
     "artifacts": {
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["type", "path", "description"],
         "properties": {
-          "type": {"type": "string"},
-          "path": {"type": "string"},
-          "description": {"type": "string"}
+          "type": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1}
         }
       }
     },
-    "topic_card_path": {"type": ["string", "null"]},
-    "next_recommended_action": {"type": ["string", "null"]}
+    "asset_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "path", "storage_kind", "filename", "mime", "size", "sha256"],
+        "properties": {
+          "type": {"enum": ["source_script", "topic_card", "continuous_script", "spoken_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]},
+          "path": {"type": "string", "minLength": 1},
+          "storage_kind": {"enum": ["file", "directory"]},
+          "filename": {"type": "string", "minLength": 1},
+          "mime": {"type": "string", "minLength": 1},
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
+        },
+        "allOf": [
+          {"if": {"properties": {"storage_kind": {"const": "file"}}}, "then": {"required": ["sha256"]}},
+          {"if": {"properties": {"storage_kind": {"const": "directory"}}}, "then": {"properties": {"mime": {"const": "inode/directory"}, "size": {"const": 0}}}}
+        ]
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}}
   },
-  "additionalProperties": false
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "awaiting_input"}}}, "then": {"properties": {"questions": {"minItems": 1}}}}
+  ]
 }

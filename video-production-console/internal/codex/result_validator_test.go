@@ -1,0 +1,294 @@
+package codex
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"video-production-console/internal/domain"
+)
+
+func TestValidateResultEnvelopeAcceptsCompletedAndTransitionStatus(t *testing.T) {
+	out := t.TempDir()
+	file := filepath.Join(out, "script.md")
+	if err := os.WriteFile(file, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionRemixEnhanced, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: file, StorageKind: domain.StorageFile, Filename: "script.md", MIME: "text/markdown", Size: 5, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, domain.ActionRemixEnhanced, out); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Status = "needs_input"
+	envelope.Questions = []Question{{Text: "Pick one", Options: []string{"a"}}}
+	data, _ := json.Marshal(envelope)
+	got, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionRemixEnhanced, out)
+	if err != nil || got.Status != "awaiting_input" {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+}
+
+func TestValidateResultEnvelopeRejectsInvalidContract(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontagePlan, Status: "completed", Summary: "ok", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
+	tests := []struct {
+		name   string
+		mutate func(*ResultEnvelope)
+	}{
+		{"missing schema", func(v *ResultEnvelope) { v.SchemaVersion = "" }},
+		{"task mismatch", func(v *ResultEnvelope) { v.TaskID = uuid.NewString() }},
+		{"action mismatch", func(v *ResultEnvelope) { v.Action = domain.ActionRemixStandard }},
+		{"awaiting without question", func(v *ResultEnvelope) { v.Status = "awaiting_input" }},
+		{"unknown asset type", func(v *ResultEnvelope) {
+			v.AssetOutputs = []AssetOutput{{Type: domain.AssetType("debug_log"), Path: filepath.Join(out, "x")}}
+		}},
+		{"outside artifact", func(v *ResultEnvelope) {
+			v.Artifacts = []ArtifactOutput{{Type: "report", Path: filepath.Join(out, "..", "escape.txt"), Description: "x"}}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := base
+			tt.mutate(&got)
+			if err := ValidateResultEnvelope(got, taskID, domain.ActionMontagePlan, out); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+	data, _ := json.Marshal(base)
+	data = []byte(strings.TrimSuffix(string(data), "}") + `,"unexpected":true}`)
+	if _, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontagePlan, out); err == nil {
+		t.Fatal("expected unknown field rejection")
+	}
+	missingSummary := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.plan","status":"completed","questions":[],"artifacts":[],"asset_outputs":[],"warnings":[]}`)
+	if _, err := ValidateResultEnvelopeJSON(missingSummary, taskID, domain.ActionMontagePlan, out); err == nil {
+		t.Fatal("expected missing exact field rejection")
+	}
+}
+
+func TestValidateResultEnvelopeRejectsArtifactAsAssetAndDirectoryMetadataMismatch(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	dir := filepath.Join(out, "draft")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{}}
+	dirHash, err := HashResultDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.AssetOutputs = []AssetOutput{{Type: domain.AssetMixDraft, Path: dir, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory", SHA256: dirHash}}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err != nil {
+		t.Fatal(err)
+	}
+	base.AssetOutputs[0].Size = 1
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected directory size mismatch rejection")
+	}
+	base.AssetOutputs[0].Size = 0
+	base.Artifacts = []ArtifactOutput{{Type: "debug", Path: dir, Description: "engineering log"}}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("engineering artifact must not also be an asset")
+	}
+}
+
+func TestValidateResultEnvelopeRejectsArtifactDirectoryAssetPathOverlap(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	draft := filepath.Join(out, "draft")
+	child := filepath.Join(draft, "engineering", "report.json")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, Warnings: []string{}}
+	base.AssetOutputs = []AssetOutput{{Type: domain.AssetMixDraft, Path: draft, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory"}}
+	base.Artifacts = []ArtifactOutput{{Type: "report", Path: child, Description: "engineering report"}}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected artifact descendant overlap rejection")
+	}
+	base.Artifacts[0].Path = out
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected artifact ancestor overlap rejection")
+	}
+}
+
+func TestValidateResultEnvelopeRequiresNonEmptyQuestionOptions(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionTopicBrainstorm, Status: "awaiting_input", Summary: "choose", Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
+	for _, options := range [][]string{{}, {""}, {"valid", "  "}} {
+		base.Questions = []Question{{Text: "Pick", Options: options}}
+		if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+			t.Fatalf("expected options %#v rejection", options)
+		}
+	}
+}
+
+func TestValidateResultEnvelopeJSONRejectsExplicitDirectorySHA256(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	draft := filepath.Join(out, "draft")
+	if err := os.MkdirAll(draft, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[],"asset_outputs":[{"type":"mix_draft","path":` + mustJSONQuote(t, draft) + `,"storage_kind":"directory","filename":"draft","mime":"inode/directory","size":0,"sha256":""}],"warnings":[]}`)
+	if _, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontageExecute, out); err == nil {
+		t.Fatal("expected explicit directory sha256 field rejection")
+	}
+}
+
+func TestValidateResultEnvelopeJSONRejectsCaseVariantUnknownFields(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	draft := filepath.Join(out, "draft")
+	if err := os.MkdirAll(draft, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirHash, err := HashResultDirectory(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := `{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[],"asset_outputs":[{"type":"mix_draft","path":` + mustJSONQuote(t, draft) + `,"storage_kind":"directory","filename":"draft","mime":"inode/directory","size":0,"sha256":` + mustJSONQuote(t, dirHash) + `}],"warnings":[]}`
+	cases := []string{
+		strings.Replace(base, `"size":0`, `"size":0,"SHA256":""`, 1),
+		strings.Replace(base, `"status":"completed"`, `"status":"completed","Status":"failed"`, 1),
+		strings.Replace(base, `"questions":[]`, `"questions":[{"text":"Pick","Text":"override","options":["a"]}]`, 1),
+	}
+	for i, data := range cases {
+		if _, err := ValidateResultEnvelopeJSON([]byte(data), taskID, domain.ActionMontageExecute, out); err == nil {
+			t.Fatalf("case %d: expected case-variant unknown field rejection", i)
+		}
+	}
+}
+
+func TestValidateResultEnvelopeRejectsAnyArtifactAssetOrAssetAssetOverlap(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	dir := filepath.Join(out, "draft")
+	child := filepath.Join(dir, "video.mp4")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirHash, err := HashResultDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, Warnings: []string{}, Artifacts: []ArtifactOutput{}}
+	base.AssetOutputs = []AssetOutput{
+		{Type: domain.AssetMixDraft, Path: dir, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory", SHA256: dirHash},
+		{Type: domain.AssetFinalVideo, Path: child, StorageKind: domain.StorageFile, Filename: "video.mp4", MIME: "video/mp4", Size: 5, SHA256: sha256HexForTest(t, child)},
+	}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected file-in-directory asset overlap rejection")
+	}
+	base.AssetOutputs = base.AssetOutputs[:1]
+	base.Artifacts = []ArtifactOutput{{Type: "report", Path: child, Description: "artifact in asset dir"}}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected artifact/asset overlap rejection")
+	}
+}
+
+func TestValidateResultEnvelopeJSONRejectsDuplicateKeysAndNulls(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	base := `{"schema_version":"2.0","task_id":"` + taskID + `","action":"topic.brainstorm","status":"completed","summary":"ok","questions":[],"artifacts":[],"asset_outputs":[],"warnings":[]}`
+	cases := []string{
+		strings.Replace(base, `"summary":"ok"`, `"summary":"ok","summary":"override"`, 1),
+		strings.Replace(base, `"questions":[]`, `"questions":[{"text":"Pick","text":"Override","options":["a"]}]`, 1),
+		strings.Replace(base, `"summary":"ok"`, `"summary":null`, 1),
+		strings.Replace(base, `"warnings":[]`, `"warnings":null`, 1),
+		strings.Replace(base, `"questions":[]`, `"questions":null`, 1),
+		strings.Replace(base, `"warnings":[]`, `"warnings":[null]`, 1),
+	}
+	for i, data := range cases {
+		if _, err := ValidateResultEnvelopeJSON([]byte(data), taskID, domain.ActionTopicBrainstorm, out); err == nil {
+			t.Fatalf("case %d accepted invalid strict JSON", i)
+		}
+	}
+}
+
+func TestValidateResultEnvelopeVerifiesFileAndDirectoryContentHashes(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "script.md")
+	if err := os.WriteFile(file, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(out, "draft")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.json"), []byte("plan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirHash, err := HashResultDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{}}
+	base.AssetOutputs = []AssetOutput{{Type: domain.AssetContinuousScript, Path: file, StorageKind: domain.StorageFile, Filename: "script.md", MIME: "text/markdown", Size: 8, SHA256: sha256HexForTest(t, file)}}
+	if err := os.WriteFile(file, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected tampered file hash rejection")
+	}
+	base.AssetOutputs = []AssetOutput{{Type: domain.AssetMixDraft, Path: dir, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory", SHA256: dirHash}}
+	if err := os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
+		t.Fatal("expected tampered directory hash rejection")
+	}
+}
+
+func sha256HexForTest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func mustJSONQuote(t *testing.T, value string) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestSchemasAreStrictAndParseable(t *testing.T) {
+	for _, name := range []string{"task-manifest.schema.json", "codex-result.schema.json", "topic-candidates.schema.json"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "schemas", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if schema["additionalProperties"] != false {
+			t.Fatalf("%s top-level is not strict", name)
+		}
+		if !strings.Contains(string(data), `"const": "2.0"`) {
+			t.Fatalf("%s does not freeze schema version", name)
+		}
+	}
+	topic, err := os.ReadFile(filepath.Join("..", "..", "schemas", "topic-candidates.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"minItems": 3`, `"maxItems": 5`, `"additionalProperties": false`} {
+		if !strings.Contains(string(topic), want) {
+			t.Fatalf("topic schema missing %s", want)
+		}
+	}
+}
