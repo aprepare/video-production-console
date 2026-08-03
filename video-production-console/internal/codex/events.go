@@ -24,18 +24,20 @@ type Result struct {
 	NextRecommendedAction *string    `json:"next_recommended_action,omitempty"`
 }
 type Event struct {
-	Kind        string
-	Level       string
-	DisplayText string
-	SessionID   string
-	RawJSON     json.RawMessage
-	FinalResult *Result
+	Kind             string
+	Level            string
+	DisplayText      string
+	AgentMessageText string
+	SessionID        string
+	RawJSON          json.RawMessage
+	FinalResult      *Result
 }
 
 func ParseLine(line []byte) (Event, error) {
-	line = bytes.TrimSpace(line)
-	if len(line) == 0 {
-		return Event{Kind: "parse_warning", Level: "warning", DisplayText: "empty JSONL line"}, nil
+	raw := json.RawMessage(append([]byte(nil), line...))
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return Event{Kind: "parse_warning", Level: "warning", DisplayText: "empty JSONL line", RawJSON: raw}, nil
 	}
 	var envelope struct {
 		Type     string `json:"type"`
@@ -46,16 +48,16 @@ func ParseLine(line []byte) (Event, error) {
 		} `json:"item"`
 		Result *Result `json:"result"`
 	}
-	if err := json.Unmarshal(line, &envelope); err != nil {
-		return Event{Kind: "parse_warning", Level: "warning", DisplayText: fmt.Sprintf("invalid JSON: %v", err), RawJSON: json.RawMessage(append([]byte(nil), line...))}, nil
+	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+		return Event{Kind: "parse_warning", Level: "warning", DisplayText: fmt.Sprintf("invalid JSON: %v", err), RawJSON: raw}, nil
 	}
-	e := Event{Level: "info", RawJSON: json.RawMessage(append([]byte(nil), line...))}
+	e := Event{Level: "info", RawJSON: raw}
 	switch envelope.Type {
 	case "thread.started":
 		e.Kind, e.SessionID = "thread_started", envelope.ThreadID
 	case "item.completed":
 		if envelope.Item.Type == "agent_message" {
-			e.Kind, e.DisplayText = "agent_message", envelope.Item.Text
+			e.Kind, e.DisplayText, e.AgentMessageText = "agent_message", envelope.Item.Text, envelope.Item.Text
 		} else {
 			e.Kind = "item_completed"
 		}

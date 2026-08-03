@@ -11,12 +11,26 @@ func TestParseLineMapsKnownEventsAndResults(t *testing.T) {
 		t.Fatalf("event=%+v err=%v", e, err)
 	}
 	e, err = ParseLine([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}`))
-	if err != nil || e.Kind != "agent_message" || e.DisplayText != "hello" || e.Level != "info" {
+	if err != nil || e.Kind != "agent_message" || e.DisplayText != "hello" || e.AgentMessageText != "hello" || e.Level != "info" {
 		t.Fatalf("event=%+v err=%v", e, err)
 	}
 	e, err = ParseLine([]byte(`{"type":"turn.completed","result":{"status":"completed","summary":"done","artifacts":[]}}`))
 	if err != nil || e.Kind != "turn_completed" || e.FinalResult == nil || e.FinalResult.Status != "completed" {
 		t.Fatalf("event=%+v err=%v", e, err)
+	}
+}
+
+func TestParseLinePreservesExactRawAgentMessage(t *testing.T) {
+	raw := []byte("  {\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"candidate\"}}  ")
+	e, err := ParseLine(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(e.RawJSON) != string(raw) {
+		t.Fatalf("raw=%q want=%q", e.RawJSON, raw)
+	}
+	if e.DisplayText != "candidate" || e.AgentMessageText != "candidate" {
+		t.Fatalf("event=%+v", e)
 	}
 }
 

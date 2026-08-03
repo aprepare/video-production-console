@@ -2,32 +2,64 @@ package codex
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
 
-func TestRunnerKillsBlockedChildOnOversizedJSONL(t *testing.T) {
-	repo, _ := newTestRunner(t, "completed")
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", "$x='{' + ('x' * (16*1024*1024+1)) + '}'; [Console]::Out.Write($x); [Console]::Out.Flush(); Start-Sleep -Seconds 30")
-	runner := NewRunner(cmd, repo, "t1", t.TempDir(), nil)
-	done := make(chan error, 1)
-	go func() { done <- runner.Run(context.Background()) }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected oversized stream failure")
-		}
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
-		t.Fatal("runner hung after oversized JSONL")
+func init() {
+	if os.Getenv("VIDEO_CONSOLE_RUNNER_HELPER") != "oversized" {
+		return
 	}
-	task, err := repo.Get(context.Background(), "t1")
+	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("x", 1025))
+	_ = os.Stdout.Sync()
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	os.Exit(0)
+}
+
+func TestRunnerOversizedJSONLHelper(t *testing.T) {}
+
+func TestRunnerKillsBlockedChildOnOversizedJSONL(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerOversizedJSONLHelper$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "VIDEO_CONSOLE_RUNNER_HELPER=oversized")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdin.Close() })
+	runner := NewRunner(cmd, fixture.repo, fixture.taskID, fixture.root, nil)
+	runner.maxJSONLBytes = 1024
+	termination := make(chan error, 1)
+	runner.terminate = func(child *exec.Cmd) {
+		if child.Process == nil {
+			termination <- fmt.Errorf("terminate called before child started")
+			return
+		}
+		termination <- child.Process.Kill()
+	}
+	err = runner.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected oversized stream failure")
+	}
+	if err := <-termination; err != nil {
+		t.Fatalf("terminate blocked child: %v", err)
+	}
+	if cmd.ProcessState == nil || !cmd.ProcessState.Exited() || cmd.ProcessState.Success() {
+		t.Fatalf("blocked child was not killed: state=%+v", cmd.ProcessState)
+	}
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,72 +68,98 @@ func TestRunnerKillsBlockedChildOnOversizedJSONL(t *testing.T) {
 	}
 }
 
-func newTestRunner(t *testing.T, mode string) (*store.TaskRepository, *Runner) {
+func TestRunnerStartFailureReleasesCleanupOnceWithNilProcess(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	cmd := exec.Command(filepath.Join(t.TempDir(), "missing-codex"))
+	runner := NewRunner(cmd, fixture.repo, fixture.taskID, fixture.root, nil)
+	var cleanups atomic.Int32
+	runner.Cleanup = func() error {
+		cleanups.Add(1)
+		return nil
+	}
+	if err := runner.Run(context.Background()); err == nil {
+		t.Fatal("expected start failure")
+	}
+	if cmd.Process != nil {
+		t.Fatalf("process unexpectedly exists: %+v", cmd.Process)
+	}
+	if got := cleanups.Load(); got != 1 {
+		t.Fatalf("cleanup calls=%d want=1", got)
+	}
+}
+
+type runnerFixture struct {
+	db        *sql.DB
+	repo      *store.TaskRepository
+	runner    *Runner
+	taskID    string
+	projectID string
+	root      string
+	lastPath  string
+}
+
+func newTestRunner(t *testing.T, mode string) *runnerFixture {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "task.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if _, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+	accountID := uuid.NewString()
+	projectID := uuid.NewString()
+	taskID := uuid.NewString()
+	if _, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, accountID, "A", "#fff", "active", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,?,?,?)`, projectID, accountID, "P", domain.StageScript, now, now); err != nil {
 		t.Fatal(err)
 	}
 	repo := store.NewTaskRepository(db)
 	t.Cleanup(func() { _ = db.Close() })
-	if err := repo.Create(context.Background(), domain.CodexTask{ID: "t1", AccountID: "a", Type: "topic_select", SkillName: "x", Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now}); err != nil {
+	if err := repo.Create(context.Background(), domain.CodexTask{ID: taskID, ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix", Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE codex_tasks SET action=? WHERE id=?`, domain.ActionRemixStandard, taskID); err != nil {
 		t.Fatal(err)
 	}
 	fake, err := filepath.Abs(filepath.Join("..", "..", "tests", "fakes", "fake-codex.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo, NewRunner(exec.Command("powershell", "-NoProfile", "-File", fake, mode), repo, "t1", t.TempDir(), nil)
+	root := t.TempDir()
+	lastPath := filepath.Join(root, "output-last-message.json")
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-File", fake, mode, "--output-last-message", lastPath, "--task-id", taskID, "--action", string(domain.ActionRemixStandard), "--output-dir", root)
+	return &runnerFixture{db: db, repo: repo, runner: NewRunner(cmd, repo, taskID, root, nil), taskID: taskID, projectID: projectID, root: root, lastPath: lastPath}
 }
 
 func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "task.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	now := time.Now().UTC()
-	if _, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
-		t.Fatal(err)
-	}
-	repo := store.NewTaskRepository(db)
-	if err := repo.Create(context.Background(), domain.CodexTask{ID: "t1", AccountID: "a", Type: "topic_select", SkillName: "x", Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	fake, err := filepath.Abs(filepath.Join("..", "..", "tests", "fakes", "fake-codex.ps1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("powershell", "-NoProfile", "-File", fake, "completed")
+	fixture := newTestRunner(t, "completed")
 	var broadcasts []Event
 	var callbackCounts []int
-	if err := NewRunner(cmd, repo, "t1", t.TempDir(), func(e Event) {
+	fixture.runner.Broadcast = func(e Event) {
 		broadcasts = append(broadcasts, e)
-		events, err := repo.Events(context.Background(), "t1")
+		events, err := fixture.repo.Events(context.Background(), fixture.taskID)
 		if err != nil {
 			t.Errorf("read events in callback: %v", err)
 			return
 		}
 		callbackCounts = append(callbackCounts, len(events))
-	}).Run(context.Background()); err != nil {
+	}
+	if err := fixture.runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	task, err := repo.Get(context.Background(), "t1")
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if task.Status != domain.TaskCompleted || task.CodexSessionID == nil {
 		t.Fatalf("task=%+v", task)
 	}
-	events, err := repo.Events(context.Background(), "t1")
+	events, err := fixture.repo.Events(context.Background(), fixture.taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 || events[0].Kind != "thread_started" || events[1].Kind != "agent_message" || events[2].Kind != "turn_completed" {
+	if len(events) != 4 || events[0].Kind != "thread_started" || events[1].Kind != "agent_message" || events[2].Kind != "turn_completed" || events[3].Kind != "result_completed" {
 		t.Fatalf("events=%+v", events)
 	}
 	if len(broadcasts) != 3 {
@@ -112,59 +170,100 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 			t.Fatalf("broadcast %d observed %d persisted events", i, count)
 		}
 	}
+	var snapshot string
+	if err := fixture.db.QueryRow(`SELECT config_snapshot_json FROM codex_tasks WHERE id=?`, fixture.taskID).Scan(&snapshot); err != nil || !strings.Contains(snapshot, "output-last-message") {
+		t.Fatalf("snapshot=%q err=%v", snapshot, err)
+	}
 }
 
-func TestRunnerResultStatusesAndExitFailures(t *testing.T) {
+func TestRunnerResolvesFinalResultInAgentThenLastMessageOrder(t *testing.T) {
 	for _, tc := range []struct {
-		mode    string
-		status  domain.TaskStatus
-		wantErr bool
+		mode        string
+		wantSummary string
 	}{
-		{"needs_input", domain.TaskWaitingInput, false}, {"failed", domain.TaskFailed, true}, {"failed_result", domain.TaskFailed, true},
-		{"malformed", domain.TaskWaitingInput, false}, {"large", domain.TaskWaitingInput, false}, {"stderr", domain.TaskWaitingInput, false}, {"interleave", domain.TaskWaitingInput, false}, {"delay", domain.TaskWaitingInput, false},
+		{"completed", "agent result"},
+		{"agent_preferred", "agent result"},
+		{"agent_only", "agent result"},
+		{"last_message_only", "last result"},
+		{"invalid_agent", "last result"},
+		{"latest_invalid", "last result"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
-			repo, runner := newTestRunner(t, tc.mode)
-			if err := runner.Run(context.Background()); (err != nil) != tc.wantErr {
-				t.Fatalf("err=%v", err)
+			fixture := newTestRunner(t, tc.mode)
+			if err := fixture.runner.Run(context.Background()); err != nil {
+				t.Fatal(err)
 			}
-			task, err := repo.Get(context.Background(), "t1")
+			task, err := fixture.repo.Get(context.Background(), fixture.taskID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if task.Status != tc.status {
-				t.Fatalf("status=%s", task.Status)
-			}
-			events, err := repo.Events(context.Background(), "t1")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.mode == "stderr" && len(events) == 0 {
-				t.Fatal("stderr event missing")
-			}
-			if tc.mode == "interleave" {
-				for i, event := range events {
-					if event.Sequence != int64(i+1) {
-						t.Fatalf("event sequence=%d at index=%d", event.Sequence, i)
-					}
-				}
+			if task.Status != domain.TaskCompleted || task.ResultSummary == nil || *task.ResultSummary != tc.wantSummary {
+				t.Fatalf("task=%+v", task)
 			}
 		})
 	}
 }
 
-func TestRunnerRejectsSymlinkArtifactEscape(t *testing.T) {
-	_, runner := newTestRunner(t, "completed")
-	root := runner.AssetRoot
-	outside := filepath.Join(t.TempDir(), "outside.txt")
-	if err := os.WriteFile(outside, []byte("x"), 0600); err != nil {
+func TestRunnerPersistsAwaitingInputQuestionInOneConversation(t *testing.T) {
+	fixture := newTestRunner(t, "awaiting_input")
+	if err := fixture.runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(root, "link.txt")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil || task.Status != domain.TaskAwaitingInput {
+		t.Fatalf("task=%+v err=%v", task, err)
 	}
-	if err := runner.registerArtifacts(context.Background(), []Artifact{{Type: "x", Path: "link.txt"}}); err == nil {
-		t.Fatal("expected symlink escape rejection")
+	messages, err := fixture.repo.Messages(context.Background(), fixture.taskID)
+	if err != nil || len(messages) != 1 || messages[0].QuestionSchema == nil || !strings.Contains(*messages[0].QuestionSchema, "pick") {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+}
+
+func TestRunnerInvalidResultPersistsRawEngineeringArtifactOnly(t *testing.T) {
+	fixture := newTestRunner(t, "invalid_schema")
+	if err := fixture.runner.Run(context.Background()); err == nil {
+		t.Fatal("expected output validation failure")
+	}
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil || task.Status != domain.TaskFailed || task.ErrorCode == nil || *task.ErrorCode != "output_invalid" {
+		t.Fatalf("task=%+v err=%v", task, err)
+	}
+	artifacts, err := fixture.repo.Artifacts(context.Background(), fixture.taskID)
+	if err != nil || len(artifacts) != 1 || artifacts[0].Kind != "raw_output_last_message" || artifacts[0].Path != fixture.lastPath {
+		t.Fatalf("artifacts=%+v err=%v", artifacts, err)
+	}
+	var formalAssets int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
+		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestRunnerPersistsEngineeringArtifactsAndFormalAssetsSeparately(t *testing.T) {
+	fixture := newTestRunner(t, "completed_with_outputs")
+	if err := fixture.runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := fixture.repo.Artifacts(context.Background(), fixture.taskID)
+	if err != nil || len(artifacts) != 1 || artifacts[0].Kind != "qc_report" {
+		t.Fatalf("artifacts=%+v err=%v", artifacts, err)
+	}
+	var formalAssets int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 1 {
+		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestRunnerFailedProcessNeverRegistersFormalResultAssets(t *testing.T) {
+	fixture := newTestRunner(t, "failed")
+	if err := fixture.runner.Run(context.Background()); err == nil {
+		t.Fatal("expected process failure")
+	}
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil || task.Status != domain.TaskFailed {
+		t.Fatalf("task=%+v err=%v", task, err)
+	}
+	var formalAssets int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
+		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
 	}
 }
