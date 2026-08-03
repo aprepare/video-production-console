@@ -53,6 +53,7 @@ function App() {
   const [ideaOpen, setIdeaOpen] = useState(false)
   const [ideaSession, setIdeaSession] = useState<IdeaSession | null>(null)
   const [ideaInput, setIdeaInput] = useState('')
+  const [taskOpen, setTaskOpen] = useState<Task | null>(null)
   const activeTasks = useMemo(() => tasks.filter(task => ['queued', 'running', 'awaiting_input', 'resuming', 'waiting_input'].includes(task.status)), [tasks])
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
@@ -113,6 +114,17 @@ function App() {
     })
     return () => sockets.forEach(socket => socket.close())
   }, [selected, activeTasks, loadDetail])
+  useEffect(() => {
+    const onTaskClick = (event: MouseEvent) => {
+      const row = (event.target as HTMLElement).closest('.task-row')
+      if (!row) return
+      const rows = Array.from(document.querySelectorAll('.task-row'))
+      const index = rows.indexOf(row)
+      if (index >= 0 && tasks[index]) setTaskOpen(tasks[index])
+    }
+    document.addEventListener('click', onTaskClick)
+    return () => document.removeEventListener('click', onTaskClick)
+  }, [tasks])
 
   const login = async (event: FormEvent) => {
     event.preventDefault()
@@ -220,6 +232,7 @@ function App() {
     {preview && <div className="modal-backdrop" onClick={() => setPreview(null)}><section className="preview-modal" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">{assetLabels[preview.asset.type] || preview.asset.type}</span><h2>{preview.asset.filename}</h2></div><button className="close" onClick={() => setPreview(null)}>×</button></div><pre className="asset-text">{preview.text}</pre></section></div>}
     {settingsOpen && settingsDraft && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><form className="settings-modal" onClick={event => event.stopPropagation()} onSubmit={saveSettings}><div className="drawer-head"><div><span className="muted">本地配置</span><h2>控制台设置</h2></div><button type="button" className="close" onClick={() => setSettingsOpen(false)}>×</button></div><p className="settings-note">密钥不会回显；留空表示保持现有值不变。</p><label className="settings-field">同时运行任务数<select value={settingsDraft.max_codex_concurrency} onChange={event => setSettingsDraft({ ...settingsDraft, max_codex_concurrency: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}</select></label>{settingFields.map(([key, label, placeholder]) => <label className="settings-field" key={key}>{label}<input value={settingsDraft[key] || ''} placeholder={placeholder} onChange={event => setSettingsDraft({ ...settingsDraft, [key]: event.target.value })} /></label>)}<div className="secret-grid">{(['grok_api_key', 'pexels_api_key'] as const).map(key => <label className="settings-field" key={key}>{key === 'grok_api_key' ? 'Grok API 密钥' : 'Pexels API 密钥'}<small>{settings?.secrets[key]?.configured ? '已配置，输入新值才会替换' : '未配置'}</small><input type="password" value={secretDraft[key]} placeholder="留空保持不变" onChange={event => setSecretDraft({ ...secretDraft, [key]: event.target.value })} /></label>)}</div><button className="save-settings" type="submit">保存设置</button></form></div>}
     {ideaOpen && ideaSession && <div className="modal-backdrop" onClick={() => setIdeaOpen(false)}><section className="preview-modal idea-modal" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">选题规划 · {ideaSession.account_id ? accountName(ideaSession.account_id, accounts) : '未指定账号'}</span><h2>{ideaSession.title}</h2></div><button className="close" onClick={() => setIdeaOpen(false)}>×</button></div><div className="idea-messages">{ideaSession.messages?.map(item => <div className={`idea-message ${item.role}`} key={item.id}><b>{item.role === 'user' ? '你' : 'Codex'}</b><p>{item.content}</p></div>)}{!ideaSession.messages?.length && <p className="muted">告诉我你想做的财经方向、受众或近期关注的问题。</p>}</div>{ideaSession.candidates?.length ? <div className="idea-candidates"><h3>候选题</h3>{ideaSession.candidates.map(candidate => <article key={candidate.id}><div><strong>{candidate.title}</strong><p>{candidate.summary}</p></div><button onClick={() => void selectIdeaCandidate(candidate)}>确认建项目</button></article>)}</div> : null}<form className="idea-compose" onSubmit={sendIdeaMessage}><input autoFocus value={ideaInput} onChange={event => setIdeaInput(event.target.value)} placeholder="输入你的想法或追问" /><button disabled={!ideaInput.trim()}>发送</button></form></section></div>}
+    {taskOpen && <div className="modal-backdrop" onClick={() => setTaskOpen(null)}><section className="preview-modal task-modal" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">Codex 任务详情</span><h2>{taskOpen.skill_name || taskOpen.type}</h2></div><button className="close" onClick={() => setTaskOpen(null)}>×</button></div><div className="task-modal-meta"><span className={`task-status status-${taskOpen.status}`}>{statusLabels[taskOpen.status] || taskOpen.status}</span><span>{taskOpen.id}</span></div>{taskOpen.prompt_snapshot && <section><h3>发送给 CLI 的任务说明</h3><pre className="asset-text">{taskOpen.prompt_snapshot}</pre></section>}{taskOpen.messages?.length ? <section><h3>对话记录</h3>{taskOpen.messages.map(item => <div className="task-message" key={item.id}><b>{item.role === 'user' ? '你' : 'Codex'}</b><p>{item.content}</p></div>)}</section> : null}{taskOpen.events?.length ? <section><h3>运行事件</h3>{taskOpen.events.map(item => <p className="event" key={item.id}>{item.display_text || item.kind}</p>)}</section> : null}{taskOpen.result_summary && <p>{taskOpen.result_summary}</p>}{taskOpen.error_message && <p className="warning">{taskOpen.error_message}</p>}</section></div>}
   </div>
 }
 
