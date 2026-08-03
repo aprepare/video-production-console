@@ -74,7 +74,25 @@ func BuildManifestPrompt(manifest TaskManifest, manifestPath string) (string, er
 	if strings.TrimSpace(manifestPath) == "" || secretValue.MatchString(strings.ReplaceAll(strings.ToLower(manifestPath), "%20", " ")) {
 		return "", fmt.Errorf("manifest path is empty or resembles secret material")
 	}
-	return formatManifestPrompt(manifest.Skill, resolved.WireAction, manifestPath)
+	_, projectRoot, err := canonicalTaskOutput(manifest.OutputDir, manifest.TaskID, "")
+	if err != nil {
+		return "", err
+	}
+	canonical, err := resolvePath(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize manifest path: %w", err)
+	}
+	expected, err := resolvePath(filepath.Join(projectRoot, "tasks", manifest.TaskID, "task_manifest.json"))
+	if err != nil {
+		return "", err
+	}
+	if !pathInside(projectRoot, expected) {
+		return "", fmt.Errorf("manifest path escapes project root")
+	}
+	if !canonicalSamePath(canonical, expected) {
+		return "", fmt.Errorf("manifest path must equal canonical task manifest path")
+	}
+	return formatManifestPrompt(manifest.Skill, resolved.WireAction, canonical)
 }
 
 func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error) {

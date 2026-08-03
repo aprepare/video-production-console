@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,18 +16,29 @@ import (
 
 func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	taskID, projectID, accountID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	root := t.TempDir()
+	paths := []string{filepath.Join(root, "spoken.md"), filepath.Join(root, "narration.wav"), filepath.Join(root, "subtitles.srt"), filepath.Join(root, "background.png")}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("input"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := filepath.Join(root, "machine-profile.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	project := domain.Project{ID: projectID, AccountID: accountID}
 	inputs := []domain.AssetVersion{
-		manifestVersion(projectID, accountID, domain.AssetSpokenScript, `C:\managed\project\spoken.md`),
-		manifestVersion(projectID, accountID, domain.AssetNarration, `C:\managed\project\narration.wav`),
-		manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, `C:\managed\project\subtitles.srt`),
-		manifestVersion("", accountID, domain.AssetAccountBackground, `C:\managed\accounts\background.png`),
+		manifestVersion(projectID, accountID, domain.AssetSpokenScript, paths[0]),
+		manifestVersion(projectID, accountID, domain.AssetNarration, paths[1]),
+		manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, paths[2]),
+		manifestVersion("", accountID, domain.AssetAccountBackground, paths[3]),
 	}
 	manifest, err := BuildManifest(BuildManifestInput{
 		Task: domain.CodexTask{ID: taskID}, Project: &project, Inputs: inputs,
-		Action: domain.ActionMontagePlan, OutputDir: `C:\managed\project\tasks\` + taskID + `\output`,
+		Action: domain.ActionMontagePlan, OutputDir: filepath.Join(root, "tasks", taskID, "output"),
 		SkillSnapshot:     domain.SkillSnapshot{ID: uuid.NewString(), Name: "jianying-montage-draft"},
-		NonSecretSettings: ManifestSettings{MediaRoot: `C:\media`},
+		NonSecretSettings: ManifestSettings{MediaRoot: `C:\media`, MachineProfilePath: profile},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,10 +153,14 @@ func TestBuildAndWriteManifestRejectSchemaInvalidInputs(t *testing.T) {
 func TestBuildManifestDerivesPrimaryRoleAndRejectsAssetIdentitySpoofing(t *testing.T) {
 	projectID, accountID := uuid.NewString(), uuid.NewString()
 	taskID, projectRoot := uuid.NewString(), t.TempDir()
+	source := filepath.Join(projectRoot, "source.md")
+	if err := os.WriteFile(source, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	input := BuildManifestInput{
 		Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID},
 		Action: domain.ActionRemixStandard, OutputDir: filepath.Join(projectRoot, "tasks", taskID, "output"), SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()},
-		Inputs: []domain.AssetVersion{manifestVersion(projectID, accountID, domain.AssetSourceScript, `C:\project\source.md`)},
+		Inputs: []domain.AssetVersion{manifestVersion(projectID, accountID, domain.AssetSourceScript, source)},
 	}
 	manifest, err := BuildManifest(input)
 	if err != nil {
@@ -179,6 +196,8 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 	background := filepath.Join(accountRoot, "background.png")
 	writeFile(spoken)
 	writeFile(background)
+	profile := filepath.Join(projectRoot, "machine-profile.json")
+	writeFile(profile)
 	manifest, err := BuildManifest(BuildManifestInput{
 		Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID},
 		Action: domain.ActionMontagePlan, OutputDir: filepath.Join(projectRoot, "tasks", taskID, "output"),
@@ -189,6 +208,7 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 			manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, spoken),
 			manifestVersion("", accountID, domain.AssetAccountBackground, background),
 		},
+		NonSecretSettings: ManifestSettings{MachineProfilePath: profile},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -482,12 +502,78 @@ func TestTaskManifestSchemaConstrainsDedicatedOutputShape(t *testing.T) {
 	}
 }
 
+func TestBuildManifestAddsTopicActionSettingsAndEngineeringCandidateInput(t *testing.T) {
+	root := t.TempDir()
+	projectID, accountID, taskID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	output := filepath.Join(root, "tasks", taskID, "output")
+	candidates := filepath.Join(root, "candidates.json")
+	if err := os.WriteFile(candidates, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID}, Action: domain.ActionTopicCommit, OutputDir: output, ExpectedOutputs: []ExpectedOutput{{Type: "topic_card", Required: true, Description: "card"}}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session-1", CandidateID: "candidate-1", TopicCandidatesPath: candidates, ObsidianVault: root, TopicCardsDir: "cards"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.SessionID != "session-1" || manifest.NonSecretSettings.CandidateID != "candidate-1" || manifest.NonSecretSettings.TopicCandidatesPath == "" || len(manifest.EngineeringInputs) != 1 || manifest.EngineeringInputs[0].Type != "topic_candidates" {
+		t.Fatalf("topic commit contract missing: %#v", manifest)
+	}
+}
+
+func TestBuildManifestRejectsExpectedOutputOutsideActionAllowlist(t *testing.T) {
+	root, taskID := t.TempDir(), uuid.NewString()
+	_, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicBrainstorm, OutputDir: filepath.Join(root, "tasks", taskID, "output"), ExpectedOutputs: []ExpectedOutput{{Type: "mix_draft", Required: true}}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session-1"}})
+	if err == nil {
+		t.Fatal("topic action accepted montage expected output")
+	}
+}
+
+func TestWriteManifestCreatesOutputAndRejectsUnsafeProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	projectID, accountID, taskID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	output := filepath.Join(root, "tasks", taskID, "output")
+	manifest, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID}, Action: domain.ActionTopicBrainstorm, OutputDir: output, ExpectedOutputs: []ExpectedOutput{{Type: "topic_candidates", Required: true, Description: "candidates"}}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(manifest, ManifestRoots{Project: root}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(output); err != nil || !info.IsDir() {
+		t.Fatalf("WriteManifest did not create output_dir: %v", err)
+	}
+	fileRoot := filepath.Join(root, "project-file")
+	if err := os.WriteFile(fileRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(manifest, ManifestRoots{Project: fileRoot}); err == nil {
+		t.Fatal("ordinary file accepted as project root")
+	}
+}
+
+func TestWriteManifestRejectsOutputDirectorySymlinkEscape(t *testing.T) {
+	root, outside, taskID := t.TempDir(), t.TempDir(), uuid.NewString()
+	taskDir := filepath.Join(root, "tasks", taskID)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(taskDir, "output")
+	if err := os.Symlink(outside, output); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Inputs: []ManifestInput{}, EngineeringInputs: []EngineeringInput{}, OutputDir: output, ExpectedOutputs: []ExpectedOutput{{Type: "topic_candidates", Required: true}}, ApprovalMode: "plan_then_wait", SkillSnapshotID: uuid.NewString(), NonSecretSettings: ManifestSettings{SessionID: "session-1"}}
+	if _, err := WriteManifest(manifest, ManifestRoots{Project: root}); err == nil {
+		t.Fatal("output_dir symlink escape accepted")
+	}
+}
+
 func manifestVersion(projectID, accountID string, typ domain.AssetType, path string) domain.AssetVersion {
 	project := (*string)(nil)
 	if projectID != "" {
 		project = &projectID
 	}
-	return domain.AssetVersion{ID: uuid.NewString(), AssetID: uuid.NewString(), ProjectID: project, AccountID: accountID, Type: typ, Version: 2, Path: path, Filename: filepath.Base(path), MIMEType: "application/octet-stream", Size: 5, SHA256: strings.Repeat("a", 64), State: domain.AssetReady}
+	data, _ := os.ReadFile(path)
+	digest := sha256.Sum256(data)
+	return domain.AssetVersion{ID: uuid.NewString(), AssetID: uuid.NewString(), ProjectID: project, AccountID: accountID, Type: typ, Version: 2, StorageKind: domain.StorageFile, Path: path, Filename: filepath.Base(path), MIMEType: "application/octet-stream", Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:]), State: domain.AssetReady}
 }
 
 func manifestHasRole(manifest TaskManifest, role string) bool {

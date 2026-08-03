@@ -4,7 +4,7 @@
   "title": "Video Console Task Manifest 2.0",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "task_id", "job_id", "skill", "action", "inputs", "output_dir", "expected_outputs", "approval_mode", "skill_snapshot_id", "non_secret_settings"],
+  "required": ["schema_version", "task_id", "job_id", "skill", "action", "inputs", "engineering_inputs", "output_dir", "expected_outputs", "approval_mode", "skill_snapshot_id", "non_secret_settings"],
   "properties": {
     "schema_version": {"const": "2.0"},
     "task_id": {"type": "string", "format": "uuid"},
@@ -25,7 +25,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["asset_id", "version_id", "version", "type", "role", "path", "mime", "size", "sha256", "required"],
+        "required": ["asset_id", "version_id", "version", "type", "role", "path", "storage_kind", "mime", "size", "sha256", "required"],
         "properties": {
           "asset_id": {"type": "string", "format": "uuid"},
           "version_id": {"type": "string", "format": "uuid"},
@@ -33,6 +33,7 @@
           "type": {"$ref": "#/$defs/assetType"},
           "role": {"type": "string", "minLength": 1},
           "path": {"type": "string", "minLength": 1},
+          "storage_kind": {"const": "file"},
           "mime": {"type": "string", "minLength": 1},
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
@@ -49,6 +50,18 @@
           {"properties": {"type": {"const": "mix_draft"}, "role": {"const": "mix_draft"}}},
           {"properties": {"type": {"const": "final_video"}, "role": {"const": "final_video"}}}
         ]
+      }
+    },
+    "engineering_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "path"],
+        "properties": {
+          "type": {"const": "topic_candidates"},
+          "path": {"type": "string", "minLength": 1}
+        }
       }
     },
     "output_dir": {"type": "string", "minLength": 1, "pattern": "[/\\\\]tasks[/\\\\][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}[/\\\\]output$"},
@@ -78,15 +91,28 @@
         "baokuan_mcp_executable": {"type": "string"},
         "obsidian_vault": {"type": "string"},
         "topic_cards_dir": {"type": "string"},
+        "session_id": {"type": "string", "minLength": 1},
+        "candidate_id": {"type": "string", "minLength": 1},
+        "topic_candidates_path": {"type": "string", "minLength": 1},
         "grok_base_url": {"type": "string"},
         "grok_model": {"type": "string"},
         "codex_binary_path": {"type": "string"},
         "media_index_path": {"type": "string"},
         "media_root": {"type": "string"},
-        "jianying_root": {"type": "string"}
+        "jianying_root": {"type": "string"},
+        "machine_profile_path": {"type": "string", "minLength": 1}
       }
     }
   },
+  "allOf": [
+    {"if": {"properties": {"action": {"const": "topic.brainstorm"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "topic_candidates"}}}}, "non_secret_settings": {"required": ["session_id"]}}}},
+    {"if": {"properties": {"action": {"const": "topic.commit"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "topic_card"}}}}, "engineering_inputs": {"minItems": 1, "maxItems": 1}, "non_secret_settings": {"required": ["session_id", "candidate_id", "topic_candidates_path", "obsidian_vault", "topic_cards_dir"]}}}},
+    {"if": {"properties": {"action": {"const": "topic.deepen"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "topic_card"}}}}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card"]}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"enum": ["continuous_script", "spoken_script"]}}}}}}},
+    {"if": {"properties": {"action": {"const": "remix.spoken_format"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "spoken_script"}}}}}}},
+    {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path"]}, "expected_outputs": {"items": {"properties": {"type": {"const": "production_plan"}}}}}}},
+    {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path"]}, "expected_outputs": {"items": {"properties": {"type": {"enum": ["production_plan", "mix_draft"]}}}}}}}
+  ],
   "$defs": {
     "assetType": {"enum": ["source_script", "topic_card", "continuous_script", "spoken_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]}
   }

@@ -22,9 +22,11 @@ type ResultEnvelope struct {
 }
 
 type ArtifactOutput struct {
-	Type        string `json:"type"`
-	Path        string `json:"path"`
-	Description string `json:"description"`
+	Type         string `json:"type"`
+	Path         string `json:"path"`
+	Description  string `json:"description"`
+	RelativePath string `json:"relative_path,omitempty"`
+	SHA256       string `json:"sha256,omitempty"`
 }
 
 type AssetOutput struct {

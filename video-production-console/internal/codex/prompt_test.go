@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 
 func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
 	taskID := uuid.NewString()
-	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Inputs: []ManifestInput{{Path: `C:\secret-project\source.md`}}, OutputDir: `C:\managed\output`, NonSecretSettings: ManifestSettings{MediaRoot: "safe"}}
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Inputs: []ManifestInput{{Path: `C:\secret-project\source.md`}}, OutputDir: filepath.Join(`C:\managed`, "tasks", taskID, "output"), NonSecretSettings: ManifestSettings{MediaRoot: "safe"}}
 	manifestPath := filepath.Join(`C:\managed`, "tasks", taskID, "task_manifest.json")
 	prompt, err := BuildManifestPrompt(manifest, manifestPath)
 	if err != nil {
@@ -40,5 +41,17 @@ func TestPromptRejectsMismatchedSkillActionAndSecretPath(t *testing.T) {
 	manifest.Skill = "jianying-montage-draft"
 	if _, err := BuildManifestPrompt(manifest, `C:\token=plaintext\task_manifest.json`); err == nil {
 		t.Fatal("expected secret-like path rejection")
+	}
+}
+
+func TestManifestPromptRejectsPathOutsideCanonicalTaskLocation(t *testing.T) {
+	root, taskID := t.TempDir(), uuid.NewString()
+	output := filepath.Join(root, "tasks", taskID, "output")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, OutputDir: output}
+	if _, err := BuildManifestPrompt(manifest, filepath.Join(root, "other", "task_manifest.json")); err == nil {
+		t.Fatal("expected manifest-path escape rejection")
 	}
 }

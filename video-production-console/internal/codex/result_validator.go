@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,10 +39,14 @@ func ValidateResultEnvelopeJSON(data []byte, expectedTaskID string, expectedActi
 	if err := validateExactJSONFields(fields, required, required); err != nil {
 		return ResultEnvelope{}, fmt.Errorf("result envelope fields: %w", err)
 	}
-	if err := validateNestedResultFields(fields); err != nil {
+	if err := normalizeNestedResultFields(fields); err != nil {
 		return ResultEnvelope{}, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	normalizedData, err := json.Marshal(fields)
+	if err != nil {
+		return ResultEnvelope{}, fmt.Errorf("encode normalized result envelope: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(normalizedData))
 	decoder.DisallowUnknownFields()
 	var envelope ResultEnvelope
 	if err := decoder.Decode(&envelope); err != nil {
@@ -59,7 +64,7 @@ func ValidateResultEnvelopeJSON(data []byte, expectedTaskID string, expectedActi
 	return envelope, nil
 }
 
-func validateNestedResultFields(fields map[string]json.RawMessage) error {
+func normalizeNestedResultFields(fields map[string]json.RawMessage) error {
 	for _, field := range []string{"schema_version", "task_id", "action", "status", "summary"} {
 		if err := requireJSONString(fields[field]); err != nil {
 			return fmt.Errorf("result field %q: %w", field, err)
@@ -70,11 +75,22 @@ func validateNestedResultFields(fields map[string]json.RawMessage) error {
 			return fmt.Errorf("result field %q: %w", field, err)
 		}
 	}
-	var questions []map[string]json.RawMessage
-	if err := json.Unmarshal(fields["questions"], &questions); err != nil {
+	var rawQuestions []json.RawMessage
+	if err := json.Unmarshal(fields["questions"], &rawQuestions); err != nil {
 		return fmt.Errorf("inspect question fields: %w", err)
 	}
-	for i, question := range questions {
+	questions := make([]Question, 0, len(rawQuestions))
+	for i, raw := range rawQuestions {
+		if err := requireJSONString(raw); err == nil {
+			var text string
+			_ = json.Unmarshal(raw, &text)
+			questions = append(questions, Question{Text: text, Options: []string{text}})
+			continue
+		}
+		var question map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &question); err != nil {
+			return fmt.Errorf("question %d must be a string or object", i)
+		}
 		if err := validateExactJSONFields(question, []string{"text", "options"}, []string{"text", "options"}); err != nil {
 			return fmt.Errorf("question %d fields: %w", i, err)
 		}
@@ -93,21 +109,115 @@ func validateNestedResultFields(fields map[string]json.RawMessage) error {
 				return fmt.Errorf("question %d option %d: %w", i, j, err)
 			}
 		}
+		var decoded Question
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return err
+		}
+		questions = append(questions, decoded)
 	}
-	var artifacts []map[string]json.RawMessage
-	if err := json.Unmarshal(fields["artifacts"], &artifacts); err != nil {
+	fields["questions"], _ = json.Marshal(questions)
+	var rawArtifacts []json.RawMessage
+	if err := json.Unmarshal(fields["artifacts"], &rawArtifacts); err != nil {
 		return fmt.Errorf("inspect artifact fields: %w", err)
 	}
-	for i, artifact := range artifacts {
-		if err := validateExactJSONFields(artifact, []string{"type", "path", "description"}, []string{"type", "path", "description"}); err != nil {
+	artifacts := make([]ArtifactOutput, 0, len(rawArtifacts))
+	for i, raw := range rawArtifacts {
+		var artifact map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &artifact); err != nil {
+			return fmt.Errorf("artifact %d must be an object", i)
+		}
+		allowed := []string{"type", "path", "description", "relative_path", "sha256", "kind"}
+		if err := validateExactJSONFields(artifact, allowed, []string{"type", "path"}); err != nil {
 			return fmt.Errorf("artifact %d fields: %w", i, err)
 		}
-		for _, field := range []string{"type", "path", "description"} {
+		for _, field := range []string{"type", "path"} {
 			if err := requireJSONString(artifact[field]); err != nil {
 				return fmt.Errorf("artifact %d field %q: %w", i, field, err)
 			}
 		}
+		var decoded ArtifactOutput
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return err
+		}
+		if kind, ok := artifact["kind"]; ok {
+			if _, has := artifact["description"]; has {
+				return fmt.Errorf("artifact %d mixes kind and description", i)
+			}
+			if err := requireJSONString(kind); err != nil {
+				return fmt.Errorf("artifact %d kind: %w", i, err)
+			}
+			_ = json.Unmarshal(kind, &decoded.Description)
+		} else if err := requireJSONString(artifact["description"]); err != nil {
+			return fmt.Errorf("artifact %d description: %w", i, err)
+		}
+		for _, field := range []string{"relative_path", "sha256"} {
+			if value, ok := artifact[field]; ok {
+				if err := requireJSONString(value); err != nil {
+					return fmt.Errorf("artifact %d %s: %w", i, field, err)
+				}
+			}
+		}
+		artifacts = append(artifacts, decoded)
 	}
+	fields["artifacts"], _ = json.Marshal(artifacts)
+	var rawAssets []json.RawMessage
+	if err := json.Unmarshal(fields["asset_outputs"], &rawAssets); err != nil {
+		return fmt.Errorf("inspect asset output fields: %w", err)
+	}
+	assets := make([]AssetOutput, 0, len(rawAssets))
+	for i, raw := range rawAssets {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &object); err != nil {
+			return fmt.Errorf("asset output %d must be an object", i)
+		}
+		if _, compatKind := object["kind"]; compatKind {
+			if err := validateExactJSONFields(object, []string{"type", "kind", "path", "metadata"}, []string{"type", "kind", "path", "metadata"}); err != nil {
+				return fmt.Errorf("asset output %d fields: %w", i, err)
+			}
+			for _, name := range []string{"type", "kind", "path"} {
+				if err := requireJSONString(object[name]); err != nil {
+					return fmt.Errorf("asset output %d %s: %w", i, name, err)
+				}
+			}
+			var metadata map[string]json.RawMessage
+			if err := json.Unmarshal(object["metadata"], &metadata); err != nil {
+				return fmt.Errorf("asset output %d metadata: %w", i, err)
+			}
+			if err := validateExactJSONFields(metadata, []string{"registered_path", "narration_present", "bgm_present", "sfx_present", "transitions_present"}, nil); err != nil {
+				return fmt.Errorf("asset output %d metadata: %w", i, err)
+			}
+			if value, ok := metadata["registered_path"]; ok {
+				trimmed := bytes.TrimSpace(value)
+				if !bytes.Equal(trimmed, []byte("null")) && requireJSONString(value) != nil {
+					return fmt.Errorf("asset output %d registered_path must be string or null", i)
+				}
+			}
+			for _, name := range []string{"narration_present", "bgm_present", "sfx_present", "transitions_present"} {
+				if value, ok := metadata[name]; ok {
+					var flag bool
+					if err := json.Unmarshal(value, &flag); err != nil {
+						return fmt.Errorf("asset output %d metadata %s must be boolean", i, name)
+					}
+				}
+			}
+			var typ, kind, path string
+			_ = json.Unmarshal(object["type"], &typ)
+			_ = json.Unmarshal(object["kind"], &kind)
+			_ = json.Unmarshal(object["path"], &path)
+			asset, err := normalizeCompatibilityAsset(domain.AssetType(typ), kind, path)
+			if err != nil {
+				return fmt.Errorf("asset output %d: %w", i, err)
+			}
+			assets = append(assets, asset)
+			continue
+		}
+		var asset AssetOutput
+		if err := json.Unmarshal(raw, &asset); err != nil {
+			return fmt.Errorf("asset output %d: %w", i, err)
+		}
+		assets = append(assets, asset)
+	}
+	fields["asset_outputs"], _ = json.Marshal(assets)
 	var warnings []json.RawMessage
 	if err := json.Unmarshal(fields["warnings"], &warnings); err != nil {
 		return err
@@ -120,11 +230,44 @@ func validateNestedResultFields(fields map[string]json.RawMessage) error {
 	return nil
 }
 
+func normalizeCompatibilityAsset(typ domain.AssetType, kind, path string) (AssetOutput, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return AssetOutput{}, fmt.Errorf("inspect compatibility output: %w", err)
+	}
+	asset := AssetOutput{Type: typ, Path: path, Filename: filepath.Base(path), Size: info.Size()}
+	switch kind {
+	case "directory":
+		if !info.IsDir() {
+			return AssetOutput{}, fmt.Errorf("kind=directory does not name a directory")
+		}
+		asset.StorageKind, asset.MIME, asset.Size = domain.StorageDirectory, "inode/directory", 0
+		asset.SHA256, err = HashResultDirectory(path)
+	case "file":
+		if !info.Mode().IsRegular() {
+			return AssetOutput{}, fmt.Errorf("kind=file does not name a regular file")
+		}
+		asset.StorageKind = domain.StorageFile
+		asset.MIME = mime.TypeByExtension(filepath.Ext(path))
+		if asset.MIME == "" {
+			asset.MIME = "application/octet-stream"
+		}
+		asset.SHA256, err = hashResultFile(path)
+	default:
+		return AssetOutput{}, fmt.Errorf("unsupported compatibility kind %q", kind)
+	}
+	return asset, err
+}
+
 func ParseResultEnvelope(data []byte, expectedTaskID string, expectedAction domain.TaskAction, outputDir string) (ResultEnvelope, error) {
 	return ValidateResultEnvelopeJSON(data, expectedTaskID, expectedAction, outputDir)
 }
 
 func ValidateResultEnvelope(envelope ResultEnvelope, expectedTaskID string, expectedAction domain.TaskAction, outputDir string) error {
+	return ValidateResultEnvelopeWithRoots(envelope, expectedTaskID, expectedAction, outputDir, ManifestRoots{})
+}
+
+func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID string, expectedAction domain.TaskAction, outputDir string, roots ManifestRoots) error {
 	if envelope.Status == "needs_input" {
 		envelope.Status = "awaiting_input"
 	}
@@ -154,6 +297,12 @@ func ValidateResultEnvelope(envelope ResultEnvelope, expectedTaskID string, expe
 	if envelope.Status == "awaiting_input" && len(envelope.Questions) == 0 {
 		return fmt.Errorf("awaiting_input requires a structured question")
 	}
+	if envelope.Status != "awaiting_input" && len(envelope.Questions) != 0 {
+		return fmt.Errorf("questions are only allowed while awaiting_input")
+	}
+	if envelope.Status != "completed" && len(envelope.AssetOutputs) != 0 {
+		return fmt.Errorf("formal assets are only allowed for completed results")
+	}
 	for i, question := range envelope.Questions {
 		if strings.TrimSpace(question.Text) == "" || len(question.Options) == 0 {
 			return fmt.Errorf("question %d is not structured", i)
@@ -173,9 +322,35 @@ func ValidateResultEnvelope(envelope ResultEnvelope, expectedTaskID string, expe
 		if strings.TrimSpace(artifact.Type) == "" || strings.TrimSpace(artifact.Description) == "" {
 			return fmt.Errorf("artifact %d metadata is incomplete", i)
 		}
-		path, err := validateResultPath("artifact", artifact.Path, root)
+		if !allowedArtifactTypes[envelope.Action][artifact.Type] {
+			return fmt.Errorf("artifact %d type %q is not allowed for action %q", i, artifact.Type, envelope.Action)
+		}
+		artifactRoot := root
+		if artifact.Type == "topic_card" {
+			artifactRoot, err = requiredDirectoryRoot("Obsidian", roots.Obsidian)
+			if err != nil {
+				return fmt.Errorf("artifact %d: %w", i, err)
+			}
+		}
+		path, err := validateResultPath("artifact", artifact.Path, artifactRoot)
 		if err != nil {
 			return fmt.Errorf("artifact %d: %w", i, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("artifact %d must name a regular file", i)
+		}
+		if artifact.Type == "topic_card" {
+			rel, err := filepath.Rel(artifactRoot, path)
+			if err != nil || filepath.IsAbs(artifact.RelativePath) || filepath.Clean(artifact.RelativePath) != rel || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("artifact %d relative_path does not match Vault path", i)
+			}
+			actual, err := hashResultFile(path)
+			if err != nil || !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
+				return fmt.Errorf("artifact %d sha256 does not match file content", i)
+			}
+		} else if artifact.RelativePath != "" || artifact.SHA256 != "" {
+			return fmt.Errorf("artifact %d receipt fields are only allowed for topic_card", i)
 		}
 		artifactPaths = append(artifactPaths, path)
 	}
@@ -183,6 +358,9 @@ func ValidateResultEnvelope(envelope ResultEnvelope, expectedTaskID string, expe
 	for i, asset := range envelope.AssetOutputs {
 		if !formalAssetTypes[asset.Type] {
 			return fmt.Errorf("asset output %d has unknown formal asset type %q", i, asset.Type)
+		}
+		if !allowedAssetTypes[envelope.Action][asset.Type] {
+			return fmt.Errorf("asset output %d type %q is not allowed for action %q", i, asset.Type, envelope.Action)
 		}
 		path, err := validateResultPath("asset output", asset.Path, root)
 		if err != nil {
@@ -262,7 +440,8 @@ func validateAssetMetadata(asset AssetOutput, path string) error {
 		if !sha256Pattern.MatchString(asset.SHA256) {
 			return fmt.Errorf("file sha256 must be 64 hexadecimal characters")
 		}
-		if strings.TrimSpace(asset.MIME) == "" || asset.MIME == "inode/directory" {
+		mediaType, _, parseErr := mime.ParseMediaType(asset.MIME)
+		if parseErr != nil || !strings.Contains(mediaType, "/") || mediaType == "inode/directory" {
 			return fmt.Errorf("file MIME metadata is inconsistent")
 		}
 		actual, err := hashResultFile(path)
@@ -290,6 +469,30 @@ func validateAssetMetadata(asset AssetOutput, path string) error {
 		return fmt.Errorf("unsupported storage_kind %q", asset.StorageKind)
 	}
 	return nil
+}
+
+var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
+	domain.ActionTopicBrainstorm: {"topic_candidates": true},
+	domain.ActionTopicCommit:     {"topic_card": true}, domain.ActionTopicDeepen: {"topic_card": true},
+	domain.ActionRemixStandard:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionRemixEnhanced:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionSpokenFormat:   {"self_check": true},
+	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "self_check": true},
+	domain.ActionMontagePlan:    montageArtifactTypes(), domain.ActionMontageExecute: montageArtifactTypes(),
+}
+
+func montageArtifactTypes() map[string]bool {
+	return map[string]bool{"production_plan": true, "production_plan_validation": true, "draft_validation": true, "selected_media_summary": true, "registration_result": true, "qc_report": true, "events": true, "stderr_log": true, "plaintext_workspace": true}
+}
+
+var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
+	domain.ActionTopicBrainstorm: {}, domain.ActionTopicCommit: {}, domain.ActionTopicDeepen: {},
+	domain.ActionRemixStandard:  {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
+	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
+	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
+	domain.ActionSpokenFormat:   {domain.AssetSpokenScript: true}, domain.ActionRemixReview: {},
+	domain.ActionMontagePlan: {}, domain.ActionMontageExecute: {domain.AssetMixDraft: true},
 }
 
 type resultDirectoryEntry struct {

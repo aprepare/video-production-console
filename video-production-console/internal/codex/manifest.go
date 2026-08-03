@@ -44,18 +44,19 @@ func ResolveAction(action domain.TaskAction) (ActionResolution, error) {
 }
 
 type TaskManifest struct {
-	SchemaVersion     string            `json:"schema_version"`
-	TaskID            string            `json:"task_id"`
-	JobID             string            `json:"job_id"`
-	Skill             string            `json:"skill"`
-	Action            domain.TaskAction `json:"action"`
-	Project           *ManifestProject  `json:"project,omitempty"`
-	Inputs            []ManifestInput   `json:"inputs"`
-	OutputDir         string            `json:"output_dir"`
-	ExpectedOutputs   []ExpectedOutput  `json:"expected_outputs"`
-	ApprovalMode      string            `json:"approval_mode"`
-	SkillSnapshotID   string            `json:"skill_snapshot_id"`
-	NonSecretSettings ManifestSettings  `json:"non_secret_settings"`
+	SchemaVersion     string             `json:"schema_version"`
+	TaskID            string             `json:"task_id"`
+	JobID             string             `json:"job_id"`
+	Skill             string             `json:"skill"`
+	Action            domain.TaskAction  `json:"action"`
+	Project           *ManifestProject   `json:"project,omitempty"`
+	Inputs            []ManifestInput    `json:"inputs"`
+	EngineeringInputs []EngineeringInput `json:"engineering_inputs"`
+	OutputDir         string             `json:"output_dir"`
+	ExpectedOutputs   []ExpectedOutput   `json:"expected_outputs"`
+	ApprovalMode      string             `json:"approval_mode"`
+	SkillSnapshotID   string             `json:"skill_snapshot_id"`
+	NonSecretSettings ManifestSettings   `json:"non_secret_settings"`
 }
 
 type ManifestProject struct {
@@ -64,16 +65,22 @@ type ManifestProject struct {
 }
 
 type ManifestInput struct {
-	AssetID   string           `json:"asset_id"`
-	VersionID string           `json:"version_id"`
-	Version   int              `json:"version"`
-	Type      domain.AssetType `json:"type"`
-	Role      string           `json:"role"`
-	Path      string           `json:"path"`
-	MIME      string           `json:"mime"`
-	Size      int64            `json:"size"`
-	SHA256    string           `json:"sha256"`
-	Required  bool             `json:"required"`
+	AssetID     string             `json:"asset_id"`
+	VersionID   string             `json:"version_id"`
+	Version     int                `json:"version"`
+	Type        domain.AssetType   `json:"type"`
+	Role        string             `json:"role"`
+	Path        string             `json:"path"`
+	StorageKind domain.StorageKind `json:"storage_kind"`
+	MIME        string             `json:"mime"`
+	Size        int64              `json:"size"`
+	SHA256      string             `json:"sha256"`
+	Required    bool               `json:"required"`
+}
+
+type EngineeringInput struct {
+	Type string `json:"type"`
+	Path string `json:"path"`
 }
 
 type ExpectedOutput struct {
@@ -92,12 +99,16 @@ type ManifestSettings struct {
 	BaokuanMCPExecutable string `json:"baokuan_mcp_executable,omitempty"`
 	ObsidianVault        string `json:"obsidian_vault,omitempty"`
 	TopicCardsDir        string `json:"topic_cards_dir,omitempty"`
+	SessionID            string `json:"session_id,omitempty"`
+	CandidateID          string `json:"candidate_id,omitempty"`
+	TopicCandidatesPath  string `json:"topic_candidates_path,omitempty"`
 	GrokBaseURL          string `json:"grok_base_url,omitempty"`
 	GrokModel            string `json:"grok_model,omitempty"`
 	CodexBinaryPath      string `json:"codex_binary_path,omitempty"`
 	MediaIndexPath       string `json:"media_index_path,omitempty"`
 	MediaRoot            string `json:"media_root,omitempty"`
 	JianyingRoot         string `json:"jianying_root,omitempty"`
+	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
 }
 
 type BuildManifestInput struct {
@@ -154,14 +165,14 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		roles[role] = true
 		inputs = append(inputs, ManifestInput{
 			AssetID: version.AssetID, VersionID: version.ID, Version: version.Version,
-			Type: version.Type, Role: role, Path: inputPath, MIME: version.MIMEType,
+			Type: version.Type, Role: role, Path: inputPath, StorageKind: version.StorageKind, MIME: version.MIMEType,
 			Size: version.Size, SHA256: version.SHA256, Required: true,
 		})
 	}
-	if in.Action == domain.ActionMontagePlan || in.Action == domain.ActionMontageExecute {
-		for _, role := range []string{string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)} {
+	if required := requiredInputRoles[in.Action]; required != nil {
+		for _, role := range required {
 			if !roles[role] {
-				return TaskManifest{}, fmt.Errorf("montage input %q is required", role)
+				return TaskManifest{}, fmt.Errorf("action %q input %q is required", in.Action, role)
 			}
 		}
 	}
@@ -171,6 +182,26 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		}
 		return inputs[i].Role < inputs[j].Role
 	})
+	engineeringInputs := []EngineeringInput{}
+	if strings.TrimSpace(in.NonSecretSettings.TopicCandidatesPath) != "" {
+		path, err := resolvePath(in.NonSecretSettings.TopicCandidatesPath)
+		if err != nil {
+			return TaskManifest{}, fmt.Errorf("canonicalize topic candidates path: %w", err)
+		}
+		in.NonSecretSettings.TopicCandidatesPath = path
+		engineeringInputs = append(engineeringInputs, EngineeringInput{Type: "topic_candidates", Path: path})
+	}
+	if strings.TrimSpace(in.NonSecretSettings.MachineProfilePath) != "" {
+		path, err := resolvePath(in.NonSecretSettings.MachineProfilePath)
+		if err != nil {
+			return TaskManifest{}, fmt.Errorf("canonicalize machine profile path: %w", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return TaskManifest{}, fmt.Errorf("machine_profile_path must name a regular file")
+		}
+		in.NonSecretSettings.MachineProfilePath = path
+	}
 	approval := in.ApprovalMode
 	if approval == "" {
 		approval = "plan_then_wait"
@@ -181,7 +212,8 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 	manifest := TaskManifest{
 		SchemaVersion: ProtocolSchemaVersion, TaskID: in.Task.ID, JobID: in.Task.ID,
 		Skill: resolved.Skill, Action: in.Action, Inputs: inputs, OutputDir: outputDir,
-		ExpectedOutputs: append([]ExpectedOutput(nil), in.ExpectedOutputs...), ApprovalMode: approval,
+		EngineeringInputs: engineeringInputs,
+		ExpectedOutputs:   append([]ExpectedOutput(nil), in.ExpectedOutputs...), ApprovalMode: approval,
 		SkillSnapshotID: in.SkillSnapshot.ID, NonSecretSettings: in.NonSecretSettings,
 	}
 	if manifest.ExpectedOutputs == nil {
@@ -229,7 +261,7 @@ func WriteManifest(manifest TaskManifest, roots ManifestRoots) (string, error) {
 	if manifest.SchemaVersion != ProtocolSchemaVersion || manifest.Skill != resolved.Skill || manifest.JobID != manifest.TaskID {
 		return "", fmt.Errorf("manifest protocol identity is inconsistent")
 	}
-	projectRoot, err := resolvePath(roots.Project)
+	projectRoot, err := requiredDirectoryRoot("project", roots.Project)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize project root: %w", err)
 	}
@@ -246,6 +278,9 @@ func WriteManifest(manifest TaskManifest, roots ManifestRoots) (string, error) {
 		return "", err
 	}
 	manifest.OutputDir = output
+	if err := os.MkdirAll(output, 0o700); err != nil {
+		return "", fmt.Errorf("create output_dir: %w", err)
+	}
 	for i := range manifest.Inputs {
 		input := &manifest.Inputs[i]
 		var allowed []string
@@ -264,6 +299,17 @@ func WriteManifest(manifest TaskManifest, roots ManifestRoots) (string, error) {
 		input.Path = path
 		if pathsOverlap(output, path) {
 			return "", fmt.Errorf("input %q overlaps output_dir", input.Role)
+		}
+	}
+	for i := range manifest.EngineeringInputs {
+		input := &manifest.EngineeringInputs[i]
+		path, err := canonicalInAnyRoot("engineering input path", input.Path, projectRoot)
+		if err != nil {
+			return "", fmt.Errorf("engineering input %q: %w", input.Type, err)
+		}
+		input.Path = path
+		if pathsOverlap(output, path) {
+			return "", fmt.Errorf("engineering input %q overlaps output_dir", input.Type)
 		}
 	}
 	taskDir, err := canonicalContained("task directory", filepath.Join(projectRoot, "tasks", manifest.TaskID), projectRoot)
@@ -357,6 +403,9 @@ func canonicalTaskOutput(path, taskID, projectRoot string) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("canonicalize expected output_dir: %w", err)
 	}
+	if !pathInside(root, expected) {
+		return "", "", fmt.Errorf("output_dir escapes project root")
+	}
 	if !canonicalSamePath(output, expected) {
 		return "", "", fmt.Errorf("output_dir must equal %q", expected)
 	}
@@ -419,7 +468,7 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 	if strings.TrimSpace(manifest.OutputDir) == "" {
 		return fmt.Errorf("output_dir is required")
 	}
-	if manifest.Inputs == nil || manifest.ExpectedOutputs == nil {
+	if manifest.Inputs == nil || manifest.EngineeringInputs == nil || manifest.ExpectedOutputs == nil {
 		return fmt.Errorf("manifest array fields must be present")
 	}
 	switch manifest.ApprovalMode {
@@ -431,6 +480,14 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 		if err := validateManifestInput(input); err != nil {
 			return fmt.Errorf("input %d: %w", i, err)
 		}
+	}
+	for i, input := range manifest.EngineeringInputs {
+		if input.Type != "topic_candidates" || strings.TrimSpace(input.Path) == "" {
+			return fmt.Errorf("engineering input %d is invalid", i)
+		}
+	}
+	if err := validateActionManifestContract(manifest); err != nil {
+		return err
 	}
 	for i, output := range manifest.ExpectedOutputs {
 		if strings.TrimSpace(output.Type) == "" {
@@ -456,6 +513,16 @@ func validateManifestInput(input ManifestInput) error {
 	if strings.TrimSpace(input.Path) == "" {
 		return fmt.Errorf("path is required")
 	}
+	if input.StorageKind != domain.StorageFile {
+		return fmt.Errorf("storage_kind must be file")
+	}
+	info, err := os.Stat(input.Path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("path must name a regular file")
+	}
+	if input.Size != info.Size() {
+		return fmt.Errorf("size does not match file")
+	}
 	mediaType, _, err := mime.ParseMediaType(input.MIME)
 	if err != nil || !strings.Contains(mediaType, "/") {
 		return fmt.Errorf("MIME %q is invalid", input.MIME)
@@ -466,6 +533,75 @@ func validateManifestInput(input ManifestInput) error {
 	if !sha256Pattern.MatchString(input.SHA256) {
 		return fmt.Errorf("sha256 must be 64 hexadecimal characters")
 	}
+	actual, err := hashResultFile(input.Path)
+	if err != nil || !strings.EqualFold(actual, input.SHA256) {
+		return fmt.Errorf("sha256 does not match file content")
+	}
+	return nil
+}
+
+func requiredDirectoryRoot(label, root string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("%s root is required", label)
+	}
+	resolved, err := resolvePath(root)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%s root must be a directory", label)
+	}
+	return resolved, nil
+}
+
+var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
+	domain.ActionTopicBrainstorm: {"topic_candidates": true},
+	domain.ActionTopicCommit:     {"topic_card": true}, domain.ActionTopicDeepen: {"topic_card": true},
+	domain.ActionRemixStandard:  {"continuous_script": true, "spoken_script": true},
+	domain.ActionRemixEnhanced:  {"continuous_script": true, "spoken_script": true},
+	domain.ActionRemixFromTopic: {"continuous_script": true, "spoken_script": true},
+	domain.ActionSpokenFormat:   {"spoken_script": true}, domain.ActionRemixReview: {},
+	domain.ActionMontagePlan:    {"production_plan": true},
+	domain.ActionMontageExecute: {"production_plan": true, "mix_draft": true},
+}
+
+var requiredInputRoles = map[domain.TaskAction][]string{
+	domain.ActionRemixStandard: {"primary_source"}, domain.ActionRemixEnhanced: {"primary_source"},
+	domain.ActionRemixFromTopic: {string(domain.AssetTopicCard)}, domain.ActionSpokenFormat: {string(domain.AssetContinuousScript)},
+	domain.ActionMontagePlan:    {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+	domain.ActionMontageExecute: {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+}
+
+func validateActionManifestContract(manifest TaskManifest) error {
+	allowed, ok := expectedOutputAllowlist[manifest.Action]
+	if !ok {
+		return fmt.Errorf("unsupported manifest action %q", manifest.Action)
+	}
+	for _, output := range manifest.ExpectedOutputs {
+		if !allowed[output.Type] {
+			return fmt.Errorf("expected output %q is not allowed for action %q", output.Type, manifest.Action)
+		}
+	}
+	s := manifest.NonSecretSettings
+	switch manifest.Action {
+	case domain.ActionTopicBrainstorm:
+		if strings.TrimSpace(s.SessionID) == "" {
+			return fmt.Errorf("session_id is required")
+		}
+	case domain.ActionTopicCommit:
+		if strings.TrimSpace(s.SessionID) == "" || strings.TrimSpace(s.CandidateID) == "" || strings.TrimSpace(s.ObsidianVault) == "" || strings.TrimSpace(s.TopicCardsDir) == "" || len(manifest.EngineeringInputs) != 1 {
+			return fmt.Errorf("topic commit requires session_id, candidate_id, and topic candidates input")
+		}
+	case domain.ActionTopicDeepen:
+		if strings.TrimSpace(s.SessionID) == "" || len(manifest.Inputs) != 1 || manifest.Inputs[0].Type != domain.AssetTopicCard {
+			return fmt.Errorf("topic deepen requires session_id and exactly one topic_card input")
+		}
+	case domain.ActionMontagePlan, domain.ActionMontageExecute:
+		if strings.TrimSpace(s.MachineProfilePath) == "" {
+			return fmt.Errorf("machine_profile_path is required")
+		}
+	}
 	return nil
 }
 
@@ -473,7 +609,15 @@ func optionalResolvedRoot(root string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", nil
 	}
-	return resolvePath(root)
+	resolved, err := resolvePath(root)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("managed root must be a directory")
+	}
+	return resolved, nil
 }
 
 func canonicalInAnyRoot(label, path string, roots ...string) (string, error) {

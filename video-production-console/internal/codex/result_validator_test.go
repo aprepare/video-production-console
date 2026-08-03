@@ -26,6 +26,7 @@ func TestValidateResultEnvelopeAcceptsCompletedAndTransitionStatus(t *testing.T)
 	}
 	envelope.Status = "needs_input"
 	envelope.Questions = []Question{{Text: "Pick one", Options: []string{"a"}}}
+	envelope.AssetOutputs = []AssetOutput{}
 	data, _ := json.Marshal(envelope)
 	got, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionRemixEnhanced, out)
 	if err != nil || got.Status != "awaiting_input" {
@@ -243,6 +244,83 @@ func TestValidateResultEnvelopeVerifiesFileAndDirectoryContentHashes(t *testing.
 	}
 	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
 		t.Fatal("expected tampered directory hash rejection")
+	}
+}
+
+func TestValidateResultEnvelopeNormalizesMontageCompatibilityFields(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	workspace := filepath.Join(out, "workspace", taskID)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(out, "production_plan.json")
+	if err := os.WriteFile(plan, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[{"type":"production_plan","path":` + mustJSONQuote(t, plan) + `,"kind":"file"}],"asset_outputs":[{"type":"mix_draft","kind":"directory","path":` + mustJSONQuote(t, workspace) + `,"metadata":{"registered_path":null}}],"warnings":[]}`)
+	got, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontageExecute, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Artifacts[0].Description != "file" || got.AssetOutputs[0].StorageKind != domain.StorageDirectory || got.AssetOutputs[0].Filename != taskID || got.AssetOutputs[0].MIME != "inode/directory" || got.AssetOutputs[0].SHA256 == "" {
+		t.Fatalf("compatibility result was not normalized: %#v", got)
+	}
+}
+
+func TestValidateResultEnvelopeNormalizesStringQuestionsAndRejectsAssetsBeforeCompletion(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.plan","status":"awaiting_input","summary":"need profile","questions":["Provide machine profile."],"artifacts":[],"asset_outputs":[],"warnings":[]}`)
+	got, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontagePlan, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Questions[0].Text != "Provide machine profile." || len(got.Questions[0].Options) != 1 {
+		t.Fatalf("string question was not normalized: %#v", got.Questions)
+	}
+	file := filepath.Join(out, "script.txt")
+	if err := os.WriteFile(file, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"remix.standard","status":"failed","summary":"failed","questions":[],"artifacts":[],"asset_outputs":[{"type":"continuous_script","path":` + mustJSONQuote(t, file) + `,"storage_kind":"file","filename":"script.txt","mime":"text/plain","size":6,"sha256":` + mustJSONQuote(t, sha256HexForTest(t, file)) + `}],"warnings":[]}`)
+	if _, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionRemixStandard, out); err == nil {
+		t.Fatal("failed result registered a formal asset")
+	}
+}
+
+func TestValidateResultEnvelopeTopicCardUsesVaultReceiptAndActionMatrix(t *testing.T) {
+	out, vault, taskID := t.TempDir(), t.TempDir(), uuid.NewString()
+	cards := filepath.Join(vault, "cards")
+	if err := os.MkdirAll(cards, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	card := filepath.Join(cards, "card.md")
+	if err := os.WriteFile(card, []byte("# card"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionTopicCommit, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{{Type: "topic_card", Path: card, RelativePath: "cards/card.md", SHA256: sha256HexForTest(t, card), Description: "card"}}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
+	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault}); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+	if err := ValidateResultEnvelopeWithRoots(envelope, taskID, domain.ActionTopicCommit, out, ManifestRoots{Obsidian: vault}); err == nil {
+		t.Fatal("topic card accepted an invalid receipt hash")
+	}
+}
+
+func TestValidateResultEnvelopeRejectsActionAssetMismatchAndMalformedMediaType(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "script.txt")
+	if err := os.WriteFile(file, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontagePlan, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: file, StorageKind: domain.StorageFile, Filename: "script.txt", MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("montage plan accepted remix asset")
+	}
+	envelope.Action = domain.ActionRemixStandard
+	envelope.AssetOutputs[0].MIME = "text/plain; charset"
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("malformed MIME parameters accepted")
 	}
 }
 
