@@ -207,6 +207,20 @@ func newCodexCommandFactories(settings config.Config, base codex.Config) (codex.
 			ProjectDir:   root,
 			AllowedDir:   taskRoot,
 		}
+		// A task manifest is optional while older HTTP task creation has not
+		// supplied the asset versions required by every V2 action. When a
+		// manifest has been prepared in this controlled task directory, make it
+		// authoritative for the command prompt rather than falling back to the
+		// compatibility task-type mapping.
+		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
+		if info, statErr := os.Lstat(manifestPath); statErr == nil {
+			if !info.Mode().IsRegular() {
+				return nil, "", fmt.Errorf("task manifest must be a regular file")
+			}
+			ctx.ManifestPath = manifestPath
+		} else if !os.IsNotExist(statErr) {
+			return nil, "", fmt.Errorf("inspect task manifest: %w", statErr)
+		}
 		guard, err := codex.OpenProjectDirGuard(ctx)
 		if err != nil {
 			return nil, "", err

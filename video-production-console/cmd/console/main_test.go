@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
@@ -180,6 +183,61 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	answer, err := codex.StdinText(resume.Stdin)
 	if err != nil || answer != "answer" {
 		t.Fatalf("resume stdin = %q, err=%v", answer, err)
+	}
+}
+
+func TestCodexCommandFactoryUsesPreparedManifestAction(t *testing.T) {
+	dataRoot := t.TempDir()
+	schema := filepath.Join(t.TempDir(), "codex-result.schema.json")
+	base := testCodexCommandConfig(t, schema)
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
+
+	projectID := uuid.NewString()
+	accountID := uuid.NewString()
+	taskID := uuid.NewString()
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTaskDirectory(root, taskID); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(root, "source.md")
+	source := []byte("source script")
+	if err := os.WriteFile(sourcePath, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(source)
+	manifest, err := codex.BuildManifest(codex.BuildManifestInput{
+		Task:      task,
+		Project:   &domain.Project{ID: projectID, AccountID: accountID},
+		Action:    task.Action,
+		OutputDir: filepath.Join(root, "tasks", taskID, "output"),
+		Inputs: []domain.AssetVersion{{
+			ID: uuid.NewString(), AssetID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID,
+			Type: domain.AssetSourceScript, Version: 1, StorageKind: domain.StorageFile, Path: sourcePath,
+			Filename: "source.md", MIMEType: "text/markdown", Size: int64(len(source)), SHA256: hex.EncodeToString(digest[:]), State: domain.AssetReady,
+		}},
+		SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"},
+	})
+	if err != nil {
+		t.Fatalf("build manifest: %v", err)
+	}
+	if _, err := codex.WriteManifest(manifest, codex.ManifestRoots{Project: root}); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("make command: %v", err)
+	}
+	prompt, err := codex.StdinText(cmd.Stdin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "action=enhanced") || strings.Contains(prompt, "action=standard") {
+		t.Fatalf("command did not use manifest action: %q", prompt)
 	}
 }
 

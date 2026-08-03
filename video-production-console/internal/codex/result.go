@@ -85,6 +85,21 @@ func rejectDuplicateJSONKeys(data []byte) error {
 	return nil
 }
 
+// decodeStrictJSON decodes one object without accepting duplicate keys or
+// trailing JSON values. It is shared by the command path when loading a
+// persisted task manifest before constructing the Codex prompt.
+func decodeStrictJSON(data []byte, target any) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
+
 func scanStrictJSONValue(decoder *json.Decoder) error {
 	token, err := decoder.Token()
 	if err != nil {

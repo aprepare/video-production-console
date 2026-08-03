@@ -58,12 +58,16 @@ func ResolveTaskAction(taskType string, requested domain.TaskAction) (domain.Tas
 
 // TaskContext is the complete, project-scoped context supplied to one Codex run.
 type TaskContext struct {
-	ProjectID       string
-	AccountName     string
-	TaskType        string
-	WorkspaceDir    string
-	ProjectDir      string
-	AllowedDir      string
+	ProjectID    string
+	AccountName  string
+	TaskType     string
+	WorkspaceDir string
+	ProjectDir   string
+	AllowedDir   string
+	// ManifestPath is the canonical, task-scoped manifest to use as the
+	// authoritative prompt source. Empty retains the legacy compatibility
+	// prompt for callers that have not migrated to manifest preparation yet.
+	ManifestPath    string
 	AssetPaths      []string
 	ProjectDirGuard *ProjectDirGuard
 	OtherProject    string // test/support metadata; never included in the prompt
@@ -180,6 +184,13 @@ func normalizeContext(ctx TaskContext) (TaskContext, error) {
 		assets = append(assets, normalized)
 	}
 	ctx.WorkspaceDir, ctx.ProjectDir, ctx.AllowedDir, ctx.AssetPaths = workspace, project, allowed, assets
+	if strings.TrimSpace(ctx.ManifestPath) != "" {
+		manifest, err := normalizeInside("manifest path", ctx.ManifestPath, allowed)
+		if err != nil {
+			return TaskContext{}, err
+		}
+		ctx.ManifestPath = manifest
+	}
 	return ctx, nil
 }
 

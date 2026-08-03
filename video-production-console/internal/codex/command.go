@@ -216,7 +216,26 @@ func BuildExecCommand(cfg Config, ctx TaskContext) (*exec.Cmd, error) {
 	if rel, err := filepath.Rel(normalized.ProjectDir, cfg.WorkingDirectory); err != nil || rel != "." {
 		return nil, fmt.Errorf("working directory must be the guarded project root")
 	}
-	prompt, err := buildPrompt(normalized, skill)
+	var prompt string
+	if strings.TrimSpace(normalized.ManifestPath) != "" {
+		// Read no manifest contents here: the manifest path is passed to the
+		// bounded prompt builder, and the Skill reads the file under its
+		// already-guarded task directory.
+		manifest, err := os.ReadFile(normalized.ManifestPath)
+		if err != nil {
+			return nil, fmt.Errorf("read task manifest: %w", err)
+		}
+		var decoded TaskManifest
+		if err := decodeStrictJSON(manifest, &decoded); err != nil {
+			return nil, fmt.Errorf("decode task manifest: %w", err)
+		}
+		prompt, err = BuildManifestPrompt(decoded, normalized.ManifestPath)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		prompt, err = buildPrompt(normalized, skill)
+	}
 	if err != nil {
 		return nil, err
 	}
