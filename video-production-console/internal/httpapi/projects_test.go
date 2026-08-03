@@ -25,6 +25,8 @@ import (
 type failingProjectStore struct {
 	getErr, listErr, backgroundErr, moveErr error
 	stage                                   domain.ProjectStage
+	addState                                store.CommitState
+	addErr                                  error
 }
 
 func (s *failingProjectStore) CreateProject(context.Context, domain.Project) error { return nil }
@@ -48,6 +50,9 @@ func (s *failingProjectStore) SetTopicCardPath(context.Context, string, string, 
 	return nil
 }
 func (s *failingProjectStore) AddAsset(context.Context, *domain.Asset) (store.CommitState, error) {
+	if s.addErr != nil {
+		return s.addState, s.addErr
+	}
 	return store.CommitCommitted, nil
 }
 func (s *failingProjectStore) ListAssets(context.Context, string) ([]domain.Asset, error) {
@@ -110,6 +115,21 @@ func TestMoveMapsConcurrentStageConflict(t *testing.T) {
 	}
 }
 
+func TestProjectUploadKeepsFileAndReturnsRecoverableErrorForUnknownCommit(t *testing.T) {
+	root := t.TempDir()
+	id := uuid.NewString()
+	repository := &failingProjectStore{addState: store.CommitUnknown, addErr: &store.CommitOutcomeError{Outcome: store.CommitUnknown, Err: errors.New("lost commit acknowledgement")}}
+	h := newProjectsHandler(repository, assets.NewService(root))
+	response := uploadProjectFile(t, h, id, "continuous_script", "script.txt", []byte("hello"))
+	defer response.Body.Close()
+	assertAPIError(t, response, http.StatusServiceUnavailable, "asset_commit_unknown")
+	directory := filepath.Join(root, "projects", id, "continuous_script")
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("saved file entries=%v err=%v", entries, err)
+	}
+}
+
 func TestProjectViewIncludesLifecycleFields(t *testing.T) {
 	now := time.Now().UTC()
 	note := "published manually"
@@ -119,6 +139,18 @@ func TestProjectViewIncludesLifecycleFields(t *testing.T) {
 		if !bytes.Contains(data, []byte(`"`+field+`"`)) {
 			t.Fatalf("response missing %s: %s", field, data)
 		}
+	}
+}
+
+func TestDefaultProjectAndAssetViewsDoNotExposeStoragePaths(t *testing.T) {
+	projectPath := "C:\\private\\topic.png"
+	projectJSON, _ := json.Marshal(toProjectView(domain.Project{TopicCardPath: &projectPath}))
+	assetJSON, _ := json.Marshal(toAssetView(domain.Asset{Path: "C:\\private\\video.mp4"}))
+	if bytes.Contains(projectJSON, []byte("topic_card_path")) || bytes.Contains(projectJSON, []byte("C:\\\\private")) {
+		t.Fatalf("project leaked path: %s", projectJSON)
+	}
+	if bytes.Contains(assetJSON, []byte(`"path"`)) || bytes.Contains(assetJSON, []byte("C:\\\\private")) {
+		t.Fatalf("asset leaked path: %s", assetJSON)
 	}
 }
 
@@ -156,11 +188,11 @@ func TestProjectLifecycleUploadVersionsAndGates(t *testing.T) {
 		t.Fatalf("upload statuses = %d, %d", first.StatusCode, second.StatusCode)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM assets WHERE project_id=? AND type='continuous_script'`, created.ID).Scan(&count); err != nil || count != 2 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE project_id=? AND type='continuous_script'`, created.ID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("versions count=%d err=%v", count, err)
 	}
 	var path string
-	_ = db.QueryRow(`SELECT path FROM assets WHERE project_id=? ORDER BY version DESC LIMIT 1`, created.ID).Scan(&path)
+	_ = db.QueryRow(`SELECT path FROM asset_versions WHERE project_id=? ORDER BY version DESC LIMIT 1`, created.ID).Scan(&path)
 	wantRoot := filepath.Join(root, "projects", created.ID, "continuous_script")
 	if filepath.Dir(path) != wantRoot {
 		t.Fatalf("asset path=%q want root=%q", path, wantRoot)
@@ -257,19 +289,14 @@ func newProjectsTestHandler(t *testing.T, status string) (http.Handler, *sql.DB,
 	t.Cleanup(func() { db.Close() })
 	id := uuid.NewString()
 	now := time.Now().UTC()
-	bgID := uuid.NewString()
 	bgPath := filepath.Join(root, "bg.png")
-	_, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff',?,?,?)`, id, "account", status, now, now)
-	if err != nil {
+	if _, err = store.NewAccountRepository(db).CreateWithBackground(context.Background(), domain.Account{ID: id, Name: "account", Color: "#fff", Status: "active", CreatedAt: now, UpdatedAt: now}, store.NewBackground{ID: uuid.NewString(), Path: bgPath, Filename: "bg.png", MIMEType: "image/png", Size: 1, SHA256: "sha"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES(?,NULL,?,'account_background',?,'bg.png','image/png',1,'sha',1,'active',?)`, bgID, id, bgPath, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`UPDATE accounts SET background_asset_id=? WHERE id=?`, bgID, id)
-	if err != nil {
-		t.Fatal(err)
+	if status != "active" {
+		if _, err = db.Exec(`UPDATE accounts SET status=? WHERE id=?`, status, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return NewProjectsHandler(db, assets.NewService(root)), db, root, id
 }

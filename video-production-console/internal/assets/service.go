@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -33,9 +34,9 @@ const MaxAudioAssetSize int64 = 200 << 20
 
 func MaxSizeForType(assetType domain.AssetType) int64 {
 	switch assetType {
-	case domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitle:
+	case domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitleSRT, domain.AssetSubtitle:
 		return MaxTextAssetSize
-	case domain.AssetAudio:
+	case domain.AssetNarration, domain.AssetAudio:
 		return MaxAudioAssetSize
 	case domain.AssetMixDraft, domain.AssetFinalVideo:
 		return MaxProjectAssetSize
@@ -65,6 +66,10 @@ type SavedAsset struct {
 }
 
 func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType, filename string, reader io.Reader) (saved SavedAsset, err error) {
+	return s.saveProjectAsset(projectID, assetType, assetType, filename, reader)
+}
+
+func (s *Service) saveProjectAsset(projectID string, targetType, validationType domain.AssetType, filename string, reader io.Reader) (saved SavedAsset, err error) {
 	parsedID, parseErr := uuid.Parse(projectID)
 	if parseErr != nil {
 		return SavedAsset{}, ErrInvalidProjectAsset
@@ -72,17 +77,17 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 	ext := strings.ToLower(filepath.Ext(filename))
 	allowed := map[domain.AssetType]map[string]bool{
 		domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true},
-		domain.AssetSubtitle: {".srt": true}, domain.AssetAudio: {".mp3": true, ".wav": true, ".m4a": true},
+		domain.AssetSubtitleSRT: {".srt": true}, domain.AssetSubtitle: {".srt": true}, domain.AssetNarration: {".mp3": true, ".wav": true, ".m4a": true}, domain.AssetAudio: {".mp3": true, ".wav": true, ".m4a": true},
 		domain.AssetMixDraft: {".mp4": true}, domain.AssetFinalVideo: {".mp4": true},
 	}
-	if !allowed[assetType][ext] {
+	if !allowed[validationType][ext] {
 		return SavedAsset{}, ErrInvalidProjectAsset
 	}
-	maxSize := MaxSizeForType(assetType)
+	maxSize := MaxSizeForType(validationType)
 	if maxSize == 0 {
 		return SavedAsset{}, ErrInvalidProjectAsset
 	}
-	directory := filepath.Join(s.dataRoot, "projects", parsedID.String(), string(assetType))
+	directory := filepath.Join(s.dataRoot, "projects", parsedID.String(), string(targetType))
 	if err = os.MkdirAll(directory, 0o755); err != nil {
 		return SavedAsset{}, fmt.Errorf("create project asset directory: %w", err)
 	}
@@ -111,7 +116,7 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 	if err = temporary.Close(); err != nil {
 		return SavedAsset{}, err
 	}
-	mimeType, err := validateProjectFile(temporaryPath, assetType, ext)
+	mimeType, err := validateProjectFile(temporaryPath, validationType, ext)
 	if err != nil {
 		return SavedAsset{}, err
 	}
@@ -125,13 +130,166 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 	return SavedAsset{Path: finalPath, MIMEType: mimeType, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
+func (s *Service) SaveTextVersion(projectID string, typ domain.AssetType, filename, text string) (SavedAsset, error) {
+	switch typ {
+	case domain.AssetSourceScript, domain.AssetTopicCard, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitleSRT:
+	default:
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
+	// Source scripts and topic cards use the same managed text rules as scripts.
+	validationType := typ
+	if typ == domain.AssetSourceScript || typ == domain.AssetTopicCard {
+		validationType = domain.AssetContinuousScript
+	}
+	return s.saveProjectAsset(projectID, typ, validationType, filename, strings.NewReader(text))
+}
+
+func (s *Service) ImportFile(projectID string, typ domain.AssetType, sourcePath string) (SavedAsset, error) {
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return SavedAsset{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return SavedAsset{}, ErrInvalidProjectAsset
+	}
+	if s.beforeImportOpen != nil {
+		s.beforeImportOpen(sourcePath)
+	}
+	file, err := openPathNoFollow(sourcePath, "", false)
+	if err != nil {
+		return SavedAsset{}, err
+	}
+	defer file.Close()
+	return s.SaveProjectAsset(projectID, typ, filepath.Base(sourcePath), file)
+}
+
+func (s *Service) HashDirectory(path string) (string, int64, error) {
+	root, err := filepath.Abs(s.dataRoot)
+	if err != nil {
+		return "", 0, ErrAssetPathInvalid
+	}
+	directory, err := filepath.Abs(path)
+	if err != nil || !pathInside(root, directory) {
+		return "", 0, ErrAssetPathInvalid
+	}
+	rootResolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", 0, ErrAssetPathInvalid
+	}
+	directoryResolved, err := filepath.EvalSymlinks(directory)
+	if err != nil || filepath.Clean(directoryResolved) != filepath.Clean(directory) || !pathInside(rootResolved, directoryResolved) {
+		return "", 0, ErrAssetPathInvalid
+	}
+	info, err := os.Stat(directory)
+	if err != nil {
+		return "", 0, err
+	}
+	if !info.IsDir() {
+		return "", 0, ErrInvalidProjectAsset
+	}
+	directoryHandle, err := openPathNoFollow(directory, root, true)
+	if err != nil {
+		return "", 0, err
+	}
+	defer directoryHandle.Close()
+	directoryIdentity, err := directoryHandle.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	type entryHash struct {
+		relative string
+		digest   [sha256.Size]byte
+		size     int64
+	}
+	entries := []entryHash{}
+	err = filepath.WalkDir(directory, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		currentDirectory, identityErr := os.Stat(directory)
+		if identityErr != nil || !os.SameFile(directoryIdentity, currentDirectory) {
+			return ErrAssetPathInvalid
+		}
+		if current == directory {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return ErrAssetPathInvalid
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr != nil || filepath.Clean(resolved) != filepath.Clean(current) || !pathInside(directory, resolved) {
+			return ErrAssetPathInvalid
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		entryInfo, statErr := entry.Info()
+		if statErr != nil {
+			return statErr
+		}
+		if !entryInfo.Mode().IsRegular() {
+			return ErrAssetPathInvalid
+		}
+		if s.beforeHashFileOpen != nil {
+			s.beforeHashFileOpen(current)
+		}
+		file, openErr := openPathNoFollow(current, directory, false)
+		if openErr != nil {
+			return openErr
+		}
+		digest := sha256.New()
+		n, copyErr := io.Copy(digest, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		relative, relErr := filepath.Rel(directory, current)
+		if relErr != nil {
+			return relErr
+		}
+		var sum [sha256.Size]byte
+		copy(sum[:], digest.Sum(nil))
+		entries = append(entries, entryHash{relative: filepath.ToSlash(relative), digest: sum, size: n})
+		return nil
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	currentDirectory, err := os.Stat(directory)
+	if err != nil || !os.SameFile(directoryIdentity, currentDirectory) {
+		return "", 0, ErrAssetPathInvalid
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].relative < entries[j].relative })
+	digest := sha256.New()
+	var total int64
+	var boundary [8]byte
+	for _, entry := range entries {
+		binary.BigEndian.PutUint64(boundary[:], uint64(len(entry.relative)))
+		_, _ = digest.Write(boundary[:])
+		_, _ = io.WriteString(digest, entry.relative)
+		binary.BigEndian.PutUint64(boundary[:], uint64(len(entry.digest)))
+		_, _ = digest.Write(boundary[:])
+		_, _ = digest.Write(entry.digest[:])
+		total += entry.size
+	}
+	return hex.EncodeToString(digest.Sum(nil)), total, nil
+}
+
+func pathInside(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
 func validateProjectFile(path string, assetType domain.AssetType, ext string) (string, error) {
 	if ext == ".m4a" || ext == ".mp4" {
 		handlers, err := isoBMFFHandlers(path)
 		if err != nil {
 			return "", nil
 		}
-		if ext == ".m4a" && assetType == domain.AssetAudio && handlers["soun"] && !handlers["vide"] {
+		if ext == ".m4a" && (assetType == domain.AssetNarration || assetType == domain.AssetAudio) && handlers["soun"] && !handlers["vide"] {
 			return "audio/mp4", nil
 		}
 		if ext == ".mp4" && (assetType == domain.AssetMixDraft || assetType == domain.AssetFinalVideo) && handlers["vide"] {
@@ -144,7 +302,7 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		return "", err
 	}
 	defer file.Close()
-	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitle {
+	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitleSRT || assetType == domain.AssetSubtitle {
 		reader := bufio.NewReader(file)
 		for {
 			r, size, readErr := reader.ReadRune()
@@ -163,14 +321,14 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		}
 		return "text/plain; charset=utf-8", nil
 	}
-	if ext == ".wav" {
+	if ext == ".wav" && (assetType == domain.AssetNarration || assetType == domain.AssetAudio) {
 		ok, err := validWAVFile(file)
 		if ok {
 			return "audio/wav", nil
 		}
 		return "", err
 	}
-	if ext == ".mp3" {
+	if ext == ".mp3" && (assetType == domain.AssetNarration || assetType == domain.AssetAudio) {
 		ok, err := validMP3File(file)
 		if ok {
 			return "audio/mpeg", nil
@@ -439,7 +597,9 @@ func bytesContainsNUL(data []byte) bool {
 }
 
 type Service struct {
-	dataRoot string
+	dataRoot           string
+	beforeImportOpen   func(string)
+	beforeHashFileOpen func(string)
 }
 
 func NewService(dataRoot string) *Service {
@@ -608,7 +768,7 @@ func validateImageFile(path, mimeType string) error {
 }
 
 func (s *Service) ReconcileAccountBackgrounds(ctx context.Context, db *sql.DB, logger *log.Logger) error {
-	rows, err := db.QueryContext(ctx, `SELECT path FROM assets WHERE type = 'account_background'`)
+	rows, err := db.QueryContext(ctx, `SELECT path FROM asset_versions WHERE type = 'account_background'`)
 	if err != nil {
 		return fmt.Errorf("list referenced account backgrounds: %w", err)
 	}
@@ -688,23 +848,6 @@ func (s *Service) ReconcileAccountBackgrounds(ctx context.Context, db *sql.DB, l
 }
 
 func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger *log.Logger) error {
-	rows, err := db.QueryContext(ctx, `SELECT path FROM assets WHERE project_id IS NOT NULL`)
-	if err != nil {
-		return fmt.Errorf("list project assets: %w", err)
-	}
-	refs := map[string]bool{}
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			rows.Close()
-			return err
-		}
-		abs, _ := filepath.Abs(p)
-		refs[filepath.Clean(abs)] = true
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
 	root, err := filepath.Abs(filepath.Join(s.dataRoot, "projects"))
 	if err != nil {
 		return err
@@ -719,6 +862,37 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 	if !info.IsDir() {
 		return fmt.Errorf("projects data root is not a directory")
 	}
+	rows, err := db.QueryContext(ctx, `SELECT path,storage_kind,project_id,type FROM asset_versions WHERE project_id IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("list project assets: %w", err)
+	}
+	refs := map[string]bool{}
+	protectedDirectories := map[string]bool{}
+	for rows.Next() {
+		var p, projectID string
+		var storageKind domain.StorageKind
+		var typ domain.AssetType
+		if err := rows.Scan(&p, &storageKind, &projectID, &typ); err != nil {
+			rows.Close()
+			return err
+		}
+		abs, valid := validManagedProjectAssetPath(root, projectID, typ, p, storageKind == domain.StorageDirectory)
+		if !valid {
+			continue
+		}
+		if storageKind == domain.StorageDirectory {
+			protectedDirectories[abs] = true
+		} else {
+			refs[abs] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	var errs []error
 	_ = filepath.WalkDir(root, func(path string, e os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -726,6 +900,9 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 			return nil
 		}
 		if e.IsDir() {
+			if path != root && protectedDirectories[filepath.Clean(path)] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		abs := filepath.Clean(path)
@@ -741,4 +918,38 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 		return nil
 	})
 	return errors.Join(errs...)
+}
+
+func validManagedProjectAssetPath(root, projectID string, typ domain.AssetType, path string, directory bool) (string, bool) {
+	if _, err := uuid.Parse(projectID); err != nil || strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	abs = filepath.Clean(abs)
+	projectRoot := filepath.Join(root, projectID)
+	requiredRoot := projectRoot
+	if directory {
+		requiredRoot = filepath.Join(projectRoot, string(typ))
+	}
+	if !pathInside(requiredRoot, abs) {
+		return "", false
+	}
+	if directory {
+		relative, err := filepath.Rel(requiredRoot, abs)
+		if err != nil || relative == "." {
+			return "", false
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil || filepath.Clean(resolved) != abs {
+		return "", false
+	}
+	info, err := os.Stat(abs)
+	if err != nil || directory != info.IsDir() || !directory && !info.Mode().IsRegular() {
+		return "", false
+	}
+	return abs, true
 }

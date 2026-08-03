@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 )
 
@@ -29,6 +30,22 @@ const (
 	CommitUnknown
 )
 
+type CommitOutcomeError struct {
+	Outcome CommitState
+	Err     error
+}
+
+func (e *CommitOutcomeError) Error() string { return e.Err.Error() }
+func (e *CommitOutcomeError) Unwrap() error { return e.Err }
+
+func commitOutcome(err error) CommitState {
+	var outcome *CommitOutcomeError
+	if errors.As(err, &outcome) {
+		return outcome.Outcome
+	}
+	return CommitNotCommitted
+}
+
 type NewBackground struct {
 	ID       string
 	Path     string
@@ -43,42 +60,48 @@ func NewAccountRepository(db *sql.DB) *AccountRepository {
 }
 
 func (r *AccountRepository) CreateWithBackground(ctx context.Context, account domain.Account, background NewBackground) (state CommitState, err error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	if _, parseErr := uuid.Parse(account.ID); parseErr != nil {
+		return CommitNotCommitted, ErrInvalidAssetInput
+	}
+	if _, parseErr := uuid.Parse(background.ID); parseErr != nil {
+		return CommitNotCommitted, ErrInvalidAssetInput
+	}
+	conn, err := r.db.Conn(ctx)
 	if err != nil {
+		return CommitNotCommitted, fmt.Errorf("begin create account: %w", err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return CommitNotCommitted, fmt.Errorf("begin create account: %w", err)
 	}
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback()
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
 	}()
-	_, err = tx.ExecContext(ctx, `INSERT INTO accounts
+	_, err = conn.ExecContext(ctx, `INSERT INTO accounts
         (id, name, background_asset_id, color, status, created_at, updated_at)
         VALUES (?, ?, NULL, ?, 'active', ?, ?)`,
 		account.ID, account.Name, account.Color, account.CreatedAt, account.UpdatedAt)
 	if err != nil {
 		return CommitNotCommitted, classifyAccountError(err)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO assets
-        (id, project_id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
-        VALUES (?, NULL, ?, 'account_background', ?, ?, ?, ?, ?, 1, 'active', ?)`,
-		background.ID, account.ID, background.Path, background.Filename, background.MIMEType,
-		background.Size, background.SHA256, account.CreatedAt)
+	version, err := NewAssetRepository(r.db).addVersion(ctx, conn, AddAssetVersion{AccountID: account.ID, Type: domain.AssetAccountBackground, StorageKind: domain.StorageFile, Path: background.Path, Filename: background.Filename, MIMEType: background.MIMEType, Size: background.Size, SHA256: background.SHA256}, account.CreatedAt)
 	if err != nil {
-		return CommitNotCommitted, fmt.Errorf("insert background asset: %w", err)
+		return CommitNotCommitted, fmt.Errorf("insert background version: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET background_asset_id = ? WHERE id = ?`, background.ID, account.ID); err != nil {
+	if _, err = conn.ExecContext(ctx, `UPDATE accounts SET background_asset_item_id = ? WHERE id = ?`, version.AssetID, account.ID); err != nil {
 		return CommitNotCommitted, fmt.Errorf("link background asset: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return CommitUnknown, fmt.Errorf("commit create account: %w", err)
 	}
 	return CommitCommitted, nil
 }
 
 func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT a.id, a.name, a.background_asset_id, b.path, a.color, a.status, a.created_at, a.updated_at
-        FROM accounts a LEFT JOIN assets b ON b.id = a.background_asset_id ORDER BY a.created_at, a.id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.created_at, a.updated_at
+		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id ORDER BY a.created_at, a.id`)
 	if err != nil {
 		return nil, fmt.Errorf("list accounts: %w", err)
 	}
@@ -98,8 +121,8 @@ func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) 
 }
 
 func (r *AccountRepository) Get(ctx context.Context, id string) (domain.Account, error) {
-	account, err := scanAccount(r.db.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_id, b.path, a.color, a.status, a.created_at, a.updated_at
-        FROM accounts a LEFT JOIN assets b ON b.id = a.background_asset_id WHERE a.id = ?`, id))
+	account, err := scanAccount(r.db.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.created_at, a.updated_at
+		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id WHERE a.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Account{}, ErrAccountNotFound
 	}
@@ -122,45 +145,53 @@ func (r *AccountRepository) Rename(ctx context.Context, id, name string, updated
 }
 
 func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID string, background NewBackground, updatedAt time.Time) (account domain.Account, state CommitState, err error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	if _, parseErr := uuid.Parse(accountID); parseErr != nil {
+		return domain.Account{}, CommitNotCommitted, ErrInvalidAssetInput
+	}
+	if _, parseErr := uuid.Parse(background.ID); parseErr != nil {
+		return domain.Account{}, CommitNotCommitted, ErrInvalidAssetInput
+	}
+	conn, err := r.db.Conn(ctx)
 	if err != nil {
+		return domain.Account{}, CommitNotCommitted, fmt.Errorf("begin replace background: %w", err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return domain.Account{}, CommitNotCommitted, fmt.Errorf("begin replace background: %w", err)
 	}
 	defer func() {
 		if state != CommitCommitted {
-			_ = tx.Rollback()
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
 	}()
-	account, err = scanAccount(tx.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_id, b.path,
+	account, err = scanAccount(conn.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path,
         a.color, a.status, a.created_at, a.updated_at
-        FROM accounts a LEFT JOIN assets b ON b.id = a.background_asset_id WHERE a.id = ?`, accountID))
+		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id WHERE a.id = ?`, accountID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Account{}, CommitNotCommitted, ErrAccountNotFound
 	}
 	if err != nil {
 		return domain.Account{}, CommitNotCommitted, fmt.Errorf("read account for background replacement: %w", err)
 	}
-	var version int
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM assets
-		WHERE account_id = ? AND type = 'account_background'`, accountID).Scan(&version); err != nil {
-		return domain.Account{}, CommitNotCommitted, fmt.Errorf("choose background version: %w", err)
+	if account.BackgroundAssetID == nil {
+		return domain.Account{}, CommitNotCommitted, ErrAssetVersionNotFound
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO assets
-        (id, project_id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
-        VALUES (?, NULL, ?, 'account_background', ?, ?, ?, ?, ?, ?, 'active', ?)`,
-		background.ID, accountID, background.Path, background.Filename, background.MIMEType,
-		background.Size, background.SHA256, version, updatedAt)
+	var parent string
+	if err = conn.QueryRowContext(ctx, `SELECT current_version_id FROM asset_items WHERE id=?`, *account.BackgroundAssetID).Scan(&parent); err != nil {
+		return domain.Account{}, CommitNotCommitted, err
+	}
+	version, err := NewAssetRepository(r.db).addVersion(ctx, conn, AddAssetVersion{LogicalAssetID: *account.BackgroundAssetID, AccountID: accountID, Type: domain.AssetAccountBackground, StorageKind: domain.StorageFile, Path: background.Path, Filename: background.Filename, MIMEType: background.MIMEType, Size: background.Size, SHA256: background.SHA256, ParentVersionID: &parent}, updatedAt)
 	if err != nil {
 		return domain.Account{}, CommitNotCommitted, fmt.Errorf("insert replacement background: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET background_asset_id = ?, updated_at = ? WHERE id = ?`, background.ID, updatedAt, accountID); err != nil {
+	if _, err = conn.ExecContext(ctx, `UPDATE accounts SET updated_at = ? WHERE id = ?`, updatedAt, accountID); err != nil {
 		return domain.Account{}, CommitNotCommitted, fmt.Errorf("update background pointer: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return domain.Account{}, CommitUnknown, fmt.Errorf("commit replace background: %w", err)
 	}
 	state = CommitCommitted
-	account.BackgroundAssetID = &background.ID
+	account.BackgroundAssetID = &version.AssetID
 	account.BackgroundPath = &background.Path
 	account.UpdatedAt = updatedAt
 	return account, CommitCommitted, nil

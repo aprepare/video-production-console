@@ -146,14 +146,13 @@ func TestReconcileAccountBackgroundsRemovesOnlyOrphansAndTemps(t *testing.T) {
 			t.Fatalf("write fixture %q: %v", path, err)
 		}
 	}
-	for version, path := range []string{referencedOld, referencedCurrent} {
-		assetID := []string{"6dc72973-372d-42f2-9102-a40133829d40", "8e95eab4-520f-4296-b4d0-97882125f063"}[version]
-		if _, err := db.Exec(`INSERT INTO assets
-            (id, account_id, type, path, filename, mime_type, size, sha256, version, status, created_at)
-            VALUES (?, ?, 'account_background', ?, 'file.png', 'image/png', 1, 'hash', ?, 'active', ?)`,
-			assetID, testAccountID, path, version+1, now); err != nil {
-			t.Fatalf("insert asset: %v", err)
-		}
+	repo := store.NewAssetRepository(db)
+	first, err := repo.AddVersion(context.Background(), store.AddAssetVersion{AccountID: testAccountID, Type: domain.AssetAccountBackground, Path: referencedOld, Filename: "file.png", MIMEType: "image/png", Size: 1, SHA256: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddVersion(context.Background(), store.AddAssetVersion{LogicalAssetID: first.AssetID, AccountID: testAccountID, Type: domain.AssetAccountBackground, Path: referencedCurrent, Filename: "file.png", MIMEType: "image/png", Size: 1, SHA256: "current", ParentVersionID: &first.ID}); err != nil {
+		t.Fatal(err)
 	}
 	if err := NewService(root).ReconcileAccountBackgrounds(context.Background(), db, nil); err != nil {
 		t.Fatalf("ReconcileAccountBackgrounds() error = %v", err)
@@ -206,11 +205,13 @@ func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
 	for _, p := range []string{keep1, keep2, orphan, temp} {
 		_ = os.WriteFile(p, []byte("x"), 0600)
 	}
-	for i, p := range []string{keep1, keep2} {
-		_, err = db.Exec(`INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES(?,?,?,?,?,'x','audio/mpeg',1,'x',?,'active',?)`, uuid.NewString(), pid, aid, "audio", p, i+1, now)
-		if err != nil {
-			t.Fatal(err)
-		}
+	repo := store.NewAssetRepository(db)
+	first, err := repo.AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &pid, AccountID: aid, Type: domain.AssetNarration, Path: keep1, Filename: "x.mp3", MIMEType: "audio/mpeg", Size: 1, SHA256: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddVersion(context.Background(), store.AddAssetVersion{LogicalAssetID: first.AssetID, ProjectID: &pid, AccountID: aid, Type: domain.AssetNarration, Path: keep2, Filename: "x.mp3", MIMEType: "audio/mpeg", Size: 1, SHA256: "two", ParentVersionID: &first.ID}); err != nil {
+		t.Fatal(err)
 	}
 	if err := NewService(root).ReconcileProjectAssets(context.Background(), db, nil); err != nil {
 		t.Fatal(err)
@@ -224,6 +225,111 @@ func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("kept orphan %s", p)
 		}
+	}
+}
+
+func TestReconcileProjectAssetsProtectsOnlyRegisteredDirectorySubtree(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	accountID, projectID, otherProjectID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{projectID, otherProjectID} {
+		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, id, accountID, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	managedRoot := filepath.Join(root, "projects")
+	registered := filepath.Join(managedRoot, projectID, string(domain.AssetMixDraft), "draft")
+	keep := filepath.Join(registered, "nested", "keep.dat")
+	orphan := filepath.Join(managedRoot, projectID, string(domain.AssetMixDraft), "orphan.dat")
+	prefixSibling := filepath.Join(managedRoot, projectID, string(domain.AssetMixDraft), "draft-evil", "remove.dat")
+	otherProjectFile := filepath.Join(managedRoot, otherProjectID, string(domain.AssetMixDraft), "foreign", "remove.dat")
+	for _, path := range []string{keep, orphan, prefixSibling, otherProjectFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := store.NewAssetRepository(db)
+	first, err := repo.AddVersion(ctx, store.AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: registered, Filename: "draft", MIMEType: "application/x-directory", Size: 1, SHA256: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Malicious or corrupt directory rows must not protect the managed root or another project's subtree.
+	typeRoot := filepath.Join(managedRoot, projectID, string(domain.AssetMixDraft))
+	if _, err := repo.AddVersion(ctx, store.AddAssetVersion{LogicalAssetID: first.AssetID, ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: typeRoot, Filename: "mix_draft", MIMEType: "application/x-directory", Size: 1, SHA256: "type-root"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddVersion(ctx, store.AddAssetVersion{LogicalAssetID: first.AssetID, ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: managedRoot, Filename: "projects", MIMEType: "application/x-directory", Size: 1, SHA256: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddVersion(ctx, store.AddAssetVersion{LogicalAssetID: first.AssetID, ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: filepath.Dir(otherProjectFile), Filename: "foreign", MIMEType: "application/x-directory", Size: 1, SHA256: "three"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := NewService(root).ReconcileProjectAssets(ctx, db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("registered directory content removed: %v", err)
+	}
+	for _, path := range []string{orphan, prefixSibling, otherProjectFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unprotected file %q remains, stat=%v", path, err)
+		}
+	}
+}
+
+func TestReconcileProjectAssetsDoesNotProtectRegisteredSymlinkDirectory(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	accountID, projectID, otherProjectID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+	for _, id := range []string{projectID, otherProjectID} {
+		_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, id, accountID, now, now)
+	}
+	target := filepath.Join(t.TempDir(), "outside-target")
+	file := filepath.Join(target, "remove.dat")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "projects", projectID, string(domain.AssetMixDraft), "linked")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	if _, err := store.NewAssetRepository(db).AddVersion(ctx, store.AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: link, Filename: "linked", MIMEType: "application/x-directory", Size: 1, SHA256: "hash"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewService(root).ReconcileProjectAssets(ctx, db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("registered symlink was not removed: %v", err)
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "x" {
+		t.Fatalf("outside target changed: data=%q err=%v", data, err)
 	}
 }
 
@@ -298,6 +404,141 @@ func TestProjectAssetSizeLimitsByType(t *testing.T) {
 		if got := MaxSizeForType(tt.typ); got != tt.want {
 			t.Errorf("MaxSizeForType(%s)=%d want %d", tt.typ, got, tt.want)
 		}
+	}
+}
+
+func TestSaveTextVersionAndImportFilePublishAtomically(t *testing.T) {
+	root := t.TempDir()
+	svc := NewService(root)
+	projectID := uuid.NewString()
+	saved, err := svc.SaveTextVersion(projectID, domain.AssetContinuousScript, "script.md", "hello\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, readErr := os.ReadFile(saved.Path); readErr != nil || string(data) != "hello\n" {
+		t.Fatalf("data=%q err=%v", data, readErr)
+	}
+	source := filepath.Join(t.TempDir(), "voice.mp3")
+	if err := os.WriteFile(source, validMP3(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := svc.ImportFile(projectID, domain.AssetNarration, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(imported.Path) != filepath.Join(root, "projects", projectID, string(domain.AssetNarration)) {
+		t.Fatalf("path=%q", imported.Path)
+	}
+	if _, err := svc.ImportFile(projectID, domain.AssetFinalVideo, filepath.Dir(source)); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("directory import error=%v", err)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.mp4")
+	if err := os.WriteFile(bad, []byte("not-video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportFile(projectID, domain.AssetFinalVideo, bad); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("bad import error=%v", err)
+	}
+	files := allFiles(t, filepath.Join(root, "projects", projectID, string(domain.AssetFinalVideo)))
+	if len(files) != 0 {
+		t.Fatalf("failed import left files=%v", files)
+	}
+}
+
+func TestImportFileRejectsSymlinkSwapBeforeOpen(t *testing.T) {
+	root := t.TempDir()
+	svc := NewService(root)
+	projectID := uuid.NewString()
+	source := filepath.Join(t.TempDir(), "voice.mp3")
+	outside := filepath.Join(t.TempDir(), "outside.mp3")
+	if err := os.WriteFile(source, validMP3(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, append(validMP3(), []byte("outside-secret")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc.beforeImportOpen = func(string) {
+		if err := os.Remove(source); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, source); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	if _, err := svc.ImportFile(projectID, domain.AssetNarration, source); !errors.Is(err, ErrAssetPathInvalid) {
+		t.Fatalf("swap error=%v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "projects")); !os.IsNotExist(statErr) {
+		t.Fatalf("swap created project storage: %v", statErr)
+	}
+}
+
+func TestHashDirectoryIsDeterministicAndRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	svc := NewService(root)
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []struct{ root, name, data string }{{first, "z.txt", "z"}, {first, "nested/a.txt", "a"}, {second, "nested/a.txt", "a"}, {second, "z.txt", "z"}} {
+		if err := os.WriteFile(filepath.Join(file.root, filepath.FromSlash(file.name)), []byte(file.data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h1, size1, err := svc.HashDirectory(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, size2, err := svc.HashDirectory(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 == "" || h1 != h2 || size1 != 2 || size2 != 2 {
+		t.Fatalf("first=(%s,%d) second=(%s,%d)", h1, size1, h2, size2)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(first, "escape.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, _, err := svc.HashDirectory(first); !errors.Is(err, ErrAssetPathInvalid) {
+		t.Fatalf("symlink error=%v", err)
+	}
+}
+
+func TestHashDirectoryRejectsFileSymlinkSwapBeforeOpen(t *testing.T) {
+	root := t.TempDir()
+	svc := NewService(root)
+	directory := filepath.Join(root, "artifact")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(directory, "asset.dat")
+	outside := filepath.Join(t.TempDir(), "secret.dat")
+	if err := os.WriteFile(inside, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc.beforeHashFileOpen = func(path string) {
+		if path != inside {
+			return
+		}
+		if err := os.Remove(inside); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, inside); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	if _, _, err := svc.HashDirectory(directory); !errors.Is(err, ErrAssetPathInvalid) {
+		t.Fatalf("swap error=%v", err)
 	}
 }
 

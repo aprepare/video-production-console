@@ -39,7 +39,6 @@ type accountResponse struct {
 	ID                string `json:"id"`
 	Name              string `json:"name"`
 	BackgroundAssetID string `json:"background_asset_id"`
-	BackgroundPath    string `json:"background_path"`
 	Color             string `json:"color"`
 	Status            string `json:"status"`
 	CreatedAt         string `json:"created_at"`
@@ -114,6 +113,10 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 				log.Printf("remove uncommitted account background: %v", removeErr)
 			}
 		}
+		if state == store.CommitUnknown {
+			writeError(response, http.StatusServiceUnavailable, "account_commit_unknown", "The account may have been created. Refresh before retrying.")
+			return
+		}
 		if errors.Is(err, store.ErrAccountNameConflict) {
 			writeError(response, http.StatusConflict, "account_name_conflict", "An active account with this name already exists.")
 			return
@@ -122,7 +125,13 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
-	writeJSON(response, http.StatusCreated, toAccountResponse(account))
+	stored, readErr := h.repository.Get(request.Context(), account.ID)
+	if readErr != nil {
+		log.Printf("read created account: %v", readErr)
+		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, toAccountResponse(stored))
 }
 
 func (h *accountsHandler) rename(response http.ResponseWriter, request *http.Request) {
@@ -197,6 +206,10 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 			if removeErr := os.Remove(saved.Path); removeErr != nil {
 				log.Printf("remove uncommitted replacement background: %v", removeErr)
 			}
+		}
+		if state == store.CommitUnknown {
+			writeError(response, http.StatusServiceUnavailable, "account_commit_unknown", "The background may have been replaced. Refresh before retrying.")
+			return
 		}
 		if errors.Is(err, store.ErrAccountNotFound) {
 			writeError(response, http.StatusNotFound, "account_not_found", "The account was not found.")
@@ -276,12 +289,8 @@ func toAccountResponse(account domain.Account) accountResponse {
 	if account.BackgroundAssetID != nil {
 		backgroundID = *account.BackgroundAssetID
 	}
-	backgroundPath := ""
-	if account.BackgroundPath != nil {
-		backgroundPath = *account.BackgroundPath
-	}
 	return accountResponse{
-		ID: account.ID, Name: account.Name, BackgroundAssetID: backgroundID, BackgroundPath: backgroundPath,
+		ID: account.ID, Name: account.Name, BackgroundAssetID: backgroundID,
 		Color: account.Color, Status: account.Status,
 		CreatedAt: account.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: account.UpdatedAt.Format(time.RFC3339Nano),
 	}

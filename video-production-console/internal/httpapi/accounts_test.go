@@ -50,13 +50,13 @@ func TestCreateAccountStoresBackground(t *testing.T) {
 		t.Fatal("background_asset_id is empty")
 	}
 	var storedPath string
-	if err := db.QueryRow(`SELECT path FROM assets WHERE id = ?`, got.BackgroundAssetID).Scan(&storedPath); err != nil {
+	if err := db.QueryRow(`SELECT v.path FROM asset_items i JOIN asset_versions v ON v.id=i.current_version_id WHERE i.id = ?`, got.BackgroundAssetID).Scan(&storedPath); err != nil {
 		t.Fatalf("read background asset: %v", err)
 	}
 	absRoot, _ := filepath.Abs(dataRoot)
 	absPath, _ := filepath.Abs(storedPath)
-	if got.BackgroundPath != storedPath {
-		t.Errorf("background_path = %q, want %q", got.BackgroundPath, storedPath)
+	if got.BackgroundPath != "" {
+		t.Errorf("background_path leaked storage path %q", got.BackgroundPath)
 	}
 	if rel, err := filepath.Rel(absRoot, absPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		t.Fatalf("asset path %q is outside data root %q", absPath, absRoot)
@@ -192,8 +192,8 @@ func TestListRenameReplaceBackgroundAndDeactivateAccount(t *testing.T) {
 	if err := json.NewDecoder(replaced.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode updated account: %v", err)
 	}
-	if updated.BackgroundAssetID == "" || updated.BackgroundAssetID == created.BackgroundAssetID {
-		t.Errorf("new background ID = %q, want a new nonempty ID", updated.BackgroundAssetID)
+	if updated.BackgroundAssetID == "" || updated.BackgroundAssetID != created.BackgroundAssetID {
+		t.Errorf("background logical ID = %q, want stable %q", updated.BackgroundAssetID, created.BackgroundAssetID)
 	}
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("old background was not retained: %v", err)
@@ -224,7 +224,7 @@ func TestReplaceBackgroundKeepsCommittedFileWhenPostCommitAccountReadWouldFail(t
 	handler, db, _ := newAccountsTestHandler(t)
 	created := createAccount(t, handler, "账号A")
 	_, err := db.Exec(fmt.Sprintf(`CREATE TRIGGER corrupt_account_timestamp_after_replacement
-        AFTER INSERT ON assets WHEN NEW.account_id = '%s' AND NEW.version = 2
+		AFTER INSERT ON asset_versions WHEN NEW.account_id = '%s' AND NEW.version = 2
         BEGIN
             UPDATE accounts SET created_at = 'not-a-timestamp' WHERE id = NEW.account_id;
         END`, created.ID))
@@ -238,10 +238,10 @@ func TestReplaceBackgroundKeepsCommittedFileWhenPostCommitAccountReadWouldFail(t
 		t.Fatalf("replace status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, readBody(t, response.Body))
 	}
 	var assetID, path string
-	if err := db.QueryRow(`SELECT background_asset_id FROM accounts WHERE id = ?`, created.ID).Scan(&assetID); err != nil {
+	if err := db.QueryRow(`SELECT background_asset_item_id FROM accounts WHERE id = ?`, created.ID).Scan(&assetID); err != nil {
 		t.Fatalf("read committed pointer: %v", err)
 	}
-	if err := db.QueryRow(`SELECT path FROM assets WHERE id = ?`, assetID).Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT v.path FROM asset_items i JOIN asset_versions v ON v.id=i.current_version_id WHERE i.id = ?`, assetID).Scan(&path); err != nil {
 		t.Fatalf("read committed asset: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -255,7 +255,22 @@ func TestReplaceBackgroundDoesNotDeleteFileWhenCommitOutcomeIsUnknown(t *testing
 	handler := newAccountsHandler(repository, assets.NewService(root))
 	response := performAccountUpload(t, handler, "/api/accounts/"+repository.account.ID+"/background", "", "new.jpg", encodeJPEG(t))
 	defer response.Body.Close()
-	assertAPIError(t, response, http.StatusInternalServerError, "internal_error")
+	assertAPIError(t, response, http.StatusServiceUnavailable, "account_commit_unknown")
+	if repository.savedPath == "" {
+		t.Fatal("repository did not receive saved background")
+	}
+	if _, err := os.Stat(repository.savedPath); err != nil {
+		t.Fatalf("file was deleted for unknown commit outcome: %v", err)
+	}
+}
+
+func TestCreateAccountDoesNotDeleteFileWhenCommitOutcomeIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	repository := &unknownCommitRepository{unknownCreate: true}
+	handler := newAccountsHandler(repository, assets.NewService(root))
+	response := performAccountUpload(t, handler, "/api/accounts", "account", "background.png", pngBytes(t))
+	defer response.Body.Close()
+	assertAPIError(t, response, http.StatusServiceUnavailable, "account_commit_unknown")
 	if repository.savedPath == "" {
 		t.Fatal("repository did not receive saved background")
 	}
@@ -265,12 +280,18 @@ func TestReplaceBackgroundDoesNotDeleteFileWhenCommitOutcomeIsUnknown(t *testing
 }
 
 type unknownCommitRepository struct {
-	account   domain.Account
-	savedPath string
+	account       domain.Account
+	savedPath     string
+	unknownCreate bool
 }
 
 func (r *unknownCommitRepository) List(context.Context) ([]domain.Account, error) { return nil, nil }
-func (r *unknownCommitRepository) CreateWithBackground(context.Context, domain.Account, store.NewBackground) (store.CommitState, error) {
+
+func (r *unknownCommitRepository) CreateWithBackground(_ context.Context, _ domain.Account, background store.NewBackground) (store.CommitState, error) {
+	if r.unknownCreate {
+		r.savedPath = background.Path
+		return store.CommitUnknown, errors.New("simulated unknown commit result")
+	}
 	return store.CommitCommitted, nil
 }
 func (r *unknownCommitRepository) Get(context.Context, string) (domain.Account, error) {
@@ -368,7 +389,7 @@ func createAccount(t *testing.T, handler http.Handler, name string) accountRespo
 func assetPath(t *testing.T, db *sql.DB, assetID string) string {
 	t.Helper()
 	var path string
-	if err := db.QueryRow(`SELECT path FROM assets WHERE id = ?`, assetID).Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT v.path FROM asset_items i JOIN asset_versions v ON v.id=i.current_version_id WHERE i.id = ?`, assetID).Scan(&path); err != nil {
 		t.Fatalf("read asset path: %v", err)
 	}
 	return path

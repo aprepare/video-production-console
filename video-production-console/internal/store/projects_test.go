@@ -113,7 +113,7 @@ func TestAddAssetAllocatesUniqueVersionsAcrossDatabaseHandles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := db1.Query(`SELECT version FROM assets WHERE project_id=? ORDER BY version`, pid)
+	rows, err := db1.Query(`SELECT version FROM asset_versions WHERE project_id=? ORDER BY version`, pid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,5 +126,41 @@ func TestAddAssetAllocatesUniqueVersionsAcrossDatabaseHandles(t *testing.T) {
 	}
 	if len(versions) != 2 || versions[0] != 1 || versions[1] != 2 {
 		t.Fatalf("versions=%v", versions)
+	}
+}
+
+func TestProjectRepositoryWritesAndReadsOnlyV2Assets(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "project-v2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	aid, pid := uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	repo := NewProjectRepository(db)
+	a := domain.Asset{ID: uuid.NewString(), ProjectID: &pid, AccountID: uuid.NewString(), Type: domain.AssetNarration, Path: "voice.mp3", Filename: "voice.mp3", MIMEType: "audio/mpeg", Size: 1, SHA256: "hash", CreatedAt: now}
+	state, err := repo.AddAsset(context.Background(), &a)
+	if err != nil || state != CommitCommitted {
+		t.Fatalf("state=%v err=%v", state, err)
+	}
+	if a.AccountID != aid || a.Version != 1 {
+		t.Fatalf("asset=%#v", a)
+	}
+	var legacy int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM assets WHERE project_id=?`, pid).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 0 {
+		t.Fatalf("legacy rows=%d", legacy)
+	}
+	assets, err := repo.ListAssets(context.Background(), pid)
+	if err != nil || len(assets) != 1 || assets[0].ID != a.ID {
+		t.Fatalf("assets=%#v err=%v", assets, err)
+	}
+	got, err := repo.GetAsset(context.Background(), a.ID)
+	if err != nil || got.Path != a.Path {
+		t.Fatalf("got=%#v err=%v", got, err)
 	}
 }

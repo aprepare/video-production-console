@@ -49,21 +49,19 @@ func newProjectsHandler(repository projectStore, service *assets.Service) http.H
 }
 
 type projectView struct {
-	ID            string              `json:"id"`
-	AccountID     string              `json:"account_id"`
-	Title         string              `json:"title"`
-	Stage         domain.ProjectStage `json:"stage"`
-	TopicCardPath *string             `json:"topic_card_path,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
-	ReadyAt       *time.Time          `json:"ready_at"`
-	PublishedAt   *time.Time          `json:"published_at"`
-	PublishNote   *string             `json:"publish_note"`
+	ID          string              `json:"id"`
+	AccountID   string              `json:"account_id"`
+	Title       string              `json:"title"`
+	Stage       domain.ProjectStage `json:"stage"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
+	ReadyAt     *time.Time          `json:"ready_at"`
+	PublishedAt *time.Time          `json:"published_at"`
+	PublishNote *string             `json:"publish_note"`
 }
 type assetView struct {
 	ID        string           `json:"id"`
 	Type      domain.AssetType `json:"type"`
-	Path      string           `json:"path"`
 	Filename  string           `json:"filename"`
 	MIMEType  string           `json:"mime_type"`
 	Size      int64            `json:"size"`
@@ -154,6 +152,12 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 			current[string(a.Type)] = v
 		}
 		available[a.Type] = true
+		if a.Type == domain.AssetNarration {
+			available[domain.AssetAudio] = true
+		}
+		if a.Type == domain.AssetSubtitleSRT {
+			available[domain.AssetSubtitle] = true
+		}
 	}
 	var bg any = nil
 	if background.ID != "" {
@@ -220,6 +224,10 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 				log.Printf("remove uncommitted project asset: %v", removeErr)
 			}
 		}
+		if state == store.CommitUnknown {
+			writeError(w, http.StatusServiceUnavailable, "asset_commit_unknown", "The asset may have been recorded. Refresh before retrying.")
+			return
+		}
 		writeError(w, 500, "asset_store_failed", "Asset could not be recorded.")
 		return
 	}
@@ -262,6 +270,12 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 	available := map[domain.AssetType]bool{}
 	for _, a := range all {
 		available[a.Type] = true
+		if a.Type == domain.AssetNarration {
+			available[domain.AssetAudio] = true
+		}
+		if a.Type == domain.AssetSubtitleSRT {
+			available[domain.AssetSubtitle] = true
+		}
 	}
 	bg, err := h.repository.Background(r.Context(), id)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -335,10 +349,10 @@ func uploadableType(t domain.AssetType) bool {
 	return false
 }
 func toProjectView(p domain.Project) projectView {
-	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, TopicCardPath: p.TopicCardPath, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote}
+	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote}
 }
 func toAssetView(a domain.Asset) assetView {
-	return assetView{a.ID, a.Type, a.Path, a.Filename, a.MIMEType, a.Size, a.SHA256, a.Version, a.CreatedAt}
+	return assetView{ID: a.ID, Type: a.Type, Filename: a.Filename, MIMEType: a.MIMEType, Size: a.Size, SHA256: a.SHA256, Version: a.Version, CreatedAt: a.CreatedAt}
 }
 func missingForStage(stage domain.ProjectStage, a map[domain.AssetType]bool) []string {
 	var to domain.ProjectStage
