@@ -532,6 +532,21 @@ function App() {
       return;
     }
     const planningAccount = account || accounts[0]?.id || undefined;
+    const sessionsResponse = await api("/api/ideas");
+    if (sessionsResponse.ok) {
+      const sessions = (await sessionsResponse.json()) as IdeaSession[];
+      const existing = sessions.find(
+        (session) =>
+          session.status === "planning" &&
+          (!planningAccount || session.account_id === planningAccount),
+      );
+      if (existing) {
+        setIdeaSession(existing);
+        setIdeaOpen(true);
+        await refreshIdea(existing.id);
+        return;
+      }
+    }
     const response = await api("/api/ideas", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
