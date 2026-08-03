@@ -95,14 +95,14 @@ type CodexTask struct {
 }
 
 type TaskEvent struct {
-	ID          string
-	TaskID      string
-	Sequence    int64
-	Kind        string
-	Level       string
-	DisplayText string
-	RawJSON     string
-	CreatedAt   time.Time
+	ID          string    `json:"id"`
+	TaskID      string    `json:"task_id"`
+	Sequence    int64     `json:"sequence"`
+	Kind        string    `json:"kind"`
+	Level       string    `json:"level"`
+	DisplayText string    `json:"display_text"`
+	RawJSON     string    `json:"raw_json,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type TaskMessage struct {

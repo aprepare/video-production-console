@@ -35,6 +35,46 @@
   color: #286549;
   font-size: 12px;
 }
+.idea-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.idea-progress-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #799482;
+}
+.idea-progress-dot.running,
+.idea-progress-dot.resuming {
+  background: #2f8f66;
+  animation: idea-pulse 1.4s ease-in-out infinite;
+}
+.idea-progress-dot.failed,
+.idea-progress-dot.cancelled,
+.idea-progress-dot.canceled,
+.idea-progress-dot.interrupted {
+  background: #ba5252;
+}
+.idea-progress-events {
+  margin: 8px 0 0 17px;
+  padding: 0;
+  color: #496957;
+}
+.idea-progress-events li + li {
+  margin-top: 3px;
+}
+.idea-progress-note {
+  margin: 7px 0 0 16px;
+  color: #5f7769;
+}
+@keyframes idea-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
 .idea-candidates {
   display: flex;
   flex-direction: column;

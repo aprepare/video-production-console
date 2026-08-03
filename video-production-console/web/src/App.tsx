@@ -28,12 +28,18 @@ type TaskMessage = {
   created_at: string;
 };
 type TaskEvent = {
-  id: string;
-  sequence: number;
-  kind: string;
-  level: string;
-  display_text: string;
-  created_at: string;
+  id?: string;
+  sequence?: number;
+  kind?: string;
+  level?: string;
+  display_text?: string;
+  raw_json?: string;
+  created_at?: string;
+  // The task API currently serializes persisted events with Go field names.
+  Kind?: string;
+  Level?: string;
+  DisplayText?: string;
+  RawJSON?: string;
 };
 type Task = {
   id: string;
@@ -147,6 +153,36 @@ const settingFields: Array<[keyof PublicSettings, string, string]> = [
   ["jianying_root", "剪映草稿目录", "剪映草稿根目录"],
 ];
 
+function taskEventProgress(event: TaskEvent) {
+  const kind = event.kind || event.Kind || "";
+  const displayText = event.display_text || event.DisplayText || "";
+  const raw = event.raw_json || event.RawJSON || "";
+  if (displayText) return displayText;
+  if (/baokuan_search_materials/i.test(raw)) return "正在检索爆款库素材";
+  if (/baokuan_list_snippets/i.test(raw)) return "正在筛选可借鉴的爆款片段";
+  if (
+    /thread\.started|turn\.started/i.test(kind) ||
+    /thread\.started|turn\.started/i.test(raw)
+  )
+    return "Codex 已启动，正在分析选题";
+  if (/turn\.completed/i.test(kind) || /turn\.completed/i.test(raw))
+    return "正在整理候选选题";
+  if (/error|failed/i.test(kind) || /error|failed/i.test(raw))
+    return "任务遇到问题，正在等待处理";
+  if (/item\.started/i.test(kind) || /item\.started/i.test(raw))
+    return "正在分析素材与选题方向";
+  return "正在推进选题分析";
+}
+
+function taskProgressStatus(task: Task) {
+  if (task.status === "failed")
+    return task.error_message || "任务失败，请查看任务详情";
+  if (task.status === "awaiting_input" || task.status === "waiting_input")
+    return "Codex 正在等待你的回复";
+  if (task.status === "completed") return "已完成，正在载入候选选题";
+  return statusLabels[task.status] || task.status;
+}
+
 function App() {
   const [csrf, setCsrf] = useState("");
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -180,6 +216,7 @@ function App() {
   });
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [ideaSession, setIdeaSession] = useState<IdeaSession | null>(null);
+  const [ideaTask, setIdeaTask] = useState<Task | null>(null);
   const [ideaInput, setIdeaInput] = useState("");
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -290,12 +327,23 @@ function App() {
       const response = await api(`/api/ideas/${ideaSession.id}`);
       if (!response.ok) return;
       const detail = (await response.json()) as IdeaSessionDetail;
+      const messages = detail.messages || [];
       setIdeaSession({
         ...detail.session,
-        messages: detail.messages || [],
+        messages,
         candidates: detail.candidates || [],
       });
+      const taskID = [...messages]
+        .reverse()
+        .find((message) => message.task_id)?.task_id;
+      if (!taskID) {
+        setIdeaTask(null);
+        return;
+      }
+      const taskResponse = await api(`/api/tasks/${taskID}`);
+      if (taskResponse.ok) setIdeaTask((await taskResponse.json()) as Task);
     };
+    void refresh();
     const timer = window.setInterval(() => void refresh(), 2500);
     return () => window.clearInterval(timer);
   }, [api, ideaOpen, ideaSession?.id]);
@@ -588,11 +636,21 @@ function App() {
     const response = await api(`/api/ideas/${id}`);
     if (!response.ok) return;
     const detail = (await response.json()) as IdeaSessionDetail;
+    const messages = detail.messages || [];
     setIdeaSession({
       ...detail.session,
-      messages: detail.messages || [],
+      messages,
       candidates: detail.candidates || [],
     });
+    const taskID = [...messages]
+      .reverse()
+      .find((message) => message.task_id)?.task_id;
+    if (!taskID) {
+      setIdeaTask(null);
+      return;
+    }
+    const taskResponse = await api(`/api/tasks/${taskID}`);
+    if (taskResponse.ok) setIdeaTask((await taskResponse.json()) as Task);
   };
   const sendIdeaMessage = async (event: FormEvent) => {
     event.preventDefault();
@@ -1148,7 +1206,34 @@ function App() {
               )}
             </div>
             {ideaSession.messages?.length && !ideaSession.candidates?.length ? (
-              <p className="idea-pending">已发送给 Codex，正在生成候选选题…</p>
+              <section className="idea-pending" aria-live="polite">
+                <div className="idea-progress-head">
+                  <span
+                    className={`idea-progress-dot ${ideaTask?.status || "queued"}`}
+                  />
+                  <strong>
+                    {ideaTask
+                      ? taskProgressStatus(ideaTask)
+                      : "已发送，正在等待 Codex 启动"}
+                  </strong>
+                </div>
+                {ideaTask?.events?.length ? (
+                  <ol className="idea-progress-events">
+                    {ideaTask.events
+                      .slice(-3)
+                      .reverse()
+                      .map((item, index) => (
+                        <li key={item.id || `${item.sequence || 0}-${index}`}>
+                          {taskEventProgress(item)}
+                        </li>
+                      ))}
+                  </ol>
+                ) : (
+                  <p className="idea-progress-note">
+                    会自动刷新，无需停留在这个窗口。
+                  </p>
+                )}
+              </section>
             ) : null}
             {ideaSession.candidates?.length ? (
               <div className="idea-candidates">
