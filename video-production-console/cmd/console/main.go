@@ -48,18 +48,6 @@ func main() {
 	if settings.ObsidianVault != "" {
 		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
 	}
-	executablePath, err := os.Executable()
-	if err != nil {
-		log.Fatal(err)
-	}
-	developmentRoot, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-	schemaPath, err := resolveResultSchemaPath(executablePath, developmentRoot)
-	if err != nil {
-		log.Fatal(err)
-	}
 	db, err := store.Open(settings.DatabasePath)
 	if err != nil {
 		log.Fatal(err)
@@ -79,7 +67,9 @@ func main() {
 	settings.BaokuanBaseURL = runtimeSettings.BaokuanBaseURL
 	settings.CodexBinaryPath = runtimeSettings.CodexBinaryPath
 	settings.ObsidianVault = runtimeSettings.ObsidianVault
-	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, ResultSchema: schemaPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
+	// The local proxy rejects Codex's advanced JSON Schema dialect. Results are
+	// still strictly validated by the console before any artifact is accepted.
+	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
 	home, homeErr := os.UserHomeDir()
 	if homeErr != nil {

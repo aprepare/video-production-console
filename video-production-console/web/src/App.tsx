@@ -280,6 +280,15 @@ function App() {
     if (authenticated) void load();
   }, [authenticated, load]);
   useEffect(() => {
+    if (!ideaOpen || !ideaSession) return;
+    const refresh = async () => {
+      const response = await api(`/api/ideas/${ideaSession.id}`);
+      if (response.ok) setIdeaSession((await response.json()) as IdeaSession);
+    };
+    const timer = window.setInterval(() => void refresh(), 2500);
+    return () => window.clearInterval(timer);
+  }, [api, ideaOpen, ideaSession?.id]);
+  useEffect(() => {
     if (!authenticated) return;
     const refresh = async () => {
       const response = await api("/api/runtime");
@@ -568,14 +577,6 @@ function App() {
     const response = await api(`/api/ideas/${id}`);
     if (response.ok) setIdeaSession((await response.json()) as IdeaSession);
   };
-  useEffect(() => {
-    if (!ideaOpen || !ideaSession) return;
-    const timer = window.setInterval(
-      () => void refreshIdea(ideaSession.id),
-      2500,
-    );
-    return () => window.clearInterval(timer);
-  }, [ideaOpen, ideaSession?.id]);
   const sendIdeaMessage = async (event: FormEvent) => {
     event.preventDefault();
     if (!ideaSession || !ideaInput.trim()) return;

@@ -158,9 +158,11 @@ func commandForConfig(cfg Config, args []string) (*exec.Cmd, error) {
 
 func (c Config) normalized() (Config, error) {
 	var err error
-	c.ResultSchema, err = normalizedAbsolutePath("result schema", c.ResultSchema)
-	if err != nil {
-		return Config{}, err
+	if strings.TrimSpace(c.ResultSchema) != "" {
+		c.ResultSchema, err = normalizedAbsolutePath("result schema", c.ResultSchema)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	c.WorkingDirectory, err = normalizedAbsolutePath("working directory", c.WorkingDirectory)
 	if err != nil {
@@ -239,12 +241,11 @@ func BuildExecCommand(cfg Config, ctx TaskContext) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{
-		"exec", "--json", "--skip-git-repo-check",
-		"--output-schema", cfg.ResultSchema,
-		"--output-last-message", cfg.OutputLastMessage,
-		"-C", cfg.WorkingDirectory, "-",
+	args := []string{"exec", "--json", "--skip-git-repo-check"}
+	if cfg.ResultSchema != "" {
+		args = append(args, "--output-schema", cfg.ResultSchema)
 	}
+	args = append(args, "--output-last-message", cfg.OutputLastMessage, "-C", cfg.WorkingDirectory, "-")
 	cmd, err := commandForConfig(cfg, args)
 	if err != nil {
 		return nil, err
@@ -267,12 +268,11 @@ func BuildResumeCommand(cfg Config, sessionID, answer string) (*exec.Cmd, error)
 	if cfg.Redactor != nil {
 		cfg.Redactor.Register(sessionID)
 	}
-	args := []string{
-		"exec", "resume", "--json",
-		"--output-schema", cfg.ResultSchema,
-		"--output-last-message", cfg.OutputLastMessage,
-		sessionID, "-",
+	args := []string{"exec", "resume", "--json"}
+	if cfg.ResultSchema != "" {
+		args = append(args, "--output-schema", cfg.ResultSchema)
 	}
+	args = append(args, "--output-last-message", cfg.OutputLastMessage, sessionID, "-")
 	cmd, err := commandForConfig(cfg, args)
 	if err != nil {
 		return nil, err

@@ -249,7 +249,6 @@ func TestBuildExecCommandRejectsInvalidOutputAndWorkingPaths(t *testing.T) {
 		name   string
 		mutate func(*Config, TaskContext)
 	}{
-		{"empty schema", func(cfg *Config, _ TaskContext) { cfg.ResultSchema = "" }},
 		{"relative schema", func(cfg *Config, _ TaskContext) { cfg.ResultSchema = "schema.json" }},
 		{"empty last message", func(cfg *Config, _ TaskContext) { cfg.OutputLastMessage = "" }},
 		{"relative last message", func(cfg *Config, _ TaskContext) { cfg.OutputLastMessage = "last.json" }},
@@ -393,7 +392,6 @@ func TestBuildResumeCommandRejectsInvalidOutputAndWorkingPaths(t *testing.T) {
 		name   string
 		mutate func(*Config)
 	}{
-		{"empty schema", func(cfg *Config) { cfg.ResultSchema = "" }},
 		{"relative schema", func(cfg *Config) { cfg.ResultSchema = "schema.json" }},
 		{"empty last message", func(cfg *Config) { cfg.OutputLastMessage = "" }},
 		{"relative last message", func(cfg *Config) { cfg.OutputLastMessage = "last.json" }},
