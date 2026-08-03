@@ -99,6 +99,11 @@ type IdeaSession = {
   messages?: IdeaMessage[];
   candidates?: IdeaCandidate[];
 };
+type IdeaSessionDetail = {
+  session: IdeaSession;
+  messages?: IdeaMessage[];
+  candidates?: IdeaCandidate[];
+};
 
 const stages = [
   "topic",
@@ -283,7 +288,13 @@ function App() {
     if (!ideaOpen || !ideaSession) return;
     const refresh = async () => {
       const response = await api(`/api/ideas/${ideaSession.id}`);
-      if (response.ok) setIdeaSession((await response.json()) as IdeaSession);
+      if (!response.ok) return;
+      const detail = (await response.json()) as IdeaSessionDetail;
+      setIdeaSession({
+        ...detail.session,
+        messages: detail.messages || [],
+        candidates: detail.candidates || [],
+      });
     };
     const timer = window.setInterval(() => void refresh(), 2500);
     return () => window.clearInterval(timer);
@@ -575,7 +586,13 @@ function App() {
   };
   const refreshIdea = async (id: string) => {
     const response = await api(`/api/ideas/${id}`);
-    if (response.ok) setIdeaSession((await response.json()) as IdeaSession);
+    if (!response.ok) return;
+    const detail = (await response.json()) as IdeaSessionDetail;
+    setIdeaSession({
+      ...detail.session,
+      messages: detail.messages || [],
+      candidates: detail.candidates || [],
+    });
   };
   const sendIdeaMessage = async (event: FormEvent) => {
     event.preventDefault();
