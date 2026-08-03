@@ -1,19 +1,22 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"video-production-console/internal/assets"
+	consoleauth "video-production-console/internal/auth"
 	"video-production-console/internal/baokuan"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
+	"video-production-console/internal/domain"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
 )
@@ -28,6 +31,8 @@ type Options struct {
 	Obsidian      obsidian.Service
 	BaokuanClient *baokuan.Client
 	MCPExecutable string
+	AuthService   *consoleauth.Service
+	Settings      *consoleSettings.Service
 }
 
 // App is the HTTP application.
@@ -86,41 +91,10 @@ func New(options Options) *App {
 		if options.Scheduler != nil {
 			mux.Handle("/api/tasks", tasksHandler)
 		}
-		mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				var value string
-				if err := options.DB.QueryRowContext(r.Context(), `SELECT value FROM settings WHERE key='max_codex_concurrency'`).Scan(&value); err != nil {
-					http.Error(w, err.Error(), 500)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"max_codex_concurrency":` + value + `}`))
-				return
-			}
-			if r.Method != http.MethodPut {
-				http.NotFound(w, r)
-				return
-			}
-			var in struct {
-				Max int `json:"max_codex_concurrency"`
-			}
-			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil || in.Max < 1 || in.Max > 4 {
-				http.Error(w, "max_codex_concurrency must be 1-4", 400)
-				return
-			}
-			if options.Scheduler != nil {
-				if err := options.Scheduler.SetLimit(in.Max); err != nil {
-					http.Error(w, err.Error(), 400)
-					return
-				}
-			}
-			if _, err := options.DB.ExecContext(r.Context(), `UPDATE settings SET value=? WHERE key='max_codex_concurrency'`, strconv.Itoa(in.Max)); err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"max_codex_concurrency":` + strconv.Itoa(in.Max) + `}`))
-		})
+		if options.Settings != nil {
+			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
+			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
+		}
 	}
 	client := options.BaokuanClient
 	if client == nil && options.Config.BaokuanBaseURL != "" {
@@ -137,7 +111,49 @@ func New(options Options) *App {
 		_ = json.NewEncoder(w).Encode(options.Obsidian.Health())
 	})
 	mux.Handle("/", webui.Handler())
-	return &App{handler: mux}
+	if options.AuthService == nil {
+		return &App{handler: mux}
+	}
+	authHandler := httpapi.NewAuthHandler(options.AuthService)
+	mux.Handle("/api/auth/", authHandler)
+	protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
+	return &App{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Health and login must remain reachable before a browser has a session.
+		// The auth handler applies its own protection to all remaining auth routes.
+		if r.URL.Path == "/api/health" || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		protected.ServeHTTP(w, r)
+	})}
+}
+
+type settingsWithScheduler struct {
+	service   *consoleSettings.Service
+	scheduler codex.Scheduler
+}
+
+func (s settingsWithScheduler) Get(ctx context.Context) (consoleSettings.View, error) {
+	return s.service.Get(ctx)
+}
+
+func (s settingsWithScheduler) Update(ctx context.Context, public domain.PublicSettings, secrets map[string]string) (consoleSettings.View, error) {
+	view, err := s.service.Update(ctx, public, secrets)
+	if err != nil || s.scheduler == nil {
+		return view, err
+	}
+	if err := s.scheduler.SetLimit(view.Public.MaxCodexConcurrency); err != nil {
+		return consoleSettings.View{}, err
+	}
+	return view, nil
+}
+
+func (s settingsWithScheduler) TestDependency(ctx context.Context, dependency string) consoleSettings.Health {
+	return s.service.TestDependency(ctx, dependency)
+}
+
+func (s settingsWithScheduler) RepairBaokuanMCP(ctx context.Context) consoleSettings.Health {
+	return s.service.RepairBaokuanMCP(ctx)
 }
 
 // Handler returns the application's HTTP handler.

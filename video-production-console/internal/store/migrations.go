@@ -541,6 +541,8 @@ OR EXISTS (
 BEGIN
     SELECT RAISE(ABORT, 'asset version scope or parent does not match asset item');
 END;`,
+	`ALTER TABLE admins ADD COLUMN singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1);
+CREATE UNIQUE INDEX admins_singleton_uq ON admins(singleton);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

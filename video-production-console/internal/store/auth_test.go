@@ -30,6 +30,10 @@ func TestAuthStoreBootstrapAdminIsUniqueAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM admins`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("admin count=%d err=%v", count, err)
 	}
+	var singleton int
+	if err := db.QueryRow(`SELECT singleton FROM admins WHERE id=?`, first.ID).Scan(&singleton); err != nil || singleton != 1 {
+		t.Fatalf("singleton=%d err=%v", singleton, err)
+	}
 }
 
 func TestAuthStoreSessionStoresHashesAndRejectsExpiryRevocationPasswordChange(t *testing.T) {
@@ -80,6 +84,30 @@ func TestAuthStoreSessionStoresHashesAndRejectsExpiryRevocationPasswordChange(t 
 	var hash string
 	if err := db.QueryRow(`SELECT password_hash FROM admins WHERE id=?`, admin.ID).Scan(&hash); err != nil || hash != "new-bcrypt" {
 		t.Fatalf("password hash=%q err=%v", hash, err)
+	}
+}
+
+func TestAuthStoreTouchSessionUpdatesActivityAndRejectsExpired(t *testing.T) {
+	repo, db := newAuthStoreTest(t)
+	now := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	admin, _, err := repo.CreateAdminIfNone(context.Background(), "hash", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := AuthSession{ID: uuid.NewString(), AdminID: admin.ID, TokenHash: security.HashSecret("touch-token"), CSRFHash: security.HashSecret("touch-csrf"), RemoteAddr: "x", ExpiresAt: now.Add(time.Hour), LastSeenAt: now, CreatedAt: now}
+	if err := repo.CreateSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	updated := now.Add(2 * time.Minute)
+	if err := repo.TouchSession(context.Background(), session.ID, updated); err != nil {
+		t.Fatal(err)
+	}
+	var got time.Time
+	if err := db.QueryRow(`SELECT last_seen_at FROM auth_sessions WHERE id=?`, session.ID).Scan(&got); err != nil || !got.Equal(updated) {
+		t.Fatalf("last_seen_at=%v err=%v", got, err)
+	}
+	if err := repo.TouchSession(context.Background(), session.ID, now.Add(2*time.Hour)); err != ErrUnauthenticated {
+		t.Fatalf("expired touch err=%v", err)
 	}
 }
 

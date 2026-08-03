@@ -13,12 +13,14 @@ import (
 
 	"video-production-console/internal/app"
 	"video-production-console/internal/assets"
+	consoleauth "video-production-console/internal/auth"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/security"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
 
@@ -31,6 +33,19 @@ var codexSecretEnvironmentKeys = []string{
 
 func main() {
 	settings := config.Default()
+	settings.DataRoot = absolutePath(settings.DataRoot)
+	settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
+	codexPath, err := exec.LookPath(settings.CodexBinaryPath)
+	if err != nil {
+		log.Fatalf("resolve Codex binary: %v", err)
+	}
+	settings.CodexBinaryPath, err = filepath.Abs(codexPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if settings.ObsidianVault != "" {
+		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
+	}
 	executablePath, err := os.Executable()
 	if err != nil {
 		log.Fatal(err)
@@ -43,17 +58,26 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	commandConfig := codex.Config{
-		CodexBinaryPath:   settings.CodexBinaryPath,
-		ResultSchema:      schemaPath,
-		SecretEnvironment: loadCodexSecretEnvironment(os.LookupEnv),
-		Redactor:          security.NewRedactor(),
-	}
 	db, err := store.Open(settings.DatabasePath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	settingsService := consoleSettings.NewService(store.NewSettingsRepository(db), security.NewSecretProtector())
+	boot := consoleSettings.BootSettings{ListenAddr: settings.ListenAddr, DataRoot: settings.DataRoot, CodexBinaryPath: settings.CodexBinaryPath, ObsidianVault: settings.ObsidianVault}
+	if err := settingsService.InitializeBootSettings(context.Background(), boot); err != nil {
+		log.Fatalf("initialize settings: %v", err)
+	}
+	runtimeSettings, err := settingsService.Runtime(context.Background())
+	if err != nil {
+		log.Fatalf("load runtime settings: %v", err)
+	}
+	settings.ListenAddr = runtimeSettings.ListenAddr
+	settings.DataRoot = runtimeSettings.DataRoot
+	settings.BaokuanBaseURL = runtimeSettings.BaokuanBaseURL
+	settings.CodexBinaryPath = runtimeSettings.CodexBinaryPath
+	settings.ObsidianVault = runtimeSettings.ObsidianVault
+	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, ResultSchema: schemaPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
 	if err := assetService.ReconcileAccountBackgrounds(context.Background(), db, log.Default()); err != nil {
 		log.Printf("account background reconciliation completed with errors: %v", err)
@@ -63,7 +87,7 @@ func main() {
 	}
 	taskRepo := store.NewTaskRepository(db)
 	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig)
-	scheduler, err := codex.NewScheduler(taskRepo, 2, makeCommand, makeResume, nil)
+	scheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -75,11 +99,26 @@ func main() {
 			hub.Publish(context.Background(), taskID, events[len(events)-1])
 		}
 	})
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault)})
+	authService := consoleauth.NewService(store.NewAuthStore(db), consoleauth.Options{})
+	if err := authService.Bootstrap(context.Background(), "123321"); err != nil {
+		log.Fatalf("bootstrap administrator: %v", err)
+	}
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService})
 	log.Printf("video production console listening on %s", settings.ListenAddr)
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func absolutePath(value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	resolved, err := filepath.Abs(value)
+	if err != nil {
+		return filepath.Clean(value)
+	}
+	return resolved
 }
 
 func resolveResultSchemaPath(executablePath, developmentRoot string) (string, error) {
@@ -288,6 +327,23 @@ func loadCodexSecretEnvironment(lookup func(string) (string, bool)) map[string]s
 		if value, ok := lookup(key); ok {
 			environment[key] = value
 		}
+	}
+	return environment
+}
+
+func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(string) (string, bool)) map[string]string {
+	environment := loadCodexSecretEnvironment(lookup)
+	if runtime.GrokAPIKey != "" {
+		environment["GROK_SEARCH_API_KEY"] = runtime.GrokAPIKey
+	}
+	if runtime.GrokBaseURL != "" {
+		environment["GROK_SEARCH_BASE_URL"] = runtime.GrokBaseURL
+	}
+	if runtime.GrokModel != "" {
+		environment["GROK_SEARCH_MODEL"] = runtime.GrokModel
+	}
+	if runtime.PexelsAPIKey != "" {
+		environment["PEXELS_API_KEY"] = runtime.PexelsAPIKey
 	}
 	return environment
 }

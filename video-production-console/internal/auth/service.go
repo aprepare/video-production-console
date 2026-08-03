@@ -31,6 +31,7 @@ type authRepository interface {
 	Admin(context.Context) (store.Admin, error)
 	CreateSession(context.Context, store.AuthSession) error
 	FindValidSession(context.Context, string, time.Time) (store.AuthSession, error)
+	TouchSession(context.Context, string, time.Time) error
 	RotateCSRF(context.Context, string, string, string) error
 	RevokeSession(context.Context, string) error
 	RevokeAll(context.Context, string) error
@@ -148,6 +149,17 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Identity, err
 	}
 	if err != nil {
 		return Identity{}, err
+	}
+	// Avoid a write on every request while still recording active sessions.
+	// A touch failure is surfaced so database outages cannot silently extend
+	// an otherwise stale authentication state.
+	if session.LastSeenAt.IsZero() || s.now().Sub(session.LastSeenAt) >= time.Minute {
+		if err := s.repo.TouchSession(ctx, session.ID, s.now()); err != nil {
+			if errors.Is(err, store.ErrUnauthenticated) {
+				return Identity{}, ErrUnauthenticated
+			}
+			return Identity{}, err
+		}
 	}
 	return Identity{AdminID: session.AdminID, SessionID: session.ID, CSRFHash: session.CSRFHash, InitialPasswordWarning: session.InitialPasswordWarning, ExpiresAt: session.ExpiresAt}, nil
 }

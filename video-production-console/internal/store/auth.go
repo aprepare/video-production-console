@@ -43,7 +43,7 @@ func (s *AuthStore) CreateAdminIfNone(ctx context.Context, passwordHash string, 
 		return Admin{}, false, fmt.Errorf("begin admin bootstrap: %w", err)
 	}
 	defer tx.Rollback()
-	admin, err := scanAdmin(tx.QueryRowContext(ctx, `SELECT id,password_hash,password_changed_at,created_at,updated_at FROM admins LIMIT 1`))
+	admin, err := scanAdmin(tx.QueryRowContext(ctx, `SELECT id,password_hash,password_changed_at,created_at,updated_at FROM admins ORDER BY created_at,id LIMIT 1`))
 	if err == nil {
 		if err := tx.Commit(); err != nil {
 			return Admin{}, false, fmt.Errorf("commit admin bootstrap: %w", err)
@@ -56,6 +56,14 @@ func (s *AuthStore) CreateAdminIfNone(ctx context.Context, passwordHash string, 
 	admin = Admin{ID: uuid.NewString(), PasswordHash: passwordHash, PasswordChangedAt: now, CreatedAt: now, UpdatedAt: now}
 	_, err = tx.ExecContext(ctx, `INSERT INTO admins(id,password_hash,password_changed_at,created_at,updated_at) VALUES(?,?,?,?,?)`, admin.ID, admin.PasswordHash, now, now, now)
 	if err != nil {
+		// The singleton index may reject a concurrent bootstrap. Re-read the
+		// winner instead of turning a harmless race into a startup failure.
+		if existing, readErr := scanAdmin(tx.QueryRowContext(ctx, `SELECT id,password_hash,password_changed_at,created_at,updated_at FROM admins ORDER BY created_at,id LIMIT 1`)); readErr == nil {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return Admin{}, false, fmt.Errorf("commit concurrent admin bootstrap: %w", commitErr)
+			}
+			return existing, false, nil
+		}
 		return Admin{}, false, fmt.Errorf("create administrator: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -65,7 +73,7 @@ func (s *AuthStore) CreateAdminIfNone(ctx context.Context, passwordHash string, 
 }
 
 func (s *AuthStore) Admin(ctx context.Context) (Admin, error) {
-	admin, err := scanAdmin(s.db.QueryRowContext(ctx, `SELECT id,password_hash,password_changed_at,created_at,updated_at FROM admins LIMIT 1`))
+	admin, err := scanAdmin(s.db.QueryRowContext(ctx, `SELECT id,password_hash,password_changed_at,created_at,updated_at FROM admins ORDER BY created_at,id LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Admin{}, ErrUnauthenticated
 	}
@@ -125,7 +133,30 @@ func (s *AuthStore) RotateCSRF(ctx context.Context, sessionID, currentHash, csrf
 	if err != nil {
 		return fmt.Errorf("rotate session CSRF: %w", err)
 	}
-	if count, err := result.RowsAffected(); err != nil || count != 1 {
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rotate session CSRF rows affected: %w", err)
+	} else if count != 1 {
+		return ErrUnauthenticated
+	}
+	return nil
+}
+
+// TouchSession updates activity for a still-valid session. Callers should
+// throttle this operation; it is intentionally a compare-and-check update so
+// an expired or revoked session cannot be revived.
+func (s *AuthStore) TouchSession(ctx context.Context, sessionID string, now time.Time) error {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return fmt.Errorf("invalid session UUID: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at=? WHERE id=? AND expires_at>?`, now, sessionID, now)
+	if err != nil {
+		return fmt.Errorf("touch auth session: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("touch auth session rows affected: %w", err)
+	}
+	if count != 1 {
 		return ErrUnauthenticated
 	}
 	return nil
@@ -166,7 +197,9 @@ func (s *AuthStore) ChangePasswordAndRevokeAll(ctx context.Context, adminID, cur
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
-	if count, err := result.RowsAffected(); err != nil || count != 1 {
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("change password rows affected: %w", err)
+	} else if count != 1 {
 		return ErrUnauthenticated
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_sessions WHERE admin_id=?`, adminID); err != nil {

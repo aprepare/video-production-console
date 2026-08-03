@@ -320,6 +320,7 @@ func (r *outageAuthRepository) CreateSession(context.Context, store.AuthSession)
 func (r *outageAuthRepository) FindValidSession(context.Context, string, time.Time) (store.AuthSession, error) {
 	return store.AuthSession{}, store.ErrUnauthenticated
 }
+func (r *outageAuthRepository) TouchSession(context.Context, string, time.Time) error { return nil }
 func (r *outageAuthRepository) RotateCSRF(context.Context, string, string, string) error {
 	return r.rotateErr
 }
