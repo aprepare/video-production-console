@@ -9,6 +9,7 @@ type Asset = { id: string; type: string; filename: string; mime_type: string; si
 type TaskMessage = { id: string; role: string; content: string; created_at: string }
 type TaskEvent = { id: string; sequence: number; kind: string; level: string; display_text: string; created_at: string }
 type Task = { id: string; project_id?: string; type: string; skill_name: string; status: string; prompt_snapshot?: string; result_summary?: string; error_message?: string; created_at: string; messages?: TaskMessage[]; events?: TaskEvent[] }
+type RuntimeStatus = { Limit: number; Running: number; Queued: number }
 type ProjectDetail = { project: Project; assets: Record<string, Asset>; asset_history?: Record<string, Asset[]>; missing_assets?: string[] }
 type PublicSettings = { listen_addr: string; data_root: string; max_codex_concurrency: number; baokuan_base_url: string; baokuan_mcp_executable: string; obsidian_vault: string; topic_cards_dir: string; grok_base_url: string; grok_model: string; codex_binary_path: string; media_index_path: string; media_root: string; jianying_root: string }
 type Settings = { public: PublicSettings; settings_version: number; secrets: Record<string, { configured: boolean; masked: string }> }
@@ -54,6 +55,7 @@ function App() {
   const [ideaSession, setIdeaSession] = useState<IdeaSession | null>(null)
   const [ideaInput, setIdeaInput] = useState('')
   const [taskOpen, setTaskOpen] = useState<Task | null>(null)
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const activeTasks = useMemo(() => tasks.filter(task => ['queued', 'running', 'awaiting_input', 'resuming', 'waiting_input'].includes(task.status)), [tasks])
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
@@ -99,6 +101,16 @@ function App() {
     })()
   }, [])
   useEffect(() => { if (authenticated) void load() }, [authenticated, load])
+  useEffect(() => {
+    if (!authenticated) return
+    const refresh = async () => {
+      const response = await api('/api/runtime')
+      if (response.ok) setRuntime(await response.json() as RuntimeStatus)
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 5000)
+    return () => window.clearInterval(timer)
+  }, [authenticated, api])
   useEffect(() => {
     if (!selected) return
     const timer = window.setInterval(() => void loadDetail(selected), 5000)
@@ -227,7 +239,7 @@ function App() {
   }
 
   return <div className="shell">
-    <header><div><span className="eyebrow">LOCAL VIDEO OPERATIONS</span><h1>视频生产控制台</h1></div><div className="status"><span className="dot" />本地服务 · 共用爆款库<button className="header-button" onClick={() => void openIdeaPlanner()}>给我选题</button><button className="header-button" onClick={() => void openSettings()}>设置</button><button className="header-button" onClick={() => void logout()}>退出</button></div></header>
+    <header><div><span className="eyebrow">LOCAL VIDEO OPERATIONS</span><h1>视频生产控制台</h1></div><div className="status"><span className="dot" />本地服务 · 共用爆款库{runtime && <span className={runtime.Running >= runtime.Limit || runtime.Queued > 0 ? 'runtime-warning' : 'runtime-state'}>CLI {runtime.Running}/{runtime.Limit}{runtime.Queued > 0 ? ` · 排队 ${runtime.Queued}` : ''}</span>}<button className="header-button" onClick={() => void openIdeaPlanner()}>给我选题</button><button className="header-button" onClick={() => void openSettings()}>设置</button><button className="header-button" onClick={() => void logout()}>退出</button></div></header>
     <div className="layout"><aside><div className="aside-title">账号 <span>{accounts.length}</span></div><button className={!account ? 'selected' : ''} onClick={() => setAccount('')}>全部账号</button>{accounts.map(item => <button key={item.id} className={account === item.id ? 'selected' : ''} onClick={() => setAccount(item.id)}>{item.name}</button>)}<form onSubmit={createAccount} className="add-account"><input value={newAccount} onChange={event => setNewAccount(event.target.value)} placeholder="添加账号名称" /><label className="background-pick">{accountBackground ? '已选择背景图' : '选择固定背景图'}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={event => setAccountBackground(event.target.files?.[0] || null)} /></label><button type="submit">添加账号</button></form><div className="aside-foot">每个账号使用一张固定背景图；每个项目独立管理文案、配音、字幕和成片。</div></aside>
       <main><div className="toolbar"><div><div className="muted">{account ? accounts.find(item => item.id === account)?.name : '全部账号'}</div><h2>视频项目</h2></div><form onSubmit={createProject} className="new-project"><input value={newProject} onChange={event => setNewProject(event.target.value)} placeholder={account ? '新建项目标题' : '先选择账号'} /><button disabled={!account}>新建项目</button></form></div>{message && <div className="notice">{message}<button onClick={() => setMessage('')}>关闭</button></div>}{loading ? <div className="empty">正在读取项目…</div> : <div className="board">{stages.map(stage => <section className="column" key={stage}><div className="column-head"><span>{stageLabel(stage)}</span><b>{visible.filter(project => project.stage === stage).length}</b></div>{visible.filter(project => project.stage === stage).map(project => <button className="project" key={project.id} onClick={() => openProject(project)}><strong>{project.title}</strong><small>{project.id.slice(0, 8)} · {project.missing_assets?.length ? `缺少 ${project.missing_assets.length} 项素材` : '按当前阶段无需补充素材'}</small><div className="project-foot"><span>{accountName(project.account_id, accounts)}</span><span className="pulse">●</span></div></button>)}</section>)}</div>}</main></div>
     {selected && <div className="drawer-backdrop" onClick={closeProject}><aside className="drawer" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">{accountName(selected.account_id, accounts)}</span><h2>{selected.title}</h2></div><button className="close" onClick={closeProject} aria-label="关闭">×</button></div>{detailLoading && !detail ? <div className="empty">正在读取详情…</div> : detail && <>

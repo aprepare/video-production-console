@@ -110,6 +110,12 @@ func New(options Options) *App {
 		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer)
 		mux.Handle("/api/ideas", ideasHandler)
 		mux.Handle("/api/ideas/", ideasHandler)
+		if options.Scheduler != nil {
+			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(options.Scheduler.Snapshot())
+			})
+		}
 	}
 	client := options.BaokuanClient
 	if client == nil && options.Config.BaokuanBaseURL != "" {
