@@ -17,6 +17,7 @@ import (
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	consoleSettings "video-production-console/internal/settings"
+	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
 )
@@ -33,6 +34,8 @@ type Options struct {
 	MCPExecutable string
 	AuthService   *consoleauth.Service
 	Settings      *consoleSettings.Service
+	Skills        *skillregistry.Service
+	TaskPreparer  httpapi.TaskManifestPreparer
 }
 
 // App is the HTTP application.
@@ -59,7 +62,7 @@ func New(options Options) *App {
 		mux.Handle("/api/projects", projects)
 		assetsHandler := httpapi.NewAssetsHandler(options.DB, assetService)
 		mux.Handle("/api/assets/", assetsHandler)
-		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler)
+		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler, options.TaskPreparer)
 		mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "/tasks") && options.Scheduler != nil {
 				tasksHandler.ServeHTTP(w, r)
@@ -99,6 +102,14 @@ func New(options Options) *App {
 			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
 			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
 		}
+		if options.Skills != nil {
+			skillsHandler := httpapi.NewSkillsHandler(options.Skills)
+			mux.Handle("/api/skills", skillsHandler)
+			mux.Handle("/api/skills/", skillsHandler)
+		}
+		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler)
+		mux.Handle("/api/ideas", ideasHandler)
+		mux.Handle("/api/ideas/", ideasHandler)
 	}
 	client := options.BaokuanClient
 	if client == nil && options.Config.BaokuanBaseURL != "" {

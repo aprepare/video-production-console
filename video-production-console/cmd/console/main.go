@@ -17,10 +17,12 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/httpapi"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
+	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 )
 
@@ -79,6 +81,17 @@ func main() {
 	settings.ObsidianVault = runtimeSettings.ObsidianVault
 	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, ResultSchema: schemaPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		log.Fatalf("resolve user home for Skills: %v", homeErr)
+	}
+	skillsService := skillregistry.NewService(store.NewSkillRepository(db), skillregistry.Options{
+		Roots: skillregistry.DefaultRoots(filepath.Join(home, ".codex", "skills")),
+	})
+	if _, scanErr := skillsService.ScanAll(context.Background()); scanErr != nil {
+		log.Printf("Skill scan completed with errors; manifest-backed tasks may be unavailable: %v", scanErr)
+	}
+	taskPreparer := httpapi.NewTaskManifestPreparer(db, settingsService, skillsService)
 	if err := assetService.ReconcileAccountBackgrounds(context.Background(), db, log.Default()); err != nil {
 		log.Printf("account background reconciliation completed with errors: %v", err)
 	}
@@ -108,7 +121,7 @@ func main() {
 	if err := authService.Bootstrap(context.Background(), "123321"); err != nil {
 		log.Fatalf("bootstrap administrator: %v", err)
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer})
 	log.Printf("video production console listening on %s", settings.ListenAddr)
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
 		log.Fatal(err)
