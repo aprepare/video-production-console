@@ -145,11 +145,18 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 	current := map[string]assetView{}
 	history := map[string][]assetView{}
 	available := map[domain.AssetType]bool{}
+	latest := map[string]domain.Asset{}
 	for _, a := range all {
 		v := toAssetView(a)
 		history[string(a.Type)] = append(history[string(a.Type)], v)
-		if _, ok := current[string(a.Type)]; !ok {
-			current[string(a.Type)] = v
+		if previous, ok := latest[a.ID]; !ok || a.Version > previous.Version {
+			latest[a.ID] = a
+		}
+	}
+	for _, a := range latest {
+		current[string(a.Type)] = toAssetView(a)
+		if a.Status != string(domain.AssetReady) {
+			continue
 		}
 		available[a.Type] = true
 		if a.Type == domain.AssetNarration {
@@ -164,6 +171,9 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 		available[domain.AssetAccountBackground] = true
 		v := toAssetView(background)
 		bg = v
+		if background.Status != string(domain.AssetReady) {
+			delete(available, domain.AssetAccountBackground)
+		}
 	}
 	missing := missingForStage(p.Stage, available)
 	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing})

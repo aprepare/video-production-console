@@ -127,3 +127,29 @@ func TestTaskHTTPRejectsMissingRemixAssetBeforeEnqueue(t *testing.T) {
 		t.Fatalf("status=%d enqueued=%d body=%s", recorder.Code, scheduler.enqueued, recorder.Body.String())
 	}
 }
+
+func TestTaskManifestPreparerWritesProjectlessTopicManifest(t *testing.T) {
+	db, accountID, _, root := setupManifestTask(t, false)
+	preparer := &taskManifestPreparer{
+		projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db),
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}},
+		skills:   manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-topic-selector"}},
+	}
+	task := domain.CodexTask{ID: uuid.NewString(), AccountID: accountID, Action: domain.ActionTopicBrainstorm, Type: "topic_select"}
+	sessionID := uuid.NewString()
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{SessionID: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "projects", task.ID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Action != domain.ActionTopicBrainstorm || manifest.Skill != "finance-topic-selector" || manifest.NonSecretSettings.SessionID != sessionID {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+}

@@ -139,6 +139,7 @@ function App() {
     if (!response.ok) { setMessage('项目创建失败。'); return }; setNewProject(''); await load()
   }
   const startTask = async (type: string, prompt: string) => {
+    if (type === 'topic_select') { await openIdeaPlanner(); return }
     if (!selected) return
     const response = await api(`/api/projects/${selected.id}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_id: selected.account_id, type, prompt }) })
     if (!response.ok) setMessage('Codex 任务创建失败。'); else await loadDetail(selected)

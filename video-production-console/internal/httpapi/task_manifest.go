@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -62,16 +63,6 @@ func NewTaskManifestPreparer(db *sql.DB, settings runtimeSettingsProvider, skill
 }
 
 func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTask, req TaskManifestRequest) error {
-	if task.ProjectID == nil || strings.TrimSpace(*task.ProjectID) == "" {
-		return fmt.Errorf("manifest preparation requires a project")
-	}
-	project, err := p.projects.GetProject(ctx, *task.ProjectID)
-	if err != nil {
-		return fmt.Errorf("read project for manifest: %w", err)
-	}
-	if project.AccountID != task.AccountID {
-		return fmt.Errorf("task account does not match project account")
-	}
 	runtime, err := p.settings.Runtime(ctx)
 	if err != nil {
 		return fmt.Errorf("runtime settings unavailable: %w", err)
@@ -79,6 +70,20 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	resolved, err := codex.ResolveAction(task.Action)
 	if err != nil {
 		return err
+	}
+	var project domain.Project
+	var projectPtr *domain.Project
+	if task.ProjectID != nil && strings.TrimSpace(*task.ProjectID) != "" {
+		project, err = p.projects.GetProject(ctx, *task.ProjectID)
+		if err != nil {
+			return fmt.Errorf("read project for manifest: %w", err)
+		}
+		if project.AccountID != task.AccountID {
+			return fmt.Errorf("task account does not match project account")
+		}
+		projectPtr = &project
+	} else if task.Action != domain.ActionTopicBrainstorm {
+		return fmt.Errorf("manifest preparation requires a project")
 	}
 	snapshot, err := p.skills.Latest(ctx, resolved.Skill)
 	if err != nil {
@@ -91,17 +96,20 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		return fmt.Errorf("skill snapshot %q is invalid", resolved.Skill)
 	}
 
-	versions, err := p.assets.CurrentByProject(ctx, project.ID)
-	if err != nil {
-		return fmt.Errorf("read current project assets: %w", err)
-	}
-	byType := make(map[domain.AssetType]domain.AssetVersion, len(versions))
-	for _, version := range versions {
-		byType[version.Type] = version
-	}
-	inputs, err := manifestInputs(task.Action, byType, p, ctx, project.ID)
-	if err != nil {
-		return err
+	var inputs []domain.AssetVersion
+	if projectPtr != nil {
+		versions, readErr := p.assets.CurrentByProject(ctx, project.ID)
+		if readErr != nil {
+			return fmt.Errorf("read current project assets: %w", readErr)
+		}
+		byType := make(map[domain.AssetType]domain.AssetVersion, len(versions))
+		for _, version := range versions {
+			byType[version.Type] = version
+		}
+		inputs, err = manifestInputs(task.Action, byType, p, ctx, project.ID)
+		if err != nil {
+			return err
+		}
 	}
 	settings := codex.ManifestSettings{
 		ListenAddr: runtime.ListenAddr, DataRoot: runtime.DataRoot,
@@ -115,16 +123,26 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
 		MachineProfilePath: strings.TrimSpace(req.MachineProfilePath),
 	}
+	// Project-less planning tasks use their task ID as the managed root; this
+	// matches the scheduler's projectIDForTask fallback and keeps the manifest
+	// discoverable by the Codex command factory.
+	projectRoot := filepath.Join(runtime.DataRoot, "projects", task.ID)
+	if projectPtr != nil {
+		projectRoot = filepath.Join(runtime.DataRoot, "projects", project.ID)
+	}
+	if err := os.MkdirAll(projectRoot, 0o700); err != nil {
+		return fmt.Errorf("create manifest project root: %w", err)
+	}
 	manifest, err := codex.BuildManifest(codex.BuildManifestInput{
-		Task: task, Project: &project, Inputs: inputs, Action: task.Action,
-		OutputDir:    filepath.Join(runtime.DataRoot, "projects", project.ID, "tasks", task.ID, "output"),
+		Task: task, Project: projectPtr, Inputs: inputs, Action: task.Action,
+		OutputDir:    filepath.Join(projectRoot, "tasks", task.ID, "output"),
 		ApprovalMode: req.ApprovalMode, SkillSnapshot: snapshot, NonSecretSettings: settings,
 	})
 	if err != nil {
 		return fmt.Errorf("build task manifest: %w", err)
 	}
 	_, err = codex.WriteManifest(manifest, codex.ManifestRoots{
-		Project:       filepath.Join(runtime.DataRoot, "projects", project.ID),
+		Project:       projectRoot,
 		AccountAssets: filepath.Join(runtime.DataRoot, "accounts"),
 		Obsidian:      runtime.ObsidianVault, TopicCards: runtime.TopicCardsDir,
 		MachineProfiles: runtime.DataRoot,

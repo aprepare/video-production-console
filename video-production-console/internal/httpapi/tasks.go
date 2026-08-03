@@ -16,6 +16,8 @@ import (
 
 type taskAPI struct {
 	repo      *store.TaskRepository
+	projects  *store.ProjectRepository
+	accounts  *store.AccountRepository
 	scheduler codex.Scheduler
 	preparer  TaskManifestPreparer
 }
@@ -25,7 +27,7 @@ func NewTasksHandler(db *sql.DB, s codex.Scheduler, preparers ...TaskManifestPre
 	if len(preparers) > 0 {
 		preparer = preparers[0]
 	}
-	h := &taskAPI{repo: store.NewTaskRepository(db), scheduler: s, preparer: preparer}
+	h := &taskAPI{repo: store.NewTaskRepository(db), projects: store.NewProjectRepository(db), accounts: store.NewAccountRepository(db), scheduler: s, preparer: preparer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects/{id}/tasks", h.create)
 	mux.HandleFunc("GET /api/tasks", h.list)
@@ -70,7 +72,7 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		Prompt    string            `json:"prompt"`
 		TaskManifestRequest
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Type) == "" {
+	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Type) == "" || strings.TrimSpace(in.Prompt) == "" {
 		writeError(w, 400, "invalid_task", "Task type and prompt are required.")
 		return
 	}
@@ -81,6 +83,26 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, e := uuid.Parse(in.AccountID); e != nil {
 		writeError(w, 400, "invalid_account_id", "Account ID must be a UUID.")
+		return
+	}
+	project, e := h.projects.GetProject(r.Context(), pid)
+	if errors.Is(e, store.ErrProjectNotFound) || errors.Is(e, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "Project was not found.")
+		return
+	}
+	if e != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if project.AccountID != in.AccountID {
+		writeError(w, http.StatusConflict, "account_project_mismatch", "Task account does not belong to the project.")
+		return
+	}
+	if _, e := h.accounts.Get(r.Context(), in.AccountID); errors.Is(e, store.ErrAccountNotFound) || errors.Is(e, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "account_not_found", "Account was not found.")
+		return
+	} else if e != nil {
+		writeError(w, http.StatusInternalServerError, "account_read_failed", "Account could not be read.")
 		return
 	}
 	id := uuid.NewString()

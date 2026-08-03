@@ -107,7 +107,7 @@ func New(options Options) *App {
 			mux.Handle("/api/skills", skillsHandler)
 			mux.Handle("/api/skills/", skillsHandler)
 		}
-		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler)
+		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer)
 		mux.Handle("/api/ideas", ideasHandler)
 		mux.Handle("/api/ideas/", ideasHandler)
 	}

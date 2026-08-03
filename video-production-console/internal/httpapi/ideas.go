@@ -16,10 +16,15 @@ import (
 type ideasHandler struct {
 	repo      *store.IdeaRepository
 	scheduler codex.Scheduler
+	preparer  TaskManifestPreparer
 }
 
-func NewIdeasHandler(db *sql.DB, scheduler codex.Scheduler) http.Handler {
-	h := &ideasHandler{repo: store.NewIdeaRepository(db), scheduler: scheduler}
+func NewIdeasHandler(db *sql.DB, scheduler codex.Scheduler, preparers ...TaskManifestPreparer) http.Handler {
+	var preparer TaskManifestPreparer
+	if len(preparers) > 0 {
+		preparer = preparers[0]
+	}
+	h := &ideasHandler{repo: store.NewIdeaRepository(db), scheduler: scheduler, preparer: preparer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/ideas", h.list)
 	mux.HandleFunc("POST /api/ideas", h.create)
@@ -133,6 +138,12 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := uuid.NewString()
 	task := domain.CodexTask{ID: taskID, AccountID: *account, Type: "topic_select", SkillName: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Status: domain.TaskQueued, PromptSnapshot: msg.Content, CreatedAt: now}
+	if h.preparer != nil {
+		if e := h.preparer.Prepare(r.Context(), task, TaskManifestRequest{SessionID: id}); e != nil {
+			writeError(w, http.StatusConflict, "task_manifest_not_ready", e.Error())
+			return
+		}
+	}
 	taskMsg := msg
 	taskMsg.TaskID = &taskID
 	if e := h.repo.AddMessage(r.Context(), taskMsg); e != nil {
