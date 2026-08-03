@@ -372,7 +372,7 @@ func TestRunnerPersistsEngineeringArtifactsAndFormalAssetsSeparately(t *testing.
 		t.Fatal(err)
 	}
 	artifacts, err := fixture.repo.Artifacts(context.Background(), fixture.taskID)
-	if err != nil || len(artifacts) != 1 || artifacts[0].Kind != "qc_report" {
+	if err != nil || len(artifacts) != 1 || artifacts[0].Kind != "self_check" {
 		t.Fatalf("artifacts=%+v err=%v", artifacts, err)
 	}
 	var formalAssets int

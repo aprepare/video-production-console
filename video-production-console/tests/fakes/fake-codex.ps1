@@ -30,13 +30,13 @@ function New-Result([string]$Status, [string]$Summary, [bool]$WithOutputs) {
     $assets = @()
     if ($WithOutputs) {
         if ([string]::IsNullOrWhiteSpace($OutputDir)) { throw "--output-dir is required for output mode" }
-        $qcPath = Join-Path $OutputDir "qc.json"
+        $selfCheckPath = Join-Path $OutputDir "self_check.json"
         $scriptPath = Join-Path $OutputDir "script.md"
-        [System.IO.File]::WriteAllText($qcPath, "{`"ok`":true}", $utf8)
+        [System.IO.File]::WriteAllText($selfCheckPath, "{`"ok`":true}", $utf8)
         [System.IO.File]::WriteAllText($scriptPath, "script", $utf8)
         $scriptInfo = Get-Item -LiteralPath $scriptPath
         $scriptSHA = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $artifacts = @([ordered]@{ type = "qc_report"; path = $qcPath; description = "quality report" })
+        $artifacts = @([ordered]@{ type = "self_check"; path = $selfCheckPath; description = "self check" })
         $assets = @([ordered]@{
             type = "continuous_script"
             path = $scriptPath
