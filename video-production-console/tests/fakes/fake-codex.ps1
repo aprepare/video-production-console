@@ -122,6 +122,13 @@ switch ($Mode) {
         Write-AgentMessage $agentJSON
         Write-LastMessage $agentJSON
     }
+    "completed_with_bad_asset_hash" {
+        $result = New-Result "completed" "agent result" $true
+        $result.asset_outputs[0].sha256 = ("0" * 64)
+        $agentJSON = Result-JSON $result
+        Write-AgentMessage $agentJSON
+        Write-LastMessage $agentJSON
+    }
     "failed" {
         $agentJSON = Result-JSON (New-Result "completed" "must not commit" $true)
         Write-AgentMessage $agentJSON

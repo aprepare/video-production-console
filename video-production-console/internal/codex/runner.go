@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,10 +18,14 @@ import (
 	"sync"
 
 	"video-production-console/internal/domain"
+	"video-production-console/internal/security"
 	"video-production-console/internal/store"
 )
 
-const defaultMaxJSONLBytes = 16 * 1024 * 1024
+const (
+	defaultMaxJSONLBytes             = 16 * 1024 * 1024
+	defaultMaxOutputLastMessageBytes = 16 * 1024 * 1024
+)
 
 type Runner struct {
 	Command               *exec.Cmd
@@ -30,11 +35,13 @@ type Runner struct {
 	OutputDir             string
 	OutputLastMessagePath string
 	Snapshot              *CommandSnapshot
+	Redactor              *security.Redactor
 	Broadcast             func(Event)
 	Cleanup               func() error
 
-	maxJSONLBytes int
-	terminate     func(*exec.Cmd)
+	maxJSONLBytes             int
+	maxOutputLastMessageBytes int64
+	terminate                 func(*exec.Cmd)
 }
 
 type persistedEvent struct{ event Event }
@@ -42,7 +49,8 @@ type persistedEvent struct{ event Event }
 func NewRunner(command *exec.Cmd, tasks *store.TaskRepository, taskID, assetRoot string, broadcast func(Event)) *Runner {
 	return &Runner{
 		Command: command, Tasks: tasks, TaskID: taskID, AssetRoot: assetRoot, Broadcast: broadcast,
-		maxJSONLBytes: defaultMaxJSONLBytes, terminate: terminateProcess,
+		Redactor: security.NewRedactor(), maxJSONLBytes: defaultMaxJSONLBytes,
+		maxOutputLastMessageBytes: defaultMaxOutputLastMessageBytes, terminate: terminateProcess,
 	}
 }
 
@@ -58,6 +66,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	if r.Command == nil || r.Tasks == nil {
 		return fmt.Errorf("runner requires command and task repository")
 	}
+	r.registerCommandSecrets()
 	expectedAction, err := r.Tasks.ExpectedAction(ctx, r.TaskID)
 	if err != nil {
 		return err
@@ -70,7 +79,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	snapshot := runnerCommandSnapshot(r.Command, r.Snapshot)
+	snapshot := runnerCommandSnapshot(r.Command, r.Snapshot, r.Redactor)
 	snapshotJSON, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("encode command snapshot: %w", err)
@@ -79,17 +88,19 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		return err
 	}
 	if err := r.Command.Start(); err != nil {
-		_ = r.Tasks.UpdateStatus(context.WithoutCancel(ctx), r.TaskID, domain.TaskFailed, "", "start_failed", err.Error())
-		return err
+		return r.persistFailure(context.WithoutCancel(ctx), "start_failed", err)
 	}
 
 	stop := make(chan struct{})
 	processDone := make(chan struct{})
 	var stopOnce sync.Once
+	var stopMu sync.Mutex
 	var stopErr error
 	terminate := func(err error) {
 		stopOnce.Do(func() {
+			stopMu.Lock()
 			stopErr = err
+			stopMu.Unlock()
 			close(stop)
 			terminator := r.terminate
 			if terminator == nil {
@@ -100,7 +111,9 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 			_ = stderr.Close()
 		})
 	}
+	watcherDone := make(chan struct{})
 	go func() {
+		defer close(watcherDone)
 		select {
 		case <-ctx.Done():
 			terminate(ctx.Err())
@@ -129,6 +142,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	readers.Wait()
 	waitErr := r.Command.Wait()
 	close(processDone)
+	<-watcherDone
 	close(events)
 	var streamErr error
 	for i := 0; i < 2; i++ {
@@ -140,20 +154,19 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	persistCtx := context.WithoutCancel(ctx)
 
 	if persistenceErr != nil {
-		_ = r.Tasks.UpdateStatus(persistCtx, r.TaskID, domain.TaskFailed, "", "event_persistence_failed", persistenceErr.Error())
-		return persistenceErr
+		return r.persistFailure(persistCtx, "event_persistence_failed", persistenceErr)
 	}
 	if streamErr != nil {
-		_ = r.Tasks.UpdateStatus(persistCtx, r.TaskID, domain.TaskFailed, "", "stream_failed", streamErr.Error())
-		return streamErr
+		return r.persistFailure(persistCtx, "stream_failed", streamErr)
 	}
-	if stopErr != nil && waitErr == nil {
-		_ = r.Tasks.UpdateStatus(persistCtx, r.TaskID, domain.TaskFailed, "", "stream_failed", stopErr.Error())
-		return stopErr
+	stopMu.Lock()
+	stoppedWith := stopErr
+	stopMu.Unlock()
+	if stoppedWith != nil && waitErr == nil {
+		return r.persistFailure(persistCtx, "stream_failed", stoppedWith)
 	}
 	if waitErr != nil {
-		_ = r.Tasks.UpdateStatus(persistCtx, r.TaskID, domain.TaskFailed, "", "process_failed", waitErr.Error())
-		return waitErr
+		return r.persistFailure(persistCtx, "process_failed", waitErr)
 	}
 
 	latestMu.Lock()
@@ -163,7 +176,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	var result ResultEnvelope
 	var rawResult, rawLast []byte
 	if pathErr == nil {
-		result, rawResult, rawLast, err = resolveFinalResult(agentText, lastPath, r.TaskID, expectedAction, r.outputDir())
+		result, rawResult, rawLast, err = r.resolveFinalResult(agentText, lastPath, expectedAction)
 	} else {
 		err = pathErr
 	}
@@ -180,38 +193,42 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		}
 		write := store.TaskResultWrite{
 			Status: domain.TaskFailed, Summary: "Codex output did not match the result contract",
-			EventKind: "result_invalid", RawJSON: string(raw), ErrorCode: "output_invalid", ErrorMessage: err.Error(),
+			EventKind: "result_invalid", RawJSON: r.redact(string(raw)), ErrorCode: "output_invalid", ErrorMessage: r.redact(err.Error()),
 		}
 		if persistErr := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); persistErr != nil {
-			return persistErr
+			return r.persistFailure(persistCtx, "result_persistence_failed", persistErr)
 		}
 		return fmt.Errorf("output_invalid: %w", err)
 	}
 
-	rawJSON := string(rawResult)
+	rawJSON := r.redact(string(rawResult))
 	switch result.Status {
 	case "awaiting_input":
 		questionJSON, marshalErr := json.Marshal(result.Questions)
 		if marshalErr != nil {
 			return marshalErr
 		}
-		questionSchema := string(questionJSON)
+		questionSchema := r.redact(string(questionJSON))
+		summary := r.redact(result.Summary)
 		write := store.TaskResultWrite{
-			Status: domain.TaskAwaitingInput, Summary: result.Summary, AssistantContent: result.Summary,
+			Status: domain.TaskAwaitingInput, Summary: summary, AssistantContent: summary,
 			QuestionSchema: &questionSchema, EventKind: "result_awaiting_input", RawJSON: rawJSON,
 		}
-		return r.Tasks.AwaitInput(persistCtx, r.TaskID, write)
+		if err := r.Tasks.AwaitInput(persistCtx, r.TaskID, write); err != nil {
+			return r.persistFailure(persistCtx, "result_persistence_failed", err)
+		}
+		return nil
 	case "failed":
 		artifacts, artifactErr := r.engineeringArtifacts(result.Artifacts)
 		if artifactErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, artifactErr)
 		}
 		write := store.TaskResultWrite{
-			Status: domain.TaskFailed, Summary: result.Summary, AssistantContent: result.Summary,
-			EventKind: "result_failed", RawJSON: rawJSON, ErrorCode: "result_failed", ErrorMessage: result.Summary,
+			Status: domain.TaskFailed, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
+			EventKind: "result_failed", RawJSON: rawJSON, ErrorCode: "result_failed", ErrorMessage: r.redact(result.Summary),
 		}
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); err != nil {
-			return err
+			return r.persistFailure(persistCtx, "result_persistence_failed", err)
 		}
 		return fmt.Errorf("task failed: %s", result.Summary)
 	case "completed":
@@ -219,12 +236,16 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		if artifactErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, artifactErr)
 		}
+		assetOutputs, assetErr := r.verifiedFormalAssets(result.AssetOutputs)
+		if assetErr != nil {
+			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, assetErr)
+		}
 		task, taskErr := r.Tasks.Get(persistCtx, r.TaskID)
 		if taskErr != nil {
-			return taskErr
+			return r.persistFailure(persistCtx, "result_persistence_failed", taskErr)
 		}
-		assets := make([]store.AddAssetVersion, 0, len(result.AssetOutputs))
-		for _, output := range result.AssetOutputs {
+		assets := make([]store.AddAssetVersion, 0, len(assetOutputs))
+		for _, output := range assetOutputs {
 			assets = append(assets, store.AddAssetVersion{
 				ProjectID: task.ProjectID, AccountID: task.AccountID, Type: output.Type, StorageKind: output.StorageKind,
 				Path: output.Path, Filename: output.Filename, MIMEType: output.MIME, Size: output.Size, SHA256: output.SHA256,
@@ -232,23 +253,33 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 			})
 		}
 		write := store.TaskResultWrite{
-			Status: domain.TaskCompleted, Summary: result.Summary, AssistantContent: result.Summary,
+			Status: domain.TaskCompleted, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
 			EventKind: "result_completed", RawJSON: rawJSON,
 		}
-		return r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, assets)
+		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, assets); err != nil {
+			return r.persistFailure(persistCtx, "result_persistence_failed", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported validated result status %q", result.Status)
 	}
 }
 
-func runnerCommandSnapshot(cmd *exec.Cmd, provided *CommandSnapshot) CommandSnapshot {
+func runnerCommandSnapshot(cmd *exec.Cmd, provided *CommandSnapshot, redactor *security.Redactor) CommandSnapshot {
 	if provided != nil {
 		copy := *provided
 		copy.Args = append([]string(nil), provided.Args...)
 		copy.EnvironmentKeys = append([]string(nil), provided.EnvironmentKeys...)
+		if redactor != nil {
+			copy.Binary = redactor.Redact(copy.Binary)
+			copy.WorkingDirectory = redactor.Redact(copy.WorkingDirectory)
+			for i := range copy.Args {
+				copy.Args[i] = redactor.Redact(copy.Args[i])
+			}
+		}
 		return copy
 	}
-	snapshot := SnapshotCommand(cmd, nil)
+	snapshot := SnapshotCommand(cmd, redactor)
 	if len(snapshot.Args) >= 4 && snapshot.Args[0] == "exec" && snapshot.Args[1] == "resume" && snapshot.Args[len(snapshot.Args)-1] == "-" {
 		snapshot.Args[len(snapshot.Args)-2] = "[REDACTED]"
 	}
@@ -261,7 +292,7 @@ func (r *Runner) persistEvents(ctx context.Context, events <-chan persistedEvent
 		if firstErr != nil {
 			continue
 		}
-		e := item.event
+		e := r.redactedEvent(item.event)
 		if e.SessionID != "" {
 			if err := r.Tasks.SetSession(ctx, r.TaskID, e.SessionID); err != nil {
 				firstErr = err
@@ -331,18 +362,18 @@ func (r *Runner) readStderr(_ context.Context, reader io.Reader, events chan<- p
 	return nil
 }
 
-func resolveFinalResult(agentText, lastMessagePath, taskID string, action domain.TaskAction, outputDir string) (ResultEnvelope, []byte, []byte, error) {
+func (r *Runner) resolveFinalResult(agentText, lastMessagePath string, action domain.TaskAction) (ResultEnvelope, []byte, []byte, error) {
 	if strings.TrimSpace(agentText) != "" {
 		raw := []byte(agentText)
-		if result, err := ParseResultEnvelope(raw, taskID, action, outputDir); err == nil {
+		if result, err := ParseResultEnvelope(raw, r.TaskID, action, r.outputDir()); err == nil {
 			return result, raw, nil, nil
 		}
 	}
-	rawLast, err := os.ReadFile(lastMessagePath)
+	rawLast, err := r.readOutputLastMessage(lastMessagePath)
 	if err != nil {
 		return ResultEnvelope{}, nil, nil, fmt.Errorf("output_last_message_missing: %w", err)
 	}
-	result, err := ParseResultEnvelope(rawLast, taskID, action, outputDir)
+	result, err := ParseResultEnvelope(rawLast, r.TaskID, action, r.outputDir())
 	if err != nil {
 		return ResultEnvelope{}, nil, rawLast, err
 	}
@@ -350,15 +381,80 @@ func resolveFinalResult(agentText, lastMessagePath, taskID string, action domain
 }
 
 func (r *Runner) outputLastMessagePath() (string, error) {
+	path := ""
 	if strings.TrimSpace(r.OutputLastMessagePath) != "" {
-		return filepath.Abs(filepath.Clean(r.OutputLastMessagePath))
-	}
-	for i, arg := range r.Command.Args {
-		if arg == "--output-last-message" && i+1 < len(r.Command.Args) {
-			return filepath.Abs(filepath.Clean(r.Command.Args[i+1]))
+		path = r.OutputLastMessagePath
+	} else {
+		for i, arg := range r.Command.Args {
+			if arg == "--output-last-message" && i+1 < len(r.Command.Args) {
+				path = r.Command.Args[i+1]
+				break
+			}
 		}
 	}
-	return "", fmt.Errorf("output_last_message_missing: command has no --output-last-message path")
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("output_last_message_missing: command has no --output-last-message path")
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("output_last_message path must be absolute")
+	}
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil || !canonicalSamePath(abs, path) {
+		return "", fmt.Errorf("output_last_message path must be canonical")
+	}
+	root, err := resolvePath(r.outputDir())
+	if err != nil {
+		return "", fmt.Errorf("canonicalize output directory: %w", err)
+	}
+	parent, err := resolvePath(filepath.Dir(abs))
+	if err != nil {
+		return "", fmt.Errorf("canonicalize output_last_message parent: %w", err)
+	}
+	if !withinRoot(root, parent) {
+		return "", fmt.Errorf("output_last_message path escapes output directory")
+	}
+	if info, err := os.Lstat(abs); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("output_last_message must be a no-follow regular file")
+		}
+		resolved, err := resolvePath(abs)
+		if err != nil || !withinRoot(root, resolved) || !canonicalSamePath(abs, resolved) {
+			return "", fmt.Errorf("output_last_message path is not safely contained")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return abs, nil
+}
+
+func (r *Runner) readOutputLastMessage(path string) ([]byte, error) {
+	root, err := resolvePath(r.outputDir())
+	if err != nil {
+		return nil, err
+	}
+	file, resolved, info, err := openVerifiedArtifact(path, root)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if !info.Mode().IsRegular() || !withinRoot(root, resolved) || !canonicalSamePath(path, resolved) {
+		return nil, fmt.Errorf("output_last_message must be a contained regular file")
+	}
+	limit := r.maxOutputLastMessageBytes
+	if limit <= 0 {
+		limit = defaultMaxOutputLastMessageBytes
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("output_last_message exceeds %d bytes", limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit || int64(len(data)) != info.Size() {
+		return nil, fmt.Errorf("output_last_message size changed during read")
+	}
+	return data, nil
 }
 
 func (r *Runner) outputDir() string {
@@ -378,6 +474,80 @@ func (r *Runner) engineeringArtifacts(outputs []ArtifactOutput) ([]store.TaskArt
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts, nil
+}
+
+func (r *Runner) verifiedFormalAssets(outputs []AssetOutput) ([]AssetOutput, error) {
+	root, err := resolvePath(r.outputDir())
+	if err != nil {
+		return nil, err
+	}
+	verified := make([]AssetOutput, 0, len(outputs))
+	for _, output := range outputs {
+		if output.StorageKind == domain.StorageDirectory {
+			verified = append(verified, output)
+			continue
+		}
+		file, path, info, err := openVerifiedArtifact(output.Path, root)
+		if err != nil {
+			return nil, fmt.Errorf("open formal asset %q: %w", output.Path, err)
+		}
+		if !info.Mode().IsRegular() || !withinRoot(root, path) || !canonicalSamePath(output.Path, path) {
+			_ = file.Close()
+			return nil, fmt.Errorf("formal asset must be a contained no-follow regular file")
+		}
+		if output.Size != info.Size() {
+			_ = file.Close()
+			return nil, fmt.Errorf("formal asset size does not match file")
+		}
+		probe := make([]byte, 512)
+		n, readErr := io.ReadFull(file, probe)
+		if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
+			_ = file.Close()
+			return nil, readErr
+		}
+		hash := sha256.New()
+		if _, err := hash.Write(probe[:n]); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if _, err := io.Copy(hash, file); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := file.Close(); err != nil {
+			return nil, err
+		}
+		actualSHA := hex.EncodeToString(hash.Sum(nil))
+		if !strings.EqualFold(output.SHA256, actualSHA) {
+			return nil, fmt.Errorf("formal asset sha256 does not match file")
+		}
+		declaredMIME, _, err := mime.ParseMediaType(output.MIME)
+		if err != nil {
+			return nil, fmt.Errorf("formal asset MIME is invalid: %w", err)
+		}
+		recognizedMIME := recognizedMIMEForPath(path)
+		if recognizedMIME == "" {
+			recognizedMIME = http.DetectContentType(probe[:n])
+		}
+		recognizedMIME, _, err = mime.ParseMediaType(recognizedMIME)
+		if err != nil || !strings.EqualFold(declaredMIME, recognizedMIME) {
+			return nil, fmt.Errorf("formal asset MIME does not match recognized file type")
+		}
+		output.Path = path
+		output.Filename = filepath.Base(path)
+		output.Size = info.Size()
+		output.SHA256 = actualSHA
+		output.MIME = recognizedMIME
+		verified = append(verified, output)
+	}
+	return verified, nil
+}
+
+func recognizedMIMEForPath(path string) string {
+	if strings.EqualFold(filepath.Ext(path), ".md") {
+		return "text/markdown"
+	}
+	return mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 }
 
 func (r *Runner) taskArtifact(kind, path, mimeType string) (store.TaskArtifact, error) {
@@ -454,12 +624,51 @@ func (r *Runner) persistOutputInvalid(ctx context.Context, lastPath string, rawL
 	}
 	write := store.TaskResultWrite{
 		Status: domain.TaskFailed, Summary: "Codex output did not match the result contract", EventKind: "result_invalid",
-		RawJSON: string(rawLast), ErrorCode: "output_invalid", ErrorMessage: cause.Error(),
+		RawJSON: r.redact(string(rawLast)), ErrorCode: "output_invalid", ErrorMessage: r.redact(cause.Error()),
 	}
 	if err := r.Tasks.CompleteWithResult(ctx, r.TaskID, write, artifacts, nil); err != nil {
-		return err
+		return r.persistFailure(ctx, "result_persistence_failed", err)
 	}
 	return fmt.Errorf("output_invalid: %w", cause)
+}
+
+func (r *Runner) persistFailure(ctx context.Context, code string, cause error) error {
+	message := r.redact(cause.Error())
+	statusErr := r.Tasks.UpdateStatus(ctx, r.TaskID, domain.TaskFailed, "", code, message)
+	if statusErr != nil {
+		return errors.Join(cause, fmt.Errorf("persist failure status: %w", statusErr))
+	}
+	return cause
+}
+
+func (r *Runner) redact(value string) string {
+	if r.Redactor == nil {
+		return value
+	}
+	return r.Redactor.Redact(value)
+}
+
+func (r *Runner) redactedEvent(event Event) Event {
+	event.DisplayText = r.redact(event.DisplayText)
+	event.AgentMessageText = r.redact(event.AgentMessageText)
+	event.RawJSON = json.RawMessage(r.redact(string(event.RawJSON)))
+	return event
+}
+
+func (r *Runner) registerCommandSecrets() {
+	if r.Redactor == nil {
+		r.Redactor = security.NewRedactor()
+	}
+	secretKeys := make(map[string]struct{}, len(secretEnvironmentKeys))
+	for _, key := range secretEnvironmentKeys {
+		secretKeys[strings.ToUpper(key)] = struct{}{}
+	}
+	for _, entry := range r.Command.Env {
+		key, value, ok := strings.Cut(entry, "=")
+		if _, sensitive := secretKeys[strings.ToUpper(key)]; ok && sensitive {
+			r.Redactor.Register(value)
+		}
+	}
 }
 
 func withinRoot(root, path string) bool {

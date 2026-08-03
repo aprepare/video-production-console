@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/security"
 	"video-production-console/internal/store"
 )
 
@@ -176,6 +177,57 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	}
 }
 
+func TestRunnerRedactsEveryPersistedCodexValue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    string
+		secrets []string
+	}{
+		{name: "completed result and snapshot", mode: "completed", secrets: []string{"agent result"}},
+		{name: "stderr and ignored failed result", mode: "failed", secrets: []string{"technical failure", "must not commit"}},
+		{name: "invalid raw result", mode: "invalid_schema", secrets: []string{"completed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTestRunner(t, tc.mode)
+			redactor := security.NewRedactor()
+			for _, secret := range tc.secrets {
+				redactor.Register(secret)
+			}
+			redactor.Register(fixture.root)
+			fixture.runner.Redactor = redactor
+			_ = fixture.runner.Run(context.Background())
+
+			rows, err := fixture.db.Query(`
+				SELECT config_snapshot_json FROM codex_tasks WHERE id=?
+				UNION ALL SELECT COALESCE(result_summary,'') FROM codex_tasks WHERE id=?
+				UNION ALL SELECT COALESCE(error_message,'') FROM codex_tasks WHERE id=?
+				UNION ALL SELECT display_text FROM task_events WHERE task_id=?
+				UNION ALL SELECT raw_json FROM task_events WHERE task_id=?
+				UNION ALL SELECT content FROM task_messages WHERE task_id=?
+				UNION ALL SELECT COALESCE(question_schema,'') FROM task_messages WHERE task_id=?`,
+				fixture.taskID, fixture.taskID, fixture.taskID, fixture.taskID, fixture.taskID, fixture.taskID, fixture.taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var persisted string
+				if err := rows.Scan(&persisted); err != nil {
+					t.Fatal(err)
+				}
+				for _, secret := range append(tc.secrets, fixture.root) {
+					if strings.Contains(persisted, secret) {
+						t.Fatalf("persisted secret %q in %q", secret, persisted)
+					}
+				}
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestRunnerResolvesFinalResultInAgentThenLastMessageOrder(t *testing.T) {
 	for _, tc := range []struct {
 		mode        string
@@ -238,6 +290,82 @@ func TestRunnerInvalidResultPersistsRawEngineeringArtifactOnly(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsUnsafeOutputLastMessagePath(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *runnerFixture) string
+	}{
+		{
+			name: "outside output directory",
+			setup: func(t *testing.T, _ *runnerFixture) string {
+				path := filepath.Join(t.TempDir(), "outside.json")
+				if err := os.WriteFile(path, []byte(`{"status":"completed"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "relative path",
+			setup: func(_ *testing.T, _ *runnerFixture) string {
+				return "output-last-message.json"
+			},
+		},
+		{
+			name: "directory",
+			setup: func(_ *testing.T, fixture *runnerFixture) string {
+				return fixture.root
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newTestRunner(t, "completed")
+			fixture.runner.OutputLastMessagePath = tt.setup(t, fixture)
+			if err := fixture.runner.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "output_invalid") {
+				t.Fatalf("error=%v", err)
+			}
+			assertTaskFailedWithCode(t, fixture, "output_invalid")
+		})
+	}
+}
+
+func TestRunnerRejectsSymlinkAndOversizedOutputLastMessage(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		fixture := newTestRunner(t, "completed")
+		target := filepath.Join(t.TempDir(), "outside.json")
+		if err := os.WriteFile(target, []byte(`{"status":"completed"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(fixture.root, "linked.json")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		fixture.runner.OutputLastMessagePath = link
+		if err := fixture.runner.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "output_invalid") {
+			t.Fatalf("error=%v", err)
+		}
+		assertTaskFailedWithCode(t, fixture, "output_invalid")
+	})
+
+	t.Run("oversized", func(t *testing.T) {
+		fixture := newTestRunner(t, "last_message_only")
+		fixture.runner.maxOutputLastMessageBytes = 64
+		if err := fixture.runner.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "output_invalid") {
+			t.Fatalf("error=%v", err)
+		}
+		assertTaskFailedWithCode(t, fixture, "output_invalid")
+	})
+}
+
+func assertTaskFailedWithCode(t *testing.T, fixture *runnerFixture, code string) {
+	t.Helper()
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil || task.Status != domain.TaskFailed || task.ErrorCode == nil || *task.ErrorCode != code {
+		t.Fatalf("task=%+v err=%v", task, err)
+	}
+}
+
 func TestRunnerPersistsEngineeringArtifactsAndFormalAssetsSeparately(t *testing.T) {
 	fixture := newTestRunner(t, "completed_with_outputs")
 	if err := fixture.runner.Run(context.Background()); err != nil {
@@ -249,6 +377,35 @@ func TestRunnerPersistsEngineeringArtifactsAndFormalAssetsSeparately(t *testing.
 	}
 	var formalAssets int
 	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 1 {
+		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestRunnerRejectsFormalAssetWhoseDigestDoesNotMatchFile(t *testing.T) {
+	fixture := newTestRunner(t, "completed_with_bad_asset_hash")
+	err := fixture.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "output_invalid") {
+		t.Fatalf("error=%v", err)
+	}
+	assertTaskFailedWithCode(t, fixture, "output_invalid")
+	var formalAssets int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
+		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestRunnerPersistsDiagnosticFailureWhenResultTransactionFails(t *testing.T) {
+	fixture := newTestRunner(t, "completed_with_outputs")
+	if _, err := fixture.db.Exec(`CREATE TRIGGER fail_task_artifact BEFORE INSERT ON task_artifacts BEGIN SELECT RAISE(FAIL, 'artifact write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err := fixture.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "artifact write rejected") {
+		t.Fatalf("error=%v", err)
+	}
+	assertTaskFailedWithCode(t, fixture, "result_persistence_failed")
+	var formalAssets int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
 		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
 	}
 }
