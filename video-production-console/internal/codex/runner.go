@@ -236,6 +236,22 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		if artifactErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, artifactErr)
 		}
+		if result.Action == domain.ActionTopicBrainstorm {
+			var candidatesPath string
+			for _, output := range result.Artifacts {
+				if output.Type == "topic_candidates" {
+					candidatesPath = output.Path
+					break
+				}
+			}
+			sessionID, candidates, parseErr := loadTopicCandidates(candidatesPath, r.TaskID)
+			if parseErr != nil {
+				return r.persistOutputInvalid(persistCtx, lastPath, rawLast, parseErr)
+			}
+			if err := store.NewIdeaRepository(r.Tasks.DB()).ReplaceCandidates(persistCtx, sessionID, r.TaskID, candidates); err != nil {
+				return r.persistOutputInvalid(persistCtx, lastPath, rawLast, fmt.Errorf("persist topic candidates: %w", err))
+			}
+		}
 		assetOutputs, assetErr := r.verifiedFormalAssets(result.AssetOutputs)
 		if assetErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, assetErr)

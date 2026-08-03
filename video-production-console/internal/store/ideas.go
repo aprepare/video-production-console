@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -118,6 +119,47 @@ func (r *IdeaRepository) Candidates(ctx context.Context, id string) ([]domain.Id
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ReplaceCandidates replaces the brainstorm candidates for a session. The
+// task_id/session_id pair is checked by the foreign keys in the same
+// transaction, so stale task output cannot populate an unrelated session.
+func (r *IdeaRepository) ReplaceCandidates(ctx context.Context, sessionID, taskID string, candidates []domain.IdeaCandidate) error {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("session and task ids are required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM idea_sessions WHERE id=? AND EXISTS (SELECT 1 FROM idea_messages WHERE session_id=idea_sessions.id AND task_id=?)`, sessionID, taskID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return ErrIdeaSessionNotFound
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM idea_candidates WHERE session_id=?`, sessionID); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for i, candidate := range candidates {
+		created := candidate.CreatedAt
+		if created.IsZero() {
+			created = now
+		}
+		if strings.TrimSpace(candidate.ID) == "" || strings.TrimSpace(candidate.Title) == "" {
+			return fmt.Errorf("candidate %d is missing id or title", i)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO idea_candidates(id,session_id,task_id,position,title,summary,score,source,selected,created_at) VALUES(?,?,?,?,?,?,?,?,0,?)`, candidate.ID, sessionID, taskID, i+1, candidate.Title, candidate.Summary, candidate.Score, candidate.Source, created); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE idea_sessions SET status='planning',updated_at=? WHERE id=?`, now, sessionID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *IdeaRepository) SelectCandidate(ctx context.Context, sessionID, candidateID string) (domain.IdeaCandidate, error) {

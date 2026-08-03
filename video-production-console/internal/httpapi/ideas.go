@@ -104,7 +104,8 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Content string `json:"content"`
+		Content   string `json:"content"`
+		AccountID string `json:"account_id"`
 	}
 	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Content) == "" {
 		writeError(w, 400, "message_required", "Message content is required.")
@@ -112,7 +113,17 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	msg := domain.IdeaMessage{ID: uuid.NewString(), SessionID: id, Role: "user", Content: strings.TrimSpace(in.Content), CreatedAt: now}
-	if h.scheduler == nil || s.AccountID == nil {
+	account := s.AccountID
+	if account == nil && strings.TrimSpace(in.AccountID) != "" {
+		v, pe := uuid.Parse(in.AccountID)
+		if pe != nil {
+			writeError(w, 400, "invalid_account_id", "Account ID must be a UUID.")
+			return
+		}
+		x := v.String()
+		account = &x
+	}
+	if h.scheduler == nil || account == nil {
 		if e := h.repo.AddMessage(r.Context(), msg); e != nil {
 			writeError(w, 500, "idea_message_failed", "Idea message could not be saved.")
 			return
@@ -121,7 +132,7 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := uuid.NewString()
-	task := domain.CodexTask{ID: taskID, AccountID: *s.AccountID, Type: "topic_select", SkillName: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Status: domain.TaskQueued, PromptSnapshot: msg.Content, CreatedAt: now}
+	task := domain.CodexTask{ID: taskID, AccountID: *account, Type: "topic_select", SkillName: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Status: domain.TaskQueued, PromptSnapshot: msg.Content, CreatedAt: now}
 	taskMsg := msg
 	taskMsg.TaskID = &taskID
 	if e := h.repo.AddMessage(r.Context(), taskMsg); e != nil {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
+import './idea.css'
 
 type Account = { id: string; name: string; status?: string }
 type Project = { id: string; account_id: string; title: string; stage: string; updated_at?: string; missing_assets?: string[] }
@@ -11,6 +12,9 @@ type Task = { id: string; project_id?: string; type: string; skill_name: string;
 type ProjectDetail = { project: Project; assets: Record<string, Asset>; asset_history?: Record<string, Asset[]>; missing_assets?: string[] }
 type PublicSettings = { listen_addr: string; data_root: string; max_codex_concurrency: number; baokuan_base_url: string; baokuan_mcp_executable: string; obsidian_vault: string; topic_cards_dir: string; grok_base_url: string; grok_model: string; codex_binary_path: string; media_index_path: string; media_root: string; jianying_root: string }
 type Settings = { public: PublicSettings; settings_version: number; secrets: Record<string, { configured: boolean; masked: string }> }
+type IdeaMessage = { id: string; role: string; content: string; createdAt?: string; created_at?: string }
+type IdeaCandidate = { id: string; title: string; summary?: string; score?: number; selected?: boolean }
+type IdeaSession = { id: string; accountID?: string; account_id?: string; title: string; status: string; messages?: IdeaMessage[]; candidates?: IdeaCandidate[] }
 
 const stages = ['topic', 'script', 'assets', 'mixing', 'review', 'ready', 'published']
 const assetLabels: Record<string, string> = { continuous_script: '连续文案', spoken_script: '口播稿', audio: '配音', subtitle: 'SRT 字幕', mix_draft: '混剪草稿', final_video: '成片' }
@@ -46,6 +50,9 @@ function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsDraft, setSettingsDraft] = useState<PublicSettings | null>(null)
   const [secretDraft, setSecretDraft] = useState({ grok_api_key: '', pexels_api_key: '' })
+  const [ideaOpen, setIdeaOpen] = useState(false)
+  const [ideaSession, setIdeaSession] = useState<IdeaSession | null>(null)
+  const [ideaInput, setIdeaInput] = useState('')
   const activeTasks = useMemo(() => tasks.filter(task => ['queued', 'running', 'awaiting_input', 'resuming', 'waiting_input'].includes(task.status)), [tasks])
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
@@ -177,8 +184,31 @@ function App() {
   if (authenticated === null) return <div className="splash">正在验证访问权限…</div>
   if (!authenticated) return <main className="login-page"><form className="login-card" onSubmit={login}><span className="eyebrow">LOCAL VIDEO OPERATIONS</span><h1>视频生产控制台</h1><p>请输入管理口令后继续。</p>{message && <div className="notice">{message}</div>}<label>管理口令<input autoFocus type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" /></label><button type="submit">进入控制台</button></form></main>
 
+  const openIdeaPlanner = async () => {
+    const planningAccount = account || accounts[0]?.id || undefined
+    const response = await api('/api/ideas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_id: planningAccount, title: '新选题规划' }) })
+    if (!response.ok) { setMessage('选题会话创建失败'); return }
+    const created = await response.json() as IdeaSession
+    setIdeaSession({ ...created, messages: [], candidates: [] }); setIdeaInput(''); setIdeaOpen(true)
+  }
+  const refreshIdea = async (id: string) => { const response = await api(`/api/ideas/${id}`); if (response.ok) setIdeaSession(await response.json() as IdeaSession) }
+  const sendIdeaMessage = async (event: FormEvent) => {
+    event.preventDefault(); if (!ideaSession || !ideaInput.trim()) return
+    const content = ideaInput.trim(); setIdeaInput('')
+    const response = await api(`/api/ideas/${ideaSession.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, account_id: ideaSession.account_id || account || undefined }) })
+    if (!response.ok) { setMessage('选题消息发送失败'); setIdeaInput(content); return }
+    await refreshIdea(ideaSession.id)
+  }
+  const selectIdeaCandidate = async (candidate: IdeaCandidate) => {
+    if (!ideaSession) return
+    const response = await api(`/api/ideas/${ideaSession.id}/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: candidate.id, account_id: ideaSession.account_id || account || undefined }) })
+    if (!response.ok) { setMessage('候选题确认失败'); return }
+    const result = await response.json() as { project?: Project }
+    if (result.project) { setProjects(current => [result.project!, ...current.filter(item => item.id !== result.project!.id)]); setIdeaOpen(false); openProject(result.project) } else await refreshIdea(ideaSession.id)
+  }
+
   return <div className="shell">
-    <header><div><span className="eyebrow">LOCAL VIDEO OPERATIONS</span><h1>视频生产控制台</h1></div><div className="status"><span className="dot" />本地服务 · 共用爆款库<button className="header-button" onClick={() => void openSettings()}>设置</button><button className="header-button" onClick={() => void logout()}>退出</button></div></header>
+    <header><div><span className="eyebrow">LOCAL VIDEO OPERATIONS</span><h1>视频生产控制台</h1></div><div className="status"><span className="dot" />本地服务 · 共用爆款库<button className="header-button" onClick={() => void openIdeaPlanner()}>给我选题</button><button className="header-button" onClick={() => void openSettings()}>设置</button><button className="header-button" onClick={() => void logout()}>退出</button></div></header>
     <div className="layout"><aside><div className="aside-title">账号 <span>{accounts.length}</span></div><button className={!account ? 'selected' : ''} onClick={() => setAccount('')}>全部账号</button>{accounts.map(item => <button key={item.id} className={account === item.id ? 'selected' : ''} onClick={() => setAccount(item.id)}>{item.name}</button>)}<form onSubmit={createAccount} className="add-account"><input value={newAccount} onChange={event => setNewAccount(event.target.value)} placeholder="添加账号名称" /><label className="background-pick">{accountBackground ? '已选择背景图' : '选择固定背景图'}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={event => setAccountBackground(event.target.files?.[0] || null)} /></label><button type="submit">添加账号</button></form><div className="aside-foot">每个账号使用一张固定背景图；每个项目独立管理文案、配音、字幕和成片。</div></aside>
       <main><div className="toolbar"><div><div className="muted">{account ? accounts.find(item => item.id === account)?.name : '全部账号'}</div><h2>视频项目</h2></div><form onSubmit={createProject} className="new-project"><input value={newProject} onChange={event => setNewProject(event.target.value)} placeholder={account ? '新建项目标题' : '先选择账号'} /><button disabled={!account}>新建项目</button></form></div>{message && <div className="notice">{message}<button onClick={() => setMessage('')}>关闭</button></div>}{loading ? <div className="empty">正在读取项目…</div> : <div className="board">{stages.map(stage => <section className="column" key={stage}><div className="column-head"><span>{stageLabel(stage)}</span><b>{visible.filter(project => project.stage === stage).length}</b></div>{visible.filter(project => project.stage === stage).map(project => <button className="project" key={project.id} onClick={() => openProject(project)}><strong>{project.title}</strong><small>{project.id.slice(0, 8)} · {project.missing_assets?.length ? `缺少 ${project.missing_assets.length} 项素材` : '按当前阶段无需补充素材'}</small><div className="project-foot"><span>{accountName(project.account_id, accounts)}</span><span className="pulse">●</span></div></button>)}</section>)}</div>}</main></div>
     {selected && <div className="drawer-backdrop" onClick={closeProject}><aside className="drawer" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">{accountName(selected.account_id, accounts)}</span><h2>{selected.title}</h2></div><button className="close" onClick={closeProject} aria-label="关闭">×</button></div>{detailLoading && !detail ? <div className="empty">正在读取详情…</div> : detail && <>
@@ -188,6 +218,7 @@ function App() {
       <section className="drawer-section"><h3>Codex 任务 <span className="count">{tasks.length}</span></h3><div className="task-list">{tasks.map(task => <article className="task-row" key={task.id}><div className="task-top"><strong>{task.skill_name || task.type}</strong><span className={`task-status status-${task.status}`}>{statusLabels[task.status] || task.status}</span></div>{task.prompt_snapshot && <details><summary>发送给 CLI 的任务说明</summary><pre>{task.prompt_snapshot}</pre></details>}{task.messages?.length ? <details><summary>对话记录（{task.messages.length}）</summary>{task.messages.map(item => <div className="task-message" key={item.id}><b>{item.role === 'user' ? '你' : 'Codex'}</b><p>{item.content}</p></div>)}</details> : null}{task.events?.length ? <details><summary>运行事件（{task.events.length}）</summary>{task.events.map(item => <p className="event" key={item.id}>{item.display_text || item.kind}</p>)}</details> : null}{task.result_summary && <p>{task.result_summary}</p>}{task.error_message && <p className="warning">{task.error_message}</p>}{['awaiting_input', 'waiting_input'].includes(task.status) && <div className="task-actions"><button onClick={() => void answerTask(task)}>回复</button><button className="secondary" onClick={() => void cancelTask(task)}>取消任务</button></div>}</article>)}{!tasks.length && <p className="muted">暂无 Codex 任务</p>}</div></section></>}</aside></div>}
     {preview && <div className="modal-backdrop" onClick={() => setPreview(null)}><section className="preview-modal" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">{assetLabels[preview.asset.type] || preview.asset.type}</span><h2>{preview.asset.filename}</h2></div><button className="close" onClick={() => setPreview(null)}>×</button></div><pre className="asset-text">{preview.text}</pre></section></div>}
     {settingsOpen && settingsDraft && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><form className="settings-modal" onClick={event => event.stopPropagation()} onSubmit={saveSettings}><div className="drawer-head"><div><span className="muted">本地配置</span><h2>控制台设置</h2></div><button type="button" className="close" onClick={() => setSettingsOpen(false)}>×</button></div><p className="settings-note">密钥不会回显；留空表示保持现有值不变。</p><label className="settings-field">同时运行任务数<select value={settingsDraft.max_codex_concurrency} onChange={event => setSettingsDraft({ ...settingsDraft, max_codex_concurrency: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}</select></label>{settingFields.map(([key, label, placeholder]) => <label className="settings-field" key={key}>{label}<input value={settingsDraft[key] || ''} placeholder={placeholder} onChange={event => setSettingsDraft({ ...settingsDraft, [key]: event.target.value })} /></label>)}<div className="secret-grid">{(['grok_api_key', 'pexels_api_key'] as const).map(key => <label className="settings-field" key={key}>{key === 'grok_api_key' ? 'Grok API 密钥' : 'Pexels API 密钥'}<small>{settings?.secrets[key]?.configured ? '已配置，输入新值才会替换' : '未配置'}</small><input type="password" value={secretDraft[key]} placeholder="留空保持不变" onChange={event => setSecretDraft({ ...secretDraft, [key]: event.target.value })} /></label>)}</div><button className="save-settings" type="submit">保存设置</button></form></div>}
+    {ideaOpen && ideaSession && <div className="modal-backdrop" onClick={() => setIdeaOpen(false)}><section className="preview-modal idea-modal" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="muted">选题规划 · {ideaSession.account_id ? accountName(ideaSession.account_id, accounts) : '未指定账号'}</span><h2>{ideaSession.title}</h2></div><button className="close" onClick={() => setIdeaOpen(false)}>×</button></div><div className="idea-messages">{ideaSession.messages?.map(item => <div className={`idea-message ${item.role}`} key={item.id}><b>{item.role === 'user' ? '你' : 'Codex'}</b><p>{item.content}</p></div>)}{!ideaSession.messages?.length && <p className="muted">告诉我你想做的财经方向、受众或近期关注的问题。</p>}</div>{ideaSession.candidates?.length ? <div className="idea-candidates"><h3>候选题</h3>{ideaSession.candidates.map(candidate => <article key={candidate.id}><div><strong>{candidate.title}</strong><p>{candidate.summary}</p></div><button onClick={() => void selectIdeaCandidate(candidate)}>确认建项目</button></article>)}</div> : null}<form className="idea-compose" onSubmit={sendIdeaMessage}><input autoFocus value={ideaInput} onChange={event => setIdeaInput(event.target.value)} placeholder="输入你的想法或追问" /><button disabled={!ideaInput.trim()}>发送</button></form></section></div>}
   </div>
 }
 
