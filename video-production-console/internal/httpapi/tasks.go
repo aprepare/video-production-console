@@ -17,10 +17,15 @@ import (
 type taskAPI struct {
 	repo      *store.TaskRepository
 	scheduler codex.Scheduler
+	preparer  TaskManifestPreparer
 }
 
-func NewTasksHandler(db *sql.DB, s codex.Scheduler) http.Handler {
-	h := &taskAPI{store.NewTaskRepository(db), s}
+func NewTasksHandler(db *sql.DB, s codex.Scheduler, preparers ...TaskManifestPreparer) http.Handler {
+	var preparer TaskManifestPreparer
+	if len(preparers) > 0 {
+		preparer = preparers[0]
+	}
+	h := &taskAPI{repo: store.NewTaskRepository(db), scheduler: s, preparer: preparer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects/{id}/tasks", h.create)
 	mux.HandleFunc("GET /api/tasks", h.list)
@@ -63,6 +68,7 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		Type      string            `json:"type"`
 		Action    domain.TaskAction `json:"action"`
 		Prompt    string            `json:"prompt"`
+		TaskManifestRequest
 	}
 	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Type) == "" {
 		writeError(w, 400, "invalid_task", "Task type and prompt are required.")
@@ -80,6 +86,12 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	id := uuid.NewString()
 	p := pid
 	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: resolved.Skill, Action: action, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, CreatedAt: time.Now().UTC()}
+	if h.preparer != nil {
+		if e := h.preparer.Prepare(r.Context(), t, in.TaskManifestRequest); e != nil {
+			writeError(w, http.StatusConflict, "task_manifest_not_ready", e.Error())
+			return
+		}
+	}
 	if e := h.scheduler.Enqueue(r.Context(), t); e != nil {
 		writeError(w, 500, "task_enqueue_failed", e.Error())
 		return
