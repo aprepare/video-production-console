@@ -86,6 +86,11 @@ func main() {
 		log.Printf("project asset reconciliation completed with errors: %v", err)
 	}
 	taskRepo := store.NewTaskRepository(db)
+	if interrupted, err := taskRepo.InterruptInFlight(context.Background()); err != nil {
+		log.Fatalf("recover interrupted tasks: %v", err)
+	} else if interrupted > 0 {
+		log.Printf("marked %d unfinished Codex task(s) interrupted after restart", interrupted)
+	}
 	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig)
 	scheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {

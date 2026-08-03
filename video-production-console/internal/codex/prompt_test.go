@@ -44,6 +44,20 @@ func TestPromptRejectsMismatchedSkillActionAndSecretPath(t *testing.T) {
 	}
 }
 
+func TestResolveTaskActionMapsLegacyTypesAndRejectsSkillCrossovers(t *testing.T) {
+	action, resolved, err := ResolveTaskAction("remix", "")
+	if err != nil || action != domain.ActionRemixStandard || resolved.Skill != "finance-viral-remix" {
+		t.Fatalf("legacy remix resolution = %q %#v, %v", action, resolved, err)
+	}
+	action, resolved, err = ResolveTaskAction("remix", domain.ActionRemixEnhanced)
+	if err != nil || action != domain.ActionRemixEnhanced || resolved.WireAction != "enhanced" {
+		t.Fatalf("enhanced remix resolution = %q %#v, %v", action, resolved, err)
+	}
+	if _, _, err := ResolveTaskAction("remix", domain.ActionMontagePlan); err == nil {
+		t.Fatal("expected a cross-skill action to be rejected")
+	}
+}
+
 func TestManifestPromptRejectsPathOutsideCanonicalTaskLocation(t *testing.T) {
 	root, taskID := t.TempDir(), uuid.NewString()
 	output := filepath.Join(root, "tasks", taskID, "output")

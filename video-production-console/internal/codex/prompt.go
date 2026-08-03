@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"video-production-console/internal/domain"
 )
 
 var skills = map[string]string{
@@ -18,6 +20,40 @@ var skills = map[string]string{
 var legacyWireActions = map[string]string{
 	"topic_select": "brainstorm", "topic_deepen": "deepen", "remix": "standard",
 	"spoken_format": "spoken_format", "montage": "plan",
+}
+
+var legacyTaskActions = map[string]domain.TaskAction{
+	"topic_select":  domain.ActionTopicBrainstorm,
+	"topic_deepen":  domain.ActionTopicDeepen,
+	"remix":         domain.ActionRemixStandard,
+	"spoken_format": domain.ActionSpokenFormat,
+	"montage":       domain.ActionMontagePlan,
+}
+
+// ResolveTaskAction bridges the original HTTP task type vocabulary to the
+// action-based manifest/result protocol. An explicit action is accepted for
+// compatible variants (for example remix.enhanced), but it may never switch
+// a task into another Skill family.
+func ResolveTaskAction(taskType string, requested domain.TaskAction) (domain.TaskAction, ActionResolution, error) {
+	skill, err := SkillForTask(taskType)
+	if err != nil {
+		return "", ActionResolution{}, err
+	}
+	if requested == "" {
+		var ok bool
+		requested, ok = legacyTaskActions[taskType]
+		if !ok {
+			return "", ActionResolution{}, fmt.Errorf("no default action for codex task type %q", taskType)
+		}
+	}
+	resolved, err := ResolveAction(requested)
+	if err != nil {
+		return "", ActionResolution{}, err
+	}
+	if resolved.Skill != skill {
+		return "", ActionResolution{}, fmt.Errorf("action %q belongs to skill %q, not task type %q", requested, resolved.Skill, taskType)
+	}
+	return requested, resolved, nil
 }
 
 // TaskContext is the complete, project-scoped context supplied to one Codex run.

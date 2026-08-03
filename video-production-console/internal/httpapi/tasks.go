@@ -36,6 +36,7 @@ type taskView struct {
 	AccountID      string               `json:"account_id"`
 	Type           string               `json:"type"`
 	SkillName      string               `json:"skill_name"`
+	Action         domain.TaskAction    `json:"action"`
 	Status         domain.TaskStatus    `json:"status"`
 	CodexSessionID *string              `json:"codex_session_id,omitempty"`
 	ResultSummary  *string              `json:"result_summary,omitempty"`
@@ -49,7 +50,7 @@ type taskView struct {
 }
 
 func viewTask(t domain.CodexTask) taskView {
-	return taskView{t.ID, t.ProjectID, t.AccountID, t.Type, t.SkillName, t.Status, t.CodexSessionID, t.ResultSummary, t.ErrorCode, t.ErrorMessage, t.CreatedAt, t.StartedAt, t.FinishedAt, nil, nil}
+	return taskView{t.ID, t.ProjectID, t.AccountID, t.Type, t.SkillName, t.Action, t.Status, t.CodexSessionID, t.ResultSummary, t.ErrorCode, t.ErrorMessage, t.CreatedAt, t.StartedAt, t.FinishedAt, nil, nil}
 }
 func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	pid := r.PathValue("id")
@@ -58,15 +59,16 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		AccountID string `json:"account_id"`
-		Type      string `json:"type"`
-		Prompt    string `json:"prompt"`
+		AccountID string            `json:"account_id"`
+		Type      string            `json:"type"`
+		Action    domain.TaskAction `json:"action"`
+		Prompt    string            `json:"prompt"`
 	}
 	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Type) == "" {
 		writeError(w, 400, "invalid_task", "Task type and prompt are required.")
 		return
 	}
-	skill, e := codex.SkillForTask(in.Type)
+	action, resolved, e := codex.ResolveTaskAction(in.Type, in.Action)
 	if e != nil {
 		writeError(w, 400, "invalid_task_type", e.Error())
 		return
@@ -77,7 +79,7 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id := uuid.NewString()
 	p := pid
-	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: skill, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, CreatedAt: time.Now().UTC()}
+	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: resolved.Skill, Action: action, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, CreatedAt: time.Now().UTC()}
 	if e := h.scheduler.Enqueue(r.Context(), t); e != nil {
 		writeError(w, 500, "task_enqueue_failed", e.Error())
 		return

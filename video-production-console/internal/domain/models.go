@@ -75,11 +75,14 @@ type Asset struct {
 }
 
 type CodexTask struct {
-	ID             string
-	ProjectID      *string
-	AccountID      string
-	Type           string
-	SkillName      string
+	ID        string
+	ProjectID *string
+	AccountID string
+	Type      string
+	SkillName string
+	// Action is the versioned workflow contract used to validate the result.
+	// Type is retained only as the compatibility-facing task family.
+	Action         TaskAction
 	Status         TaskStatus
 	CodexSessionID *string
 	PromptSnapshot string

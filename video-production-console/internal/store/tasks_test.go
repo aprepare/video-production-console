@@ -44,6 +44,73 @@ func TestTaskRepositoryPersistsTaskEventsAndStatus(t *testing.T) {
 	}
 }
 
+func TestTaskRepositoryCreateV2PersistsActionForRunnerValidation(t *testing.T) {
+	db, err := Open(t.TempDir() + "/task-v2.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	task := domain.CodexTask{ID: "v2", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now}
+	if err := repo.CreateV2(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if action, err := repo.ExpectedAction(context.Background(), task.ID); err != nil || action != domain.ActionRemixEnhanced {
+		t.Fatalf("ExpectedAction = %q, %v", action, err)
+	}
+	got, err := repo.Get(context.Background(), task.ID)
+	if err != nil || got.Action != domain.ActionRemixEnhanced {
+		t.Fatalf("Get = %#v, %v", got, err)
+	}
+	if err := repo.CreateV2(context.Background(), domain.CodexTask{ID: "missing-action", AccountID: "a", SkillName: "finance-viral-remix", Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now}); err == nil {
+		t.Fatal("expected missing action to be rejected")
+	}
+}
+
+func TestTaskRepositoryInterruptInFlightNeverRequeuesAndWritesEvent(t *testing.T) {
+	db, err := Open(t.TempDir() + "/task-recovery.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	for _, task := range []domain.CodexTask{
+		{ID: "running", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskRunning, PromptSnapshot: "p", CreatedAt: now},
+		{ID: "resuming", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskResuming, PromptSnapshot: "p", CreatedAt: now},
+		{ID: "queued", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now},
+	} {
+		if err := repo.CreateV2(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count, err := repo.InterruptInFlight(context.Background())
+	if err != nil || count != 2 {
+		t.Fatalf("InterruptInFlight = %d, %v", count, err)
+	}
+	for _, id := range []string{"running", "resuming"} {
+		got, err := repo.Get(context.Background(), id)
+		if err != nil || got.Status != domain.TaskInterrupted || got.ErrorCode == nil || *got.ErrorCode != "interrupted_on_restart" {
+			t.Fatalf("recovered task %s = %#v, %v", id, got, err)
+		}
+		events, err := repo.Events(context.Background(), id)
+		if err != nil || len(events) != 1 || events[0].Kind != "interrupted_on_restart" {
+			t.Fatalf("recovery events for %s = %#v, %v", id, events, err)
+		}
+	}
+	queued, err := repo.Get(context.Background(), "queued")
+	if err != nil || queued.Status != domain.TaskQueued {
+		t.Fatalf("queued task changed: %#v, %v", queued, err)
+	}
+}
+
 func newTaskResultRepository(t *testing.T) (*sql.DB, *TaskRepository, domain.CodexTask) {
 	t.Helper()
 	db, err := Open(t.TempDir() + "/task-result.db")

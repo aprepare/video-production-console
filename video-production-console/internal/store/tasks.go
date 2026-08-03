@@ -76,16 +76,81 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CodexTask) erro
 	_, err := r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,prompt_snapshot,created_at) VALUES(?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Status, task.PromptSnapshot, task.CreatedAt)
 	return err
 }
+
+// CreateV2 persists the action required by the manifest/result protocol.
+// Create remains solely for reading and migrating pre-protocol task records.
+func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) error {
+	if strings.TrimSpace(string(task.Action)) == "" {
+		return fmt.Errorf("task action is required")
+	}
+	if strings.TrimSpace(task.SkillName) == "" {
+		return fmt.Errorf("task skill is required")
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,prompt_snapshot,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.PromptSnapshot, task.CreatedAt)
+	return err
+}
+
+// InterruptInFlight marks tasks whose process could not have survived this
+// console restart. It deliberately never requeues them: a user must inspect
+// and explicitly start a new task rather than accidentally running stale work.
+func (r *TaskRepository) InterruptInFlight(ctx context.Context) (int, error) {
+	interrupted := 0
+	err := r.immediate(ctx, "interrupt in-flight tasks", func(q assetDBTX, now time.Time) error {
+		rows, err := q.QueryContext(ctx, `SELECT id FROM codex_tasks WHERE status IN (?,?) ORDER BY created_at,id`, domain.TaskRunning, domain.TaskResuming)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			updated, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status IN (?,?)`, domain.TaskInterrupted, "interrupted_on_restart", "Console restarted before this task finished.", now, id, domain.TaskRunning, domain.TaskResuming)
+			if err != nil {
+				return err
+			}
+			affected, err := updated.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if affected != 1 {
+				return fmt.Errorf("task %q changed while recovering", id)
+			}
+			if err := insertEvent(ctx, q, id, domain.TaskEvent{Kind: "interrupted_on_restart", Level: "warning", DisplayText: "Task interrupted because the console restarted.", CreatedAt: now}); err != nil {
+				return err
+			}
+			interrupted++
+		}
+		return nil
+	})
+	return interrupted, err
+}
 func (r *TaskRepository) Get(ctx context.Context, id string) (domain.CodexTask, error) {
 	var t domain.CodexTask
-	err := r.db.QueryRowContext(ctx, `SELECT id,project_id,account_id,type,skill_name,status,codex_session_id,prompt_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at FROM codex_tasks WHERE id=?`, id).Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &t.Status, &t.CodexSessionID, &t.PromptSnapshot, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+	var action sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT id,project_id,account_id,type,skill_name,action,status,codex_session_id,prompt_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at FROM codex_tasks WHERE id=?`, id).Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.PromptSnapshot, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
+	}
+	if action.Valid {
+		t.Action = domain.TaskAction(action.String)
 	}
 	return t, err
 }
 func (r *TaskRepository) List(ctx context.Context, projectID string, status domain.TaskStatus) ([]domain.CodexTask, error) {
-	q := `SELECT id,project_id,account_id,type,skill_name,status,codex_session_id,prompt_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at FROM codex_tasks WHERE 1=1`
+	q := `SELECT id,project_id,account_id,type,skill_name,action,status,codex_session_id,prompt_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at FROM codex_tasks WHERE 1=1`
 	args := []any{}
 	if projectID != "" {
 		q += " AND project_id=?"
@@ -104,8 +169,12 @@ func (r *TaskRepository) List(ctx context.Context, projectID string, status doma
 	var out []domain.CodexTask
 	for rows.Next() {
 		var t domain.CodexTask
-		if err := rows.Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &t.Status, &t.CodexSessionID, &t.PromptSnapshot, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+		var action sql.NullString
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.PromptSnapshot, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
 			return nil, err
+		}
+		if action.Valid {
+			t.Action = domain.TaskAction(action.String)
 		}
 		out = append(out, t)
 	}
@@ -164,7 +233,7 @@ func (r *TaskRepository) SetSession(ctx context.Context, id, session string) err
 }
 func (r *TaskRepository) UpdateStatus(ctx context.Context, id string, status domain.TaskStatus, summary, code, message string) error {
 	now := time.Now().UTC()
-	_, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IN ('completed','failed','cancelled') THEN ? ELSE finished_at END,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END WHERE id=?`, status, nullable(summary), nullable(code), nullable(message), status, now, status, now, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IN ('completed','failed','canceled','cancelled','interrupted') THEN ? ELSE finished_at END,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END WHERE id=?`, status, nullable(summary), nullable(code), nullable(message), status, now, status, now, id)
 	return err
 }
 func nullable(s string) any {

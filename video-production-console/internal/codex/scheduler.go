@@ -173,8 +173,19 @@ func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 	if t.Status == "" {
 		t.Status = domain.TaskQueued
 	}
+	action, resolved, err := ResolveTaskAction(t.Type, t.Action)
+	if err != nil {
+		return err
+	}
+	t.Action = action
+	if t.SkillName == "" {
+		t.SkillName = resolved.Skill
+	}
+	if t.SkillName != resolved.Skill {
+		return fmt.Errorf("task skill %q does not match action %q", t.SkillName, t.Action)
+	}
 	if _, err := s.tasks.Get(ctx, t.ID); errors.Is(err, sql.ErrNoRows) {
-		if err := s.tasks.Create(ctx, t); err != nil {
+		if err := s.tasks.CreateV2(ctx, t); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -186,12 +197,13 @@ func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 	s.signal()
 	return nil
 }
+
 func (s *TaskScheduler) Resume(ctx context.Context, id, answer string) error {
 	t, err := s.tasks.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	if t.Status != domain.TaskWaitingInput {
+	if t.Status != domain.TaskAwaitingInput && t.Status != domain.TaskWaitingInput {
 		return fmt.Errorf("task is not waiting for input")
 	}
 	if t.CodexSessionID == nil || *t.CodexSessionID == "" {
@@ -228,7 +240,7 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 		return nil
 	}
 	s.mu.Unlock()
-	if t.Status == domain.TaskQueued || t.Status == domain.TaskWaitingInput {
+	if t.Status == domain.TaskQueued || t.Status == domain.TaskAwaitingInput || t.Status == domain.TaskWaitingInput {
 		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
 		return s.tasks.UpdateStatus(ctx, id, domain.TaskCancelled, "", "cancelled", "task cancelled")
 	}
