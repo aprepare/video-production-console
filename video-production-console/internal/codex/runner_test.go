@@ -18,7 +18,14 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskcompletion"
 )
+
+type completionObserverFunc func(context.Context, domain.CodexTask) error
+
+func (f completionObserverFunc) AfterTerminal(ctx context.Context, task domain.CodexTask) error {
+	return f(ctx, task)
+}
 
 func init() {
 	if os.Getenv("VIDEO_CONSOLE_RUNNER_HELPER") != "oversized" {
@@ -143,6 +150,18 @@ func newTestRunner(t *testing.T, mode string) *runnerFixture {
 
 func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	fixture := newTestRunner(t, "completed")
+	var observed domain.CodexTask
+	fixture.runner.CompletionObserver = completionObserverFunc(func(ctx context.Context, task domain.CodexTask) error {
+		persisted, err := fixture.repo.Get(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		if persisted.Status != domain.TaskCompleted {
+			return fmt.Errorf("observer ran before commit: %s", persisted.Status)
+		}
+		observed = task
+		return nil
+	})
 	var broadcasts []Event
 	var callbackCounts []int
 	fixture.runner.Broadcast = func(e Event) {
@@ -164,6 +183,9 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	if task.Status != domain.TaskCompleted || task.CodexSessionID == nil {
 		t.Fatalf("task=%+v", task)
 	}
+	if observed.ID != task.ID || observed.Status != domain.TaskCompleted {
+		t.Fatalf("observed=%+v", observed)
+	}
 	events, err := fixture.repo.Events(context.Background(), fixture.taskID)
 	if err != nil {
 		t.Fatal(err)
@@ -182,6 +204,25 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	var snapshot string
 	if err := fixture.db.QueryRow(`SELECT config_snapshot_json FROM codex_tasks WHERE id=?`, fixture.taskID).Scan(&snapshot); err != nil || !strings.Contains(snapshot, "output-last-message") {
 		t.Fatalf("snapshot=%q err=%v", snapshot, err)
+	}
+}
+
+func TestRunnerCompletionObserverErrorKeepsTerminalStatusAndAppendsWarning(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	fixture.runner.CompletionObserver = completionObserverFunc(func(context.Context, domain.CodexTask) error { return fmt.Errorf("workflow unavailable") })
+	if err := fixture.runner.Run(context.Background()); err == nil {
+		t.Fatal("expected observer error")
+	}
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != domain.TaskCompleted {
+		t.Fatalf("task status=%s", task.Status)
+	}
+	events, _ := fixture.repo.Events(context.Background(), fixture.taskID)
+	if len(events) == 0 || events[len(events)-1].Kind != taskcompletion.ObserverWarningEvent {
+		t.Fatalf("events=%+v", events)
 	}
 }
 

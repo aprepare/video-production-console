@@ -20,3 +20,10 @@ type CompletedInput struct {
 type Gate interface {
 	HandleCompleted(context.Context, CompletedInput) (bool, error)
 }
+
+const ObserverWarningEvent = "workflow_observer_warning"
+
+// Observer runs only after a terminal CodexTask state is durably committed.
+type Observer interface {
+	AfterTerminal(context.Context, domain.CodexTask) error
+}

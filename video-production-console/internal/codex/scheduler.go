@@ -26,24 +26,24 @@ type CommandFactory func(domain.CodexTask) (*exec.Cmd, string, error)
 type ResumeCommandFactory func(domain.CodexTask, string) (*exec.Cmd, string, error)
 
 type scheduled struct {
-	cancel    context.CancelFunc
-	cmd       *exec.Cmd
-	cancelled bool
+	cancel context.CancelFunc
+	cmd    *exec.Cmd
 }
 type TaskScheduler struct {
-	tasks          *store.TaskRepository
-	makeCommand    CommandFactory
-	makeResume     ResumeCommandFactory
-	broadcast      func(Event)
-	broadcastTask  func(string, Event)
-	completionGate taskcompletion.Gate
-	mu             sync.Mutex
-	limit          int
-	running        map[string]*scheduled
-	projectLocks   map[string]string
-	wake           chan struct{}
-	stop           chan struct{}
-	done           chan struct{}
+	tasks              *store.TaskRepository
+	makeCommand        CommandFactory
+	makeResume         ResumeCommandFactory
+	broadcast          func(Event)
+	broadcastTask      func(string, Event)
+	completionGate     taskcompletion.Gate
+	completionObserver taskcompletion.Observer
+	mu                 sync.Mutex
+	limit              int
+	running            map[string]*scheduled
+	projectLocks       map[string]string
+	wake               chan struct{}
+	stop               chan struct{}
+	done               chan struct{}
 }
 
 func NewScheduler(tasks *store.TaskRepository, limit int, makeCommand CommandFactory, makeResume ResumeCommandFactory, broadcast func(Event)) (*TaskScheduler, error) {
@@ -129,6 +129,7 @@ func (s *TaskScheduler) dispatch() {
 		}
 		if err != nil {
 			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "command_build_failed", err.Error())
+			s.notifyTerminalObserver(context.Background(), t.ID)
 			s.mu.Lock()
 			delete(s.projectLocks, key)
 			s.mu.Unlock()
@@ -147,23 +148,19 @@ func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.C
 	s.mu.Lock()
 	taskBroadcast := s.broadcastTask
 	completionGate := s.completionGate
+	completionObserver := s.completionObserver
 	s.mu.Unlock()
 	if taskBroadcast != nil {
 		broadcast = func(e Event) { taskBroadcast(t.ID, e) }
 	}
 	r := NewRunner(cmd, s.tasks, t.ID, root, broadcast)
 	r.CompletionGate = completionGate
-	err := r.Run(ctx)
+	r.CompletionObserver = completionObserver
+	_ = r.Run(ctx) // Runner persists terminal failures and observer warnings.
 	s.mu.Lock()
-	item := s.running[t.ID]
-	cancelled := item != nil && item.cancelled
 	delete(s.running, t.ID)
 	delete(s.projectLocks, key)
 	s.mu.Unlock()
-	if cancelled {
-		_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskCanceled, "", "canceled", "task canceled")
-	} else if err != nil { /* Runner persists failure details. */
-	}
 	s.signal()
 }
 
@@ -177,6 +174,12 @@ func (s *TaskScheduler) SetTaskBroadcast(fn func(string, Event)) {
 func (s *TaskScheduler) SetCompletionGate(gate taskcompletion.Gate) {
 	s.mu.Lock()
 	s.completionGate = gate
+	s.mu.Unlock()
+}
+
+func (s *TaskScheduler) SetCompletionObserver(observer taskcompletion.Observer) {
+	s.mu.Lock()
+	s.completionObserver = observer
 	s.mu.Unlock()
 }
 func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
@@ -243,7 +246,6 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 	s.mu.Lock()
 	item := s.running[id]
 	if item != nil {
-		item.cancelled = true
 		item.cancel()
 		if item.cmd != nil && item.cmd.Process != nil {
 			terminateProcess(item.cmd)
@@ -251,14 +253,38 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 		s.mu.Unlock()
 		persistCtx := context.WithoutCancel(ctx)
 		_ = s.tasks.AppendEvent(persistCtx, id, domain.TaskEvent{Kind: "cancel_requested", Level: "warning", DisplayText: "Task cancellation requested"})
-		return s.tasks.UpdateStatus(persistCtx, id, domain.TaskCanceled, "", "canceled", "task canceled")
+		if err := s.tasks.UpdateStatus(persistCtx, id, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
+			return err
+		}
+		return s.notifyTerminalObserver(persistCtx, id)
 	}
 	s.mu.Unlock()
 	if t.Status == domain.TaskQueued || t.Status == domain.TaskAwaitingInput || t.Status == domain.TaskWaitingInput {
 		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
-		return s.tasks.UpdateStatus(ctx, id, domain.TaskCanceled, "", "canceled", "task canceled")
+		if err := s.tasks.UpdateStatus(ctx, id, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
+			return err
+		}
+		return s.notifyTerminalObserver(ctx, id)
 	}
 	return fmt.Errorf("task cannot be cancelled in status %s", t.Status)
+}
+
+func (s *TaskScheduler) notifyTerminalObserver(ctx context.Context, taskID string) error {
+	s.mu.Lock()
+	observer := s.completionObserver
+	s.mu.Unlock()
+	if observer == nil {
+		return nil
+	}
+	task, err := s.tasks.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if err := observer.AfterTerminal(ctx, task); err != nil {
+		warningErr := s.tasks.AppendEvent(ctx, taskID, domain.TaskEvent{Kind: taskcompletion.ObserverWarningEvent, Level: "warning", DisplayText: err.Error()})
+		return errors.Join(err, warningErr)
+	}
+	return nil
 }
 func (s *TaskScheduler) SetLimit(limit int) error {
 	if limit < 1 || limit > 4 {

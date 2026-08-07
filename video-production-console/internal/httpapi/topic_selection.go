@@ -126,9 +126,22 @@ func findProjectTopicSelection(ctx context.Context, db *sql.DB, project domain.P
 	return projectTopicSelection{SessionID: sessionID, Candidate: candidate, TopicCandidatesPath: path}, nil
 }
 
-func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver, project domain.Project, selection projectTopicSelection) (domain.CodexTask, error) {
+type topicCommitLaunch struct {
+	model taskmodel.Selection
+	now   time.Time
+}
+
+func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver, project domain.Project, selection projectTopicSelection, options ...topicCommitLaunch) (domain.CodexTask, error) {
 	if scheduler == nil || preparer == nil {
 		return domain.CodexTask{}, errors.New("topic card task service is unavailable")
+	}
+	requested := taskmodel.Selection{}
+	now := time.Now().UTC()
+	if len(options) > 0 {
+		requested = options[0].model
+		if !options[0].now.IsZero() {
+			now = options[0].now
+		}
 	}
 	tasks := store.NewTaskRepository(db)
 	existing, err := tasks.List(ctx, project.ID, "")
@@ -136,17 +149,17 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 		return domain.CodexTask{}, err
 	}
 	for _, task := range existing {
-		if task.Action == domain.ActionTopicCommit && (task.Status == domain.TaskQueued || task.Status == domain.TaskRunning || task.Status == domain.TaskResuming || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput) {
+		modelMatches := requested.Model == "" || (task.ModelName == requested.Model && task.ReasoningEffort == requested.ReasoningEffort)
+		if task.Action == domain.ActionTopicCommit && modelMatches && (task.Status == domain.TaskQueued || task.Status == domain.TaskRunning || task.Status == domain.TaskResuming || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput) {
 			return task, nil
 		}
 	}
-	model, err := resolveTaskModel(ctx, models, taskmodel.Selection{})
+	model, err := resolveTaskModel(ctx, models, requested)
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
 	taskID := uuid.NewString()
 	projectID := project.ID
-	now := time.Now().UTC()
 	task := domain.CodexTask{
 		ID: taskID, ProjectID: &projectID, AccountID: project.AccountID,
 		Type: "topic_commit", SkillName: "finance-topic-selector", Action: domain.ActionTopicCommit,

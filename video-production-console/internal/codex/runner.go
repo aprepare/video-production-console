@@ -43,6 +43,7 @@ type Runner struct {
 	Cleanup               func() error
 	Action                domain.TaskAction
 	CompletionGate        taskcompletion.Gate
+	CompletionObserver    taskcompletion.Observer
 	ExpectedTurnID        *string
 
 	maxJSONLBytes             int
@@ -240,7 +241,7 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
 		}
-		return fmt.Errorf("task failed: %s", result.Summary)
+		return errors.Join(fmt.Errorf("task failed: %s", result.Summary), r.notifyTerminalObserver(persistCtx))
 	case "completed":
 		artifacts, artifactErr := r.engineeringArtifacts(result.Action, result.Artifacts)
 		if artifactErr != nil {
@@ -322,7 +323,7 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 		if task.ProjectID != nil {
 			_, _ = store.NewProjectRepository(r.Tasks.DB()).SyncStageFromAssets(persistCtx, *task.ProjectID, time.Now().UTC())
 		}
-		return nil
+		return r.notifyTerminalObserver(persistCtx)
 	default:
 		return fmt.Errorf("unsupported validated result status %q", result.Status)
 	}
@@ -851,7 +852,7 @@ func (r *Runner) persistOutputInvalid(ctx context.Context, lastPath string, rawL
 	if err := r.Tasks.CompleteWithResult(ctx, r.TaskID, write, artifacts, nil); err != nil {
 		return r.persistFailure(ctx, "result_persistence_failed", err)
 	}
-	return fmt.Errorf("output_invalid: %w", cause)
+	return errors.Join(fmt.Errorf("output_invalid: %w", cause), r.notifyTerminalObserver(ctx))
 }
 
 func (r *Runner) persistFailure(ctx context.Context, code string, cause error) error {
@@ -865,6 +866,7 @@ func (r *Runner) persistFailure(ctx context.Context, code string, cause error) e
 	if statusErr != nil {
 		return errors.Join(cause, fmt.Errorf("persist failure status: %w", statusErr))
 	}
+	observerErr := r.notifyTerminalObserver(ctx)
 	_, _ = store.NewConversationRepository(r.Tasks.DB()).AppendSemantic(ctx, store.SemanticWrite{
 		TaskID: r.TaskID,
 		Kind:   string(domain.SemanticFailure),
@@ -872,7 +874,34 @@ func (r *Runner) persistFailure(ctx context.Context, code string, cause error) e
 		Level:  "error",
 		Title:  message,
 	})
-	return cause
+	return errors.Join(cause, observerErr)
+}
+
+func (r *Runner) notifyTerminalObserver(ctx context.Context) error {
+	if r.CompletionObserver == nil {
+		return nil
+	}
+	task, err := r.Tasks.Get(ctx, r.TaskID)
+	if err != nil {
+		return err
+	}
+	if !isTerminalTaskStatus(task.Status) {
+		return nil
+	}
+	if err := r.CompletionObserver.AfterTerminal(ctx, task); err != nil {
+		warningErr := r.Tasks.AppendEvent(ctx, task.ID, domain.TaskEvent{Kind: taskcompletion.ObserverWarningEvent, Level: "warning", DisplayText: r.redact(err.Error())})
+		return errors.Join(err, warningErr)
+	}
+	return nil
+}
+
+func isTerminalTaskStatus(status domain.TaskStatus) bool {
+	switch status {
+	case domain.TaskCompleted, domain.TaskFailed, domain.TaskCanceled, domain.TaskCancelled, domain.TaskInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 // processFailureCause preserves the useful terminal Codex error instead of

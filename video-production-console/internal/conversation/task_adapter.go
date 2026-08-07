@@ -19,16 +19,18 @@ import (
 // It performs all work through a persisted chat session and never owns the
 // shared process lifecycle.
 type TaskAdapter struct {
-	tasks          *store.TaskRepository
-	broker         *Broker
-	rpc            ThreadRPC
-	dataRoot       string
-	completionGate taskcompletion.Gate
+	tasks              *store.TaskRepository
+	broker             *Broker
+	rpc                ThreadRPC
+	dataRoot           string
+	completionGate     taskcompletion.Gate
+	completionObserver taskcompletion.Observer
 }
 
 type TaskCompletionConfig struct {
 	DataRoot string
 	Gate     taskcompletion.Gate
+	Observer taskcompletion.Observer
 }
 
 var ErrOutputRetryNotEligible = errors.New("task output is not eligible for completion retry")
@@ -38,6 +40,7 @@ func NewTaskAdapter(tasks *store.TaskRepository, broker *Broker, rpc ThreadRPC, 
 	if len(completion) > 0 {
 		adapter.dataRoot = strings.TrimSpace(completion[0].DataRoot)
 		adapter.completionGate = completion[0].Gate
+		adapter.completionObserver = completion[0].Observer
 	}
 	if broker != nil {
 		broker.SetTurnCompletedHandler(adapter)
@@ -82,6 +85,7 @@ func (a *TaskAdapter) RetryOutput(ctx context.Context, taskID string) error {
 	runner := codex.NewRunner(nil, a.tasks, task.ID, assetRoot, nil)
 	runner.OutputDir = filepath.Join(assetRoot, "tasks", task.ID, "output")
 	runner.CompletionGate = a.completionGate
+	runner.CompletionObserver = a.completionObserver
 	runner.ExpectedTurnID = turnID
 	return runner.CompleteAgentResult(ctx, string(raw))
 }
@@ -114,7 +118,7 @@ func (a *TaskAdapter) Enqueue(ctx context.Context, task domain.CodexTask) error 
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: taskClientKeyPrefix + task.ID + ":initial", Text: task.PromptSnapshot})
 	if err != nil {
 		_ = a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_enqueue_failed", err.Error())
-		return err
+		return errors.Join(err, a.afterTerminal(ctx, task.ID))
 	}
 	if receipt.TurnID == "" {
 		return nil
@@ -152,7 +156,7 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: resumeKey, Text: answer})
 	if err != nil {
 		persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_resume_failed", err.Error())
-		return errors.Join(err, persistErr)
+		return errors.Join(err, persistErr, a.afterTerminal(ctx, task.ID))
 	}
 	if receipt.TurnID == "" {
 		return nil
@@ -225,6 +229,7 @@ func (a *TaskAdapter) CompleteTurn(ctx context.Context, sessionID, turnID, resul
 	runner := codex.NewRunner(nil, a.tasks, task.ID, assetRoot, nil)
 	runner.OutputDir = filepath.Join(assetRoot, "tasks", task.ID, "output")
 	runner.CompletionGate = a.completionGate
+	runner.CompletionObserver = a.completionObserver
 	runner.ExpectedTurnID = &turnID
 	return runner.CompleteAgentResult(ctx, resultText)
 }
@@ -250,8 +255,11 @@ func (a *TaskAdapter) FailTurn(ctx context.Context, sessionID, turnID, code stri
 	if cause != nil {
 		message = cause.Error()
 	}
-	_, err = a.tasks.FailAppServerTurn(ctx, task.ID, turnID, code, message)
-	return err
+	failed, err := a.tasks.FailAppServerTurn(ctx, task.ID, turnID, code, message)
+	if err != nil || !failed {
+		return err
+	}
+	return a.afterTerminal(ctx, task.ID)
 }
 
 func (a *TaskAdapter) TaskTurnStarted(ctx context.Context, clientKey, sessionID, threadID, turnID string) error {
@@ -267,7 +275,7 @@ func (a *TaskAdapter) TaskTurnStarted(ctx context.Context, clientKey, sessionID,
 		if persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_turn_bind_failed", cause.Error()); persistErr != nil {
 			return errors.Join(cause, persistErr)
 		}
-		return cause
+		return errors.Join(cause, a.afterTerminal(ctx, task.ID))
 	}
 	if task.ChatSessionID == nil || *task.ChatSessionID != sessionID {
 		return fail(errors.New("formal task start identity mismatch"))
@@ -300,7 +308,10 @@ func (a *TaskAdapter) TaskDeliveryFailed(ctx context.Context, clientKey, session
 	if cause != nil {
 		message = cause.Error()
 	}
-	return a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_delivery_failed", message)
+	if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_delivery_failed", message); err != nil {
+		return err
+	}
+	return a.afterTerminal(ctx, task.ID)
 }
 
 func formalTaskID(clientKey string) (string, error) {
@@ -344,12 +355,28 @@ func (a *TaskAdapter) Cancel(ctx context.Context, task domain.CodexTask) error {
 	if !canceled {
 		return errors.New("App Server task turn is no longer cancelable")
 	}
+	observerErr := a.afterTerminal(ctx, task.ID)
 	if err := a.rpc.Call(ctx, "turn/interrupt", map[string]any{"threadId": *task.CodexThreadID, "turnId": *task.CodexTurnID}, &struct{}{}); err != nil {
 		_ = a.tasks.AppendEvent(ctx, task.ID, domain.TaskEvent{Kind: "cancel_interrupt_failed", Level: "error", DisplayText: err.Error()})
-		return fmt.Errorf("interrupt Codex turn after durable cancellation: %w", err)
+		return errors.Join(fmt.Errorf("interrupt Codex turn after durable cancellation: %w", err), observerErr)
 	}
 	if err := a.tasks.AppendEvent(ctx, task.ID, domain.TaskEvent{Kind: "cancel_requested", Level: "warning", DisplayText: "Task cancellation requested"}); err != nil {
 		return err
+	}
+	return observerErr
+}
+
+func (a *TaskAdapter) afterTerminal(ctx context.Context, taskID string) error {
+	if a.completionObserver == nil {
+		return nil
+	}
+	task, err := a.tasks.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if err := a.completionObserver.AfterTerminal(ctx, task); err != nil {
+		warningErr := a.tasks.AppendEvent(ctx, task.ID, domain.TaskEvent{Kind: taskcompletion.ObserverWarningEvent, Level: "warning", DisplayText: err.Error()})
+		return errors.Join(err, warningErr)
 	}
 	return nil
 }

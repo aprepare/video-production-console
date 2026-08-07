@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +19,57 @@ import (
 type recordingRetryGate struct {
 	called int
 	input  taskcompletion.CompletedInput
+}
+
+type recordingCompletionObserver struct {
+	called int
+	task   domain.CodexTask
+	repo   *store.TaskRepository
+}
+
+func (o *recordingCompletionObserver) AfterTerminal(ctx context.Context, task domain.CodexTask) error {
+	persisted, err := o.repo.Get(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	if persisted.Status != task.Status {
+		return fmt.Errorf("observer ran before durable status")
+	}
+	o.called++
+	o.task = task
+	return nil
+}
+
+func TestTaskAdapterCompletionObserverRunsAfterDurableTurnFailure(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "observer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now)
+	repo := store.NewTaskRepository(db)
+	taskID, threadID, turnID, sessionID := uuid.NewString(), "thread", "turn", "session"
+	_, _ = db.Exec(`INSERT INTO chat_sessions(id,title,source,kind,status,codex_thread_id,working_directory,model,reasoning_effort,skill_names_json,created_at,updated_at) VALUES(?,?,'console','general','running',?,?,'gpt-5.4','high','[]',?,?)`, sessionID, "session", threadID, t.TempDir(), now, now)
+	task := domain.CodexTask{ID: taskID, AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "prompt", CreatedAt: now}
+	if err := repo.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetTransportMetadata(ctx, taskID, &sessionID, &threadID, &turnID, string(domain.CompletionAgentRunning), codex.TransportAppServer); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(ctx, taskID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompletionObserver{repo: repo}
+	adapter := NewTaskAdapter(repo, nil, nil, TaskCompletionConfig{Observer: observer})
+	if err := adapter.FailTurn(ctx, sessionID, turnID, "transport_failed", fmt.Errorf("lost")); err != nil {
+		t.Fatal(err)
+	}
+	if observer.called != 1 || observer.task.Status != domain.TaskFailed {
+		t.Fatalf("observer=%+v", observer)
+	}
 }
 
 func (g *recordingRetryGate) HandleCompleted(_ context.Context, input taskcompletion.CompletedInput) (bool, error) {

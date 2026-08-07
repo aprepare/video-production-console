@@ -259,6 +259,42 @@ func TestWorkflowAdvanceReplayAfterCompletionIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWorkflowAdvanceExistingTopicCardToRemixIsScopedAndReplayable(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	remixID := uuid.NewString()
+	seedWorkflowTask(t, db, remixID, projectID, accountID, now)
+	repo := NewWorkflowRepository(db)
+	run, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced, err := repo.AdvanceExistingTopicCardToRemix(context.Background(), run.ID, remixID, now.Add(time.Second))
+	if err != nil || advanced.TopicTaskID != nil || advanced.RemixTaskID == nil || *advanced.RemixTaskID != remixID || advanced.CurrentStep != domain.WorkflowStepRemix {
+		t.Fatalf("advanced=%+v err=%v", advanced, err)
+	}
+	completed, err := repo.Complete(context.Background(), run.ID, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repo.AdvanceExistingTopicCardToRemix(context.Background(), run.ID, remixID, now.Add(3*time.Second))
+	if err != nil || replayed.State != domain.WorkflowCompleted || !replayed.UpdatedAt.Equal(completed.UpdatedAt) {
+		t.Fatalf("replayed=%+v err=%v", replayed, err)
+	}
+}
+
+func TestWorkflowAdvanceExistingTopicCardRejectsBoundTopicTask(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	topicID, remixID := uuid.NewString(), uuid.NewString()
+	seedWorkflowTask(t, db, topicID, projectID, accountID, now)
+	seedWorkflowTask(t, db, remixID, projectID, accountID, now)
+	repo := NewWorkflowRepository(db)
+	run, _ := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	_, _ = repo.BindTopicTask(context.Background(), run.ID, topicID, now.Add(time.Second))
+	if _, err := repo.AdvanceExistingTopicCardToRemix(context.Background(), run.ID, remixID, now.Add(2*time.Second)); !errors.Is(err, ErrWorkflowTransition) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestWorkflowFailPersistsDetailsAndIsIdempotent(t *testing.T) {
 	db, accountID, projectID, now := workflowFixture(t)
 	repo := NewWorkflowRepository(db)

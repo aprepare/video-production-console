@@ -28,6 +28,8 @@ import (
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskcompletion"
+	"video-production-console/internal/workflow"
 )
 
 var codexSecretEnvironmentKeys = []string{
@@ -121,6 +123,11 @@ func main() {
 		log.Fatal(err)
 	}
 	defer legacyScheduler.Close()
+	remixCoordinator := workflow.NewRemixCoordinator(
+		store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db),
+		httpapi.NewWorkflowTaskLauncher(db, legacyScheduler, taskPreparer, nil),
+	)
+	legacyScheduler.SetCompletionObserver(remixCoordinator)
 	var montageCoordinator *montage.Coordinator
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
 		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
@@ -163,10 +170,7 @@ func main() {
 		broker := conversation.NewBroker(store.NewConversationRepository(db), rpc)
 		conversations = conversation.NewService(store.NewConversationRepository(db), broker, rpc, runtimeSettings.CodexWorkspaceRoots, skillNames(skillsService), conversation.ServiceOptions{DataRoot: runtimeSettings.DataRoot, DesktopWorkingDirectory: desktopWorkingDirectory})
 		historyService = history.NewService(history.NewAppServerSource(rpc), store.NewConversationRepository(db))
-		completionConfig := conversation.TaskCompletionConfig{DataRoot: settings.DataRoot}
-		if montageCoordinator != nil {
-			completionConfig.Gate = montageCoordinator
-		}
+		completionConfig := wireTaskCompletion(legacyScheduler, settings.DataRoot, montageCoordinator, remixCoordinator)
 		taskAdapter := conversation.NewTaskAdapter(taskRepo, broker, rpc, completionConfig)
 		completionRetryer = taskAdapter
 		recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 30*time.Second)
@@ -191,6 +195,15 @@ func main() {
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type completionObserverSetter interface {
+	SetCompletionObserver(taskcompletion.Observer)
+}
+
+func wireTaskCompletion(setter completionObserverSetter, dataRoot string, gate taskcompletion.Gate, observer taskcompletion.Observer) conversation.TaskCompletionConfig {
+	setter.SetCompletionObserver(observer)
+	return conversation.TaskCompletionConfig{DataRoot: dataRoot, Gate: gate, Observer: observer}
 }
 
 // resolveDesktopWorkingDirectory keeps sessions created from the console in

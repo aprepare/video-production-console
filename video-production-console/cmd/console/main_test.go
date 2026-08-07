@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
+	"video-production-console/internal/taskcompletion"
 )
 
 func TestNewServerHasDefensiveTimeouts(t *testing.T) {
@@ -262,6 +264,25 @@ func TestCodexCommandFactoryUsesPreparedManifestAction(t *testing.T) {
 		t.Fatalf("command did not use manifest action: %q", prompt)
 	}
 }
+
+type completionObserverSetterStub struct{ observer taskcompletion.Observer }
+
+func (s *completionObserverSetterStub) SetCompletionObserver(observer taskcompletion.Observer) {
+	s.observer = observer
+}
+
+func TestCompletionObserverWiringUsesSameObserverForLegacyAndAppServer(t *testing.T) {
+	observer := &completionObserverStubMain{}
+	legacy := &completionObserverSetterStub{}
+	config := wireTaskCompletion(legacy, "data", nil, observer)
+	if legacy.observer != observer || config.Observer != observer || config.DataRoot != "data" {
+		t.Fatalf("legacy=%v config=%+v", legacy.observer, config)
+	}
+}
+
+type completionObserverStubMain struct{}
+
+func (*completionObserverStubMain) AfterTerminal(context.Context, domain.CodexTask) error { return nil }
 
 func TestCodexCommandFactoriesRejectProjectRootEscape(t *testing.T) {
 	dataRoot := t.TempDir()

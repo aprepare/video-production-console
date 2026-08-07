@@ -130,6 +130,30 @@ func (r *WorkflowRepository) AdvanceToRemix(ctx context.Context, runID, taskID s
 	})
 }
 
+// AdvanceExistingTopicCardToRemix is the explicit fast path for a project
+// whose current topic_card was already ready before the workflow began.
+func (r *WorkflowRepository) AdvanceExistingTopicCardToRemix(ctx context.Context, runID, taskID string, now time.Time) (domain.ProjectWorkflowRun, error) {
+	return r.transition(ctx, runID, func(q assetDBTX, run domain.ProjectWorkflowRun) error {
+		if err := validateWorkflowTaskBinding(ctx, q, run, taskID, workflowTaskSlotRemix); err != nil {
+			return err
+		}
+		if run.RemixTaskID != nil {
+			if *run.RemixTaskID == taskID {
+				return nil
+			}
+			return ErrWorkflowTransition
+		}
+		if run.State != domain.WorkflowRunning || run.CurrentStep != domain.WorkflowStepTopicCard || run.TopicTaskID != nil {
+			return ErrWorkflowTransition
+		}
+		result, err := q.ExecContext(ctx, `UPDATE project_workflow_runs SET current_step='remix',remix_task_id=?,updated_at=? WHERE id=? AND state='running' AND current_step='topic_card' AND topic_task_id IS NULL AND remix_task_id IS NULL`, taskID, now, runID)
+		if err != nil {
+			return err
+		}
+		return requireOneWorkflowUpdate(result)
+	})
+}
+
 func (r *WorkflowRepository) Complete(ctx context.Context, runID string, now time.Time) (domain.ProjectWorkflowRun, error) {
 	return r.transition(ctx, runID, func(q assetDBTX, run domain.ProjectWorkflowRun) error {
 		if run.State == domain.WorkflowCompleted {

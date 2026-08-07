@@ -119,6 +119,14 @@ func TestSchedulerCancelRunningTaskPersistsCancelledStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	observed := make(chan domain.CodexTask, 1)
+	s.SetCompletionObserver(completionObserverFunc(func(ctx context.Context, task domain.CodexTask) error {
+		persisted, err := repo.Get(ctx, task.ID)
+		if err == nil && persisted.Status == domain.TaskCanceled {
+			observed <- task
+		}
+		return err
+	}))
 
 	task := domain.CodexTask{
 		ID: "cancel-running", AccountID: "account-cancel", Type: "topic_select",
@@ -140,6 +148,14 @@ func TestSchedulerCancelRunningTaskPersistsCancelledStatus(t *testing.T) {
 	}
 	if got.ErrorCode == nil || *got.ErrorCode != "canceled" {
 		t.Fatalf("error code = %v, want canceled", got.ErrorCode)
+	}
+	select {
+	case task := <-observed:
+		if task.Status != domain.TaskCanceled {
+			t.Fatalf("observed=%+v", task)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion observer was not called")
 	}
 }
 
