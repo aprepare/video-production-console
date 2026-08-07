@@ -215,6 +215,69 @@ func TestMontageRecoverInterruptsRunningAndReturnsQueued(t *testing.T) {
 	}
 }
 
+func preparedMontageSuccess(t *testing.T) (*MontageRepository, string, RegistrationSuccess) {
+	t.Helper()
+	repo, _, _, projectID, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunning(context.Background(), attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	workspaceHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if _, err := repo.db.Exec(`INSERT INTO task_artifacts(id,task_id,kind,path,filename,mime_type,size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, "plaintext_workspace", workspace, "workspace", "inode/directory", 0, workspaceHash, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	return repo, projectID, RegistrationSuccess{
+		AttemptID:       attempt.ID,
+		RegisteredPath:  filepath.Join(t.TempDir(), taskID),
+		ReceiptPath:     filepath.Join(workspace, "receipt.json"),
+		SHA256:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		WorkspaceSHA256: workspaceHash,
+		Filename:        taskID,
+	}
+}
+
+func TestMontageSucceedSetsReadyAtWhenAdvancingToReview(t *testing.T) {
+	repo, projectID, success := preparedMontageSuccess(t)
+	before := time.Now().UTC()
+	if err := repo.Succeed(context.Background(), success); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC()
+	var stage domain.ProjectStage
+	var readyAt *time.Time
+	if err := repo.db.QueryRow(`SELECT stage,ready_at FROM projects WHERE id=?`, projectID).Scan(&stage, &readyAt); err != nil {
+		t.Fatal(err)
+	}
+	if stage != domain.StageReview {
+		t.Fatalf("stage=%s, want review", stage)
+	}
+	if readyAt == nil || readyAt.Before(before) || readyAt.After(after) {
+		t.Fatalf("ready_at=%v, want timestamp in [%v,%v]", readyAt, before, after)
+	}
+}
+
+func TestMontageSucceedPreservesExistingReadyAt(t *testing.T) {
+	repo, projectID, success := preparedMontageSuccess(t)
+	original := time.Date(2026, time.August, 1, 2, 3, 4, 0, time.UTC)
+	if _, err := repo.db.Exec(`UPDATE projects SET ready_at=? WHERE id=?`, original, projectID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Succeed(context.Background(), success); err != nil {
+		t.Fatal(err)
+	}
+	var readyAt time.Time
+	if err := repo.db.QueryRow(`SELECT ready_at FROM projects WHERE id=?`, projectID).Scan(&readyAt); err != nil {
+		t.Fatal(err)
+	}
+	if !readyAt.Equal(original) {
+		t.Fatalf("ready_at=%v, want preserved %v", readyAt, original)
+	}
+}
+
 func TestAuditMixDraftsStalesUnregisteredMontageAsset(t *testing.T) {
 	repo, assets, accountID, projectID, taskID := montageFixture(t)
 	trustedRoot := t.TempDir()
