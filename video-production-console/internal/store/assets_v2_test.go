@@ -129,7 +129,7 @@ func TestAssetInvalidationTraversesOnlyRealDependencyEdges(t *testing.T) {
 func TestAssetVersionRejectsInvalidIDsParentsAndCrossProjectDependencies(t *testing.T) {
 	r, accountID, projectID := assetFixture(t)
 	upstream := addTestVersion(t, r, projectID, accountID, domain.AssetContinuousScript, "", nil)
-	if _, err := r.AddVersion(context.Background(), AddAssetVersion{ProjectID: ptr("bad"), AccountID: accountID, Type: domain.AssetSpokenScript, Path: "x", Filename: "x", MIMEType: "x", SHA256: "x"}); !errors.Is(err, ErrInvalidAssetInput) {
+	if _, err := r.AddVersion(context.Background(), AddAssetVersion{ProjectID: ptr("bad"), AccountID: accountID, Type: domain.AssetNarration, Path: "x", Filename: "x", MIMEType: "x", SHA256: "x"}); !errors.Is(err, ErrInvalidAssetInput) {
 		t.Fatalf("invalid project error=%v", err)
 	}
 	badParent := uuid.NewString()
@@ -143,8 +143,32 @@ func TestAssetVersionRejectsInvalidIDsParentsAndCrossProjectDependencies(t *test
 	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','script',?,?)`, otherProject, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.AddVersion(context.Background(), AddAssetVersion{ProjectID: &otherProject, AccountID: accountID, Type: domain.AssetSpokenScript, Path: "x", Filename: "x", MIMEType: "x", SHA256: "x", Dependencies: []string{upstream.ID}}); !errors.Is(err, ErrInvalidAssetDependency) {
+	if _, err := r.AddVersion(context.Background(), AddAssetVersion{ProjectID: &otherProject, AccountID: accountID, Type: domain.AssetNarration, Path: "x", Filename: "x", MIMEType: "x", SHA256: "x", Dependencies: []string{upstream.ID}}); !errors.Is(err, ErrInvalidAssetDependency) {
 		t.Fatalf("cross-project error=%v", err)
+	}
+}
+
+func TestAddVersionRejectsDeprecatedAssetTypes(t *testing.T) {
+	r, accountID, projectID := assetFixture(t)
+	for _, assetType := range []domain.AssetType{
+		domain.AssetSpokenScript,
+		domain.AssetAudio,
+		domain.AssetSubtitle,
+	} {
+		t.Run(string(assetType), func(t *testing.T) {
+			_, err := r.AddVersion(context.Background(), AddAssetVersion{
+				ProjectID: &projectID,
+				AccountID: accountID,
+				Type:      assetType,
+				Path:      string(assetType),
+				Filename:  string(assetType),
+				MIMEType:  "application/octet-stream",
+				SHA256:    string(assetType),
+			})
+			if !errors.Is(err, ErrInvalidAssetInput) {
+				t.Fatalf("AddVersion(%q) error = %v, want ErrInvalidAssetInput", assetType, err)
+			}
+		})
 	}
 }
 

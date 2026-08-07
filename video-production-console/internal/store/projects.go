@@ -78,44 +78,64 @@ func (r *ProjectRepository) DeleteProject(ctx context.Context, id string) error 
 // SyncStageFromAssets advances the project card to the next meaningful
 // production lane. It never regresses, publishes, or unarchives a project.
 func (r *ProjectRepository) SyncStageFromAssets(ctx context.Context, id string, now time.Time) (domain.Project, error) {
-	project, err := r.GetProject(ctx, id)
-	if err != nil {
-		return domain.Project{}, err
-	}
-	if project.Stage == domain.StageArchived || project.Stage == domain.StagePublished {
-		return project, nil
-	}
-	versions, err := r.assets.CurrentByProject(ctx, id)
-	if err != nil {
-		return domain.Project{}, err
-	}
-	ready := map[domain.AssetType]bool{}
-	for _, version := range versions {
-		if version.State == domain.AssetReady {
-			ready[version.Type] = true
-		}
-	}
-	target := domain.StageScript
-	if ready[domain.AssetContinuousScript] {
-		target = domain.StageAssets
-	}
-	if ready[domain.AssetNarration] && ready[domain.AssetSubtitleSRT] {
-		target = domain.StageMixing
-	}
-	if ready[domain.AssetMixDraft] || ready[domain.AssetFinalVideo] {
-		target = domain.StageReview
-	}
 	order := map[domain.ProjectStage]int{
 		domain.StageScript: 0, domain.StageAssets: 1, domain.StageMixing: 2,
 		domain.StageReview: 3,
 	}
-	if order[target] <= order[project.Stage] {
-		return project, nil
+	for {
+		project, err := r.GetProject(ctx, id)
+		if err != nil {
+			return domain.Project{}, err
+		}
+		if project.Stage == domain.StageArchived || project.Stage == domain.StagePublished {
+			return project, nil
+		}
+		currentOrder, known := order[project.Stage]
+		if !known {
+			return domain.Project{}, fmt.Errorf("sync project stage: invalid stage %q", project.Stage)
+		}
+		versions, err := r.assets.CurrentByProject(ctx, id)
+		if err != nil {
+			return domain.Project{}, err
+		}
+		ready := map[domain.AssetType]bool{}
+		for _, version := range versions {
+			if version.State == domain.AssetReady {
+				ready[version.Type] = true
+			}
+		}
+		target := domain.StageScript
+		if ready[domain.AssetContinuousScript] {
+			target = domain.StageAssets
+		}
+		if ready[domain.AssetNarration] && ready[domain.AssetSubtitleSRT] {
+			target = domain.StageMixing
+		}
+		if ready[domain.AssetMixDraft] || ready[domain.AssetFinalVideo] {
+			target = domain.StageReview
+		}
+		if order[target] <= currentOrder {
+			return project, nil
+		}
+		query := `UPDATE projects SET stage=?,updated_at=? WHERE id=? AND stage=?`
+		args := []any{target, now, id, project.Stage}
+		if target == domain.StageReview {
+			query = `UPDATE projects SET stage=?,updated_at=?,ready_at=COALESCE(ready_at,?) WHERE id=? AND stage=?`
+			args = []any{target, now, now, id, project.Stage}
+		}
+		result, err := r.db.ExecContext(ctx, query, args...)
+		if err != nil {
+			return domain.Project{}, err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return domain.Project{}, err
+		}
+		if updated == 0 {
+			continue
+		}
+		return r.GetProject(ctx, id)
 	}
-	if _, err := r.db.ExecContext(ctx, `UPDATE projects SET stage=?,updated_at=? WHERE id=?`, target, now, id); err != nil {
-		return domain.Project{}, err
-	}
-	return r.GetProject(ctx, id)
 }
 
 func (r *ProjectRepository) ListProjects(ctx context.Context, accountID string, stage domain.ProjectStage, q string) ([]domain.Project, error) {

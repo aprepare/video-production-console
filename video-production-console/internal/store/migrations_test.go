@@ -80,7 +80,18 @@ func TestLegacyStageMigrationRebuildsProjectsWithoutDataLoss(t *testing.T) {
 	if _, err := legacy.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
-	for index, migration := range migrations[:len(migrations)-1] {
+	migrationSet := append(append([]string(nil), migrations...), `SELECT 1;`)
+	lifecycleIndex := -1
+	for index, migration := range migrationSet {
+		if strings.Contains(migration, "CREATE TABLE projects_lifecycle_v2") {
+			lifecycleIndex = index
+			break
+		}
+	}
+	if lifecycleIndex < 0 {
+		t.Fatal("lifecycle migration not found")
+	}
+	for index, migration := range migrationSet[:lifecycleIndex] {
 		if _, err := legacy.Exec(migration); err != nil {
 			t.Fatalf("apply predecessor migration %d: %v", index+1, err)
 		}

@@ -115,6 +115,19 @@ func TestSyncStageFromAssets(t *testing.T) {
 				}
 			}
 			for _, typ := range tt.assets {
+				if typ == domain.AssetSpokenScript {
+					itemID, versionID := uuid.NewString(), uuid.NewString()
+					if _, err := db.Exec(`INSERT INTO asset_items(id,project_id,account_id,type,created_at,updated_at) VALUES(?,?,?,?,?,?)`, itemID, pid, aid, typ, now, now); err != nil {
+						t.Fatalf("insert historical %s item: %v", typ, err)
+					}
+					if _, err := db.Exec(`INSERT INTO asset_versions(id,asset_id,project_id,account_id,type,version,storage_kind,path,filename,mime_type,size,sha256,state,created_at) VALUES(?,?,?,?,?,1,'file',?,?,?,0,?,'ready',?)`, versionID, itemID, pid, aid, typ, string(typ), string(typ), "application/octet-stream", string(typ), now); err != nil {
+						t.Fatalf("insert historical %s version: %v", typ, err)
+					}
+					if _, err := db.Exec(`UPDATE asset_items SET current_version_id=? WHERE id=?`, versionID, itemID); err != nil {
+						t.Fatalf("point historical %s item: %v", typ, err)
+					}
+					continue
+				}
 				if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, AccountID: aid, Type: typ, Path: string(typ), Filename: string(typ), MIMEType: "application/octet-stream", SHA256: string(typ)}); err != nil {
 					t.Fatalf("add %s: %v", typ, err)
 				}
@@ -127,6 +140,123 @@ func TestSyncStageFromAssets(t *testing.T) {
 				t.Fatalf("stage=%s, want %s", got.Stage, tt.want)
 			}
 		})
+	}
+}
+
+func TestSyncStageFromAssetsSetsAndPreservesReadyAt(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "sync-ready-at.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	aid, pid := uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewProjectRepository(db)
+	if err := repo.CreateProject(context.Background(), domain.Project{ID: pid, AccountID: aid, Title: "p", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, Type: domain.AssetMixDraft, Path: "draft", Filename: "draft", MIMEType: "video/mp4", SHA256: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	firstReview := now.Add(time.Minute)
+	got, err := repo.SyncStageFromAssets(context.Background(), pid, firstReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReadyAt == nil || !got.ReadyAt.Equal(firstReview) {
+		t.Fatalf("first review ready_at=%v, want %v", got.ReadyAt, firstReview)
+	}
+
+	originalReadyAt := now.Add(-time.Hour)
+	if _, err := db.Exec(`UPDATE projects SET stage='mixing',ready_at=? WHERE id=?`, originalReadyAt, pid); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.SyncStageFromAssets(context.Background(), pid, firstReview.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReadyAt == nil || !got.ReadyAt.Equal(originalReadyAt) {
+		t.Fatalf("existing ready_at=%v, want %v", got.ReadyAt, originalReadyAt)
+	}
+}
+
+func TestSyncStageFromAssetsDoesNotOverwriteConcurrentArchivedStage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sync-cas.db")
+	db1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db1.Close()
+	db2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	now := time.Now().UTC()
+	aid, pid := uuid.NewString(), uuid.NewString()
+	if _, err := db1.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewProjectRepository(db1)
+	if err := repo.CreateProject(context.Background(), domain.Project{ID: pid, AccountID: aid, Title: "p", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, Type: domain.AssetContinuousScript, Path: "script", Filename: "script", MIMEType: "text/plain", SHA256: "script"}); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := db2.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(context.Background(), `ROLLBACK`)
+	result := make(chan error, 1)
+	go func() {
+		_, syncErr := repo.SyncStageFromAssets(context.Background(), pid, now.Add(time.Minute))
+		result <- syncErr
+	}()
+	// The second connection holds the writer lock, allowing Sync to observe the
+	// old stage and then wait at its write before the terminal transition commits.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if db1.Stats().InUse > 0 {
+			time.Sleep(50 * time.Millisecond)
+			if db1.Stats().InUse > 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("SyncStageFromAssets did not reach its blocked write")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := conn.ExecContext(context.Background(), `UPDATE projects SET stage='archived' WHERE id=?`, pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(context.Background(), `COMMIT`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SyncStageFromAssets did not finish after the concurrent commit")
+	}
+	got, err := repo.GetProject(context.Background(), pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stage != domain.StageArchived {
+		t.Fatalf("stage=%s, want archived", got.Stage)
 	}
 }
 
