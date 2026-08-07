@@ -164,7 +164,7 @@ func TestBuildExecCommandV2UsesExactArgumentsStdinAndManagedDirectory(t *testing
 		t.Fatalf("BuildExecCommand returned error: %v", err)
 	}
 	want := []string{
-		"codex", "--ask-for-approval", "never", "exec", "--json", "--skip-git-repo-check",
+		"codex", "--ask-for-approval", "never", "--sandbox", "workspace-write", "exec", "--json", "--skip-git-repo-check",
 		"-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`,
 		"--output-schema", cfg.ResultSchema,
 		"--output-last-message", cfg.OutputLastMessage,
@@ -316,7 +316,7 @@ func TestBuildExecCommandCanonicalizesAbsolutePaths(t *testing.T) {
 	}
 	wantSchema := filepath.Join(ctx.WorkspaceDir, "schema.json")
 	wantLast := filepath.Join(ctx.ProjectDir, "last.json")
-	wantArgs := []string{"codex", "--ask-for-approval", "never", "exec", "--json", "--skip-git-repo-check", "-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`, "--output-schema", wantSchema, "--output-last-message", wantLast, "-C", ctx.ProjectDir, "-"}
+	wantArgs := []string{"codex", "--ask-for-approval", "never", "--sandbox", "workspace-write", "exec", "--json", "--skip-git-repo-check", "-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`, "--output-schema", wantSchema, "--output-last-message", wantLast, "-C", ctx.ProjectDir, "-"}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", cmd.Args, wantArgs)
 	}
@@ -374,7 +374,7 @@ func TestBuildResumeCommandV2UsesExactArgumentsStdinAndManagedDirectory(t *testi
 		t.Fatalf("BuildResumeCommand returned error: %v", err)
 	}
 	want := []string{
-		"codex", "--ask-for-approval", "never", "exec", "resume", "--json",
+		"codex", "--ask-for-approval", "never", "--sandbox", "workspace-write", "exec", "resume", "--json",
 		"-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`,
 		"--output-schema", cfg.ResultSchema,
 		"--output-last-message", cfg.OutputLastMessage,

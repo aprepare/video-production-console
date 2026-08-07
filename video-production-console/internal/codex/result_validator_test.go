@@ -143,29 +143,24 @@ func TestValidateResultEnvelopeJSONAcceptsPlaintextWorkspacePresenceMetadata(t *
 	}
 }
 
-func TestValidateResultEnvelopeRejectsArtifactAsAssetAndDirectoryMetadataMismatch(t *testing.T) {
+func TestValidateResultEnvelopeValidatesPlaintextWorkspaceDirectoryHash(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
-	dir := filepath.Join(out, "draft")
+	dir := filepath.Join(out, "workspace")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{}}
+	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
 	dirHash, err := HashResultDirectory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.AssetOutputs = []AssetOutput{{Type: domain.AssetMixDraft, Path: dir, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory", SHA256: dirHash}}
+	base.Artifacts = []ArtifactOutput{{Type: "plaintext_workspace", Path: dir, Description: "directory", SHA256: dirHash}}
 	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err != nil {
 		t.Fatal(err)
 	}
-	base.AssetOutputs[0].Size = 1
+	base.Artifacts[0].SHA256 = strings.Repeat("0", 64)
 	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
-		t.Fatal("expected directory size mismatch rejection")
-	}
-	base.AssetOutputs[0].Size = 0
-	base.Artifacts = []ArtifactOutput{{Type: "debug", Path: dir, Description: "engineering log"}}
-	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
-		t.Fatal("engineering artifact must not also be an asset")
+		t.Fatal("expected plaintext workspace hash mismatch rejection")
 	}
 }
 
@@ -328,12 +323,12 @@ func TestValidateResultEnvelopeNormalizesMontageCompatibilityFields(t *testing.T
 	if err := os.WriteFile(plan, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[{"type":"production_plan","path":` + mustJSONQuote(t, plan) + `,"kind":"file"}],"asset_outputs":[{"type":"mix_draft","kind":"directory","path":` + mustJSONQuote(t, workspace) + `,"metadata":{"registered_path":null}}],"warnings":[]}`)
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[{"type":"production_plan","path":` + mustJSONQuote(t, plan) + `,"kind":"file"},{"type":"plaintext_workspace","path":` + mustJSONQuote(t, workspace) + `,"kind":"directory","metadata":{"narration_present":true,"bgm_present":true,"sfx_present":true,"transitions_present":true}}],"asset_outputs":[],"warnings":[]}`)
 	got, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontageExecute, out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Artifacts[0].Description != "file" || got.AssetOutputs[0].StorageKind != domain.StorageDirectory || got.AssetOutputs[0].Filename != taskID || got.AssetOutputs[0].MIME != "inode/directory" || got.AssetOutputs[0].SHA256 == "" {
+	if got.Artifacts[0].Description != "file" || got.Artifacts[1].Description != "directory" || len(got.AssetOutputs) != 0 {
 		t.Fatalf("compatibility result was not normalized: %#v", got)
 	}
 }
