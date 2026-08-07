@@ -143,24 +143,47 @@ func TestValidateResultEnvelopeJSONAcceptsPlaintextWorkspacePresenceMetadata(t *
 	}
 }
 
-func TestValidateResultEnvelopeValidatesPlaintextWorkspaceDirectoryHash(t *testing.T) {
+func TestValidateResultEnvelopeRejectsMontageExecuteMixDraftAssetOutput(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
-	dir := filepath.Join(out, "workspace")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	plan := filepath.Join(out, "production_plan.json")
+	if err := os.WriteFile(plan, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "ok", Questions: []Question{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
-	dirHash, err := HashResultDirectory(dir)
+	workspace := filepath.Join(out, "workspace")
+	draft := filepath.Join(out, "draft")
+	for _, dir := range []string{workspace, draft} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaceHash, err := HashResultDirectory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.Artifacts = []ArtifactOutput{{Type: "plaintext_workspace", Path: dir, Description: "directory", SHA256: dirHash}}
-	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err != nil {
+	draftHash, err := HashResultDirectory(draft)
+	if err != nil {
 		t.Fatal(err)
 	}
-	base.Artifacts[0].SHA256 = strings.Repeat("0", 64)
-	if err := ValidateResultEnvelope(base, taskID, base.Action, out); err == nil {
-		t.Fatal("expected plaintext workspace hash mismatch rejection")
+	envelope := ResultEnvelope{
+		SchemaVersion: ProtocolSchemaVersion,
+		TaskID:        taskID,
+		Action:        domain.ActionMontageExecute,
+		Status:        "completed",
+		Summary:       "ok",
+		Questions:     []Question{},
+		Artifacts: []ArtifactOutput{
+			{Type: "production_plan", Path: plan, Description: "file"},
+			{Type: "plaintext_workspace", Path: workspace, Description: "directory", SHA256: workspaceHash},
+		},
+		AssetOutputs: []AssetOutput{{Type: domain.AssetMixDraft, Path: draft, StorageKind: domain.StorageDirectory, Filename: "draft", MIME: "inode/directory", SHA256: draftHash}},
+		Warnings:     []string{},
+	}
+	err = ValidateResultEnvelope(envelope, taskID, envelope.Action, out)
+	if err == nil {
+		t.Fatal("montage.execute must reject a Codex-produced mix_draft asset")
+	}
+	if got, want := err.Error(), `asset output 0 type "mix_draft" is not allowed for action "montage.execute"`; got != want {
+		t.Fatalf("rejection = %q, want action/type allowlist error %q", got, want)
 	}
 }
 
