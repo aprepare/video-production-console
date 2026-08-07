@@ -39,7 +39,7 @@ func (l *workflowTaskLauncher) LaunchTopicCommit(ctx context.Context, in workflo
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
-	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now, taskID: workflowStepTaskID(in.WorkflowID, "topic")})
+	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now, taskID: workflowStepTaskID(in.WorkflowID, "topic"), publish: l.publishPreparedTask})
 }
 
 func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
@@ -79,10 +79,33 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 	if err := l.preparer.Prepare(ctx, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}); err != nil {
 		return domain.CodexTask{}, err
 	}
-	if err := l.scheduler.Enqueue(ctx, task); err != nil {
+	if err := l.publishPreparedTask(ctx, task); err != nil {
 		return domain.CodexTask{}, err
 	}
 	return task, nil
+}
+
+func (l *workflowTaskLauncher) publishPreparedTask(ctx context.Context, expected domain.CodexTask) error {
+	notifyErr := l.scheduler.Enqueue(ctx, expected)
+	if notifyErr == nil {
+		return nil
+	}
+	tasks := store.NewTaskRepository(l.db)
+	persisted, readErr := tasks.Get(ctx, expected.ID)
+	if readErr != nil {
+		return errors.Join(notifyErr, readErr)
+	}
+	projectMatches := (expected.ProjectID == nil && persisted.ProjectID == nil) || (expected.ProjectID != nil && persisted.ProjectID != nil && *expected.ProjectID == *persisted.ProjectID)
+	identityMatches := projectMatches && persisted.AccountID == expected.AccountID && persisted.Type == expected.Type && persisted.SkillName == expected.SkillName && persisted.Action == expected.Action && persisted.ModelName == expected.ModelName && persisted.ReasoningEffort == expected.ReasoningEffort
+	if !identityMatches {
+		return errors.Join(notifyErr, errors.New("durable workflow task identity mismatch"))
+	}
+	snapshot, path, manifestErr := tasks.PreparedManifest(ctx, expected.ID)
+	if manifestErr != nil || strings.TrimSpace(snapshot) == "" || strings.TrimSpace(path) == "" {
+		return errors.Join(notifyErr, manifestErr, errors.New("durable workflow task manifest is missing"))
+	}
+	_ = tasks.AppendEvent(ctx, expected.ID, domain.TaskEvent{Kind: "workflow_scheduler_notify_warning", Level: "warning", DisplayText: notifyErr.Error()})
+	return nil
 }
 
 func workflowStepTaskID(workflowID, step string) string {

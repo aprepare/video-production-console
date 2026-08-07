@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -11,6 +12,123 @@ import (
 	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 )
+
+func TestTaskRepositoryEnsurePreparedTaskPublishesTaskAndManifestAtomically(t *testing.T) {
+	db, err := Open(t.TempDir() + "/prepared.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now)
+	_, _ = db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('s','finance-viral-remix','skill','abc','[]',?,?)`, now, now)
+	repo := NewTaskRepository(db)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCommit := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseCommit()
+	repo.beforePreparedCommit = func() error { close(entered); <-release; return nil }
+	task := domain.CodexTask{ID: "prepared", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "manifest prompt", ModelName: "m", ReasoningEffort: "high", CreatedAt: now}
+	done := make(chan error, 1)
+	go func() { _, e := repo.EnsurePreparedTask(context.Background(), task, "s", "manifest.json"); done <- e }()
+	<-entered
+	type listResult struct {
+		tasks []domain.CodexTask
+		err   error
+	}
+	listed := make(chan listResult, 1)
+	listCtx, cancelList := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelList()
+	go func() {
+		tasks, e := NewTaskRepository(db).List(listCtx, "", domain.TaskQueued)
+		listed <- listResult{tasks, e}
+	}()
+	var result listResult
+	haveResult := false
+	select {
+	case result = <-listed:
+		haveResult = true
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		for _, got := range result.tasks {
+			if got.ID == task.ID {
+				t.Fatal("task visible before prepared transaction committed")
+			}
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseCommit()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !haveResult {
+		result = <-listed
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	snapshot, path, err := repo.PreparedManifest(context.Background(), task.ID)
+	if err != nil || snapshot != "s" || path != "manifest.json" {
+		t.Fatalf("snapshot=%q path=%q err=%v", snapshot, path, err)
+	}
+}
+
+func TestTaskRepositoryEnsurePreparedTaskFailureRollsBackTaskRow(t *testing.T) {
+	db, err := Open(t.TempDir() + "/prepared-fail.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now)
+	_, _ = db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('s','finance-viral-remix','skill','abc','[]',?,?)`, now, now)
+	repo := NewTaskRepository(db)
+	repo.beforePreparedCommit = func() error { return errors.New("manifest metadata failed") }
+	task := domain.CodexTask{ID: "rollback", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "p", ModelName: "m", ReasoningEffort: "high", CreatedAt: now}
+	if _, err := repo.EnsurePreparedTask(context.Background(), task, "s", "manifest.json"); err == nil {
+		t.Fatal("expected failure")
+	}
+	if _, err := repo.Get(context.Background(), task.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("task err=%v", err)
+	}
+}
+
+func TestTaskRepositoryEnsurePreparedTaskRejectsIdentityAndRunningManifestChanges(t *testing.T) {
+	db, err := Open(t.TempDir() + "/prepared-conflict.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now)
+	_, _ = db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('s','finance-viral-remix','skill','abc','[]',?,?)`, now, now)
+	repo := NewTaskRepository(db)
+	task := domain.CodexTask{ID: "conflict", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "p", ModelName: "m", ReasoningEffort: "high", CreatedAt: now}
+	if _, err := repo.EnsurePreparedTask(context.Background(), task, "s", "manifest.json"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.EnsurePreparedTask(context.Background(), task, "s", "manifest.json"); err != nil || got.ID != task.ID {
+		t.Fatalf("idempotent ensure=%+v err=%v", got, err)
+	}
+	changed := task
+	changed.Action = domain.ActionRemixStandard
+	if _, err := repo.EnsurePreparedTask(context.Background(), changed, "s", "manifest.json"); err == nil {
+		t.Fatal("expected identity conflict")
+	}
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	changed = task
+	changed.PromptSnapshot = "replacement"
+	if _, err := repo.EnsurePreparedTask(context.Background(), changed, "s", "other.json"); err == nil {
+		t.Fatal("expected running manifest conflict")
+	}
+	snapshot, path, err := repo.PreparedManifest(context.Background(), task.ID)
+	if err != nil || snapshot != "s" || path != "manifest.json" {
+		t.Fatalf("snapshot=%q path=%q err=%v", snapshot, path, err)
+	}
+}
 
 func TestTaskRepositoryPersistsTaskEventsAndStatus(t *testing.T) {
 	db, err := Open(t.TempDir() + "/test.db")

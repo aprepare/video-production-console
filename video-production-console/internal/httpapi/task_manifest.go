@@ -194,17 +194,10 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	// incomplete manifest.
 	if p.db != nil {
 		tasks := store.NewTaskRepository(p.db)
-		if _, readErr := tasks.Get(ctx, task.ID); errors.Is(readErr, sql.ErrNoRows) {
-			task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
-			task.Transport, task.CompletionPhase = codex.TransportLegacyExec, ""
-			if createErr := tasks.CreateV2(ctx, task); createErr != nil {
-				return fmt.Errorf("persist prepared task: %w", createErr)
-			}
-		} else if readErr != nil {
-			return fmt.Errorf("read prepared task: %w", readErr)
-		}
-		if err := tasks.SetPreparedManifest(ctx, task.ID, snapshot.ID, manifestPath); err != nil {
-			return fmt.Errorf("record prepared task manifest: %w", err)
+		task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
+		task.Transport, task.CompletionPhase = codex.TransportLegacyExec, ""
+		if _, err := tasks.EnsurePreparedTask(ctx, task, snapshot.ID, manifestPath); err != nil {
+			return fmt.Errorf("persist prepared task: %w", err)
 		}
 	}
 	return nil

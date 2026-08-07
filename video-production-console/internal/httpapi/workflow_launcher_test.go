@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -19,13 +20,14 @@ import (
 type workflowLauncherScheduler struct {
 	mu    sync.Mutex
 	tasks []domain.CodexTask
+	err   error
 }
 
 func (s *workflowLauncherScheduler) Enqueue(_ context.Context, task domain.CodexTask) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
-	return nil
+	return s.err
 }
 func (*workflowLauncherScheduler) Resume(context.Context, string, string) error { return nil }
 func (*workflowLauncherScheduler) Cancel(context.Context, string) error         { return nil }
@@ -45,7 +47,8 @@ func (p *workflowLauncherPreparer) Prepare(ctx context.Context, task domain.Code
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
-	return p.repo.CreateV2(ctx, task)
+	_, err := p.repo.EnsurePreparedTask(ctx, task, "workflow-snapshot", filepath.Join("manifests", task.ID+".json"))
+	return err
 }
 
 type workflowModelResolver struct{ got taskmodel.Selection }
@@ -168,6 +171,69 @@ func TestWorkflowTaskLauncherTopicCommitPreservesWorkflowModel(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskLauncherTreatsPreparedTaskAsDurableWhenSchedulerNotifyFails(t *testing.T) {
+	for _, step := range []string{"topic", "remix"} {
+		t.Run(step, func(t *testing.T) {
+			db, project, card := workflowLauncherFixture(t)
+			if step == "topic" {
+				addWorkflowTopicSelection(t, db, project)
+			}
+			scheduler := &workflowLauncherScheduler{err: errors.New("wake failed")}
+			preparer := &workflowLauncherPreparer{repo: store.NewTaskRepository(db)}
+			launcher := NewWorkflowTaskLauncher(db, scheduler, preparer, nil)
+			in := workflow.LaunchTask{WorkflowID: uuid.NewString(), Project: project, TopicCard: &card, ModelName: "m", ReasoningEffort: "high", Now: time.Now().UTC()}
+			var task domain.CodexTask
+			var err error
+			if step == "topic" {
+				task, err = launcher.LaunchTopicCommit(context.Background(), in)
+			} else {
+				task, err = launcher.LaunchRemixFromTopicCard(context.Background(), in)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted, readErr := store.NewTaskRepository(db).Get(context.Background(), task.ID)
+			if readErr != nil || persisted.Status != domain.TaskQueued {
+				t.Fatalf("task=%+v err=%v", persisted, readErr)
+			}
+			events, _ := store.NewTaskRepository(db).Events(context.Background(), task.ID)
+			if len(events) == 0 || events[len(events)-1].Kind != "workflow_scheduler_notify_warning" {
+				t.Fatalf("events=%+v", events)
+			}
+		})
+	}
+}
+
+func TestWorkflowTaskLauncherRejectsDeterministicIdentityConflict(t *testing.T) {
+	db, project, card := workflowLauncherFixture(t)
+	repo := store.NewTaskRepository(db)
+	workflowID := uuid.NewString()
+	projectID := project.ID
+	conflict := domain.CodexTask{ID: workflowStepTaskID(workflowID, "remix"), ProjectID: &projectID, AccountID: project.AccountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "conflict", ModelName: "m", ReasoningEffort: "high", CreatedAt: time.Now().UTC()}
+	if _, err := repo.EnsurePreparedTask(context.Background(), conflict, "workflow-snapshot", "conflict.json"); err != nil {
+		t.Fatal(err)
+	}
+	launcher := NewWorkflowTaskLauncher(db, &workflowLauncherScheduler{}, &workflowLauncherPreparer{repo: repo}, nil)
+	if _, err := launcher.LaunchRemixFromTopicCard(context.Background(), workflow.LaunchTask{WorkflowID: workflowID, Project: project, TopicCard: &card, ModelName: "m", ReasoningEffort: "high", Now: time.Now().UTC()}); err == nil {
+		t.Fatal("expected identity conflict")
+	}
+}
+
+func TestWorkflowTaskLauncherNotifyFailureDoesNotFailWorkflow(t *testing.T) {
+	db, project, _ := workflowLauncherFixture(t)
+	scheduler := &workflowLauncherScheduler{err: errors.New("wake failed")}
+	repo := store.NewTaskRepository(db)
+	launcher := NewWorkflowTaskLauncher(db, scheduler, &workflowLauncherPreparer{repo: repo}, nil)
+	coordinator := workflow.NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	run, err := coordinator.Start(context.Background(), workflow.StartRemix{ProjectID: project.ID, AccountID: project.AccountID, ModelName: "m", ReasoningEffort: "high", Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != domain.WorkflowRunning || run.CurrentStep != domain.WorkflowStepRemix || run.RemixTaskID == nil {
+		t.Fatalf("run=%+v", run)
+	}
+}
+
 func workflowLauncherFixture(t *testing.T) (*sql.DB, domain.Project, domain.AssetVersion) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "launcher.db"))
@@ -179,6 +245,9 @@ func workflowLauncherFixture(t *testing.T) (*sql.DB, domain.Project, domain.Asse
 	accountID, projectID := uuid.NewString(), uuid.NewString()
 	_, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('workflow-snapshot','finance-viral-remix','skill','abc','[]',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	project := domain.Project{ID: projectID, AccountID: accountID, Title: "p", CreatedAt: now, UpdatedAt: now}

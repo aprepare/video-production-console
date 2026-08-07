@@ -127,9 +127,10 @@ func findProjectTopicSelection(ctx context.Context, db *sql.DB, project domain.P
 }
 
 type topicCommitLaunch struct {
-	model  taskmodel.Selection
-	now    time.Time
-	taskID string
+	model   taskmodel.Selection
+	now     time.Time
+	taskID  string
+	publish func(context.Context, domain.CodexTask) error
 }
 
 func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver, project domain.Project, selection projectTopicSelection, options ...topicCommitLaunch) (domain.CodexTask, error) {
@@ -189,7 +190,11 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 	}); err != nil {
 		return domain.CodexTask{}, err
 	}
-	if err := scheduler.Enqueue(ctx, task); err != nil {
+	publish := scheduler.Enqueue
+	if len(options) > 0 && options[0].publish != nil {
+		publish = options[0].publish
+	}
+	if err := publish(ctx, task); err != nil {
 		return domain.CodexTask{}, err
 	}
 	_ = store.NewIdeaRepository(db).LinkProject(ctx, selection.SessionID, project.ID, project.AccountID)

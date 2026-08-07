@@ -17,7 +17,10 @@ import (
 const taskColumns = `id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,result_summary,error_code,error_message,created_at,started_at,finished_at`
 const formalTaskClientKeyPrefix = "__formal_task__:"
 
-type TaskRepository struct{ db *sql.DB }
+type TaskRepository struct {
+	db                   *sql.DB
+	beforePreparedCommit func() error
+}
 
 var ErrOutputRetryNotEligible = errors.New("task output is not eligible for completion retry")
 
@@ -113,6 +116,71 @@ func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) er
 	}
 	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt)
 	return err
+}
+
+// EnsurePreparedTask atomically publishes a formal task and its prepared
+// manifest identity. A dispatcher can never observe the task without both.
+func (r *TaskRepository) EnsurePreparedTask(ctx context.Context, task domain.CodexTask, skillSnapshotID, manifestPath string) (domain.CodexTask, error) {
+	if strings.TrimSpace(string(task.Action)) == "" || strings.TrimSpace(task.SkillName) == "" || strings.TrimSpace(skillSnapshotID) == "" || strings.TrimSpace(manifestPath) == "" || task.Status != domain.TaskQueued {
+		return domain.CodexTask{}, fmt.Errorf("queued task action, skill, snapshot, and manifest are required")
+	}
+	selection, err := taskSelection(task)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	phase, transport, err := normalizeTaskTransport(task.CompletionPhase, task.Transport, true)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	err = r.immediate(ctx, "ensure prepared task", func(q assetDBTX, now time.Time) error {
+		var project sql.NullString
+		var account, typ, skill string
+		var action domain.TaskAction
+		var status domain.TaskStatus
+		var prompt, model, effort, existingPhase, existingTransport string
+		var snapshot, path sql.NullString
+		readErr := q.QueryRowContext(ctx, `SELECT project_id,account_id,type,skill_name,action,status,prompt_snapshot,model_name,reasoning_effort,completion_phase,transport,skill_snapshot_id,manifest_path FROM codex_tasks WHERE id=?`, task.ID).Scan(&project, &account, &typ, &skill, &action, &status, &prompt, &model, &effort, &existingPhase, &existingTransport, &snapshot, &path)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			_, insertErr := q.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,skill_snapshot_id,manifest_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, phase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, skillSnapshotID, manifestPath, task.CreatedAt)
+			if insertErr != nil {
+				return insertErr
+			}
+		} else if readErr != nil {
+			return readErr
+		} else {
+			projectMatches := (task.ProjectID == nil && !project.Valid) || (task.ProjectID != nil && project.Valid && *task.ProjectID == project.String)
+			identityMatches := projectMatches && account == task.AccountID && typ == task.Type && skill == task.SkillName && action == task.Action && model == selection.Model && effort == selection.ReasoningEffort && existingPhase == phase && existingTransport == transport
+			if !identityMatches {
+				return fmt.Errorf("prepared task identity conflict")
+			}
+			if snapshot.Valid || path.Valid {
+				if !snapshot.Valid || !path.Valid || snapshot.String != skillSnapshotID || path.String != manifestPath || prompt != task.PromptSnapshot {
+					return fmt.Errorf("prepared task manifest conflict")
+				}
+			} else {
+				if status != domain.TaskQueued {
+					return fmt.Errorf("cannot prepare task in status %s", status)
+				}
+				if _, updateErr := q.ExecContext(ctx, `UPDATE codex_tasks SET prompt_snapshot=?,skill_snapshot_id=?,manifest_path=? WHERE id=? AND status=? AND skill_snapshot_id IS NULL AND manifest_path IS NULL`, task.PromptSnapshot, skillSnapshotID, manifestPath, task.ID, domain.TaskQueued); updateErr != nil {
+					return updateErr
+				}
+			}
+		}
+		if r.beforePreparedCommit != nil {
+			return r.beforePreparedCommit()
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	return r.Get(ctx, task.ID)
+}
+
+func (r *TaskRepository) PreparedManifest(ctx context.Context, id string) (string, string, error) {
+	var snapshot, path string
+	err := r.db.QueryRowContext(ctx, `SELECT skill_snapshot_id,manifest_path FROM codex_tasks WHERE id=? AND skill_snapshot_id IS NOT NULL AND manifest_path IS NOT NULL`, id).Scan(&snapshot, &path)
+	return snapshot, path, err
 }
 
 func taskSelection(task domain.CodexTask) (taskmodel.Selection, error) {
