@@ -126,6 +126,183 @@ type sqlDBForManifestTest struct {
 	root string
 }
 
+func prepareMontageManifestFixture(t *testing.T, withPublishingPackage bool) (*taskManifestPreparer, domain.CodexTask, string) {
+	t.Helper()
+	db, accountID, projectID, root := setupManifestTask(t, false)
+	if _, err := db.db.Exec(`UPDATE accounts SET name=? WHERE id=?`, "财富觉醒02", accountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE projects SET title=? WHERE id=?`, "项目兜底", projectID); err != nil {
+		t.Fatal(err)
+	}
+	backgroundDigest := sha256.Sum256([]byte("background"))
+	if _, err := db.db.Exec(`UPDATE asset_versions SET sha256=? WHERE account_id=? AND type=?`, hex.EncodeToString(backgroundDigest[:]), accountID, domain.AssetAccountBackground); err != nil {
+		t.Fatal(err)
+	}
+	assets := store.NewAssetRepository(db.db)
+	for _, item := range []struct {
+		typeName domain.AssetType
+		name     string
+		mime     string
+	}{
+		{domain.AssetContinuousScript, "script.txt", "text/plain"},
+		{domain.AssetNarration, "voice.wav", "audio/wav"},
+		{domain.AssetSubtitleSRT, "subtitles.srt", "application/x-subrip"},
+	} {
+		path := filepath.Join(root, "projects", projectID, string(item.typeName), item.name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		data := []byte(item.name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(data)
+		if _, err := assets.AddVersion(context.Background(), store.AddAssetVersion{
+			ProjectID: &projectID, AccountID: accountID, Type: item.typeName,
+			Path: path, Filename: item.name, MIMEType: item.mime, Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:]),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if withPublishingPackage {
+		packageData := []byte(`{"short_titles":["存款大搬家","不会使用第二条"]}`)
+		packagePath := filepath.Join(root, "projects", projectID, "publishing_package.json")
+		if err := os.WriteFile(packagePath, packageData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(packageData)
+		remixTask := domain.CodexTask{
+			ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Type: "remix",
+			SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced,
+			Status: domain.TaskQueued, CreatedAt: time.Now().UTC().Add(-time.Minute),
+		}
+		tasks := store.NewTaskRepository(db.db)
+		if err := tasks.CreateV2(context.Background(), remixTask); err != nil {
+			t.Fatal(err)
+		}
+		if err := tasks.CompleteWithResult(context.Background(), remixTask.ID, store.TaskResultWrite{Status: domain.TaskCompleted}, []store.TaskArtifact{{
+			Kind: "publishing_package", Path: packagePath, Filename: "publishing_package.json",
+			MIMEType: "application/json", Size: int64(len(packageData)), SHA256: hex.EncodeToString(digest[:]),
+		}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	machineProfile := filepath.Join(root, "machine-profile.json")
+	if err := os.WriteFile(machineProfile, []byte(`{"platform":"windows"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Type: "montage",
+		SkillName: "jianying-montage-draft", Action: domain.ActionMontageExecute, Status: domain.TaskQueued,
+	}
+	snapshot := domain.SkillSnapshot{
+		ID: uuid.NewString(), Name: "jianying-montage-draft", Path: filepath.Join(root, "SKILL.md"),
+		SHA256: strings.Repeat("a", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+	}
+	if err := store.NewSkillRepository(db.db).Save(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	preparer := &taskManifestPreparer{
+		db: db.db, projects: store.NewProjectRepository(db.db), assets: assets,
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{
+			DataRoot: root, MachineProfilePath: machineProfile,
+		}}},
+		skills: manifestTestSkills{snapshot: snapshot},
+	}
+	return preparer, task, filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+}
+
+func TestTaskManifestPreparerFreezesDraftDisplayNameFromFirstShortTitle(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, true)
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_"+task.ID[len(task.ID)-6:] {
+		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
+	}
+}
+
+func TestTaskManifestPreparerFallsBackToProjectTitleWithoutPublishingPackage(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_项目兜底_"+task.ID[len(task.ID)-6:] {
+		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
+	}
+}
+
+func TestMontageResultSeparatesDisplayNameFromUUIDStorageName(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, false)
+	taskID := uuid.NewString()
+	displayName := "财富觉醒02_存款大搬家_" + taskID[len(taskID)-6:]
+	manifestPath := filepath.Join(root, "projects", projectID, "tasks", taskID, "task_manifest.json")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := json.Marshal(codex.TaskManifest{NonSecretSettings: codex.ManifestSettings{DraftDisplayName: displayName}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := domain.SkillSnapshot{
+		ID: uuid.NewString(), Name: "jianying-montage-draft", Path: filepath.Join(root, "SKILL.md"),
+		SHA256: strings.Repeat("b", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+	}
+	if err := store.NewSkillRepository(db.db).Save(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.CodexTask{
+		ID: taskID, ProjectID: &projectID, AccountID: accountID, Type: "montage", SkillName: "jianying-montage-draft",
+		Action: domain.ActionMontageExecute, Status: domain.TaskQueued, CreatedAt: time.Now().UTC(),
+	}
+	tasks := store.NewTaskRepository(db.db)
+	if _, err := tasks.EnsurePreparedTask(context.Background(), task, snapshot.ID, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	registeredPath := filepath.Join(root, "jianying", taskID)
+	if err := os.MkdirAll(registeredPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewAssetRepository(db.db).AddVersion(context.Background(), store.AddAssetVersion{
+		ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory,
+		Path: registeredPath, Filename: taskID, MIMEType: "application/x-jianying-draft", SHA256: strings.Repeat("c", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := (&taskResultsHandler{repo: tasks}).montageResult(httptest.NewRequest(http.MethodGet, "/", nil), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view["display_name"] != displayName || view["storage_name"] != taskID {
+		t.Fatalf("montage identity=%#v", view)
+	}
+	registered, ok := view["registered_asset"].(map[string]any)
+	if !ok || registered["display_name"] != displayName || registered["storage_name"] != taskID || registered["path"] != registeredPath {
+		t.Fatalf("registered asset=%#v", view["registered_asset"])
+	}
+}
+
 func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, true)
 	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}

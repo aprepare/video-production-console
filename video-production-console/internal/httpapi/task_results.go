@@ -1,18 +1,19 @@
 package httpapi
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/publishing"
 	"video-production-console/internal/store"
 )
 
@@ -65,21 +66,7 @@ func (h *taskResultsHandler) result(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, view)
 }
 
-type publishingTitleRecommendation struct {
-	Rank   int    `json:"rank"`
-	Title  string `json:"title"`
-	Reason string `json:"reason"`
-}
-
-type publishingPackageView struct {
-	Titles       []string                        `json:"titles"`
-	TopTitles    []publishingTitleRecommendation `json:"top_titles"`
-	ShortTitles  []string                        `json:"short_titles"`
-	Descriptions []string                        `json:"descriptions"`
-	Description  string                          `json:"description"`
-	Topics       []string                        `json:"topics"`
-	CTA          string                          `json:"cta"`
-}
+type publishingPackageView = publishing.Package
 
 func isRemixAction(action domain.TaskAction) bool {
 	switch action {
@@ -99,26 +86,9 @@ func (h *taskResultsHandler) publishingPackage(r *http.Request, taskID string) (
 		if artifact.Kind != "publishing_package" {
 			continue
 		}
-		info, statErr := os.Lstat(artifact.Path)
-		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, errors.New("publishing package is unavailable")
-		}
-		file, openErr := os.Open(artifact.Path)
-		if openErr != nil {
-			return nil, openErr
-		}
-		data, readErr := io.ReadAll(io.LimitReader(file, 512*1024+1))
-		_ = file.Close()
-		if readErr != nil || len(data) > 512*1024 {
-			return nil, errors.New("publishing package could not be read")
-		}
-		digest := sha256.Sum256(data)
-		if artifact.SHA256 != "" && !strings.EqualFold(hex.EncodeToString(digest[:]), artifact.SHA256) {
-			return nil, errors.New("publishing package changed after validation")
-		}
-		var packageView publishingPackageView
-		if json.Unmarshal(data, &packageView) != nil {
-			return nil, errors.New("publishing package is invalid")
+		packageView, readErr := (publishing.Reader{}).Read(artifact.Path, artifact.SHA256)
+		if readErr != nil {
+			return nil, readErr
 		}
 		return &packageView, nil
 	}
@@ -126,6 +96,8 @@ func (h *taskResultsHandler) publishingPackage(r *http.Request, taskID string) (
 }
 
 func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTask) (map[string]any, error) {
+	displayName := h.draftDisplayName(r, task.ID)
+	storageName := ""
 	attempts, err := store.NewMontageRepository(h.repo.DB()).Attempts(r.Context(), task.ID)
 	if err != nil {
 		return nil, err
@@ -153,7 +125,8 @@ func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTas
 		}
 		for _, asset := range assets {
 			if asset.Type == domain.AssetMixDraft && asset.State == domain.AssetReady {
-				registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "created_at": asset.CreatedAt}
+				storageName = filepath.Base(filepath.Clean(asset.Path))
+				registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "display_name": displayName, "storage_name": storageName, "created_at": asset.CreatedAt}
 				break
 			}
 		}
@@ -162,7 +135,32 @@ func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTas
 	if len(attempts) > 0 && workspace != nil {
 		canRetry = attempts[0].State == domain.RegistrationFailed || attempts[0].State == domain.RegistrationInterrupted
 	}
-	return map[string]any{"phase": task.CompletionPhase, "workspace": workspace, "registration_attempts": registrationViews, "registered_asset": registeredAsset, "can_retry_registration": canRetry}, nil
+	return map[string]any{"phase": task.CompletionPhase, "workspace": workspace, "registration_attempts": registrationViews, "registered_asset": registeredAsset, "display_name": displayName, "storage_name": storageName, "can_retry_registration": canRetry}, nil
+}
+
+func (h *taskResultsHandler) draftDisplayName(r *http.Request, taskID string) string {
+	_, manifestPath, err := h.repo.PreparedManifest(r.Context(), taskID)
+	if err != nil {
+		return ""
+	}
+	info, err := os.Lstat(manifestPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return ""
+	}
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return ""
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+	_ = file.Close()
+	if readErr != nil || len(data) > 1024*1024 {
+		return ""
+	}
+	var manifest codex.TaskManifest
+	if json.Unmarshal(data, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.NonSecretSettings.DraftDisplayName)
 }
 func (h *taskResultsHandler) diagnostics(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)

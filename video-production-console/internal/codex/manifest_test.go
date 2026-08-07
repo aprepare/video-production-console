@@ -38,7 +38,7 @@ func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 		Task: domain.CodexTask{ID: taskID}, Project: &project, Inputs: inputs,
 		Action: domain.ActionMontagePlan, OutputDir: filepath.Join(root, "tasks", taskID, "output"),
 		SkillSnapshot:     domain.SkillSnapshot{ID: uuid.NewString(), Name: "jianying-montage-draft"},
-		NonSecretSettings: ManifestSettings{MediaRoot: `C:\media`, MachineProfilePath: profile},
+		NonSecretSettings: ManifestSettings{MediaRoot: `C:\media`, MachineProfilePath: profile, DraftDisplayName: "财富觉醒02_存款大搬家_b66205"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +48,9 @@ func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	}
 	if manifest.Skill != "jianying-montage-draft" || manifest.Action != domain.ActionMontagePlan {
 		t.Fatalf("wrong action mapping: %#v", manifest)
+	}
+	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_b66205" {
+		t.Fatalf("draft display name was not frozen: %#v", manifest.NonSecretSettings)
 	}
 	for _, role := range []string{"continuous_script", "narration", "subtitle_srt", "account_background"} {
 		if !manifestHasRole(manifest, role) {

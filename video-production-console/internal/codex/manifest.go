@@ -109,6 +109,7 @@ type ManifestSettings struct {
 	MediaRoot            string `json:"media_root,omitempty"`
 	JianyingRoot         string `json:"jianying_root,omitempty"`
 	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
+	DraftDisplayName     string `json:"draft_display_name,omitempty"`
 }
 
 type BuildManifestInput struct {

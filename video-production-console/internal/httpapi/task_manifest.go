@@ -12,6 +12,8 @@ import (
 
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/montage"
+	"video-production-console/internal/publishing"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
@@ -143,6 +145,12 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
 		MachineProfilePath: machineProfilePath,
 	}
+	if task.Action == domain.ActionMontageExecute {
+		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)
+		if err != nil {
+			return fmt.Errorf("resolve draft display name: %w", err)
+		}
+	}
 	// Project-less planning tasks use their task ID as the managed root; this
 	// matches the scheduler's projectIDForTask fallback and keeps the manifest
 	// discoverable by the Codex command factory.
@@ -201,6 +209,43 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 	}
 	return nil
+}
+
+func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task domain.CodexTask, project domain.Project) (string, error) {
+	if p.db == nil {
+		return "", fmt.Errorf("task database is unavailable")
+	}
+	account, err := store.NewAccountRepository(p.db).Get(ctx, project.AccountID)
+	if err != nil {
+		return "", fmt.Errorf("read account: %w", err)
+	}
+	shortTitle := ""
+	tasks := store.NewTaskRepository(p.db)
+	completed, err := tasks.List(ctx, project.ID, domain.TaskCompleted)
+	if err != nil {
+		return "", fmt.Errorf("list completed project tasks: %w", err)
+	}
+	for _, completedTask := range completed {
+		if !isRemixAction(completedTask.Action) {
+			continue
+		}
+		artifacts, readErr := tasks.Artifacts(ctx, completedTask.ID)
+		if readErr != nil {
+			return "", fmt.Errorf("read publishing artifacts: %w", readErr)
+		}
+		for _, artifact := range artifacts {
+			if artifact.Kind != "publishing_package" {
+				continue
+			}
+			packageView, packageErr := (publishing.Reader{}).Read(artifact.Path, artifact.SHA256)
+			if packageErr == nil && len(packageView.ShortTitles) > 0 {
+				shortTitle = strings.TrimSpace(packageView.ShortTitles[0])
+			}
+			break
+		}
+		break
+	}
+	return montage.BuildDraftDisplayName(account.Name, project.Title, shortTitle, task.ID), nil
 }
 
 // resolveStoredAssetPath keeps assets created by older console versions usable.
