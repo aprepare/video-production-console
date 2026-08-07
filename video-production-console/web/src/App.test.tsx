@@ -335,6 +335,9 @@ test("contains no legacy project drawer or bypass production controls in App sou
   expect(appSource).not.toContain("{selected && (\n        <div\n          className=\"drawer-backdrop\"");
   expect(appSource).not.toContain("×");
   expect(appSource).not.toContain("●");
+  expect(appSource).toContain('<details className="registered-directory-technical">');
+  expect(appSource).toContain('<summary>路径与文件清单</summary>');
+  for (const mojibake of ["锟", "�", "Ã", "鈥"]) expect(appSource).not.toContain(mojibake);
 });
 
 test.each([

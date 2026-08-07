@@ -509,6 +509,19 @@
 .montage-result.phase-agent_running { border-left-color: #648ba6; }
 
 .registered-directory { display: grid; gap: 10px; }
+.registered-directory-technical {
+  border-top: 1px solid #e1e9e5;
+  color: #50675d;
+  font-size: 11px;
+}
+.registered-directory-technical > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+.registered-directory-technical > dl { margin-top: 4px; }
 .registered-directory > button {
   justify-self: start;
   min-height: 44px;
@@ -521,12 +534,10 @@
 }
 .registered-directory > button:disabled { opacity: 0.5; }
 .directory-manifest {
-  border-top: 1px solid #e1e9e5;
-  padding-top: 9px;
+  padding-top: 4px;
   color: #50675d;
   font-size: 11px;
 }
-.directory-manifest summary { min-height: 44px; cursor: pointer; }
 .directory-manifest ul {
   max-height: 260px;
   margin: 4px 0 0;

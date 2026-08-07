@@ -2878,14 +2878,16 @@ function App() {
                 ) : null}
                 {taskOpen.montage.registered_asset ? (
                   <div className="registered-directory">
-                    <dl>
-                      <dt>正式项目资产</dt><dd>{taskOpen.montage.registered_asset.filename || "未命名草稿"}</dd>
-                      <dt>剪映路径</dt>
-                      <dd>{directoryManifest?.registered_path || taskOpen.montage.registered_asset.path}</dd>
-                    </dl>
-                    {directoryManifest ? (
-                      <details className="directory-manifest">
-                        <summary>目录文件清单（{directoryManifest.entries.length} 项）</summary>
+                    <details className="registered-directory-technical">
+                      <summary>路径与文件清单</summary>
+                      <dl>
+                        <dt>正式项目资产</dt><dd>{taskOpen.montage.registered_asset.filename || "未命名草稿"}</dd>
+                        <dt>剪映路径</dt>
+                        <dd>{directoryManifest?.registered_path || taskOpen.montage.registered_asset.path}</dd>
+                      </dl>
+                      {directoryManifest ? (
+                        <div className="directory-manifest">
+                          <p>目录文件清单（{directoryManifest.entries.length} 项）</p>
                         <ul>
                           {directoryManifest.entries.slice(0, 80).map((entry) => (
                             <li key={`${entry.kind}-${entry.path}`}>
@@ -2899,8 +2901,9 @@ function App() {
                         {directoryManifest.entries.length > 80 ? (
                           <p>清单较长，这里只展示前 80 项；目录共 {directoryManifest.entries.length} 项。</p>
                         ) : null}
-                      </details>
-                    ) : null}
+                        </div>
+                      ) : null}
+                    </details>
                     {isLoopbackBrowser ? (
                       <button
                         type="button"

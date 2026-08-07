@@ -1,6 +1,7 @@
 import {
   AudioLines,
   Captions,
+  ChevronDown,
   Clapperboard,
   ExternalLink,
   FileText,
@@ -98,6 +99,12 @@ export function ProjectAssets({
   const isPending = (_type: ProjectAssetUploadType) => pendingActions.length > 0;
   return (
     <section className="project-assets" aria-label="当前项目资产">
+      <details className="mobile-accordion" open>
+        <summary aria-label="收起或展开项目资产">
+          <span>项目资产</span>
+          <ChevronDown size={18} aria-hidden="true" />
+        </summary>
+        <div className="mobile-accordion__content">
       <div className="workbench-section-heading">
         <div>
           <span>PROJECT ASSETS</span>
@@ -198,6 +205,8 @@ export function ProjectAssets({
           </div>
         </article>
       </div>
+        </div>
+      </details>
     </section>
   );
 }

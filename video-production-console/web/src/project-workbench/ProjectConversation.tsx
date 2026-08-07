@@ -31,6 +31,12 @@ export function ProjectConversation({ task, onOpenConversation, onOpenTask }: Pr
 
   return (
     <section className="project-conversation" aria-label="Codex 对话摘要">
+      <details className="mobile-accordion" open>
+        <summary aria-label="收起或展开 Codex 对话">
+          <span>Codex 对话</span>
+          <ChevronDown size={18} aria-hidden="true" />
+        </summary>
+        <div className="mobile-accordion__content">
       <div className="workbench-section-heading">
         <div>
           <span>CODEX CONVERSATION</span>
@@ -79,6 +85,8 @@ export function ProjectConversation({ task, onOpenConversation, onOpenTask }: Pr
           <p>当前项目还没有 Codex 任务。执行主动作后，摘要会出现在这里。</p>
         </div>
       )}
+        </div>
+      </details>
     </section>
   );
 }

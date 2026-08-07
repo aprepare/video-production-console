@@ -337,3 +337,38 @@ test("keeps three workbench columns through 760 pixels and switches to one below
   expect(mobile).toContain("display: block");
   expect(css).not.toContain("@media (max-width: 1023px)");
 });
+
+test("provides native mobile accordions for project assets and conversation", () => {
+  const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
+  const assetToggle = screen.getByLabelText("收起或展开项目资产");
+  const conversationToggle = screen.getByLabelText("收起或展开 Codex 对话");
+  const assetDetails = assetToggle.closest("details") as HTMLDetailsElement | null;
+  const conversationDetails = conversationToggle.closest("details") as HTMLDetailsElement | null;
+
+  expect(assetDetails?.open).toBe(true);
+  expect(conversationDetails?.open).toBe(true);
+  fireEvent.click(assetToggle);
+  fireEvent.click(conversationToggle);
+  expect(assetDetails?.open).toBe(false);
+  expect(conversationDetails?.open).toBe(false);
+  expect(container.querySelectorAll(".mobile-accordion")).toHaveLength(2);
+});
+
+test("defines vertical mobile production, safe-area sticky action, touch targets, and reduced motion", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
+  const mobileStart = css.indexOf("@media (max-width: 759px)");
+  const reducedStart = css.indexOf("@media (prefers-reduced-motion", mobileStart);
+  const mobile = css.slice(mobileStart, reducedStart);
+  const reduced = css.slice(reducedStart);
+
+  expect(mobile).toContain(".production-rail");
+  expect(mobile).toContain("grid-template-columns: 1fr");
+  expect(mobile).toContain(".production-rail__line");
+  expect(mobile).toContain("width: 2px");
+  expect(mobile).toContain("position: sticky");
+  expect(mobile).toContain("env(safe-area-inset-bottom)");
+  expect(mobile).toContain("min-height: 44px");
+  expect(mobile).toContain(".mobile-accordion > summary");
+  expect(reduced).toContain("animation-duration: 0.01ms !important");
+  expect(reduced).toContain("scroll-behavior: auto !important");
+});
