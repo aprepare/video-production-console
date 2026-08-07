@@ -23,6 +23,7 @@ const workflowColumns = `id,project_id,account_id,kind,state,current_step,topic_
 type WorkflowRepository struct{ db *sql.DB }
 
 func NewWorkflowRepository(db *sql.DB) *WorkflowRepository { return &WorkflowRepository{db: db} }
+func (r *WorkflowRepository) DB() *sql.DB                  { return r.db }
 
 func (r *WorkflowRepository) BeginRemix(ctx context.Context, requested domain.ProjectWorkflowRun) (out domain.ProjectWorkflowRun, returnErr error) {
 	if requested.Kind == "" {
@@ -188,6 +189,23 @@ func (r *WorkflowRepository) Fail(ctx context.Context, runID, code, message stri
 
 func (r *WorkflowRepository) ActiveForProject(ctx context.Context, projectID string, kind domain.WorkflowKind) (domain.ProjectWorkflowRun, error) {
 	return queryWorkflow(ctx, r.db, `SELECT `+workflowColumns+` FROM project_workflow_runs WHERE project_id=? AND kind=? AND state='running'`, projectID, kind)
+}
+
+func (r *WorkflowRepository) Running(ctx context.Context, kind domain.WorkflowKind) ([]domain.ProjectWorkflowRun, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+workflowColumns+` FROM project_workflow_runs WHERE kind=? AND state='running' ORDER BY created_at,id`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProjectWorkflowRun
+	for rows.Next() {
+		var run domain.ProjectWorkflowRun
+		if err := scanWorkflow(rows, &run); err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
 }
 
 func (r *WorkflowRepository) ByTask(ctx context.Context, taskID string) (domain.ProjectWorkflowRun, error) {

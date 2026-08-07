@@ -162,10 +162,16 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 		return nil
 	}
 	if err := a.bindReceipt(ctx, task.ID, task.ChatSessionID, task.CodexThreadID, receipt.TurnID); err != nil {
-		persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_turn_bind_failed", err.Error())
-		return errors.Join(err, persistErr)
+		return a.failBindReceipt(ctx, task.ID, err)
 	}
 	return nil
+}
+
+func (a *TaskAdapter) failBindReceipt(ctx context.Context, taskID string, cause error) error {
+	if err := a.tasks.UpdateStatus(ctx, taskID, domain.TaskFailed, "", "task_turn_bind_failed", cause.Error()); err != nil {
+		return errors.Join(cause, err)
+	}
+	return errors.Join(cause, a.afterTerminal(ctx, taskID))
 }
 
 func (a *TaskAdapter) bindReceipt(ctx context.Context, taskID string, sessionID, threadID *string, turnID string) error {

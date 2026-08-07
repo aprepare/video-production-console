@@ -181,6 +181,109 @@ func TestRemixWorkflowBindingFailurePersistsFailedRun(t *testing.T) {
 	}
 }
 
+func TestRemixWorkflowReconcileInterruptedBoundTasksAndAllowsRestart(t *testing.T) {
+	for _, step := range []string{"topic", "remix"} {
+		t.Run(step, func(t *testing.T) {
+			db, accountID, projectID, now := remixFixture(t)
+			if step == "remix" {
+				addTopicCard(t, db, projectID, accountID)
+			}
+			launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+			coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+			run, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			taskID := run.TopicTaskID
+			if step == "remix" {
+				taskID = run.RemixTaskID
+			}
+			if err := store.NewTaskRepository(db).UpdateStatus(context.Background(), *taskID, domain.TaskInterrupted, "", "restart", "interrupted"); err != nil {
+				t.Fatal(err)
+			}
+			if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			failed, _ := store.NewWorkflowRepository(db).ByTask(context.Background(), *taskID)
+			if failed.State != domain.WorkflowFailed {
+				t.Fatalf("run=%+v", failed)
+			}
+			next, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now.Add(time.Minute)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next.ID == run.ID {
+				t.Fatalf("restart reused failed run %s", run.ID)
+			}
+		})
+	}
+}
+
+func TestRemixWorkflowObserverNoOpsForUnrelatedTerminalAndFailsRemixTerminal(t *testing.T) {
+	db, accountID, projectID, now := remixFixture(t)
+	launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+	coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	unrelated := domain.CodexTask{ID: uuid.NewString(), Status: domain.TaskFailed}
+	if err := coordinator.AfterTerminal(context.Background(), unrelated); err != nil {
+		t.Fatal(err)
+	}
+	addTopicCard(t, db, projectID, accountID)
+	run, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.NewTaskRepository(db).UpdateStatus(context.Background(), *run.RemixTaskID, domain.TaskFailed, "", "failed", "failed")
+	task, _ := store.NewTaskRepository(db).Get(context.Background(), *run.RemixTaskID)
+	if err := coordinator.AfterTerminal(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := store.NewWorkflowRepository(db).ByTask(context.Background(), task.ID)
+	if failed.State != domain.WorkflowFailed {
+		t.Fatalf("run=%+v", failed)
+	}
+}
+
+func TestRemixWorkflowConcurrentStartCreatesOneEffectiveTask(t *testing.T) {
+	db, accountID, projectID, now := remixFixture(t)
+	launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+	coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	var wg sync.WaitGroup
+	runs := make(chan domain.ProjectWorkflowRun, 8)
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			run, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now})
+			runs <- run
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(runs)
+	close(errs)
+	var id string
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for run := range runs {
+		if id == "" {
+			id = run.ID
+		}
+		if run.ID != id {
+			t.Fatalf("run ids %s %s", id, run.ID)
+		}
+	}
+	if len(launcher.topics) != 1 {
+		t.Fatalf("topic launches=%d", len(launcher.topics))
+	}
+}
+
 func remixFixture(t *testing.T) (*sql.DB, string, string, time.Time) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))

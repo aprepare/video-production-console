@@ -125,9 +125,12 @@ func main() {
 	defer legacyScheduler.Close()
 	remixCoordinator := workflow.NewRemixCoordinator(
 		store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db),
-		httpapi.NewWorkflowTaskLauncher(db, legacyScheduler, taskPreparer, nil),
+		httpapi.NewWorkflowTaskLauncher(db, legacyScheduler, taskPreparer, settingsService),
 	)
 	legacyScheduler.SetCompletionObserver(remixCoordinator)
+	if err := remixCoordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+		log.Fatalf("reconcile terminal remix workflows: %v", err)
+	}
 	var montageCoordinator *montage.Coordinator
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
 		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)

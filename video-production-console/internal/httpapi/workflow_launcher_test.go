@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,12 +12,18 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
 	"video-production-console/internal/workflow"
 )
 
-type workflowLauncherScheduler struct{ tasks []domain.CodexTask }
+type workflowLauncherScheduler struct {
+	mu    sync.Mutex
+	tasks []domain.CodexTask
+}
 
 func (s *workflowLauncherScheduler) Enqueue(_ context.Context, task domain.CodexTask) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
 	return nil
 }
@@ -29,13 +36,23 @@ func (*workflowLauncherScheduler) Snapshot() codex.SchedulerSnapshot {
 func (*workflowLauncherScheduler) Close() {}
 
 type workflowLauncherPreparer struct {
+	mu       sync.Mutex
 	repo     *store.TaskRepository
 	requests []TaskManifestRequest
 }
 
 func (p *workflowLauncherPreparer) Prepare(ctx context.Context, task domain.CodexTask, req TaskManifestRequest) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
 	return p.repo.CreateV2(ctx, task)
+}
+
+type workflowModelResolver struct{ got taskmodel.Selection }
+
+func (r *workflowModelResolver) ResolveTaskModel(_ context.Context, in taskmodel.Selection) (taskmodel.Selection, error) {
+	r.got = in
+	return taskmodel.Selection{Model: "normalized-model", ReasoningEffort: "xhigh"}, nil
 }
 
 func TestWorkflowTaskLauncherCreatesRemixWithWorkflowIdentityModelAndManifest(t *testing.T) {
@@ -79,6 +96,59 @@ func TestWorkflowTaskLauncherReusesExistingActiveRemix(t *testing.T) {
 	}
 	if second.ID != first.ID || len(scheduler.tasks) != 1 {
 		t.Fatalf("first=%s second=%s enqueues=%d", first.ID, second.ID, len(scheduler.tasks))
+	}
+}
+
+func TestWorkflowTaskLauncherReadyCardUsesResolverAndDoesNotAbsorbUnrelatedRemix(t *testing.T) {
+	db, project, card := workflowLauncherFixture(t)
+	repo := store.NewTaskRepository(db)
+	projectID := project.ID
+	unrelated := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: project.AccountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixFromTopic, Status: domain.TaskQueued, PromptSnapshot: "manual", ModelName: "normalized-model", ReasoningEffort: "xhigh", CreatedAt: time.Now().UTC()}
+	if err := repo.CreateV2(context.Background(), unrelated); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &workflowLauncherScheduler{}
+	preparer := &workflowLauncherPreparer{repo: repo}
+	resolver := &workflowModelResolver{}
+	launcher := NewWorkflowTaskLauncher(db, scheduler, preparer, resolver)
+	in := workflow.LaunchTask{WorkflowID: uuid.NewString(), Project: project, TopicCard: &card, ModelName: " raw-model ", ReasoningEffort: " HIGH ", Now: time.Now().UTC()}
+	first, err := launcher.LaunchRemixFromTopicCard(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == unrelated.ID || first.ModelName != "normalized-model" || first.ReasoningEffort != "xhigh" || resolver.got.Model != " raw-model " {
+		t.Fatalf("task=%+v resolver=%+v", first, resolver.got)
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	ids := make(chan string, n)
+	errs := make(chan error, n)
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task, e := launcher.LaunchRemixFromTopicCard(context.Background(), in)
+			if e == nil {
+				ids <- task.ID
+			}
+			errs <- e
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for e := range errs {
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	for id := range ids {
+		if id != first.ID {
+			t.Fatalf("duplicate identity %s != %s", id, first.ID)
+		}
+	}
+	if len(scheduler.tasks) != 1 {
+		t.Fatalf("enqueues=%d", len(scheduler.tasks))
 	}
 }
 

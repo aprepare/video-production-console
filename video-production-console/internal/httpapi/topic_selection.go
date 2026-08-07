@@ -127,8 +127,9 @@ func findProjectTopicSelection(ctx context.Context, db *sql.DB, project domain.P
 }
 
 type topicCommitLaunch struct {
-	model taskmodel.Selection
-	now   time.Time
+	model  taskmodel.Selection
+	now    time.Time
+	taskID string
 }
 
 func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver, project domain.Project, selection projectTopicSelection, options ...topicCommitLaunch) (domain.CodexTask, error) {
@@ -143,22 +144,38 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 			now = options[0].now
 		}
 	}
+	model, err := resolveTaskModel(ctx, models, requested)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
 	tasks := store.NewTaskRepository(db)
+	if len(options) > 0 && options[0].taskID != "" {
+		if existing, readErr := tasks.Get(ctx, options[0].taskID); readErr == nil {
+			if existing.Action != domain.ActionTopicCommit || existing.ProjectID == nil || *existing.ProjectID != project.ID || existing.AccountID != project.AccountID || existing.ModelName != model.Model || existing.ReasoningEffort != model.ReasoningEffort {
+				return domain.CodexTask{}, errors.New("workflow topic task identity conflict")
+			}
+			return existing, nil
+		} else if !errors.Is(readErr, sql.ErrNoRows) {
+			return domain.CodexTask{}, readErr
+		}
+	}
 	existing, err := tasks.List(ctx, project.ID, "")
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
 	for _, task := range existing {
-		modelMatches := requested.Model == "" || (task.ModelName == requested.Model && task.ReasoningEffort == requested.ReasoningEffort)
+		if len(options) > 0 && options[0].taskID != "" {
+			break
+		}
+		modelMatches := requested.Model == "" || (task.ModelName == model.Model && task.ReasoningEffort == model.ReasoningEffort)
 		if task.Action == domain.ActionTopicCommit && modelMatches && (task.Status == domain.TaskQueued || task.Status == domain.TaskRunning || task.Status == domain.TaskResuming || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput) {
 			return task, nil
 		}
 	}
-	model, err := resolveTaskModel(ctx, models, requested)
-	if err != nil {
-		return domain.CodexTask{}, err
-	}
 	taskID := uuid.NewString()
+	if len(options) > 0 && options[0].taskID != "" {
+		taskID = options[0].taskID
+	}
 	projectID := project.ID
 	task := domain.CodexTask{
 		ID: taskID, ProjectID: &projectID, AccountID: project.AccountID,

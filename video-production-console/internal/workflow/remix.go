@@ -40,6 +40,34 @@ type RemixCoordinator struct {
 	mu        sync.Mutex
 }
 
+func (c *RemixCoordinator) ReconcileTerminalWorkflows(ctx context.Context) error {
+	runs, err := c.workflows.Running(ctx, domain.WorkflowRemix)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		var taskID *string
+		if run.CurrentStep == domain.WorkflowStepRemix {
+			taskID = run.RemixTaskID
+		} else {
+			taskID = run.TopicTaskID
+		}
+		if taskID == nil {
+			continue
+		}
+		task, readErr := store.NewTaskRepository(c.workflows.DB()).Get(ctx, *taskID)
+		if readErr != nil {
+			return readErr
+		}
+		if terminal(task.Status) {
+			if err := c.AfterTerminal(ctx, task); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func NewRemixCoordinator(workflows *store.WorkflowRepository, projects *store.ProjectRepository, assets *store.AssetRepository, launcher TaskLauncher) *RemixCoordinator {
 	return &RemixCoordinator{workflows: workflows, projects: projects, assets: assets, launcher: launcher}
 }

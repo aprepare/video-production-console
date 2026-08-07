@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ type workflowTaskLauncher struct {
 	scheduler codex.Scheduler
 	preparer  TaskManifestPreparer
 	models    TaskModelResolver
+	mu        sync.Mutex
 }
 
 func NewWorkflowTaskLauncher(db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver) workflow.TaskLauncher {
@@ -28,6 +30,8 @@ func NewWorkflowTaskLauncher(db *sql.DB, scheduler codex.Scheduler, preparer Tas
 }
 
 func (l *workflowTaskLauncher) LaunchTopicCommit(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if err := l.validate(in); err != nil {
 		return domain.CodexTask{}, err
 	}
@@ -35,10 +39,12 @@ func (l *workflowTaskLauncher) LaunchTopicCommit(ctx context.Context, in workflo
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
-	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now})
+	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now, taskID: workflowStepTaskID(in.WorkflowID, "topic")})
 }
 
 func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if err := l.validate(in); err != nil {
 		return domain.CodexTask{}, err
 	}
@@ -46,14 +52,18 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		return domain.CodexTask{}, errors.New("ready project topic card is required")
 	}
 	tasks := store.NewTaskRepository(l.db)
-	existing, err := tasks.List(ctx, in.Project.ID, "")
+	model, err := resolveTaskModel(ctx, l.models, taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort})
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
-	for _, task := range existing {
-		if task.Action == domain.ActionRemixFromTopic && activeWorkflowTask(task.Status) && task.ModelName == in.ModelName && task.ReasoningEffort == in.ReasoningEffort {
-			return task, nil
+	taskID := workflowStepTaskID(in.WorkflowID, "remix")
+	if existing, readErr := tasks.Get(ctx, taskID); readErr == nil {
+		if existing.Action != domain.ActionRemixFromTopic || existing.ProjectID == nil || *existing.ProjectID != in.Project.ID || existing.AccountID != in.Project.AccountID || existing.ModelName != model.Model || existing.ReasoningEffort != model.ReasoningEffort {
+			return domain.CodexTask{}, errors.New("workflow remix task identity conflict")
 		}
+		return existing, nil
+	} else if !errors.Is(readErr, sql.ErrNoRows) {
+		return domain.CodexTask{}, readErr
 	}
 	now := in.Now
 	if now.IsZero() {
@@ -61,10 +71,10 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 	}
 	projectID := in.Project.ID
 	task := domain.CodexTask{
-		ID: uuid.NewString(), ProjectID: &projectID, AccountID: in.Project.AccountID,
+		ID: taskID, ProjectID: &projectID, AccountID: in.Project.AccountID,
 		Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixFromTopic,
 		Status: domain.TaskQueued, PromptSnapshot: "Create a remix from the approved topic card.",
-		ModelName: in.ModelName, ReasoningEffort: in.ReasoningEffort, CreatedAt: now,
+		ModelName: model.Model, ReasoningEffort: model.ReasoningEffort, CreatedAt: now,
 	}
 	if err := l.preparer.Prepare(ctx, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}); err != nil {
 		return domain.CodexTask{}, err
@@ -75,6 +85,10 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 	return task, nil
 }
 
+func workflowStepTaskID(workflowID, step string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("video-production-console/workflow/"+workflowID+"/"+step)).String()
+}
+
 func (l *workflowTaskLauncher) validate(in workflow.LaunchTask) error {
 	if l == nil || l.db == nil || l.scheduler == nil || l.preparer == nil {
 		return errors.New("workflow task launcher is unavailable")
@@ -83,13 +97,4 @@ func (l *workflowTaskLauncher) validate(in workflow.LaunchTask) error {
 		return fmt.Errorf("workflow launch identity and model are required")
 	}
 	return nil
-}
-
-func activeWorkflowTask(status domain.TaskStatus) bool {
-	switch status {
-	case domain.TaskQueued, domain.TaskRunning, domain.TaskResuming, domain.TaskAwaitingInput, domain.TaskWaitingInput:
-		return true
-	default:
-		return false
-	}
 }

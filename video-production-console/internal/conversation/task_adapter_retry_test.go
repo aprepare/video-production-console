@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ type recordingCompletionObserver struct {
 	called int
 	task   domain.CodexTask
 	repo   *store.TaskRepository
+	err    error
 }
 
 func (o *recordingCompletionObserver) AfterTerminal(ctx context.Context, task domain.CodexTask) error {
@@ -37,7 +39,7 @@ func (o *recordingCompletionObserver) AfterTerminal(ctx context.Context, task do
 	}
 	o.called++
 	o.task = task
-	return nil
+	return o.err
 }
 
 func TestTaskAdapterCompletionObserverRunsAfterDurableTurnFailure(t *testing.T) {
@@ -69,6 +71,38 @@ func TestTaskAdapterCompletionObserverRunsAfterDurableTurnFailure(t *testing.T) 
 	}
 	if observer.called != 1 || observer.task.Status != domain.TaskFailed {
 		t.Fatalf("observer=%+v", observer)
+	}
+}
+
+func TestTaskAdapterResumeBindReceiptFailureObservesDurableFailureAndPreservesCause(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "bind.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now)
+	repo := store.NewTaskRepository(db)
+	taskID := uuid.NewString()
+	task := domain.CodexTask{ID: taskID, AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskRunning, PromptSnapshot: "p", CreatedAt: now}
+	if err := repo.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	observerErr := errors.New("observer failed")
+	observer := &recordingCompletionObserver{repo: repo, err: observerErr}
+	adapter := NewTaskAdapter(repo, nil, nil, TaskCompletionConfig{Observer: observer})
+	cause := errors.New("turn changed")
+	err = adapter.failBindReceipt(ctx, taskID, cause)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err=%v", err)
+	}
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("observer error missing: %v", err)
+	}
+	got, _ := repo.Get(ctx, taskID)
+	if got.Status != domain.TaskFailed || observer.called != 1 || observer.task.Status != domain.TaskFailed {
+		t.Fatalf("task=%+v observer=%+v", got, observer)
 	}
 }
 
