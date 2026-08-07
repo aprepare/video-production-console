@@ -4,27 +4,19 @@ import { ArrowLeft } from "lucide-react";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
-import type { ActiveWorkflow } from "./project-workbench/types";
+import type {
+  ProjectAsset,
+  ProjectDetail as WorkbenchProjectDetail,
+  ProjectStage,
+  ProjectSummary,
+} from "./project-workbench/types";
 
 type Account = { id: string; name: string; status?: string };
-type Project = {
-  id: string;
-  account_id: string;
-  title: string;
-  stage: string;
-  updated_at?: string;
+type Project = Omit<ProjectSummary, "stage"> & {
+  stage: ProjectStage | "topic" | "ready";
   missing_assets?: string[];
 };
-type Asset = {
-  id: string;
-  type: string;
-  filename: string;
-  mime_type: string;
-  size: number;
-  version: number;
-  status?: string;
-  created_at: string;
-};
+type Asset = ProjectAsset;
 type TaskMessage = {
   id: string;
   role: string;
@@ -113,14 +105,12 @@ type MontageResult = {
   can_retry_registration: boolean;
 };
 type RuntimeStatus = { Limit: number; Running: number; Queued: number };
-type ProjectDetail = {
+type ProjectDetail = Omit<
+  WorkbenchProjectDetail,
+  "project" | "topic_context"
+> & {
   project: Project;
-  assets: Record<string, Asset>;
-  asset_history?: Record<string, Asset[]>;
-  background_reference?: Asset | null;
   topic_context?: IdeaCandidate | null;
-  missing_assets?: string[];
-  active_workflow?: ActiveWorkflow | null;
 };
 type PublicSettings = {
   listen_addr: string;
@@ -253,6 +243,19 @@ function writeTaskQuery(taskID: string, mode: "push" | "replace" = "replace") {
   else window.history.replaceState({}, "", url.toString());
 }
 
+function writeProjectLocation(
+  projectID: string,
+  mode: "push" | "replace",
+  preserveQuery = false,
+) {
+  const pathname = projectID ? `/projects/${projectID}` : "/projects";
+  const search = preserveQuery ? window.location.search : "";
+  const target = `${pathname}${search}`;
+  const current = `${window.location.pathname}${window.location.search}`;
+  if (mode === "push" && current !== target) window.history.pushState({}, "", target);
+  else window.history.replaceState({}, "", target);
+}
+
 const liveTaskStatuses = new Set([
   "queued",
   "running",
@@ -299,7 +302,7 @@ function montageHeadline(montage: MontageResult, phase: string) {
   }
 }
 
-const stages = [
+const stages: Array<Project["stage"]> = [
   "topic",
   "script",
   "assets",
@@ -668,6 +671,19 @@ function App() {
   const activeDialogRef = useRef<HTMLElement | null>(null);
   const nestedDialogFocusRef = useRef<HTMLElement[]>([]);
   const taskRestoreAbortRef = useRef<AbortController | null>(null);
+  const clearProjectSelection = useCallback(() => {
+    selectedIDRef.current = "";
+    detailGenerationRef.current += 1;
+    detailAbortRef.current?.abort();
+    detailInFlightRef.current = false;
+    detailQueuedRef.current = null;
+    if (detailRefreshTimerRef.current !== null)
+      window.clearTimeout(detailRefreshTimerRef.current);
+    setSelected(null);
+    setDetail(null);
+    setDetailError("");
+    setTasks([]);
+  }, []);
   const activeTasks = useMemo(
     () =>
       tasks.filter((task) => liveTaskStatuses.has(task.status)),
@@ -1103,35 +1119,58 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+  const syncTaskProjectContext = useCallback(
+    (task: Task) => {
+      const project = projects.find((item) => item.id === task.project_id);
+      if (!project) {
+        taskOpenIDRef.current = "";
+        setTaskOpen(null);
+        clearProjectSelection();
+        writeProjectLocation("", "replace");
+        return false;
+      }
+      if (window.location.pathname !== `/projects/${project.id}`) {
+        writeProjectLocation(project.id, "replace", true);
+      }
+      if (selectedIDRef.current !== project.id) {
+        detailAbortRef.current?.abort();
+        detailInFlightRef.current = false;
+        detailQueuedRef.current = null;
+        selectedIDRef.current = project.id;
+        setSelected(project);
+        setDetail(null);
+        setTasks([]);
+        void loadDetail(project);
+      }
+      return true;
+    },
+    [clearProjectSelection, loadDetail, projects],
+  );
   useEffect(() => {
     if (!authenticated || loading) return;
     const route = parseLocation(window.location.pathname);
     const taskID = new URL(window.location.href).searchParams.get("task") || "";
     if (route.view === "projects") {
       if (!["/", "/projects", "/projects/"].includes(window.location.pathname)) {
-        window.history.replaceState({}, "", `/projects${window.location.search}`);
+        writeProjectLocation("", "replace", Boolean(taskID));
       }
       if (
         !taskID &&
         selectedIDRef.current &&
         handledURLRevisionRef.current !== urlRevision
       ) {
-        selectedIDRef.current = "";
-        detailGenerationRef.current += 1;
-        detailAbortRef.current?.abort();
-        detailInFlightRef.current = false;
-        detailQueuedRef.current = null;
-        setSelected(null);
-        setDetail(null);
-        setDetailError("");
-        setTasks([]);
+        clearProjectSelection();
       }
       handledURLRevisionRef.current = urlRevision;
       return;
     }
     const project = projects.find((item) => item.id === route.projectID);
     if (!project) {
-      window.history.replaceState({}, "", `/projects${window.location.search}`);
+      taskRestoreAbortRef.current?.abort();
+      taskOpenIDRef.current = "";
+      setTaskOpen(null);
+      clearProjectSelection();
+      writeProjectLocation("", "replace");
       handledURLRevisionRef.current = urlRevision;
       return;
     }
@@ -1146,7 +1185,7 @@ function App() {
     setDetailError("");
     setTasks([]);
     void loadDetail(project);
-  }, [authenticated, loadDetail, loading, projects, urlRevision]);
+  }, [authenticated, clearProjectSelection, loadDetail, loading, projects, urlRevision]);
   useEffect(() => {
     if (!authenticated || !projects.length) return;
     const taskID = new URL(window.location.href).searchParams.get("task") || "";
@@ -1154,7 +1193,10 @@ function App() {
       if (taskOpen) setTaskOpen(null);
       return;
     }
-    if (taskOpen?.id === taskID) return;
+    if (taskOpen?.id === taskID) {
+      syncTaskProjectContext(taskOpen);
+      return;
+    }
     taskRestoreAbortRef.current?.abort();
     const controller = new AbortController();
     taskRestoreAbortRef.current = controller;
@@ -1164,17 +1206,7 @@ function App() {
         if (!response.ok) return;
         const restored = (await response.json()) as Task;
         if (controller.signal.aborted) return;
-        const project = projects.find((item) => item.id === restored.project_id);
-        if (project && selectedIDRef.current !== project.id) {
-          detailAbortRef.current?.abort();
-          detailInFlightRef.current = false;
-          detailQueuedRef.current = null;
-          selectedIDRef.current = project.id;
-          setSelected(project);
-          setDetail(null);
-          setTasks([]);
-          void loadDetail(project);
-        }
+        if (!syncTaskProjectContext(restored)) return;
         taskOpenIDRef.current = restored.id;
         setTaskOpen(restored);
       } catch (error) {
@@ -1182,7 +1214,7 @@ function App() {
       }
     })();
     return () => controller.abort();
-  }, [api, authenticated, loadDetail, projects, taskOpen, urlRevision]);
+  }, [api, authenticated, projects, syncTaskProjectContext, taskOpen, urlRevision]);
   useEffect(() => {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
@@ -1275,11 +1307,8 @@ function App() {
       else if (settingsOpen) setSettingsOpen(false);
       else if (preview) setPreview(null);
       else if (selected) {
-        selectedIDRef.current = "";
-        detailAbortRef.current?.abort();
-        setSelected(null);
-        setDetail(null);
-        setTasks([]);
+        clearProjectSelection();
+        writeProjectLocation("", "push");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1298,7 +1327,7 @@ function App() {
         }
       });
     };
-  }, [chatOpen, ideaOpen, preview, selected, settingsOpen, taskOpen]);
+  }, [chatOpen, clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
   useEffect(() => () => {
     detailAbortRef.current?.abort();
     chatAbortRef.current?.abort();
@@ -1362,23 +1391,13 @@ function App() {
     setDetail(null);
     setDetailError("");
     setTasks([]);
-    window.history.pushState({}, "", `/projects/${project.id}`);
+    writeProjectLocation(project.id, "push");
     void loadDetail(project);
   };
   const closeProject = () => {
     closeTask();
-    selectedIDRef.current = "";
-    detailGenerationRef.current += 1;
-    detailAbortRef.current?.abort();
-    detailInFlightRef.current = false;
-    detailQueuedRef.current = null;
-    if (detailRefreshTimerRef.current !== null)
-      window.clearTimeout(detailRefreshTimerRef.current);
-    setSelected(null);
-    setDetail(null);
-    setDetailError("");
-    setTasks([]);
-    window.history.pushState({}, "", "/projects");
+    clearProjectSelection();
+    writeProjectLocation("", "push");
   };
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
@@ -3360,7 +3379,7 @@ function App() {
   );
 }
 
-function stageLabel(stage: string) {
+function stageLabel(stage: Project["stage"]) {
   return (
     (
       {
@@ -3375,7 +3394,7 @@ function stageLabel(stage: string) {
     )[stage] || stage
   );
 }
-function projectStageHint(stage: string) {
+function projectStageHint(stage: Project["stage"]) {
   return (
     (
       {

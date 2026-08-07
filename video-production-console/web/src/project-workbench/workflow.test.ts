@@ -176,6 +176,20 @@ describe("production workflow view model", () => {
     ).toEqual(["narration", "account_background", "subtitle_srt"]);
   });
 
+  test("does not merge backend missing assets from a different durable stage", () => {
+    expect(
+      missingProductionInputs(
+        detail(
+          "review",
+          { continuous_script: "stale" },
+          undefined,
+          undefined,
+          ["final_video"],
+        ),
+      ),
+    ).toEqual(["continuous_script"]);
+  });
+
   test("maps active workflow steps to a disabled primary action", () => {
     expect(nextPrimaryAction(detail("script", {}, "topic_card"))).toMatchObject({
       id: "start-remix",

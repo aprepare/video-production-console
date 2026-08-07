@@ -35,8 +35,9 @@ export function deriveProductionStage(detail: ProjectDetail): ProductionStage {
 }
 
 export function missingProductionInputs(detail: ProjectDetail): string[] {
+  const derivedStage = deriveProductionStage(detail);
   let computed: string[];
-  switch (deriveProductionStage(detail)) {
+  switch (derivedStage) {
     case "script":
       computed = isReady(detail, "continuous_script") ? [] : ["continuous_script"];
       break;
@@ -56,7 +57,10 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
       computed = [];
       break;
   }
-  return [...new Set([...(detail.missing_assets || []), ...computed])];
+  const backendMissing = detail.project.stage === derivedStage
+    ? detail.missing_assets || []
+    : [];
+  return [...new Set([...backendMissing, ...computed])];
 }
 
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {

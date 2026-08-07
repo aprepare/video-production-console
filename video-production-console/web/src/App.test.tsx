@@ -124,6 +124,98 @@ test("direct project routing preserves task query restoration", async () => {
   expect(window.location.search).toBe(`?task=${taskID}`);
 });
 
+test("task restoration canonicalizes a mismatched project path to the task project", async () => {
+  const pathProject = {
+    id: "814ebfde-7470-418a-a703-a33596f7e8fe",
+    account_id: "account-1",
+    title: "路径项目 A",
+    stage: "script",
+  };
+  const taskProject = {
+    id: "94a1ddc8-7972-464e-b485-a849c7886be3",
+    account_id: "account-1",
+    title: "任务项目 B",
+    stage: "script",
+  };
+  const taskID = "2c05dd52-ce7b-4244-9c03-22e887b198bf";
+  window.history.replaceState({}, "", `/projects/${pathProject.id}?task=${taskID}`);
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/projects") return json([pathProject, taskProject]);
+      if (path === `/api/projects/${pathProject.id}`)
+        return json({ project: pathProject, assets: {}, missing_assets: [] });
+      if (path === `/api/projects/${taskProject.id}`)
+        return json({ project: taskProject, assets: {}, missing_assets: [] });
+      if (path === `/api/tasks?project_id=${pathProject.id}`) return json([]);
+      if (path === `/api/tasks?project_id=${taskProject.id}`) return json([]);
+      if (path === `/api/tasks/${taskID}`)
+        return json({
+          id: taskID,
+          project_id: taskProject.id,
+          type: "remix",
+          skill_name: "finance-viral-remix",
+          status: "completed",
+          created_at: "2026-08-08T00:00:00Z",
+        });
+    }),
+  );
+
+  render(<App />);
+
+  const closeTask = await screen.findByRole("button", { name: "关闭任务详情" });
+  await waitFor(() => expect(window.location.pathname).toBe(`/projects/${taskProject.id}`));
+  expect(window.location.search).toBe(`?task=${taskID}`);
+  window.history.replaceState({}, "", `/projects/${pathProject.id}?task=${taskID}`);
+  fireEvent.popState(window);
+  await waitFor(() => expect(window.location.pathname).toBe(`/projects/${taskProject.id}`));
+  fireEvent.click(closeTask);
+  expect(window.location.pathname).toBe(`/projects/${taskProject.id}`);
+  expect(window.location.search).toBe("");
+  expect(await screen.findByRole("heading", { name: taskProject.title })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: pathProject.title })).toBeNull();
+});
+
+test("Escape closes a project with board history semantics and reopening does not duplicate paths", async () => {
+  window.history.replaceState({}, "", "/projects");
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+  const pushState = vi.spyOn(window.history, "pushState");
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(fixture.project.title));
+  await screen.findByRole("button", { name: "返回项目看板" });
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+  expect(screen.queryByRole("button", { name: "返回项目看板" })).toBeNull();
+  fireEvent.click(screen.getByText(fixture.project.title));
+  expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
+  expect(pushState.mock.calls.map((call) => call[2])).toEqual([
+    `/projects/${routedProjectID}`,
+    "/projects",
+    `/projects/${routedProjectID}`,
+  ]);
+});
+
+test("an unknown UUID project path clears project and task state", async () => {
+  const missingID = "f47e33a2-dd0c-4fee-a68c-51b05a9f902e";
+  window.history.replaceState({}, "", `/projects/${missingID}?task=missing-task`);
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/projects") return json([]);
+    }),
+  );
+
+  render(<App />);
+
+  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+  expect(window.location.search).toBe("");
+  expect(screen.queryByRole("button", { name: "返回项目看板" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "关闭任务详情" })).toBeNull();
+});
+
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
