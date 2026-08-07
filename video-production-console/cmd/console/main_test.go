@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -277,6 +279,20 @@ func TestCompletionObserverWiringUsesSameObserverForLegacyAndAppServer(t *testin
 	config := wireTaskCompletion(legacy, "data", nil, observer)
 	if legacy.observer != observer || config.Observer != observer || config.DataRoot != "data" {
 		t.Fatalf("legacy=%v config=%+v", legacy.observer, config)
+	}
+}
+
+type failingRemixReconciler struct{}
+
+func (failingRemixReconciler) ReconcileTerminalWorkflows(context.Context) error {
+	return errors.New("reconcile failed")
+}
+
+func TestRemixWorkflowStartupReconcileLogsAndContinues(t *testing.T) {
+	var logged string
+	reconcileRemixWorkflows(context.Background(), failingRemixReconciler{}, func(format string, args ...any) { logged = fmt.Sprintf(format, args...) })
+	if !strings.Contains(logged, "reconcile failed") {
+		t.Fatalf("log=%q", logged)
 	}
 }
 

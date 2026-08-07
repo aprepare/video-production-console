@@ -45,27 +45,23 @@ func (c *RemixCoordinator) ReconcileTerminalWorkflows(ctx context.Context) error
 	if err != nil {
 		return err
 	}
+	var reconcileErr error
 	for _, run := range runs {
-		var taskID *string
-		if run.CurrentStep == domain.WorkflowStepRemix {
-			taskID = run.RemixTaskID
-		} else {
-			taskID = run.TopicTaskID
-		}
-		if taskID == nil {
+		c.mu.Lock()
+		_, taskID, runErr := c.resumeRunLocked(ctx, run, time.Now().UTC())
+		c.mu.Unlock()
+		if runErr == nil {
 			continue
 		}
-		task, readErr := store.NewTaskRepository(c.workflows.DB()).Get(ctx, *taskID)
-		if readErr != nil {
-			return readErr
+		_, failErr := c.workflows.Fail(ctx, run.ID, "reconcile_failed", runErr.Error(), time.Now().UTC())
+		runErr = errors.Join(runErr, failErr)
+		if taskID != "" {
+			warningErr := store.NewTaskRepository(c.workflows.DB()).AppendEvent(ctx, taskID, domain.TaskEvent{Kind: "workflow_observer_warning", Level: "warning", DisplayText: runErr.Error()})
+			runErr = errors.Join(runErr, warningErr)
 		}
-		if terminal(task.Status) {
-			if err := c.AfterTerminal(ctx, task); err != nil {
-				return err
-			}
-		}
+		reconcileErr = errors.Join(reconcileErr, runErr)
 	}
-	return nil
+	return reconcileErr
 }
 
 func NewRemixCoordinator(workflows *store.WorkflowRepository, projects *store.ProjectRepository, assets *store.AssetRepository, launcher TaskLauncher) *RemixCoordinator {
@@ -97,42 +93,8 @@ func (c *RemixCoordinator) Start(ctx context.Context, in StartRemix) (domain.Pro
 	if err != nil {
 		return run, err
 	}
-	if run.TopicTaskID != nil || run.RemixTaskID != nil || run.State != domain.WorkflowRunning {
-		return run, nil
-	}
-	versions, err := c.assets.CurrentByProject(ctx, project.ID)
-	if err != nil {
-		return c.fail(ctx, run, "asset_lookup_failed", err, now)
-	}
-	var topicCard *domain.AssetVersion
-	for i := range versions {
-		if versions[i].Type == domain.AssetTopicCard && versions[i].State == domain.AssetReady {
-			card := versions[i]
-			topicCard = &card
-			break
-		}
-	}
-	launch := LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: topicCard, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now}
-	if topicCard != nil {
-		task, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, launch)
-		if launchErr != nil {
-			return c.fail(ctx, run, "remix_launch_failed", launchErr, now)
-		}
-		advanced, advanceErr := c.workflows.AdvanceExistingTopicCardToRemix(ctx, run.ID, task.ID, now)
-		if advanceErr != nil {
-			return c.fail(ctx, run, "remix_bind_failed", advanceErr, now)
-		}
-		return advanced, nil
-	}
-	task, launchErr := c.launcher.LaunchTopicCommit(ctx, launch)
-	if launchErr != nil {
-		return c.fail(ctx, run, "topic_launch_failed", launchErr, now)
-	}
-	bound, bindErr := c.workflows.BindTopicTask(ctx, run.ID, task.ID, now)
-	if bindErr != nil {
-		return c.fail(ctx, run, "topic_bind_failed", bindErr, now)
-	}
-	return bound, nil
+	resumed, _, resumeErr := c.resumeRunLocked(ctx, run, now)
+	return resumed, resumeErr
 }
 
 func (c *RemixCoordinator) AfterTerminal(ctx context.Context, task domain.CodexTask) error {
@@ -151,54 +113,116 @@ func (c *RemixCoordinator) AfterTerminal(ctx context.Context, task domain.CodexT
 	if run.State != domain.WorkflowRunning {
 		return nil
 	}
-	now := time.Now().UTC()
-	if task.Status != domain.TaskCompleted {
-		_, err = c.workflows.Fail(ctx, run.ID, string(task.Status), terminalMessage(task), now)
-		return err
-	}
-	if run.TopicTaskID != nil && *run.TopicTaskID == task.ID {
-		if run.CurrentStep != domain.WorkflowStepTopicCard {
-			return nil
-		}
-		versions, readErr := c.assets.CurrentByProject(ctx, run.ProjectID)
-		if readErr != nil {
-			_, _ = c.workflows.Fail(ctx, run.ID, "asset_lookup_failed", readErr.Error(), now)
-			return readErr
-		}
-		var card *domain.AssetVersion
-		for i := range versions {
-			if versions[i].Type == domain.AssetTopicCard && versions[i].State == domain.AssetReady {
-				value := versions[i]
-				card = &value
-				break
-			}
-		}
-		if card == nil {
-			cause := errors.New("completed topic task did not persist a ready topic_card")
-			_, _ = c.workflows.Fail(ctx, run.ID, "topic_card_missing", cause.Error(), now)
-			return cause
-		}
-		project, readErr := c.projects.GetProject(ctx, run.ProjectID)
-		if readErr != nil {
-			_, _ = c.workflows.Fail(ctx, run.ID, "project_lookup_failed", readErr.Error(), now)
-			return readErr
-		}
-		remix, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
-		if launchErr != nil {
-			_, _ = c.workflows.Fail(ctx, run.ID, "remix_launch_failed", launchErr.Error(), now)
-			return launchErr
-		}
-		_, err = c.workflows.AdvanceToRemix(ctx, run.ID, remix.ID, now)
-		if err != nil {
-			_, failErr := c.workflows.Fail(ctx, run.ID, "remix_bind_failed", err.Error(), now)
-			return errors.Join(err, failErr)
-		}
-		return nil
-	}
-	if run.RemixTaskID != nil && *run.RemixTaskID == task.ID && run.CurrentStep == domain.WorkflowStepRemix {
-		_, err = c.workflows.Complete(ctx, run.ID, now)
-	}
+	_, _, err = c.resumeRunLocked(ctx, run, time.Now().UTC())
 	return err
+}
+
+func (c *RemixCoordinator) resumeRunLocked(ctx context.Context, run domain.ProjectWorkflowRun, now time.Time) (domain.ProjectWorkflowRun, string, error) {
+	tasks := store.NewTaskRepository(c.workflows.DB())
+	for run.State == domain.WorkflowRunning {
+		project, err := c.projects.GetProject(ctx, run.ProjectID)
+		if err != nil {
+			failed, failErr := c.fail(ctx, run, "project_lookup_failed", err, now)
+			return failed, "", failErr
+		}
+		if run.CurrentStep == domain.WorkflowStepTopicCard {
+			card, cardErr := c.readyTopicCard(ctx, run.ProjectID)
+			if cardErr != nil {
+				failed, failErr := c.fail(ctx, run, "asset_lookup_failed", cardErr, now)
+				return failed, "", failErr
+			}
+			if run.TopicTaskID == nil && card != nil {
+				remix, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+				if launchErr != nil {
+					failed, failErr := c.fail(ctx, run, "remix_launch_failed", launchErr, now)
+					return failed, "", failErr
+				}
+				advanced, bindErr := c.workflows.AdvanceExistingTopicCardToRemix(ctx, run.ID, remix.ID, now)
+				if bindErr != nil {
+					failed, failErr := c.fail(ctx, run, "remix_bind_failed", bindErr, now)
+					return failed, remix.ID, failErr
+				}
+				run = advanced
+				continue
+			}
+			if run.TopicTaskID == nil {
+				topic, launchErr := c.launcher.LaunchTopicCommit(ctx, LaunchTask{WorkflowID: run.ID, Project: project, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+				if launchErr != nil {
+					failed, failErr := c.fail(ctx, run, "topic_launch_failed", launchErr, now)
+					return failed, "", failErr
+				}
+				bound, bindErr := c.workflows.BindTopicTask(ctx, run.ID, topic.ID, now)
+				if bindErr != nil {
+					failed, failErr := c.fail(ctx, run, "topic_bind_failed", bindErr, now)
+					return failed, topic.ID, failErr
+				}
+				run = bound
+			}
+			task, readErr := tasks.Get(ctx, *run.TopicTaskID)
+			if readErr != nil {
+				failed, failErr := c.fail(ctx, run, "topic_task_lookup_failed", readErr, now)
+				return failed, *run.TopicTaskID, failErr
+			}
+			if !terminal(task.Status) {
+				return run, task.ID, nil
+			}
+			if task.Status != domain.TaskCompleted {
+				failed, failErr := c.workflows.Fail(ctx, run.ID, string(task.Status), terminalMessage(task), now)
+				return failed, task.ID, failErr
+			}
+			if card == nil {
+				cause := errors.New("completed topic task did not persist a ready topic_card")
+				failed, failErr := c.fail(ctx, run, "topic_card_missing", cause, now)
+				return failed, task.ID, failErr
+			}
+			remix, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+			if launchErr != nil {
+				failed, failErr := c.fail(ctx, run, "remix_launch_failed", launchErr, now)
+				return failed, task.ID, failErr
+			}
+			advanced, bindErr := c.workflows.AdvanceToRemix(ctx, run.ID, remix.ID, now)
+			if bindErr != nil {
+				failed, failErr := c.fail(ctx, run, "remix_bind_failed", bindErr, now)
+				return failed, remix.ID, failErr
+			}
+			run = advanced
+			continue
+		}
+		if run.CurrentStep == domain.WorkflowStepRemix && run.RemixTaskID != nil {
+			task, readErr := tasks.Get(ctx, *run.RemixTaskID)
+			if readErr != nil {
+				failed, failErr := c.fail(ctx, run, "remix_task_lookup_failed", readErr, now)
+				return failed, *run.RemixTaskID, failErr
+			}
+			if !terminal(task.Status) {
+				return run, task.ID, nil
+			}
+			if task.Status == domain.TaskCompleted {
+				completed, completeErr := c.workflows.Complete(ctx, run.ID, now)
+				return completed, task.ID, completeErr
+			}
+			failed, failErr := c.workflows.Fail(ctx, run.ID, string(task.Status), terminalMessage(task), now)
+			return failed, task.ID, failErr
+		}
+		cause := errors.New("workflow current step has no bound task")
+		failed, failErr := c.fail(ctx, run, "workflow_task_missing", cause, now)
+		return failed, "", failErr
+	}
+	return run, "", nil
+}
+
+func (c *RemixCoordinator) readyTopicCard(ctx context.Context, projectID string) (*domain.AssetVersion, error) {
+	versions, err := c.assets.CurrentByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range versions {
+		if versions[i].Type == domain.AssetTopicCard && versions[i].State == domain.AssetReady {
+			card := versions[i]
+			return &card, nil
+		}
+	}
+	return nil, nil
 }
 
 func (c *RemixCoordinator) fail(ctx context.Context, run domain.ProjectWorkflowRun, code string, cause error, now time.Time) (domain.ProjectWorkflowRun, error) {

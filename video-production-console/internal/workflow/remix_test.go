@@ -20,6 +20,7 @@ type recordingLauncher struct {
 	tasks           *store.TaskRepository
 	err             error
 	taskProjectID   string
+	byStep          map[string]domain.CodexTask
 }
 
 func (l *recordingLauncher) LaunchTopicCommit(ctx context.Context, in LaunchTask) (domain.CodexTask, error) {
@@ -34,6 +35,10 @@ func (l *recordingLauncher) launch(ctx context.Context, in LaunchTask, action do
 	if l.err != nil {
 		return domain.CodexTask{}, l.err
 	}
+	key := in.WorkflowID + ":" + string(action)
+	if existing, ok := l.byStep[key]; ok {
+		return existing, nil
+	}
 	*calls = append(*calls, in)
 	projectID := in.Project.ID
 	if l.taskProjectID != "" {
@@ -43,6 +48,10 @@ func (l *recordingLauncher) launch(ctx context.Context, in LaunchTask, action do
 	if err := l.tasks.CreateV2(ctx, task); err != nil {
 		return domain.CodexTask{}, err
 	}
+	if l.byStep == nil {
+		l.byStep = map[string]domain.CodexTask{}
+	}
+	l.byStep[key] = task
 	return task, nil
 }
 
@@ -282,6 +291,102 @@ func TestRemixWorkflowConcurrentStartCreatesOneEffectiveTask(t *testing.T) {
 	if len(launcher.topics) != 1 {
 		t.Fatalf("topic launches=%d", len(launcher.topics))
 	}
+}
+
+func TestRemixWorkflowReconcileBindsPersistedUnboundTopicAndReplaysTerminal(t *testing.T) {
+	db, accountID, projectID, now := remixFixture(t)
+	launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+	coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	run, err := store.NewWorkflowRepository(db).BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "m", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, _ := store.NewProjectRepository(db).GetProject(context.Background(), projectID)
+	task, err := launcher.LaunchTopicCommit(context.Background(), LaunchTask{WorkflowID: run.ID, Project: project, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.NewTaskRepository(db).UpdateStatus(context.Background(), task.ID, domain.TaskInterrupted, "", "restart", "interrupted")
+	if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.NewWorkflowRepository(db).ByTask(context.Background(), task.ID)
+	if got.State != domain.WorkflowFailed {
+		t.Fatalf("run=%+v", got)
+	}
+	if len(launcher.topics) != 1 {
+		t.Fatalf("topic launches=%d", len(launcher.topics))
+	}
+}
+
+func TestRemixWorkflowReconcileCompletesTerminalTopicAndUnadvancedTerminalRemixInOnePass(t *testing.T) {
+	db, accountID, projectID, now := remixFixture(t)
+	launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+	coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	run, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.NewTaskRepository(db).UpdateStatus(context.Background(), *run.TopicTaskID, domain.TaskCompleted, "ok", "", "")
+	addTopicCard(t, db, projectID, accountID)
+	project, _ := store.NewProjectRepository(db).GetProject(context.Background(), projectID)
+	card := currentTopicCard(t, db, projectID)
+	remix, err := launcher.LaunchRemixFromTopicCard(context.Background(), LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: &card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.NewTaskRepository(db).UpdateStatus(context.Background(), remix.ID, domain.TaskCompleted, "ok", "", "")
+	if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.NewWorkflowRepository(db).ByTask(context.Background(), remix.ID)
+	if got.State != domain.WorkflowCompleted {
+		t.Fatalf("run=%+v", got)
+	}
+	if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemixWorkflowReconcileErrorWarnsTaskFailsWorkflowAndKeepsTerminalTask(t *testing.T) {
+	db, accountID, projectID, now := remixFixture(t)
+	launcher := &recordingLauncher{tasks: store.NewTaskRepository(db)}
+	coordinator := NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	run, err := coordinator.Start(context.Background(), StartRemix{ProjectID: projectID, AccountID: accountID, ModelName: "m", ReasoningEffort: "high", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.NewTaskRepository(db).UpdateStatus(context.Background(), *run.TopicTaskID, domain.TaskCompleted, "ok", "", "")
+	if err := coordinator.ReconcileTerminalWorkflows(context.Background()); err == nil {
+		t.Fatal("expected reconcile error")
+	}
+	task, _ := store.NewTaskRepository(db).Get(context.Background(), *run.TopicTaskID)
+	if task.Status != domain.TaskCompleted {
+		t.Fatalf("task=%+v", task)
+	}
+	failed, _ := store.NewWorkflowRepository(db).ByTask(context.Background(), task.ID)
+	if failed.State != domain.WorkflowFailed {
+		t.Fatalf("run=%+v", failed)
+	}
+	events, _ := store.NewTaskRepository(db).Events(context.Background(), task.ID)
+	if len(events) == 0 || events[len(events)-1].Kind != "workflow_observer_warning" {
+		t.Fatalf("events=%+v", events)
+	}
+}
+
+func currentTopicCard(t *testing.T, db *sql.DB, projectID string) domain.AssetVersion {
+	t.Helper()
+	versions, err := store.NewAssetRepository(db).CurrentByProject(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range versions {
+		if v.Type == domain.AssetTopicCard && v.State == domain.AssetReady {
+			return v
+		}
+	}
+	t.Fatal("topic card missing")
+	return domain.AssetVersion{}
 }
 
 func remixFixture(t *testing.T) (*sql.DB, string, string, time.Time) {

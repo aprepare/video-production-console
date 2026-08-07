@@ -128,9 +128,7 @@ func main() {
 		httpapi.NewWorkflowTaskLauncher(db, legacyScheduler, taskPreparer, settingsService),
 	)
 	legacyScheduler.SetCompletionObserver(remixCoordinator)
-	if err := remixCoordinator.ReconcileTerminalWorkflows(context.Background()); err != nil {
-		log.Fatalf("reconcile terminal remix workflows: %v", err)
-	}
+	reconcileRemixWorkflows(context.Background(), remixCoordinator, log.Printf)
 	var montageCoordinator *montage.Coordinator
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
 		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
@@ -202,6 +200,14 @@ func main() {
 
 type completionObserverSetter interface {
 	SetCompletionObserver(taskcompletion.Observer)
+}
+
+type remixWorkflowReconciler interface{ ReconcileTerminalWorkflows(context.Context) error }
+
+func reconcileRemixWorkflows(ctx context.Context, reconciler remixWorkflowReconciler, logf func(string, ...any)) {
+	if err := reconciler.ReconcileTerminalWorkflows(ctx); err != nil {
+		logf("reconcile terminal remix workflows: %v", err)
+	}
 }
 
 func wireTaskCompletion(setter completionObserverSetter, dataRoot string, gate taskcompletion.Gate, observer taskcompletion.Observer) conversation.TaskCompletionConfig {
