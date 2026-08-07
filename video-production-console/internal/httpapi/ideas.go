@@ -230,7 +230,7 @@ func (h *ideasHandler) selectCandidate(w http.ResponseWriter, r *http.Request) {
 	}
 	pid := uuid.NewString()
 	now := time.Now().UTC()
-	p := domain.Project{ID: pid, AccountID: *account, Title: title, Stage: domain.StageTopic, CreatedAt: now, UpdatedAt: now}
+	p := domain.Project{ID: pid, AccountID: *account, Title: title, Stage: domain.StageScript, Status: domain.ProjectDraft, CreatedAt: now, UpdatedAt: now}
 	projectRepo := store.NewProjectRepository(h.repo.DB())
 	if e := projectRepo.CreateProject(r.Context(), p); errors.Is(e, store.ErrAccountInactive) {
 		writeError(w, http.StatusConflict, "account_inactive", "The selected account is not active.")

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,213 @@ import (
 	"video-production-console/internal/assets"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
+	"video-production-console/internal/workflow"
 )
+
+type recordingRemixStarter struct {
+	run   domain.ProjectWorkflowRun
+	calls []workflow.StartRemix
+}
+
+func (s *recordingRemixStarter) Start(_ context.Context, in workflow.StartRemix) (domain.ProjectWorkflowRun, error) {
+	s.calls = append(s.calls, in)
+	return s.run, nil
+}
+
+type fixedProjectModelResolver struct {
+	want taskmodel.Selection
+}
+
+func (r fixedProjectModelResolver) ResolveTaskModel(_ context.Context, _ taskmodel.Selection) (taskmodel.Selection, error) {
+	return r.want, nil
+}
+
+func TestProjectRemixUsesDatabaseIdentityDefaultsAndIsIdempotent(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := store.NewProjectRepository(db).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "remix", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	pid := projectID
+	if err := store.NewTaskRepository(db).Create(context.Background(), domain.CodexTask{ID: taskID, ProjectID: &pid, AccountID: accountID, Type: "topic_commit", SkillName: "finance-topic-selector", Status: domain.TaskQueued, PromptSnapshot: "prompt", ModelName: "gpt-fixed", ReasoningEffort: "high", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	starter := &recordingRemixStarter{run: domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, TopicTaskID: &taskID, ModelName: "gpt-fixed", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now}}
+	handler := NewProjectsHandler(db, assets.NewService(root), starter, fixedProjectModelResolver{want: taskmodel.Selection{Model: "gpt-fixed", ReasoningEffort: "high"}})
+
+	for i := 0; i < 2; i++ {
+		response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/remix", map[string]any{})
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("attempt %d status=%d body=%s", i+1, response.StatusCode, readResponseBody(t, response))
+		}
+		var body struct {
+			Workflow struct {
+				ID              string `json:"id"`
+				AccountID       string `json:"account_id"`
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			} `json:"workflow"`
+			CurrentTask taskView `json:"current_task"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Workflow.ID != starter.run.ID || body.Workflow.AccountID != accountID || body.CurrentTask.ID != taskID {
+			t.Fatalf("unexpected remix response: %+v", body)
+		}
+	}
+	if len(starter.calls) != 2 {
+		t.Fatalf("Start calls=%d", len(starter.calls))
+	}
+	for _, call := range starter.calls {
+		if call.ProjectID != projectID || call.AccountID != accountID || call.ModelName != "gpt-fixed" || call.ReasoningEffort != "high" {
+			t.Fatalf("coordinator input=%+v", call)
+		}
+	}
+
+	tampered := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/remix", map[string]any{"account_id": uuid.NewString()})
+	if tampered.StatusCode != http.StatusBadRequest {
+		t.Fatalf("tampered identity status=%d body=%s", tampered.StatusCode, readResponseBody(t, tampered))
+	}
+}
+
+func TestProjectDetailIncludesActiveWorkflowAndCurrentTask(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := store.NewProjectRepository(db).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "active", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	pid := projectID
+	if err := store.NewTaskRepository(db).Create(context.Background(), domain.CodexTask{ID: taskID, ProjectID: &pid, AccountID: accountID, Type: "topic_commit", SkillName: "finance-topic-selector", Status: domain.TaskRunning, PromptSnapshot: "prompt", ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.NewWorkflowRepository(db).BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.NewWorkflowRepository(db).BindTopicTask(context.Background(), run.ID, taskID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	response := performJSON(t, NewProjectsHandler(db, assets.NewService(root), nil, nil), http.MethodGet, "/api/projects/"+projectID, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.StatusCode, readResponseBody(t, response))
+	}
+	var body struct {
+		ActiveWorkflow *struct {
+			ID          string   `json:"id"`
+			CurrentTask taskView `json:"current_task"`
+		} `json:"active_workflow"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ActiveWorkflow == nil || body.ActiveWorkflow.ID != run.ID || body.ActiveWorkflow.CurrentTask.ID != taskID {
+		t.Fatalf("active workflow=%+v", body.ActiveWorkflow)
+	}
+}
+
+func TestProjectPublishResponsesAndNoRemixSideEffect(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	repo := store.NewProjectRepository(db)
+	starter := &recordingRemixStarter{}
+	handler := NewProjectsHandler(db, assets.NewService(root), starter, nil)
+	create := func(stage domain.ProjectStage) string {
+		id := uuid.NewString()
+		now := time.Now().UTC()
+		if err := repo.CreateProject(context.Background(), domain.Project{ID: id, AccountID: accountID, Title: "publish", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if stage != domain.StageScript {
+			if _, err := db.Exec(`UPDATE projects SET stage=? WHERE id=?`, stage, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+
+	notReview := performJSON(t, handler, http.MethodPost, "/api/projects/"+create(domain.StageScript)+"/publish", nil)
+	assertErrorCode(t, notReview, http.StatusConflict, "project_not_in_review")
+	reviewID := create(domain.StageReview)
+	missing := performJSON(t, handler, http.MethodPost, "/api/projects/"+reviewID+"/publish", nil)
+	assertErrorCode(t, missing, http.StatusConflict, "final_video_missing")
+	if _, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &reviewID, Type: domain.AssetFinalVideo, StorageKind: domain.StorageFile, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", Size: 1, SHA256: "sha"}); err != nil {
+		t.Fatal(err)
+	}
+	published := performJSON(t, handler, http.MethodPost, "/api/projects/"+reviewID+"/publish", nil)
+	if published.StatusCode != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", published.StatusCode, readResponseBody(t, published))
+	}
+	var body struct {
+		Stage             domain.ProjectStage  `json:"stage"`
+		PublicationStatus domain.ProjectStatus `json:"publication_status"`
+		PublishedAt       *time.Time           `json:"published_at"`
+	}
+	if err := json.NewDecoder(published.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Stage != domain.StagePublished || body.PublicationStatus != domain.ProjectPublished || body.PublishedAt == nil {
+		t.Fatalf("published response=%+v", body)
+	}
+	if len(starter.calls) != 0 {
+		t.Fatalf("publish called remix coordinator %d times", len(starter.calls))
+	}
+}
+
+func TestProjectDetailReviewReportsFinalVideoMissing(t *testing.T) {
+	id := uuid.NewString()
+	handler := newProjectsHandler(&failingProjectStore{stage: domain.StageReview}, assets.NewService(t.TempDir()))
+	response := performJSON(t, handler, http.MethodGet, "/api/projects/"+id, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	var body struct {
+		Missing []string `json:"missing_assets"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Missing) != 1 || body.Missing[0] != string(domain.AssetFinalVideo) {
+		t.Fatalf("missing=%v", body.Missing)
+	}
+}
+
+func TestProjectMoveRejectsDeprecatedTopicAndReadyStages(t *testing.T) {
+	handler, _, _, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID}))
+	for _, stage := range []string{"topic", "ready"} {
+		response := performJSON(t, handler, http.MethodPost, "/api/projects/"+created.ID+"/move", map[string]string{"stage": stage})
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("move %s status=%d", stage, response.StatusCode)
+		}
+	}
+}
+
+func assertErrorCode(t *testing.T, response *http.Response, status int, code string) {
+	t.Helper()
+	defer response.Body.Close()
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != status || body.Code != code {
+		t.Fatalf("status=%d code=%q, want %d %q", response.StatusCode, body.Code, status, code)
+	}
+}
+
+func readResponseBody(t *testing.T, response *http.Response) string {
+	t.Helper()
+	defer response.Body.Close()
+	b, _ := io.ReadAll(response.Body)
+	return string(b)
+}
 
 type failingProjectStore struct {
 	getErr, listErr, backgroundErr, moveErr error
@@ -175,7 +382,7 @@ func TestMoveRejectsOversizedAndTrailingJSON(t *testing.T) {
 func TestProjectLifecycleUploadVersionsAndGates(t *testing.T) {
 	handler, db, root, accountID := newProjectsTestHandler(t, "active")
 	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID}))
-	if created.Stage != "topic" || created.Title == "" {
+	if created.Stage != "script" || created.Title == "" {
 		t.Fatalf("created = %+v", created)
 	}
 	if oversized := uploadProjectFile(t, handler, created.ID, "continuous_script", "large.txt", bytes.Repeat([]byte("x"), (6<<20))); oversized.StatusCode != http.StatusRequestEntityTooLarge {
@@ -264,7 +471,7 @@ func TestCreateAndFilterProjectsRequireActiveAccount(t *testing.T) {
 	handler, db, _, activeID := newProjectsTestHandler(t, "active")
 	a := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": activeID, "title": "Alpha"}))
 	_ = a
-	response := performJSON(t, handler, http.MethodGet, "/api/projects?account_id="+activeID+"&stage=topic&q=alp", nil)
+	response := performJSON(t, handler, http.MethodGet, "/api/projects?account_id="+activeID+"&stage=script&q=alp", nil)
 	var list []projectResponse
 	_ = json.NewDecoder(response.Body).Decode(&list)
 	if response.StatusCode != http.StatusOK || len(list) != 1 {
@@ -298,7 +505,7 @@ func newProjectsTestHandler(t *testing.T, status string) (http.Handler, *sql.DB,
 			t.Fatal(err)
 		}
 	}
-	return NewProjectsHandler(db, assets.NewService(root)), db, root, id
+	return NewProjectsHandler(db, assets.NewService(root), nil, nil), db, root, id
 }
 
 type projectResponse struct {

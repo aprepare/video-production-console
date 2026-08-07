@@ -8,12 +8,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	consoleauth "video-production-console/internal/auth"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
+	"video-production-console/internal/workflow"
 )
+
+type appRemixStarter struct {
+	called bool
+	run    domain.ProjectWorkflowRun
+}
+
+func (s *appRemixStarter) Start(_ context.Context, _ workflow.StartRemix) (domain.ProjectWorkflowRun, error) {
+	s.called = true
+	return s.run, nil
+}
 
 type routeTestScheduler struct{}
 
@@ -113,5 +127,47 @@ func TestProjectTopicCardRouteIsMountedOnTaskHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"code":"project_not_found"`) {
 		t.Fatalf("topic-card route did not reach task handler; body = %q", response.Body.String())
+	}
+}
+
+func TestProjectRemixRouteUsesInjectedCoordinator(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC()
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	if _, err := database.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "account", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.NewProjectRepository(database).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "project", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	starter := &appRemixStarter{run: domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now}}
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, RemixCoordinator: starter})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/remix", nil))
+	if response.Code != http.StatusOK || !starter.called {
+		t.Fatalf("status=%d called=%t body=%s", response.Code, starter.called, response.Body.String())
+	}
+}
+
+func TestProjectRemixRouteRequiresAuthentication(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	starter := &appRemixStarter{}
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth, RemixCoordinator: starter})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/"+uuid.NewString()+"/remix", nil))
+	if response.Code != http.StatusUnauthorized || starter.called {
+		t.Fatalf("status=%d called=%t body=%s", response.Code, starter.called, response.Body.String())
 	}
 }

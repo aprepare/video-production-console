@@ -191,7 +191,7 @@ func main() {
 	if montageCoordinator != nil {
 		montageRetryer = montageCoordinator
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, Conversations: conversations, AppServerHealth: appServerHealth, History: historyService, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener()})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, Conversations: conversations, AppServerHealth: appServerHealth, History: historyService, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
 	log.Printf("video production console listening on %s", settings.ListenAddr)
 	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
 		log.Fatal(err)

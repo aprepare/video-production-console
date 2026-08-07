@@ -47,6 +47,7 @@ type Options struct {
 	}
 	CompletionRetryer httpapi.CompletionRetryer
 	DesktopOpener     assets.DesktopOpener
+	RemixCoordinator  httpapi.RemixCoordinator
 }
 
 // App is the HTTP application.
@@ -69,7 +70,11 @@ func New(options Options) *App {
 		accounts := httpapi.NewAccountsHandler(options.DB, assetService)
 		mux.Handle("/api/accounts", accounts)
 		mux.Handle("/api/accounts/", accounts)
-		projects := httpapi.NewProjectsHandler(options.DB, assetService)
+		var models httpapi.TaskModelResolver
+		if options.Settings != nil {
+			models = options.Settings
+		}
+		projects := httpapi.NewProjectsHandler(options.DB, assetService, options.RemixCoordinator, models)
 		mux.Handle("/api/projects", projects)
 		assetOptions := httpapi.AssetHandlerOptions{DesktopOpener: options.DesktopOpener}
 		if options.Settings != nil {
@@ -77,10 +82,6 @@ func New(options Options) *App {
 		}
 		assetsHandler := httpapi.NewAssetsHandler(options.DB, assetService, assetOptions)
 		mux.Handle("/api/assets/", assetsHandler)
-		var models httpapi.TaskModelResolver
-		if options.Settings != nil {
-			models = options.Settings
-		}
 		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler, options.TaskPreparer, models)
 		taskResultsHandler := httpapi.NewTaskResultsHandler(store.NewTaskRepository(options.DB))
 		montageHandler := httpapi.NewMontageHandler(options.MontageRetryer)

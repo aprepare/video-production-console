@@ -17,7 +17,14 @@ import (
 	"video-production-console/internal/assets"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
+	"video-production-console/internal/workflow"
 )
+
+// RemixCoordinator is the narrow project-workflow dependency used by the HTTP API.
+type RemixCoordinator interface {
+	Start(context.Context, workflow.StartRemix) (domain.ProjectWorkflowRun, error)
+}
 
 type projectStore interface {
 	CreateProject(context.Context, domain.Project) error
@@ -33,16 +40,24 @@ type projectsHandler struct {
 	repository projectStore
 	assets     *assets.Service
 	db         *sql.DB
+	remix      RemixCoordinator
+	models     TaskModelResolver
+	workflows  *store.WorkflowRepository
+	tasks      *store.TaskRepository
 }
 
-func NewProjectsHandler(db *sql.DB, service *assets.Service) http.Handler {
-	return newProjectsHandlerWithDB(store.NewProjectRepository(db), service, db)
+func NewProjectsHandler(db *sql.DB, service *assets.Service, remix RemixCoordinator, models TaskModelResolver) http.Handler {
+	return newProjectsHandlerWithDB(store.NewProjectRepository(db), service, db, remix, models)
 }
 func newProjectsHandler(repository projectStore, service *assets.Service) http.Handler {
-	return newProjectsHandlerWithDB(repository, service, nil)
+	return newProjectsHandlerWithDB(repository, service, nil, nil, nil)
 }
-func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, db *sql.DB) http.Handler {
-	h := &projectsHandler{repository: repository, assets: service, db: db}
+func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, db *sql.DB, remix RemixCoordinator, models TaskModelResolver) http.Handler {
+	h := &projectsHandler{repository: repository, assets: service, db: db, remix: remix, models: models}
+	if db != nil {
+		h.workflows = store.NewWorkflowRepository(db)
+		h.tasks = store.NewTaskRepository(db)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects", h.create)
 	mux.HandleFunc("GET /api/projects", h.list)
@@ -50,6 +65,8 @@ func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, 
 	mux.HandleFunc("DELETE /api/projects/{id}", h.delete)
 	mux.HandleFunc("POST /api/projects/{id}/assets/{type}", h.upload)
 	mux.HandleFunc("POST /api/projects/{id}/move", h.move)
+	mux.HandleFunc("POST /api/projects/{id}/remix", h.startRemix)
+	mux.HandleFunc("POST /api/projects/{id}/publish", h.publish)
 	return mux
 }
 
@@ -86,15 +103,32 @@ func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 type projectView struct {
-	ID          string              `json:"id"`
-	AccountID   string              `json:"account_id"`
-	Title       string              `json:"title"`
-	Stage       domain.ProjectStage `json:"stage"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
-	ReadyAt     *time.Time          `json:"ready_at"`
-	PublishedAt *time.Time          `json:"published_at"`
-	PublishNote *string             `json:"publish_note"`
+	ID                string               `json:"id"`
+	AccountID         string               `json:"account_id"`
+	Title             string               `json:"title"`
+	Stage             domain.ProjectStage  `json:"stage"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+	ReadyAt           *time.Time           `json:"ready_at"`
+	PublishedAt       *time.Time           `json:"published_at"`
+	PublishNote       *string              `json:"publish_note"`
+	PublicationStatus domain.ProjectStatus `json:"publication_status"`
+}
+
+type workflowView struct {
+	ID              string               `json:"id"`
+	ProjectID       string               `json:"project_id"`
+	AccountID       string               `json:"account_id"`
+	Kind            domain.WorkflowKind  `json:"kind"`
+	State           domain.WorkflowState `json:"state"`
+	CurrentStep     domain.WorkflowStep  `json:"current_step"`
+	TopicTaskID     *string              `json:"topic_task_id,omitempty"`
+	RemixTaskID     *string              `json:"remix_task_id,omitempty"`
+	Model           string               `json:"model"`
+	ReasoningEffort string               `json:"reasoning_effort"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	CurrentTask     *taskView            `json:"current_task"`
 }
 type assetView struct {
 	ID        string           `json:"id"`
@@ -127,7 +161,7 @@ func (h *projectsHandler) create(w http.ResponseWriter, r *http.Request) {
 		title = "Untitled-" + id[:8]
 	}
 	now := time.Now().UTC()
-	p := domain.Project{ID: id, AccountID: accountID.String(), Title: title, Stage: domain.StageTopic, CreatedAt: now, UpdatedAt: now}
+	p := domain.Project{ID: id, AccountID: accountID.String(), Title: title, Stage: domain.StageScript, Status: domain.ProjectDraft, CreatedAt: now, UpdatedAt: now}
 	err = h.repository.CreateProject(r.Context(), p)
 	if errors.Is(err, store.ErrAccountInactive) {
 		writeError(w, http.StatusConflict, "account_inactive", "An active account is required.")
@@ -231,7 +265,120 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 			topicContext = selection.Candidate
 		}
 	}
-	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext})
+	var activeWorkflow any = nil
+	if h.workflows != nil {
+		run, workflowErr := h.workflows.ActiveForProject(r.Context(), id, domain.WorkflowRemix)
+		if workflowErr == nil {
+			view, viewErr := h.toWorkflowView(r.Context(), run)
+			if viewErr != nil {
+				writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+				return
+			}
+			activeWorkflow = view
+		} else if !errors.Is(workflowErr, store.ErrWorkflowNotFound) {
+			writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext, "active_workflow": activeWorkflow})
+}
+
+func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var in taskModelRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_remix", "Only model and reasoning_effort are accepted.")
+		}
+		return
+	}
+	project, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if h.remix == nil {
+		writeError(w, http.StatusServiceUnavailable, "project_remix_unavailable", "Project remix is unavailable.")
+		return
+	}
+	selection, err := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_task_model", "Task model selection is invalid.")
+		return
+	}
+	run, err := h.remix.Start(r.Context(), workflow.StartRemix{ProjectID: project.ID, AccountID: project.AccountID, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, Now: time.Now().UTC()})
+	if errors.Is(err, store.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, "project_remix_not_ready", err.Error())
+		return
+	}
+	view, err := h.toWorkflowView(r.Context(), run)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workflow": view, "current_task": view.CurrentTask})
+}
+
+func (h *projectsHandler) publish(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	publisher, ok := h.repository.(interface {
+		PublishProject(context.Context, string, time.Time) (domain.Project, error)
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "project_publish_unavailable", "Project publishing is unavailable.")
+		return
+	}
+	project, err := publisher.PublishProject(r.Context(), id, time.Now().UTC())
+	switch {
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+	case errors.Is(err, store.ErrFinalVideoMissing):
+		writeError(w, http.StatusConflict, "final_video_missing", "A ready final video is required before publishing.")
+	case errors.Is(err, store.ErrProjectNotInReview):
+		writeError(w, http.StatusConflict, "project_not_in_review", "Only a project in review can be published.")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "project_publish_failed", "Project could not be published.")
+	default:
+		writeJSON(w, http.StatusOK, toProjectView(project))
+	}
+}
+
+func (h *projectsHandler) toWorkflowView(ctx context.Context, run domain.ProjectWorkflowRun) (workflowView, error) {
+	view := workflowView{ID: run.ID, ProjectID: run.ProjectID, AccountID: run.AccountID, Kind: run.Kind, State: run.State, CurrentStep: run.CurrentStep, TopicTaskID: run.TopicTaskID, RemixTaskID: run.RemixTaskID, Model: run.ModelName, ReasoningEffort: run.ReasoningEffort, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt}
+	var taskID *string
+	if run.CurrentStep == domain.WorkflowStepRemix {
+		taskID = run.RemixTaskID
+	} else {
+		taskID = run.TopicTaskID
+	}
+	if taskID == nil || h.tasks == nil {
+		return view, nil
+	}
+	task, err := h.tasks.Get(ctx, *taskID)
+	if err != nil {
+		return workflowView{}, err
+	}
+	taskSummary := viewTask(task)
+	view.CurrentTask = &taskSummary
+	return view, nil
 }
 
 func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +555,7 @@ func projectID(w http.ResponseWriter, value string) (string, bool) {
 }
 func validStage(s domain.ProjectStage) bool {
 	switch s {
-	case domain.StageTopic, domain.StageScript, domain.StageAssets, domain.StageMixing, domain.StageReview, domain.StageReady, domain.StagePublished, domain.StageArchived:
+	case domain.StageScript, domain.StageAssets, domain.StageMixing, domain.StageReview, domain.StagePublished, domain.StageArchived:
 		return true
 	}
 	return false
@@ -421,7 +568,22 @@ func uploadableType(t domain.AssetType) bool {
 	return false
 }
 func toProjectView(p domain.Project) projectView {
-	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote}
+	status := p.Status
+	if status == "" {
+		switch p.Stage {
+		case domain.StageMixing, domain.StageReview:
+			status = domain.ProjectProducing
+		case domain.StageReady:
+			status = domain.ProjectReadyToPublish
+		case domain.StagePublished:
+			status = domain.ProjectPublished
+		case domain.StageArchived:
+			status = domain.ProjectArchived
+		default:
+			status = domain.ProjectDraft
+		}
+	}
+	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote, PublicationStatus: status}
 }
 func toAssetView(a domain.Asset) assetView {
 	return assetView{ID: a.ID, Type: a.Type, Filename: a.Filename, MIMEType: a.MIMEType, Size: a.Size, SHA256: a.SHA256, Version: a.Version, CreatedAt: a.CreatedAt}
@@ -432,8 +594,6 @@ func missingForStage(stage domain.ProjectStage, a map[domain.AssetType]bool) []s
 	case domain.StageAssets:
 		to = domain.StageMixing
 	case domain.StageReview:
-		to = domain.StageReady
-	case domain.StageReady:
 		to = domain.StagePublished
 	default:
 		return []string{}

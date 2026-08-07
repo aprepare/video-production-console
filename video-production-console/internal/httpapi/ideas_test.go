@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -240,11 +241,26 @@ func TestSelectIdeaCandidateExplicitAccountOverridesSessionAccount(t *testing.T)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
+	var selected struct {
+		Project struct {
+			Stage domain.ProjectStage `json:"stage"`
+		} `json:"project"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &selected); err != nil {
+		t.Fatal(err)
+	}
+	if selected.Project.Stage != domain.StageScript {
+		t.Fatalf("response project stage=%q, want %q", selected.Project.Stage, domain.StageScript)
+	}
 	var projectAccount string
-	if err := db.QueryRow(`SELECT account_id FROM projects WHERE title='选题'`).Scan(&projectAccount); err != nil {
+	var projectStage domain.ProjectStage
+	if err := db.QueryRow(`SELECT account_id,stage FROM projects WHERE title='选题'`).Scan(&projectAccount, &projectStage); err != nil {
 		t.Fatal(err)
 	}
 	if projectAccount != secondAccount {
 		t.Fatalf("project account=%q, want explicit %q", projectAccount, secondAccount)
+	}
+	if projectStage != domain.StageScript {
+		t.Fatalf("project stage=%q, want %q", projectStage, domain.StageScript)
 	}
 }
