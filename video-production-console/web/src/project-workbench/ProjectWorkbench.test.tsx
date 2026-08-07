@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
+/// <reference types="node" />
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { ProjectWorkbench } from "./ProjectWorkbench";
 import type { ProjectDetail, ProjectTask } from "./types";
@@ -284,10 +287,23 @@ test("disables the current action, delete, and related input while pending", () 
 
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "补齐制作素材" }).disabled).toBe(true);
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" }).disabled).toBe(true);
-  expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(true);
+  for (const label of ["上传配音", "上传SRT 字幕", "上传成片", "替换账号背景图"]) {
+    expect(screen.getByLabelText<HTMLInputElement>(label).disabled).toBe(true);
+  }
 });
 
-test("guards the 1366 by 768 compact desktop structure without pretending to measure visibility", () => {
+test("labels a terminal task as recent instead of actively processing", () => {
+  const completed = { ...task, status: "completed", result_summary: "最近完成的结果" };
+  const props = workbenchProps();
+  props.tasks = [completed];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByText("最近任务")).toBeTruthy();
+  expect(screen.queryByText("Codex 正在处理")).toBeNull();
+  expect(screen.getAllByText("最近完成的结果").length).toBeGreaterThan(0);
+});
+
+test("keeps the 1366 by 768 desktop structure without runtime layout classes", () => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1366 });
   Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
   window.dispatchEvent(new Event("resize"));
@@ -295,12 +311,29 @@ test("guards the 1366 by 768 compact desktop structure without pretending to mea
   const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
   window.dispatchEvent(new Event("resize"));
 
-  const workbench = container.querySelector(".project-workbench--compact-desktop");
+  const workbench = container.querySelector(".project-workbench");
   expect(workbench).toBeTruthy();
+  expect(container.querySelector(".project-workbench--compact-desktop")).toBeNull();
   expect(window.innerWidth).toBe(1366);
   expect(window.innerHeight).toBe(768);
   expect(within(workbench as HTMLElement).getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
   expect(within(workbench as HTMLElement).getByRole("region", { name: "下一主动作" })).toBeTruthy();
   expect(within(workbench as HTMLElement).getByRole("region", { name: "当前项目资产" })).toBeTruthy();
   expect(within(workbench as HTMLElement).getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
+});
+
+test("keeps three workbench columns through 760 pixels and switches to one below it", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
+  const compactStart = css.indexOf("@media (max-width: 1100px)");
+  const mobileStart = css.indexOf("@media (max-width: 759px)");
+  const reducedMotionStart = css.indexOf("@media (prefers-reduced-motion", mobileStart);
+  const compact = css.slice(compactStart, mobileStart);
+  const mobile = css.slice(mobileStart, reducedMotionStart);
+
+  expect(css).toContain("height: 100vh");
+  expect(css).toContain("overflow: hidden");
+  expect(compact).toContain("grid-template-columns:");
+  expect(compact).not.toContain("grid-column: 1 / -1");
+  expect(mobile).toContain("display: block");
+  expect(css).not.toContain("@media (max-width: 1023px)");
 });

@@ -217,6 +217,54 @@ test("locks a pending remix against double click and unlocks after completion", 
   await waitFor(() => expect(action.disabled).toBe(false));
 });
 
+test("serializes every mutation for one project while allowing another project to proceed", async () => {
+  const projectA = { id: routedProjectID, account_id: "account-1", title: "项目 A", stage: "script" };
+  const projectB = { id: "94a1ddc8-7972-464e-b485-a849c7886be3", account_id: "account-1", title: "项目 B", stage: "script" };
+  const remixA = deferredResponse();
+  const remixB = deferredResponse();
+  const mutations: string[] = [];
+  window.history.replaceState({}, "", `/projects/${projectA.id}`);
+  vi.stubGlobal("confirm", vi.fn(() => true));
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([projectA, projectB]);
+    if (path === `/api/projects/${projectA.id}`) return json({ project: projectA, assets: {}, missing_assets: [] });
+    if (path === `/api/projects/${projectB.id}`) return json({ project: projectB, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${projectA.id}` || path === `/api/tasks?project_id=${projectB.id}`) return json([]);
+    if (path === `/api/projects/${projectA.id}/remix` && method === "POST") {
+      mutations.push("remix-a");
+      return remixA.promise;
+    }
+    if (path === `/api/projects/${projectB.id}/remix` && method === "POST") {
+      mutations.push("remix-b");
+      return remixB.promise;
+    }
+    if (path === `/api/projects/${projectA.id}` && method === "DELETE") {
+      mutations.push("delete-a");
+      return new Response(null, { status: 204 });
+    }
+  }));
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
+  await waitFor(() => expect(mutations).toEqual(["remix-a"]));
+
+  const deleteButton = screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" });
+  expect(deleteButton.disabled).toBe(true);
+  for (const label of ["上传配音", "上传SRT 字幕", "上传成片", "上传账号背景图"]) {
+    expect(screen.getByLabelText<HTMLInputElement>(label).disabled).toBe(true);
+  }
+  fireEvent.click(deleteButton);
+  expect(mutations).toEqual(["remix-a"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "返回项目看板" }));
+  fireEvent.click(await screen.findByText("项目 B"));
+  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
+  await waitFor(() => expect(mutations).toEqual(["remix-a", "remix-b"]));
+
+  remixA.resolve(json({ id: "workflow-a" }, 201));
+  remixB.resolve(json({ id: "workflow-b" }, 201));
+});
+
 test("turns a rejected remix request into an actionable error and allows retry", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "错误恢复项目", stage: "script" };
   let attempts = 0;
@@ -285,6 +333,8 @@ test("contains no legacy project drawer or bypass production controls in App sou
     expect(appSource).not.toContain(forbidden);
   }
   expect(appSource).not.toContain("{selected && (\n        <div\n          className=\"drawer-backdrop\"");
+  expect(appSource).not.toContain("×");
+  expect(appSource).not.toContain("●");
 });
 
 test.each([

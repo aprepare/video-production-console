@@ -95,7 +95,7 @@ export function ProjectAssets({
     uploadRefs.current[uploadRequest.type]?.click();
   }, [uploadRequest]);
 
-  const isPending = (type: ProjectAssetUploadType) => pendingActions.includes(`upload:${type}`);
+  const isPending = (_type: ProjectAssetUploadType) => pendingActions.length > 0;
   return (
     <section className="project-assets" aria-label="当前项目资产">
       <div className="workbench-section-heading">

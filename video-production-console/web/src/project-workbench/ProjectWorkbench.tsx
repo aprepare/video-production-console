@@ -1,5 +1,5 @@
 import { ArrowLeft, CircleCheck, MessageSquare, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ProjectAsset, ProjectDetail, ProjectTask } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
@@ -46,17 +46,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     .filter((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status))
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0]
     || [...props.tasks].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+  const currentTaskIsLive = Boolean(currentTask && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(currentTask.status));
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
-  const [compactDesktop, setCompactDesktop] = useState(
-    () => window.innerWidth >= 1024 && window.innerHeight <= 900,
-  );
-
-  useEffect(() => {
-    const updateLayoutContract = () =>
-      setCompactDesktop(window.innerWidth >= 1024 && window.innerHeight <= 900);
-    window.addEventListener("resize", updateLayoutContract);
-    return () => window.removeEventListener("resize", updateLayoutContract);
-  }, []);
+  const projectPending = props.pendingActions.length > 0;
 
   const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]);
   const unknownMissing = missing.find((type) => !knownMissing.has(type));
@@ -69,9 +61,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         : action?.id === "upload-final-video"
           ? "upload:final_video"
           : "";
-  const actionPending = action?.id === "prepare-assets"
+  const actionPending = projectPending || (action?.id === "prepare-assets"
     ? missing.some((type) => props.pendingActions.includes(`upload:${type}`))
-    : pendingForAction ? props.pendingActions.includes(pendingForAction) : false;
+    : pendingForAction ? props.pendingActions.includes(pendingForAction) : false);
 
   const requestUpload = (type: ProjectAssetUploadType) => {
     setUploadRequest((current) => ({ type, token: (current?.token || 0) + 1 }));
@@ -90,7 +82,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   };
 
   return (
-    <main className={`project-workbench${compactDesktop ? " project-workbench--compact-desktop" : ""}`}>
+    <main className="project-workbench">
       <header className="workbench-masthead">
         <button type="button" className="workbench-icon-button" onClick={props.onBack} aria-label="返回项目看板">
           <ArrowLeft size={19} aria-hidden="true" />
@@ -100,7 +92,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <h1>{detail.project.title}</h1>
           <p>项目 #{detail.project.id.slice(0, 8)} · 所有资产与任务均限定在当前项目</p>
         </div>
-        <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={props.pendingActions.includes("delete")}>
+        <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={projectPending}>
           <Trash2 size={16} aria-hidden="true" />
           删除项目
         </button>
@@ -150,10 +142,12 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </div>
 
           <div className="active-task-summary">
-            <span>ACTIVE TASK</span>
+            <span>{currentTaskIsLive ? "ACTIVE TASK" : "RECENT TASK"}</span>
             {currentTask ? (
               <button type="button" onClick={() => props.onOpenTask(currentTask)}>
-                <strong>{currentTask.action === "montage.execute" ? "混剪草稿处理中" : "Codex 正在处理"}</strong>
+                <strong>{currentTaskIsLive
+                  ? currentTask.action === "montage.execute" ? "混剪草稿处理中" : "Codex 正在处理"
+                  : "最近任务"}</strong>
                 <small>{currentTask.result_summary || "查看进度与问题"}</small>
               </button>
             ) : <p>当前没有运行中的任务。</p>}

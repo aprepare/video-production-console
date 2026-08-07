@@ -9,9 +9,11 @@
 }
 
 .project-workbench {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   color: var(--workbench-ink);
   background:
     linear-gradient(90deg, rgba(23, 33, 38, 0.025) 1px, transparent 1px) 0 0 / 72px 100%,
@@ -160,10 +162,6 @@
 
 .workbench-grid > * { min-width: 0; }
 
-.project-workbench--compact-desktop .workbench-grid {
-  grid-template-columns: minmax(225px, 0.72fr) minmax(490px, 1.6fr) minmax(280px, 0.9fr);
-}
-
 .primary-action-panel,
 .project-assets,
 .project-conversation { min-width: 0; padding: 20px; }
@@ -284,30 +282,19 @@
 .asset-upload-control:focus-within { outline: 3px solid rgba(201, 138, 46, 0.36); outline-offset: 2px; }
 
 @media (max-width: 1100px) {
-  .project-workbench { padding: 14px; }
-  .workbench-grid,
-  .project-workbench--compact-desktop .workbench-grid {
-    flex-basis: auto;
-    grid-template-columns: minmax(210px, 0.75fr) minmax(0, 1.5fr);
+  .project-workbench { padding: 12px 14px 14px; }
+  .workbench-grid {
+    grid-template-columns: minmax(175px, 0.7fr) minmax(0, 1.45fr) minmax(205px, 0.85fr);
   }
-  .project-conversation { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--workbench-line); }
-}
-
-@media (max-width: 1023px) {
-  .workbench-grid,
-  .project-workbench--compact-desktop .workbench-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  .primary-action-panel,
   .project-assets,
-  .project-conversation {
-    grid-column: auto;
-    border-left: 0;
-    border-top: 1px solid var(--workbench-line);
-  }
-  .primary-action-panel { min-height: 320px; }
+  .project-conversation { padding: 14px; }
+  .production-rail { height: 76px; }
+  .production-rail__line { top: 29px; }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 759px) {
+  .project-workbench { height: auto; min-height: 100vh; overflow: visible; }
   .workbench-title p { display: none; }
   .workbench-delete { width: 38px; padding: 0; justify-content: center; font-size: 0; }
   .production-rail { padding: 0; }

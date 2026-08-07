@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Circle, X } from "lucide-react";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
@@ -663,7 +663,8 @@ function App() {
   const taskRestoreAbortRef = useRef<AbortController | null>(null);
   const lockProjectAction = useCallback((projectID: string, action: string) => {
     const key = `${projectID}:${action}`;
-    if (pendingProjectActionsRef.current.has(key)) return "";
+    if ([...pendingProjectActionsRef.current].some((pending) => pending.startsWith(`${projectID}:`)))
+      return "";
     pendingProjectActionsRef.current.add(key);
     setPendingProjectActions([...pendingProjectActionsRef.current]);
     return key;
@@ -1184,7 +1185,7 @@ function App() {
     }
     activeDialogRef.current = active || null;
     const activeLayer =
-      (active?.closest(".modal-backdrop, .drawer-backdrop") as HTMLElement | null) || active;
+      (active?.closest(".modal-backdrop") as HTMLElement | null) || active;
     if (activeLayer) {
       (activeLayer as HTMLElement & { inert: boolean }).inert = false;
       activeLayer.removeAttribute("aria-hidden");
@@ -2297,7 +2298,7 @@ function App() {
                             <span>
                               {accountName(project.account_id, accounts)}
                             </span>
-                            <span className="pulse">●</span>
+                            <Circle className="pulse" size={8} fill="currentColor" aria-hidden="true" />
                           </div>
                         </button>
                       ))}
@@ -2320,15 +2321,15 @@ function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="drawer-head">
+            <div className="modal-head">
               <div>
                 <span className="muted">
                   {assetLabels[preview.asset.type] || preview.asset.type}
                 </span>
                 <h2 id="preview-dialog-title">{preview.asset.filename}</h2>
               </div>
-              <button className="close" onClick={() => setPreview(null)}>
-                ×
+              <button className="close" aria-label="关闭素材预览" onClick={() => setPreview(null)}>
+                <X size={20} aria-hidden="true" />
               </button>
             </div>
             <pre className="asset-text">{preview.text}</pre>
@@ -2346,7 +2347,7 @@ function App() {
             onClick={(event) => event.stopPropagation()}
             onSubmit={saveSettings}
           >
-            <div className="drawer-head">
+            <div className="modal-head">
               <div>
                 <span className="muted">本地配置</span>
                 <h2 id="settings-dialog-title">控制台设置</h2>
@@ -2354,9 +2355,10 @@ function App() {
               <button
                 type="button"
                 className="close"
+                aria-label="关闭设置"
                 onClick={() => setSettingsOpen(false)}
               >
-                ×
+                <X size={20} aria-hidden="true" />
               </button>
             </div>
             <p className="settings-note">
@@ -2522,7 +2524,7 @@ function App() {
             aria-labelledby="idea-dialog-title"
             tabIndex={-1}
           >
-            <div className="drawer-head">
+            <div className="modal-head">
               <div>
                 <span className="muted">
                   选题规划 ·{" "}
@@ -2553,8 +2555,8 @@ function App() {
                     ))}
                   </select>
                 </label>
-                <button className="close" onClick={() => setIdeaOpen(false)}>
-                  ×
+                <button className="close" aria-label="关闭选题规划" onClick={() => setIdeaOpen(false)}>
+                  <X size={20} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -2593,7 +2595,7 @@ function App() {
                         title="删除对话"
                         onClick={() => void deleteIdeaConversation(session)}
                       >
-                        ×
+                        <X size={16} aria-hidden="true" />
                       </button>
                     </div>
                   ))}
@@ -2717,7 +2719,7 @@ function App() {
                       aria-label={`删除对话 ${session.title}`}
                       onClick={() => void deleteChatSession(session)}
                     >
-                      ×
+                      <X size={16} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -2776,7 +2778,9 @@ function App() {
                   <span className="eyebrow">实时对话</span>
                   <h2 id="chat-dialog-title">{chatDetail?.session.title || "新建一个 Codex 对话"}</h2>
                 </div>
-                <button className="close" onClick={() => setChatOpen(false)}>×</button>
+                <button className="close" aria-label="关闭 Codex 对话" onClick={() => setChatOpen(false)}>
+                  <X size={20} aria-hidden="true" />
+                </button>
               </div>
               <div className="chat-messages" aria-live="polite">
                 {visibleChatMessages.map((item, index) => (
@@ -2829,14 +2833,14 @@ function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="drawer-head">
+            <div className="modal-head">
               <div>
                 <span className="muted">Codex 任务详情</span>
                   <h2 id="task-dialog-title">{taskTitle(taskOpen)}</h2>
                 {selected ? <p className="task-project-context">当前项目：{selected.title}</p> : null}
               </div>
               <button className="close" aria-label="关闭任务详情" onClick={closeTask}>
-                ×
+                <X size={20} aria-hidden="true" />
               </button>
             </div>
             <div className="task-modal-meta">
