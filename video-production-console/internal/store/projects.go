@@ -27,6 +27,8 @@ type ProjectRepository struct {
 	assets *AssetRepository
 }
 
+const projectColumns = `id,account_id,title,stage,publication_status,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note`
+
 func NewProjectRepository(db *sql.DB) *ProjectRepository {
 	return &ProjectRepository{db: db, assets: NewAssetRepository(db)}
 }
@@ -141,7 +143,7 @@ func (r *ProjectRepository) SyncStageFromAssets(ctx context.Context, id string, 
 }
 
 func (r *ProjectRepository) ListProjects(ctx context.Context, accountID string, stage domain.ProjectStage, q string) ([]domain.Project, error) {
-	query := `SELECT id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note FROM projects WHERE 1=1`
+	query := `SELECT ` + projectColumns + ` FROM projects WHERE 1=1`
 	args := []any{}
 	if accountID != "" {
 		query += " AND account_id=?"
@@ -172,7 +174,7 @@ func (r *ProjectRepository) ListProjects(ctx context.Context, accountID string, 
 	return out, rows.Err()
 }
 func (r *ProjectRepository) GetProject(ctx context.Context, id string) (domain.Project, error) {
-	p, err := scanProject(r.db.QueryRowContext(ctx, `SELECT id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note FROM projects WHERE id=?`, id))
+	p, err := scanProject(r.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrProjectNotFound
 	}
@@ -239,6 +241,17 @@ func (r *ProjectRepository) PublishProject(ctx context.Context, id string, now t
 		return out, err
 	}
 	if stage != domain.StageReview {
+		if stage == domain.StagePublished {
+			out, err = scanProject(conn.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id=?`, id))
+			if err != nil {
+				return out, err
+			}
+			if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+				return out, fmt.Errorf("commit idempotent publish project: %w", err)
+			}
+			committed = true
+			return out, nil
+		}
 		return out, ErrProjectNotInReview
 	}
 	var readyFinal int
@@ -259,7 +272,7 @@ func (r *ProjectRepository) PublishProject(ctx context.Context, id string, now t
 	if n != 1 {
 		return out, ErrProjectNotInReview
 	}
-	out, err = scanProject(conn.QueryRowContext(ctx, `SELECT id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note FROM projects WHERE id=?`, id))
+	out, err = scanProject(conn.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id=?`, id))
 	if err != nil {
 		return out, err
 	}
@@ -349,6 +362,6 @@ type projectScanner interface{ Scan(...any) error }
 
 func scanProject(s projectScanner) (domain.Project, error) {
 	var p domain.Project
-	err := s.Scan(&p.ID, &p.AccountID, &p.Title, &p.Stage, &p.TopicCardPath, &p.CreatedAt, &p.UpdatedAt, &p.ReadyAt, &p.PublishedAt, &p.PublishNote)
+	err := s.Scan(&p.ID, &p.AccountID, &p.Title, &p.Stage, &p.Status, &p.TopicCardPath, &p.CreatedAt, &p.UpdatedAt, &p.ReadyAt, &p.PublishedAt, &p.PublishNote)
 	return p, err
 }

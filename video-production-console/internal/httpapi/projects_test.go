@@ -27,12 +27,33 @@ import (
 
 type recordingRemixStarter struct {
 	run   domain.ProjectWorkflowRun
+	err   error
 	calls []workflow.StartRemix
 }
 
 func (s *recordingRemixStarter) Start(_ context.Context, in workflow.StartRemix) (domain.ProjectWorkflowRun, error) {
 	s.calls = append(s.calls, in)
-	return s.run, nil
+	return s.run, s.err
+}
+
+type repositoryWorkflowLauncher struct {
+	db    *sql.DB
+	calls int
+}
+
+func (l *repositoryWorkflowLauncher) LaunchTopicCommit(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
+	return l.launch(ctx, in, "topic_commit")
+}
+
+func (l *repositoryWorkflowLauncher) LaunchRemixFromTopicCard(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
+	return l.launch(ctx, in, "remix")
+}
+
+func (l *repositoryWorkflowLauncher) launch(ctx context.Context, in workflow.LaunchTask, typ string) (domain.CodexTask, error) {
+	l.calls++
+	projectID := in.Project.ID
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: in.Project.AccountID, Type: typ, SkillName: "test-skill", Status: domain.TaskQueued, PromptSnapshot: "prompt", ModelName: in.ModelName, ReasoningEffort: in.ReasoningEffort, CreatedAt: in.Now}
+	return task, store.NewTaskRepository(l.db).Create(ctx, task)
 }
 
 type fixedProjectModelResolver struct {
@@ -94,6 +115,66 @@ func TestProjectRemixUsesDatabaseIdentityDefaultsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestProjectRemixInternalErrorIsGeneric(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := store.NewProjectRepository(db).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "remix", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	starter := &recordingRemixStarter{err: errors.New(`open C:\\secret\\manifest.json: SQL unavailable`)}
+	response := performJSON(t, NewProjectsHandler(db, assets.NewService(root), starter, nil), http.MethodPost, "/api/projects/"+projectID+"/remix", nil)
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusInternalServerError || !strings.Contains(string(body), `"code":"project_remix_failed"`) {
+		t.Fatalf("status=%d body=%s", response.StatusCode, body)
+	}
+	if strings.Contains(string(body), "secret") || strings.Contains(string(body), "SQL") {
+		t.Fatalf("internal error leaked: %s", body)
+	}
+}
+
+func TestProjectRemixRealCoordinatorCreatesOneWorkflowAndTaskOnRetry(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := store.NewProjectRepository(db).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "remix", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &repositoryWorkflowLauncher{db: db}
+	coordinator := workflow.NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+	handler := NewProjectsHandler(db, assets.NewService(root), coordinator, nil)
+	var workflowID, taskID string
+	for i := 0; i < 2; i++ {
+		response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/remix", nil)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("attempt %d status=%d body=%s", i+1, response.StatusCode, readResponseBody(t, response))
+		}
+		var body struct {
+			Workflow struct {
+				ID string `json:"id"`
+			} `json:"workflow"`
+			CurrentTask struct {
+				ID string `json:"id"`
+			} `json:"current_task"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			workflowID, taskID = body.Workflow.ID, body.CurrentTask.ID
+		} else if body.Workflow.ID != workflowID || body.CurrentTask.ID != taskID {
+			t.Fatalf("retry changed workflow/task: %+v", body)
+		}
+	}
+	var workflows, tasks int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM project_workflow_runs WHERE project_id=?`, projectID).Scan(&workflows)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM codex_tasks WHERE project_id=?`, projectID).Scan(&tasks)
+	if workflows != 1 || tasks != 1 || launcher.calls != 1 {
+		t.Fatalf("workflows=%d tasks=%d launcher calls=%d", workflows, tasks, launcher.calls)
+	}
+}
+
 func TestProjectDetailIncludesActiveWorkflowAndCurrentTask(t *testing.T) {
 	_, db, root, accountID := newProjectsTestHandler(t, "active")
 	projectID := uuid.NewString()
@@ -129,6 +210,32 @@ func TestProjectDetailIncludesActiveWorkflowAndCurrentTask(t *testing.T) {
 	}
 	if body.ActiveWorkflow == nil || body.ActiveWorkflow.ID != run.ID || body.ActiveWorkflow.CurrentTask.ID != taskID {
 		t.Fatalf("active workflow=%+v", body.ActiveWorkflow)
+	}
+}
+
+func TestProjectViewsUseStoredPublicationStatus(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'status','script','producing',?,?)`, projectID, accountID, now, now)
+	handler := NewProjectsHandler(db, assets.NewService(root), nil, nil)
+	list := performJSON(t, handler, http.MethodGet, "/api/projects", nil)
+	var projects []projectView
+	if err := json.NewDecoder(list.Body).Decode(&projects); err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].PublicationStatus != domain.ProjectProducing {
+		t.Fatalf("list=%+v", projects)
+	}
+	detail := performJSON(t, handler, http.MethodGet, "/api/projects/"+projectID, nil)
+	var body struct {
+		Project projectView `json:"project"`
+	}
+	if err := json.NewDecoder(detail.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Project.PublicationStatus != domain.ProjectProducing {
+		t.Fatalf("detail=%+v", body.Project)
 	}
 }
 

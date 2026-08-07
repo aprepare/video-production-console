@@ -105,6 +105,61 @@ func TestPublishProjectRequiresReviewAndReadyFinalVideo(t *testing.T) {
 	assertProjectPublication(t, db, projectID, domain.StagePublished, "published", &publishedAt, publishedAt)
 }
 
+func TestPublishProjectRetryIsIdempotent(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "publish-retry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createdAt := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	firstPublish := createdAt.Add(time.Minute)
+	retryAt := firstPublish.Add(time.Hour)
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", createdAt, createdAt)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','review','producing',?,?)`, projectID, accountID, createdAt, createdAt)
+	repo := NewProjectRepository(db)
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", SHA256: "final"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.PublishProject(context.Background(), projectID, firstPublish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, err := repo.PublishProject(context.Background(), projectID, retryAt)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if first.PublishedAt == nil || retried.PublishedAt == nil || !retried.PublishedAt.Equal(*first.PublishedAt) || !retried.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("first=%+v retried=%+v", first, retried)
+	}
+	assertProjectPublication(t, db, projectID, domain.StagePublished, "published", &firstPublish, firstPublish)
+}
+
+func TestProjectRepositoryReadsStoredPublicationStatus(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "project-status.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','script','producing',?,?)`, projectID, accountID, now, now)
+	repo := NewProjectRepository(db)
+	got, err := repo.GetProject(context.Background(), projectID)
+	if err != nil || got.Status != domain.ProjectProducing {
+		t.Fatalf("get=%+v err=%v", got, err)
+	}
+	listed, err := repo.ListProjects(context.Background(), accountID, "", "")
+	if err != nil || len(listed) != 1 || listed[0].Status != domain.ProjectProducing {
+		t.Fatalf("list=%+v err=%v", listed, err)
+	}
+	moved, err := repo.MoveProject(context.Background(), projectID, domain.StageScript, domain.StageAssets, now.Add(time.Minute))
+	if err != nil || moved.Status != domain.ProjectProducing {
+		t.Fatalf("move=%+v err=%v", moved, err)
+	}
+}
+
 func TestPublishProjectWrongStageDoesNotPartiallyWrite(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "publish-stage.db"))
 	if err != nil {

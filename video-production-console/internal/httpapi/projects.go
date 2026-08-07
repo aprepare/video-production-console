@@ -323,7 +323,7 @@ func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusConflict, "project_remix_not_ready", err.Error())
+		writeError(w, http.StatusInternalServerError, "project_remix_failed", "Project remix could not be started.")
 		return
 	}
 	view, err := h.toWorkflowView(r.Context(), run)

@@ -171,3 +171,39 @@ func TestProjectRemixRouteRequiresAuthentication(t *testing.T) {
 		t.Fatalf("status=%d called=%t body=%s", response.Code, starter.called, response.Body.String())
 	}
 }
+
+func TestProjectRemixAndPublishRoutesAcceptAuthenticatedCSRFRequest(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	login, err := auth.Login(context.Background(), "123321", "127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	_, _ = database.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "account", now, now)
+	_, _ = database.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'project','review','producing',?,?)`, projectID, accountID, now, now)
+	if _, err := store.NewAssetRepository(database).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", SHA256: "sha"}); err != nil {
+		t.Fatal(err)
+	}
+	starter := &appRemixStarter{run: domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now}}
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth, RemixCoordinator: starter})
+	for _, path := range []string{"/api/projects/" + projectID + "/remix", "/api/projects/" + projectID + "/publish"} {
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		request.AddCookie(&http.Cookie{Name: consoleauth.SessionCookieName, Value: login.Token})
+		request.AddCookie(&http.Cookie{Name: consoleauth.CSRFCookieName, Value: login.CSRF})
+		request.Header.Set(consoleauth.CSRFHeader, login.CSRF)
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
