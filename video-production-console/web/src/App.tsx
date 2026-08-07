@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { ArrowLeft } from "lucide-react";
 import "./App.css";
 import "./idea.css";
+import { parseLocation } from "./project-workbench/routes";
+import type { ActiveWorkflow } from "./project-workbench/types";
 
 type Account = { id: string; name: string; status?: string };
 type Project = {
@@ -117,6 +120,7 @@ type ProjectDetail = {
   background_reference?: Asset | null;
   topic_context?: IdeaCandidate | null;
   missing_assets?: string[];
+  active_workflow?: ActiveWorkflow | null;
 };
 type PublicSettings = {
   listen_addr: string;
@@ -644,6 +648,7 @@ function App() {
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
   const [urlRevision, setURLRevision] = useState(0);
+  const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
   const detailGenerationRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
@@ -1099,6 +1104,50 @@ function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
   useEffect(() => {
+    if (!authenticated || loading) return;
+    const route = parseLocation(window.location.pathname);
+    const taskID = new URL(window.location.href).searchParams.get("task") || "";
+    if (route.view === "projects") {
+      if (!["/", "/projects", "/projects/"].includes(window.location.pathname)) {
+        window.history.replaceState({}, "", `/projects${window.location.search}`);
+      }
+      if (
+        !taskID &&
+        selectedIDRef.current &&
+        handledURLRevisionRef.current !== urlRevision
+      ) {
+        selectedIDRef.current = "";
+        detailGenerationRef.current += 1;
+        detailAbortRef.current?.abort();
+        detailInFlightRef.current = false;
+        detailQueuedRef.current = null;
+        setSelected(null);
+        setDetail(null);
+        setDetailError("");
+        setTasks([]);
+      }
+      handledURLRevisionRef.current = urlRevision;
+      return;
+    }
+    const project = projects.find((item) => item.id === route.projectID);
+    if (!project) {
+      window.history.replaceState({}, "", `/projects${window.location.search}`);
+      handledURLRevisionRef.current = urlRevision;
+      return;
+    }
+    handledURLRevisionRef.current = urlRevision;
+    if (selectedIDRef.current === project.id) return;
+    selectedIDRef.current = project.id;
+    detailQueuedRef.current = null;
+    detailAbortRef.current?.abort();
+    detailInFlightRef.current = false;
+    setSelected(project);
+    setDetail(null);
+    setDetailError("");
+    setTasks([]);
+    void loadDetail(project);
+  }, [authenticated, loadDetail, loading, projects, urlRevision]);
+  useEffect(() => {
     if (!authenticated || !projects.length) return;
     const taskID = new URL(window.location.href).searchParams.get("task") || "";
     if (!taskID) {
@@ -1313,6 +1362,7 @@ function App() {
     setDetail(null);
     setDetailError("");
     setTasks([]);
+    window.history.pushState({}, "", `/projects/${project.id}`);
     void loadDetail(project);
   };
   const closeProject = () => {
@@ -1328,6 +1378,7 @@ function App() {
     setDetail(null);
     setDetailError("");
     setTasks([]);
+    window.history.pushState({}, "", "/projects");
   };
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
@@ -1949,7 +2000,7 @@ function App() {
     if (response.ok) setHistoryThreads((await response.json()) as HistoryThread[]);
   };
 
-  const useHistoryThread = async (thread: HistoryThread, mode: "resume" | "fork") => {
+  const applyHistoryThread = async (thread: HistoryThread, mode: "resume" | "fork") => {
     const response = await api(`/api/codex/history/${encodeURIComponent(thread.id)}/${mode}`, { method: "POST" });
     if (!response.ok) {
       setMessage(
@@ -2209,9 +2260,9 @@ function App() {
               <button
                 className="close"
                 onClick={closeProject}
-                aria-label="关闭"
+                aria-label="返回项目看板"
               >
-                ×
+                <ArrowLeft aria-hidden="true" size={20} />
               </button>
             </div>
             {detailLoading && !detail ? (
@@ -3064,11 +3115,11 @@ function App() {
                       <button
                         disabled={thread.active}
                         title={thread.active ? "该会话正在别处运行" : "恢复原来的 Codex 会话"}
-                        onClick={() => void useHistoryThread(thread, "resume")}
+                        onClick={() => void applyHistoryThread(thread, "resume")}
                       >
                         继续原会话
                       </button>
-                      <button onClick={() => void useHistoryThread(thread, "fork")}>
+                      <button onClick={() => void applyHistoryThread(thread, "fork")}>
                         复制到控制台
                       </button>
                     </div>

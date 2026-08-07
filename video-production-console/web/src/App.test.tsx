@@ -3,10 +3,125 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
+import { parseLocation } from "./project-workbench/routes";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.history.replaceState({}, "", "/");
+});
+
+const routedProjectID = "814ebfde-7470-418a-a703-a33596f7e8fe";
+
+test("project location parsing accepts UUID detail paths and rejects invalid paths", () => {
+  expect(parseLocation("/")).toEqual({ view: "projects" });
+  expect(parseLocation("/projects")).toEqual({ view: "projects" });
+  expect(parseLocation(`/projects/${routedProjectID}`)).toEqual({
+    view: "project",
+    projectID: routedProjectID,
+  });
+  expect(parseLocation("/projects/project-1")).toEqual({ view: "projects" });
+  expect(parseLocation("/projects/not-a-uuid/more")).toEqual({ view: "projects" });
+});
+
+test("an invalid direct path falls back to the projects board", async () => {
+  window.history.replaceState({}, "", "/projects/not-a-project");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/projects") return json([]);
+    }),
+  );
+
+  render(<App />);
+
+  await screen.findByRole("heading", { name: "视频项目" });
+  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+});
+
+function routedProjectFetch(taskID = "") {
+  const project = {
+    id: routedProjectID,
+    account_id: "account-1",
+    title: "可恢复的视频项目",
+    stage: "script",
+  };
+  return {
+    project,
+    fetch: baseFetch((path) => {
+      if (path === "/api/projects") return json([project]);
+      if (path === `/api/projects/${routedProjectID}`)
+        return json({ project, assets: {}, missing_assets: [], active_workflow: null });
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+      if (taskID && path === `/api/tasks/${taskID}`)
+        return json({
+          id: taskID,
+          project_id: routedProjectID,
+          type: "remix",
+          skill_name: "finance-viral-remix",
+          status: "completed",
+          created_at: "2026-08-08T00:00:00Z",
+        });
+      if (taskID && path === `/api/tasks/${taskID}/semantic-events?limit=20`)
+        return json({ events: [] });
+      if (taskID && path === `/api/tasks/${taskID}/result`) return json({});
+    }),
+  };
+}
+
+test("clicking a project pushes a durable project path", async () => {
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+  const pushState = vi.spyOn(window.history, "pushState");
+
+  render(<App />);
+  fireEvent.click(await screen.findByText(fixture.project.title));
+
+  expect(pushState).toHaveBeenCalledWith({}, "", `/projects/${routedProjectID}`);
+  expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
+  expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
+});
+
+test("a direct project path restores the same project", async () => {
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: fixture.project.title })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "返回项目看板" })).toBeTruthy();
+});
+
+test("browser Back returns from a project path to the board", async () => {
+  window.history.replaceState({}, "", "/projects");
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+  render(<App />);
+  fireEvent.click(await screen.findByText(fixture.project.title));
+  await screen.findByRole("button", { name: "返回项目看板" });
+
+  window.history.back();
+
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "返回项目看板" })).toBeNull(),
+  );
+  expect(window.location.pathname).toBe("/projects");
+  expect(screen.getByText(fixture.project.title)).toBeTruthy();
+});
+
+test("direct project routing preserves task query restoration", async () => {
+  const taskID = "2c05dd52-ce7b-4244-9c03-22e887b198bf";
+  window.history.replaceState({}, "", `/projects/${routedProjectID}?task=${taskID}`);
+  const fixture = routedProjectFetch(taskID);
+  vi.stubGlobal("fetch", fixture.fetch);
+
+  render(<App />);
+
+  await waitFor(() => expect(fixture.fetch).toHaveBeenCalledWith(`/api/tasks/${taskID}`, expect.anything()));
+  expect(screen.getAllByText(fixture.project.title).length).toBeGreaterThan(0);
+  expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
+  expect(window.location.search).toBe(`?task=${taskID}`);
 });
 
 function json(value: unknown, status = 200) {
