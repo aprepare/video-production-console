@@ -477,7 +477,7 @@ func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuc
 		if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=NULL,error_message=NULL,finished_at=? WHERE id=?`, domain.TaskCompleted, domain.CompletionRegistered, now, taskID); err != nil {
 			return err
 		}
-		_, err = q.ExecContext(ctx, `UPDATE projects SET stage=CASE WHEN stage IN ('topic','script','assets','mixing') THEN 'review' ELSE stage END,updated_at=?,ready_at=COALESCE(ready_at,?) WHERE id=?`, now, now, projectID)
+		_, err = q.ExecContext(ctx, `UPDATE projects SET stage=CASE WHEN stage IN ('topic','script','assets','mixing') THEN 'review' ELSE stage END,updated_at=?,ready_at=CASE WHEN stage IN ('topic','script','assets','mixing') THEN COALESCE(ready_at,?) ELSE ready_at END WHERE id=?`, now, now, projectID)
 		return err
 	})
 	if commitOutcome(err) == CommitUnknown {

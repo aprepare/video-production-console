@@ -278,6 +278,35 @@ func TestMontageSucceedPreservesExistingReadyAt(t *testing.T) {
 	}
 }
 
+func TestMontageSucceedDoesNotSetReadyAtWithoutReviewTransition(t *testing.T) {
+	for _, stage := range []domain.ProjectStage{
+		domain.StageReview,
+		domain.StagePublished,
+		domain.StageArchived,
+	} {
+		t.Run(string(stage), func(t *testing.T) {
+			repo, projectID, success := preparedMontageSuccess(t)
+			if _, err := repo.db.Exec(`UPDATE projects SET stage=?,ready_at=NULL WHERE id=?`, stage, projectID); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Succeed(context.Background(), success); err != nil {
+				t.Fatal(err)
+			}
+			var gotStage domain.ProjectStage
+			var readyAt *time.Time
+			if err := repo.db.QueryRow(`SELECT stage,ready_at FROM projects WHERE id=?`, projectID).Scan(&gotStage, &readyAt); err != nil {
+				t.Fatal(err)
+			}
+			if gotStage != stage {
+				t.Fatalf("stage=%s, want unchanged %s", gotStage, stage)
+			}
+			if readyAt != nil {
+				t.Fatalf("ready_at=%v, want nil without review transition", readyAt)
+			}
+		})
+	}
+}
+
 func TestAuditMixDraftsStalesUnregisteredMontageAsset(t *testing.T) {
 	repo, assets, accountID, projectID, taskID := montageFixture(t)
 	trustedRoot := t.TempDir()
