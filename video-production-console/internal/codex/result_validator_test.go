@@ -413,6 +413,22 @@ func TestValidateResultEnvelopeRejectsActionAssetMismatchAndMalformedMediaType(t
 	}
 }
 
+func TestValidateResultEnvelopeRejectsSpokenScriptForRemixActions(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "spoken_script.txt")
+	if err := os.WriteFile(file, []byte("spoken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []domain.TaskAction{domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic} {
+		t.Run(string(action), func(t *testing.T) {
+			envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: action, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetSpokenScript, Path: file, StorageKind: domain.StorageFile, Filename: "spoken_script.txt", MIME: "text/plain; charset=utf-8", Size: 6, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+			if err := ValidateResultEnvelope(envelope, taskID, action, out); err == nil || !strings.Contains(err.Error(), "spoken_script") {
+				t.Fatalf("remix action accepted spoken_script result: %v", err)
+			}
+		})
+	}
+}
+
 func TestCompletedResultMustDeliverManifestRequiredOutputs(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
 	manifest := TaskManifest{TaskID: taskID, Action: domain.ActionRemixStandard, OutputDir: out, ExpectedOutputs: []ExpectedOutput{{Type: "continuous_script", Required: true}}}
@@ -465,6 +481,20 @@ func TestSchemasAreStrictAndParseable(t *testing.T) {
 	for _, want := range []string{`"minItems": 3`, `"maxItems": 5`, `"additionalProperties": false`} {
 		if !strings.Contains(string(topic), want) {
 			t.Fatalf("topic schema missing %s", want)
+		}
+	}
+}
+
+func TestSpokenConsoleProtocolIsAbsentFromSchemas(t *testing.T) {
+	for _, name := range []string{"task-manifest.schema.json", "codex-result.schema.json"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "schemas", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"remix.spoken_format", "spoken_script"} {
+			if strings.Contains(string(data), forbidden) {
+				t.Fatalf("%s still exposes deprecated console value %q", name, forbidden)
+			}
 		}
 	}
 }

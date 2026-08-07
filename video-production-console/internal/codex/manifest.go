@@ -29,7 +29,6 @@ var actionResolutions = map[domain.TaskAction]ActionResolution{
 	domain.ActionRemixStandard:   {Skill: "finance-viral-remix", WireAction: "standard"},
 	domain.ActionRemixEnhanced:   {Skill: "finance-viral-remix", WireAction: "enhanced"},
 	domain.ActionRemixFromTopic:  {Skill: "finance-viral-remix", WireAction: "from_topic_card"},
-	domain.ActionSpokenFormat:    {Skill: "finance-viral-remix", WireAction: "spoken_format"},
 	domain.ActionRemixReview:     {Skill: "finance-viral-remix", WireAction: "review"},
 	domain.ActionMontagePlan:     {Skill: "jianying-montage-draft", WireAction: "plan"},
 	domain.ActionMontageExecute:  {Skill: "jianying-montage-draft", WireAction: "execute"},
@@ -619,11 +618,11 @@ func requiredDirectoryRoot(label, root string) (string, error) {
 var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 	domain.ActionTopicBrainstorm: {"topic_candidates": true},
 	domain.ActionTopicCommit:     {"topic_card": true}, domain.ActionTopicDeepen: {"topic_card": true},
-	domain.ActionRemixStandard:  {"continuous_script": true, "spoken_script": true},
-	domain.ActionRemixEnhanced:  {"continuous_script": true, "spoken_script": true},
-	domain.ActionRemixFromTopic: {"continuous_script": true, "spoken_script": true},
-	domain.ActionSpokenFormat:   {"spoken_script": true}, domain.ActionRemixReview: {},
-	domain.ActionMontagePlan: {"production_plan": true},
+	domain.ActionRemixStandard:  {"continuous_script": true},
+	domain.ActionRemixEnhanced:  {"continuous_script": true},
+	domain.ActionRemixFromTopic: {"continuous_script": true},
+	domain.ActionRemixReview:    {},
+	domain.ActionMontagePlan:    {"production_plan": true},
 	// A montage execution produces a validated plaintext workspace only. The
 	// trusted host registers it into Jianying before a formal mix_draft asset
 	// can exist.
@@ -635,7 +634,6 @@ var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
 	domain.ActionRemixStandard:  {domain.AssetSourceScript: "primary_source"},
 	domain.ActionRemixEnhanced:  {domain.AssetSourceScript: "primary_source"},
 	domain.ActionRemixFromTopic: {domain.AssetTopicCard: "topic_brief"},
-	domain.ActionSpokenFormat:   {domain.AssetContinuousScript: "approved_script"},
 	domain.ActionRemixReview:    {domain.AssetSourceScript: "review_target", domain.AssetContinuousScript: "review_target"},
 	domain.ActionMontagePlan:    {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
 	domain.ActionMontageExecute: {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
@@ -644,7 +642,7 @@ var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
 var requiredExpectedOutputTypes = map[domain.TaskAction][]string{
 	domain.ActionTopicBrainstorm: {"topic_candidates"}, domain.ActionTopicCommit: {"topic_card"}, domain.ActionTopicDeepen: {"topic_card"},
 	domain.ActionRemixStandard: {"continuous_script"}, domain.ActionRemixEnhanced: {"continuous_script"}, domain.ActionRemixFromTopic: {"continuous_script"},
-	domain.ActionSpokenFormat: {"spoken_script"}, domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
+	domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
 }
 
 func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
@@ -658,7 +656,7 @@ func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
 
 var requiredInputRoles = map[domain.TaskAction][]string{
 	domain.ActionRemixStandard: {"primary_source"}, domain.ActionRemixEnhanced: {"primary_source"},
-	domain.ActionRemixFromTopic: {"topic_brief"}, domain.ActionSpokenFormat: {"approved_script"},
+	domain.ActionRemixFromTopic: {"topic_brief"},
 	domain.ActionMontagePlan:    {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 	domain.ActionMontageExecute: {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 }

@@ -58,6 +58,15 @@ func TestResolveTaskActionMapsLegacyTypesAndRejectsSkillCrossovers(t *testing.T)
 	}
 }
 
+func TestResolveTaskActionRejectsSpokenConsoleWorkflow(t *testing.T) {
+	if _, _, err := ResolveTaskAction("spoken_format", ""); err == nil {
+		t.Fatal("legacy spoken_format task type must not start a new console task")
+	}
+	if _, _, err := ResolveTaskAction("remix", domain.ActionSpokenFormat); err == nil {
+		t.Fatal("deprecated remix.spoken_format action must not start a new console task")
+	}
+}
+
 func TestManifestPromptRejectsPathOutsideCanonicalTaskLocation(t *testing.T) {
 	root, taskID := t.TempDir(), uuid.NewString()
 	output := filepath.Join(root, "tasks", taskID, "output")

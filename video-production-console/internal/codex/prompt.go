@@ -10,26 +10,24 @@ import (
 )
 
 var skills = map[string]string{
-	"topic_select":  "finance-topic-selector",
-	"topic_commit":  "finance-topic-selector",
-	"topic_deepen":  "finance-topic-selector",
-	"remix":         "finance-viral-remix",
-	"spoken_format": "finance-viral-remix",
-	"montage":       "jianying-montage-draft",
+	"topic_select": "finance-topic-selector",
+	"topic_commit": "finance-topic-selector",
+	"topic_deepen": "finance-topic-selector",
+	"remix":        "finance-viral-remix",
+	"montage":      "jianying-montage-draft",
 }
 
 var legacyWireActions = map[string]string{
 	"topic_select": "brainstorm", "topic_commit": "commit_topic", "topic_deepen": "deepen", "remix": "standard",
-	"spoken_format": "spoken_format", "montage": "execute",
+	"montage": "execute",
 }
 
 var legacyTaskActions = map[string]domain.TaskAction{
-	"topic_select":  domain.ActionTopicBrainstorm,
-	"topic_commit":  domain.ActionTopicCommit,
-	"topic_deepen":  domain.ActionTopicDeepen,
-	"remix":         domain.ActionRemixStandard,
-	"spoken_format": domain.ActionSpokenFormat,
-	"montage":       domain.ActionMontageExecute,
+	"topic_select": domain.ActionTopicBrainstorm,
+	"topic_commit": domain.ActionTopicCommit,
+	"topic_deepen": domain.ActionTopicDeepen,
+	"remix":        domain.ActionRemixStandard,
+	"montage":      domain.ActionMontageExecute,
 }
 
 // ResolveTaskAction bridges the original HTTP task type vocabulary to the

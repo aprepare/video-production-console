@@ -311,7 +311,7 @@ func snapshotTopicCandidatesInput(dataRoot, projectRoot, taskID, sourcePath stri
 func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain.AssetVersion, repo *taskManifestPreparer, ctx context.Context, projectID string) ([]domain.AssetVersion, error) {
 	types := map[domain.TaskAction][]domain.AssetType{
 		domain.ActionRemixStandard: {domain.AssetSourceScript}, domain.ActionRemixEnhanced: {domain.AssetSourceScript},
-		domain.ActionRemixFromTopic: {domain.AssetTopicCard}, domain.ActionSpokenFormat: {domain.AssetContinuousScript},
+		domain.ActionRemixFromTopic: {domain.AssetTopicCard},
 		domain.ActionRemixReview:    {domain.AssetContinuousScript},
 		domain.ActionMontagePlan:    {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
 		domain.ActionMontageExecute: {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},

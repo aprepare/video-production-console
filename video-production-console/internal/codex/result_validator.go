@@ -23,7 +23,7 @@ var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 var formalAssetTypes = map[domain.AssetType]bool{
 	domain.AssetSourceScript: true, domain.AssetTopicCard: true, domain.AssetContinuousScript: true,
-	domain.AssetSpokenScript: true, domain.AssetNarration: true, domain.AssetSubtitleSRT: true,
+	domain.AssetNarration: true, domain.AssetSubtitleSRT: true,
 	domain.AssetAccountBackground: true, domain.AssetMixDraft: true, domain.AssetFinalVideo: true,
 }
 
@@ -576,7 +576,6 @@ var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixStandard:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixEnhanced:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
-	domain.ActionSpokenFormat:   {"self_check": true},
 	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "self_check": true},
 	domain.ActionMontagePlan:    montagePlanArtifactTypes(), domain.ActionMontageExecute: montageExecuteArtifactTypes(),
 }
@@ -595,11 +594,11 @@ func montageExecuteArtifactTypes() map[string]bool {
 
 var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
 	domain.ActionTopicBrainstorm: {}, domain.ActionTopicCommit: {}, domain.ActionTopicDeepen: {},
-	domain.ActionRemixStandard:  {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
-	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
-	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
-	domain.ActionSpokenFormat:   {domain.AssetSpokenScript: true}, domain.ActionRemixReview: {},
-	domain.ActionMontagePlan: {}, domain.ActionMontageExecute: {},
+	domain.ActionRemixStandard:  {domain.AssetContinuousScript: true},
+	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true},
+	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true},
+	domain.ActionRemixReview:    {},
+	domain.ActionMontagePlan:    {}, domain.ActionMontageExecute: {},
 }
 
 type resultDirectoryEntry struct {

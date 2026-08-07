@@ -72,7 +72,6 @@ func TestBuildManifestUsesOneDomainToWireActionMapping(t *testing.T) {
 		{domain.ActionRemixStandard, "finance-viral-remix", "standard"},
 		{domain.ActionRemixEnhanced, "finance-viral-remix", "enhanced"},
 		{domain.ActionRemixFromTopic, "finance-viral-remix", "from_topic_card"},
-		{domain.ActionSpokenFormat, "finance-viral-remix", "spoken_format"},
 		{domain.ActionRemixReview, "finance-viral-remix", "review"},
 		{domain.ActionMontagePlan, "jianying-montage-draft", "plan"},
 		{domain.ActionMontageExecute, "jianying-montage-draft", "execute"},
@@ -87,6 +86,9 @@ func TestBuildManifestUsesOneDomainToWireActionMapping(t *testing.T) {
 	}
 	if _, err := ResolveAction(domain.TaskAction("commit_topic")); err == nil {
 		t.Fatal("wire action must not be accepted as a domain action")
+	}
+	if _, err := ResolveAction(domain.ActionSpokenFormat); err == nil {
+		t.Fatal("deprecated spoken action must not be accepted for a new manifest")
 	}
 }
 
@@ -190,7 +192,6 @@ func TestBuildManifestUsesActionSpecificInputRoles(t *testing.T) {
 		{domain.ActionRemixStandard, domain.AssetSourceScript, "primary_source"},
 		{domain.ActionRemixEnhanced, domain.AssetSourceScript, "primary_source"},
 		{domain.ActionRemixFromTopic, domain.AssetTopicCard, "topic_brief"},
-		{domain.ActionSpokenFormat, domain.AssetContinuousScript, "approved_script"},
 		{domain.ActionRemixReview, domain.AssetContinuousScript, "review_target"},
 	} {
 		t.Run(string(tt.action), func(t *testing.T) {
@@ -201,6 +202,35 @@ func TestBuildManifestUsesActionSpecificInputRoles(t *testing.T) {
 			}
 			if manifest.Inputs[0].Role != tt.want {
 				t.Fatalf("role=%q want %q", manifest.Inputs[0].Role, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemixOutputsRequireOnlyContinuousScript(t *testing.T) {
+	root, projectID, accountID := t.TempDir(), uuid.NewString(), uuid.NewString()
+	source := filepath.Join(root, "source.txt")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []domain.TaskAction{domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic} {
+		t.Run(string(action), func(t *testing.T) {
+			taskID := uuid.NewString()
+			typ := domain.AssetSourceScript
+			if action == domain.ActionRemixFromTopic {
+				typ = domain.AssetTopicCard
+			}
+			input := BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID}, Action: action, OutputDir: filepath.Join(root, "tasks", taskID, "output"), SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, Inputs: []domain.AssetVersion{manifestVersion(projectID, accountID, typ, source)}}
+			manifest, err := BuildManifest(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(manifest.ExpectedOutputs) != 1 || manifest.ExpectedOutputs[0].Type != "continuous_script" || !manifest.ExpectedOutputs[0].Required {
+				t.Fatalf("unexpected remix outputs: %#v", manifest.ExpectedOutputs)
+			}
+			input.ExpectedOutputs = []ExpectedOutput{{Type: "continuous_script", Required: true}, {Type: "spoken_script", Required: true}}
+			if _, err := BuildManifest(input); err == nil || !strings.Contains(err.Error(), "spoken_script") {
+				t.Fatalf("console manifest accepted spoken_script: %v", err)
 			}
 		})
 	}
@@ -393,7 +423,7 @@ func TestTaskManifestSchemaConstrainsActionSpecificTypeRolePairs(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"primary_source", "topic_brief", "approved_script", "review_target", "minContains"} {
+	for _, want := range []string{"primary_source", "topic_brief", "review_target", "minContains"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("schema missing action role/output constraint %q", want)
 		}
@@ -641,8 +671,6 @@ func requiredOutputsForTest(action domain.TaskAction) []ExpectedOutput {
 	switch action {
 	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic:
 		return []ExpectedOutput{{Type: "continuous_script", Required: true}}
-	case domain.ActionSpokenFormat:
-		return []ExpectedOutput{{Type: "spoken_script", Required: true}}
 	default:
 		return []ExpectedOutput{}
 	}
