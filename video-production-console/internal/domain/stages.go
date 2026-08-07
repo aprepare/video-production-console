@@ -25,14 +25,24 @@ func (e *MissingAssetsError) Error() string {
 	return "missing required assets: " + strings.Join(parts, ", ")
 }
 
+var productionStageOrder = map[ProjectStage]int{
+	StageScript:    0,
+	StageAssets:    1,
+	StageMixing:    2,
+	StageReview:    3,
+	StagePublished: 4,
+}
+
 func CanMove(from, to ProjectStage, available map[AssetType]bool) error {
-	order := map[ProjectStage]int{StageTopic: 0, StageScript: 1, StageAssets: 2, StageMixing: 3, StageReview: 4, StageReady: 5, StagePublished: 6}
-	known := func(stage ProjectStage) bool { _, ok := order[stage]; return ok || stage == StageArchived }
+	known := func(stage ProjectStage) bool {
+		_, ok := productionStageOrder[stage]
+		return ok || stage == StageArchived
+	}
 	if !known(from) || !known(to) {
 		return fmt.Errorf("invalid stage move from %s to %s", from, to)
 	}
-	fromOrder, fromOK := order[from]
-	toOrder, toOK := order[to]
+	fromOrder, fromOK := productionStageOrder[from]
+	toOrder, toOK := productionStageOrder[to]
 	if from == StageArchived && to != StageArchived {
 		return fmt.Errorf("archived project cannot be moved")
 	}
@@ -47,9 +57,9 @@ func CanMove(from, to ProjectStage, available map[AssetType]bool) error {
 	}
 	var required []AssetType
 	if from == StageAssets && to == StageMixing {
-		required = []AssetType{AssetContinuousScript, AssetAudio, AssetSubtitle, AssetAccountBackground}
+		required = []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground}
 	}
-	if (from == StageReview && to == StageReady) || (from == StageReady && to == StagePublished) {
+	if from == StageReview && to == StagePublished {
 		required = []AssetType{AssetFinalVideo}
 	}
 	missing := make([]AssetType, 0)

@@ -34,7 +34,7 @@ func (r *ProjectRepository) CreateProject(ctx context.Context, project domain.Pr
 		project.Title = "Untitled-" + project.ID[:8]
 	}
 	result, err := r.db.ExecContext(ctx, `INSERT INTO projects(id,account_id,title,stage,created_at,updated_at)
-		SELECT ?,id,?,'topic',?,? FROM accounts WHERE id=? AND status='active'`, project.ID, project.Title, project.CreatedAt, project.UpdatedAt, project.AccountID)
+		SELECT ?,id,?,'script',?,? FROM accounts WHERE id=? AND status='active'`, project.ID, project.Title, project.CreatedAt, project.UpdatedAt, project.AccountID)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
 	}
@@ -95,25 +95,19 @@ func (r *ProjectRepository) SyncStageFromAssets(ctx context.Context, id string, 
 			ready[version.Type] = true
 		}
 	}
-	target := domain.StageTopic
-	if ready[domain.AssetTopicCard] {
-		target = domain.StageScript
-	}
-	if ready[domain.AssetContinuousScript] || ready[domain.AssetSpokenScript] || ready[domain.AssetSourceScript] {
+	target := domain.StageScript
+	if ready[domain.AssetContinuousScript] {
 		target = domain.StageAssets
 	}
 	if ready[domain.AssetNarration] && ready[domain.AssetSubtitleSRT] {
 		target = domain.StageMixing
 	}
-	if ready[domain.AssetMixDraft] {
+	if ready[domain.AssetMixDraft] || ready[domain.AssetFinalVideo] {
 		target = domain.StageReview
 	}
-	if ready[domain.AssetFinalVideo] {
-		target = domain.StageReady
-	}
 	order := map[domain.ProjectStage]int{
-		domain.StageTopic: 0, domain.StageScript: 1, domain.StageAssets: 2,
-		domain.StageMixing: 3, domain.StageReview: 4, domain.StageReady: 5,
+		domain.StageScript: 0, domain.StageAssets: 1, domain.StageMixing: 2,
+		domain.StageReview: 3,
 	}
 	if order[target] <= order[project.Stage] {
 		return project, nil
@@ -174,7 +168,7 @@ func (r *ProjectRepository) MoveProject(ctx context.Context, id string, expected
 		return p, nil
 	}
 	ready, published := "", ""
-	if to == domain.StageReady {
+	if to == domain.StageReview {
 		ready = ", ready_at=COALESCE(ready_at,?)"
 	}
 	if to == domain.StagePublished {

@@ -40,7 +40,7 @@ func TestDeleteMappingRejectsActiveTurnAndProjectMain(t *testing.T) {
 	if err := repo.DeleteMapping(t.Context(), taskSession.ID); !errors.Is(err, ErrConversationActive) {
 		t.Fatalf("task delete err=%v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES('project','account','P','topic',?,?)`, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES('project','account','P','script',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	projectID := "project"

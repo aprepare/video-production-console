@@ -13,7 +13,7 @@ import (
 	"video-production-console/internal/domain"
 )
 
-func TestProjectRepositoryDefaultTitleAndTopicCard(t *testing.T) {
+func TestNewProjectStartsAtScript(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "projects.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestProjectRepositoryDefaultTitleAndTopicCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Title != "Untitled-"+projectID[:8] || p.Stage != domain.StageTopic {
+	if p.Title != "Untitled-"+projectID[:8] || p.Stage != domain.StageScript {
 		t.Fatalf("project=%+v", p)
 	}
 	if err := repo.SetTopicCardPath(context.Background(), projectID, "cards/topic.png", now.Add(time.Second)); err != nil {
@@ -58,20 +58,75 @@ func TestMoveProjectUsesExpectedStageAndIsIdempotent(t *testing.T) {
 	repo := NewProjectRepository(db)
 	_ = repo.CreateProject(context.Background(), domain.Project{ID: id, AccountID: accountID, Title: "p", CreatedAt: now, UpdatedAt: now})
 	readyAt := now.Add(time.Minute)
-	p, err := repo.MoveProject(context.Background(), id, domain.StageTopic, domain.StageReady, readyAt)
+	p, err := repo.MoveProject(context.Background(), id, domain.StageScript, domain.StageReview, readyAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	original := *p.ReadyAt
-	p, err = repo.MoveProject(context.Background(), id, domain.StageReady, domain.StageReady, readyAt.Add(time.Hour))
+	p, err = repo.MoveProject(context.Background(), id, domain.StageReview, domain.StageReview, readyAt.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !p.ReadyAt.Equal(original) || !p.UpdatedAt.Equal(readyAt) {
 		t.Fatalf("idempotent timestamps=%+v", p)
 	}
-	if _, err = repo.MoveProject(context.Background(), id, domain.StageTopic, domain.StagePublished, time.Now()); !errors.Is(err, ErrProjectStageConflict) {
+	if _, err = repo.MoveProject(context.Background(), id, domain.StageScript, domain.StagePublished, time.Now()); !errors.Is(err, ErrProjectStageConflict) {
 		t.Fatalf("conflict error=%v", err)
+	}
+}
+
+func TestSyncStageFromAssets(t *testing.T) {
+	tests := []struct {
+		name   string
+		start  domain.ProjectStage
+		assets []domain.AssetType
+		want   domain.ProjectStage
+	}{
+		{name: "empty", want: domain.StageScript},
+		{name: "topic card only", assets: []domain.AssetType{domain.AssetTopicCard}, want: domain.StageScript},
+		{name: "continuous script", assets: []domain.AssetType{domain.AssetContinuousScript}, want: domain.StageAssets},
+		{name: "narration and subtitles", assets: []domain.AssetType{domain.AssetNarration, domain.AssetSubtitleSRT}, want: domain.StageMixing},
+		{name: "mix draft", assets: []domain.AssetType{domain.AssetMixDraft}, want: domain.StageReview},
+		{name: "final video only", assets: []domain.AssetType{domain.AssetFinalVideo}, want: domain.StageReview},
+		{name: "spoken script only", assets: []domain.AssetType{domain.AssetSpokenScript}, want: domain.StageScript},
+		{name: "review does not regress", start: domain.StageReview, want: domain.StageReview},
+		{name: "published is terminal for sync", start: domain.StagePublished, want: domain.StagePublished},
+		{name: "archived is terminal for sync", start: domain.StageArchived, want: domain.StageArchived},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := Open(filepath.Join(t.TempDir(), "sync.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			now := time.Now().UTC()
+			aid, pid := uuid.NewString(), uuid.NewString()
+			if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now); err != nil {
+				t.Fatal(err)
+			}
+			repo := NewProjectRepository(db)
+			if err := repo.CreateProject(context.Background(), domain.Project{ID: pid, AccountID: aid, Title: "p", Stage: domain.StageTopic, CreatedAt: now, UpdatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.start != "" {
+				if _, err := db.Exec(`UPDATE projects SET stage=? WHERE id=?`, tt.start, pid); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, typ := range tt.assets {
+				if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, AccountID: aid, Type: typ, Path: string(typ), Filename: string(typ), MIMEType: "application/octet-stream", SHA256: string(typ)}); err != nil {
+					t.Fatalf("add %s: %v", typ, err)
+				}
+			}
+			got, err := repo.SyncStageFromAssets(context.Background(), pid, now.Add(time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Stage != tt.want {
+				t.Fatalf("stage=%s, want %s", got.Stage, tt.want)
+			}
+		})
 	}
 }
 
@@ -90,7 +145,7 @@ func TestAddAssetAllocatesUniqueVersionsAcrossDatabaseHandles(t *testing.T) {
 	now := time.Now().UTC()
 	aid, pid := uuid.NewString(), uuid.NewString()
 	_, _ = db1.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
-	_, _ = db1.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	_, _ = db1.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, pid, aid, now, now)
 	repos := []*ProjectRepository{NewProjectRepository(db1), NewProjectRepository(db2)}
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -138,7 +193,7 @@ func TestProjectRepositoryWritesAndReadsOnlyV2Assets(t *testing.T) {
 	now := time.Now().UTC()
 	aid, pid := uuid.NewString(), uuid.NewString()
 	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
-	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, pid, aid, now, now)
 	repo := NewProjectRepository(db)
 	a := domain.Asset{ID: uuid.NewString(), ProjectID: &pid, AccountID: uuid.NewString(), Type: domain.AssetNarration, Path: "voice.mp3", Filename: "voice.mp3", MIMEType: "audio/mpeg", Size: 1, SHA256: "hash", CreatedAt: now}
 	state, err := repo.AddAsset(context.Background(), &a)

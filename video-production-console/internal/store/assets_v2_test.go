@@ -26,7 +26,7 @@ func assetFixture(t *testing.T) (*AssetRepository, string, string) {
 	if _, err = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, projectID, accountID, now, now); err != nil {
+	if _, err = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, projectID, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	return NewAssetRepository(db), accountID, projectID
@@ -102,16 +102,16 @@ func TestAssetVersionConcurrentAppendUsesUniqueContinuousVersions(t *testing.T) 
 func TestAssetInvalidationTraversesOnlyRealDependencyEdges(t *testing.T) {
 	r, accountID, projectID := assetFixture(t)
 	a1 := addTestVersion(t, r, projectID, accountID, domain.AssetContinuousScript, "", nil)
-	b1 := addTestVersion(t, r, projectID, accountID, domain.AssetSpokenScript, "", nil, a1.ID)
+	b1 := addTestVersion(t, r, projectID, accountID, domain.AssetNarration, "", nil, a1.ID)
 	c1 := addTestVersion(t, r, projectID, accountID, domain.AssetFinalVideo, "", nil, b1.ID)
 	otherProject := uuid.NewString()
 	now := time.Now().UTC()
-	if _, err := r.db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','topic',?,?)`, otherProject, accountID, now, now); err != nil {
+	if _, err := r.db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','script',?,?)`, otherProject, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	d1 := addTestVersion(t, r, otherProject, accountID, domain.AssetFinalVideo, "", nil)
 	// Move B's pointer while C remains connected through historical B1.
-	b2 := addTestVersion(t, r, projectID, accountID, domain.AssetSpokenScript, b1.AssetID, &b1.ID, a1.ID)
+	b2 := addTestVersion(t, r, projectID, accountID, domain.AssetNarration, b1.AssetID, &b1.ID, a1.ID)
 	a2 := addTestVersion(t, r, projectID, accountID, domain.AssetContinuousScript, a1.AssetID, &a1.ID)
 	_ = a2
 	for _, tt := range []struct {
@@ -140,7 +140,7 @@ func TestAssetVersionRejectsInvalidIDsParentsAndCrossProjectDependencies(t *test
 	db := r.db
 	now := time.Now().UTC()
 	otherProject := uuid.NewString()
-	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','topic',?,?)`, otherProject, accountID, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','script',?,?)`, otherProject, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.AddVersion(context.Background(), AddAssetVersion{ProjectID: &otherProject, AccountID: accountID, Type: domain.AssetSpokenScript, Path: "x", Filename: "x", MIMEType: "x", SHA256: "x", Dependencies: []string{upstream.ID}}); !errors.Is(err, ErrInvalidAssetDependency) {
@@ -165,7 +165,7 @@ func TestProjectRepositoryPropagatesUnknownCommitOutcome(t *testing.T) {
 	now := time.Now().UTC()
 	accountID, projectID := uuid.NewString(), uuid.NewString()
 	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
-	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, projectID, accountID, now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, projectID, accountID, now, now)
 	repo := NewProjectRepository(db)
 	repo.assets.commit = func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {

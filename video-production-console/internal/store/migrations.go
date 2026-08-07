@@ -712,6 +712,32 @@ WHERE source='console' AND kind='project' AND project_id IS NOT NULL;`,
 );
 CREATE INDEX chat_completion_inbox_pending_idx
 ON chat_completion_inbox(status,available_at,created_at,id);`,
+	`CREATE TABLE projects_lifecycle_v2 (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    stage TEXT NOT NULL CHECK (stage IN ('script', 'assets', 'mixing', 'review', 'published', 'archived')),
+    topic_card_path TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    ready_at DATETIME,
+    published_at DATETIME,
+    publish_note TEXT,
+    publication_status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (publication_status IN ('draft', 'producing', 'ready_to_publish', 'published', 'archived'))
+);
+INSERT INTO projects_lifecycle_v2(
+    id,account_id,title,stage,topic_card_path,created_at,updated_at,
+    ready_at,published_at,publish_note,publication_status
+)
+SELECT id,account_id,title,
+    CASE stage WHEN 'topic' THEN 'script' WHEN 'ready' THEN 'review' ELSE stage END,
+    topic_card_path,created_at,updated_at,ready_at,published_at,publish_note,publication_status
+FROM projects;
+DROP TABLE projects;
+ALTER TABLE projects_lifecycle_v2 RENAME TO projects;
+CREATE INDEX projects_account_stage_idx ON projects(account_id, stage);
+CREATE INDEX projects_account_publication_idx ON projects(account_id, publication_status, created_at);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

@@ -5,45 +5,58 @@ import (
 	"testing"
 )
 
-func TestCanMoveStageGates(t *testing.T) {
-	if err := CanMove(StageTopic, StageScript, nil); err != nil {
-		t.Fatalf("topic -> script: %v", err)
-	}
-	required := map[AssetType]bool{AssetContinuousScript: true, AssetAudio: true, AssetSubtitle: true, AssetAccountBackground: true}
-	if err := CanMove(StageAssets, StageMixing, required); err != nil {
-		t.Fatalf("assets -> mixing: %v", err)
-	}
-	delete(required, AssetSubtitle)
-	if err := CanMove(StageAssets, StageMixing, required); err == nil || !strings.Contains(err.Error(), string(AssetSubtitle)) {
-		t.Fatalf("missing subtitle error = %v", err)
-	}
-	for _, move := range []struct{ from, to ProjectStage }{{StageReview, StageReady}, {StageReady, StagePublished}} {
-		if err := CanMove(move.from, move.to, nil); err == nil || !strings.Contains(err.Error(), string(AssetFinalVideo)) {
-			t.Fatalf("%s -> %s error = %v", move.from, move.to, err)
+func TestCanMoveUsesFiveProductionStages(t *testing.T) {
+	for _, move := range []struct{ from, to ProjectStage }{
+		{StageScript, StageAssets},
+		{StageMixing, StageReview},
+		{StageReview, StageReview},
+		{StageScript, StageArchived},
+	} {
+		if err := CanMove(move.from, move.to, nil); err != nil {
+			t.Fatalf("CanMove(%q, %q): %v", move.from, move.to, err)
 		}
-		if err := CanMove(move.from, move.to, map[AssetType]bool{AssetFinalVideo: true}); err != nil {
-			t.Fatalf("with final video: %v", err)
+	}
+	for _, move := range []struct{ from, to ProjectStage }{
+		{StageTopic, StageScript},
+		{StageReady, StagePublished},
+		{StageScript, StageReady},
+		{StageScript, StageMixing},
+		{StageArchived, StagePublished},
+	} {
+		if err := CanMove(move.from, move.to, nil); err == nil {
+			t.Fatalf("CanMove(%q, %q) succeeded", move.from, move.to)
 		}
 	}
 }
 
-func TestCanMoveAllowsRollbackButArchiveIsExplicit(t *testing.T) {
-	if err := CanMove(StageReview, StageScript, nil); err != nil {
-		t.Fatalf("rollback: %v", err)
+func TestCanMoveAssetsToMixingUsesCanonicalAssets(t *testing.T) {
+	required := map[AssetType]bool{
+		AssetContinuousScript:  true,
+		AssetNarration:         true,
+		AssetSubtitleSRT:       true,
+		AssetAccountBackground: true,
 	}
-	if err := CanMove(StageTopic, StageArchived, nil); err != nil {
-		t.Fatalf("explicit archive: %v", err)
+	if err := CanMove(StageAssets, StageMixing, required); err != nil {
+		t.Fatalf("assets -> mixing: %v", err)
 	}
-	if err := CanMove(StageArchived, StagePublished, nil); err == nil {
-		t.Fatal("archived project moved without explicit restore rule")
+	delete(required, AssetSubtitleSRT)
+	required[AssetSubtitle] = true
+	if err := CanMove(StageAssets, StageMixing, required); err == nil || !strings.Contains(err.Error(), string(AssetSubtitleSRT)) {
+		t.Fatalf("deprecated subtitle satisfied gate: %v", err)
 	}
-	if err := CanMove(StageTopic, StageMixing, nil); err == nil {
-		t.Fatal("forward stage skipping succeeded")
+}
+
+func TestReviewPublishesOnlyWithFinalVideo(t *testing.T) {
+	if err := CanMove(StageReview, StagePublished, nil); err == nil || !strings.Contains(err.Error(), string(AssetFinalVideo)) {
+		t.Fatalf("review -> published error = %v", err)
+	}
+	if err := CanMove(StageReview, StagePublished, map[AssetType]bool{AssetFinalVideo: true}); err != nil {
+		t.Fatalf("review -> published with final video: %v", err)
 	}
 }
 
 func TestCanMoveRejectsUnknownStagesBeforeSpecialCases(t *testing.T) {
-	for _, move := range []struct{ from, to ProjectStage }{{"invalid", "invalid"}, {"invalid", StageArchived}, {StageTopic, "invalid"}} {
+	for _, move := range []struct{ from, to ProjectStage }{{"invalid", "invalid"}, {"invalid", StageArchived}, {StageScript, "invalid"}} {
 		if err := CanMove(move.from, move.to, nil); err == nil {
 			t.Fatalf("CanMove(%q,%q) succeeded", move.from, move.to)
 		}

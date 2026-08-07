@@ -70,6 +70,103 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 	}
 }
 
+func TestLegacyStageMigrationRebuildsProjectsWithoutDataLoss(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "legacy-stages.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	for index, migration := range migrations[:len(migrations)-1] {
+		if _, err := legacy.Exec(migration); err != nil {
+			t.Fatalf("apply predecessor migration %d: %v", index+1, err)
+		}
+		if _, err := legacy.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, time.August, 7, 8, 9, 10, 0, time.UTC)
+	readyAt, publishedAt := now.Add(time.Hour), now.Add(2*time.Hour)
+	if _, err := legacy.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('account','Account','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range []struct {
+		id, stage, status string
+	}{
+		{id: "topic-project", stage: "topic", status: "draft"},
+		{id: "ready-project", stage: "ready", status: "ready_to_publish"},
+	} {
+		if _, err := legacy.Exec(`INSERT INTO projects(id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note,publication_status) VALUES(?,'account',?,?,?, ?,?,?,?,?,?)`,
+			project.id, "Title "+project.id, project.stage, "cards/"+project.id+".md", now, now.Add(time.Minute), readyAt, publishedAt, "keep note", project.status); err != nil {
+			t.Fatalf("insert %s: %v", project.id, err)
+		}
+	}
+	if _, err := legacy.Exec(`INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,prompt_snapshot,created_at) VALUES('task','topic-project','account','test','skill','completed','prompt',?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES('asset','ready-project','account','spoken_script','spoken.md','spoken.md','text/markdown',1,'sha',1,'active',?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenWithOptions(OpenOptions{Path: path, DataRoot: root, BackupDir: filepath.Join(root, "backups"), Now: time.Now})
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer db.Close()
+	if got := scalar(t, db, `SELECT stage FROM projects WHERE id='topic-project'`); got != "script" {
+		t.Fatalf("topic stage migrated to %q", got)
+	}
+	if got := scalar(t, db, `SELECT stage FROM projects WHERE id='ready-project'`); got != "review" {
+		t.Fatalf("ready stage migrated to %q", got)
+	}
+	for _, projectID := range []string{"topic-project", "ready-project"} {
+		wantTitle := "Title " + projectID
+		row := db.QueryRow(`SELECT account_id,title,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note,publication_status FROM projects WHERE id=?`, projectID)
+		var accountID, title, topicPath, note, status string
+		var createdAt, updatedAt, gotReadyAt, gotPublishedAt time.Time
+		if err := row.Scan(&accountID, &title, &topicPath, &createdAt, &updatedAt, &gotReadyAt, &gotPublishedAt, &note, &status); err != nil {
+			t.Fatal(err)
+		}
+		if accountID != "account" || title != wantTitle || topicPath != "cards/"+projectID+".md" || !createdAt.Equal(now) || !updatedAt.Equal(now.Add(time.Minute)) || !gotReadyAt.Equal(readyAt) || !gotPublishedAt.Equal(publishedAt) || note != "keep note" {
+			t.Fatalf("project fields changed: account=%q title=%q topic=%q created=%v updated=%v ready=%v published=%v note=%q", accountID, title, topicPath, createdAt, updatedAt, gotReadyAt, gotPublishedAt, note)
+		}
+		wantStatus := map[string]string{"topic-project": "draft", "ready-project": "ready_to_publish"}[projectID]
+		if status != wantStatus {
+			t.Fatalf("publication_status=%q, want %q", status, wantStatus)
+		}
+	}
+	if got := scalar(t, db, `SELECT project_id FROM codex_tasks WHERE id='task'`); got != "topic-project" {
+		t.Fatalf("task project=%q", got)
+	}
+	if got := scalar(t, db, `SELECT project_id FROM assets WHERE id='asset'`); got != "ready-project" {
+		t.Fatalf("asset project=%q", got)
+	}
+	for _, stage := range []string{"script", "assets", "mixing", "review", "published", "archived"} {
+		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,'account',?,?,?,?)`, "allowed-"+stage, stage, stage, now, now); err != nil {
+			t.Errorf("allowed stage %q rejected: %v", stage, err)
+		}
+	}
+	for _, stage := range []string{"topic", "ready"} {
+		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,'account',?,?,?,?)`, "rejected-"+stage, stage, stage, now, now); err == nil {
+			t.Errorf("legacy stage %q accepted", stage)
+		}
+	}
+	for _, index := range []string{"projects_account_stage_idx", "projects_account_publication_idx"} {
+		if got := scalar(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, index); got != "1" {
+			t.Errorf("index %s count=%s", index, got)
+		}
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM pragma_foreign_key_check`); got != "0" {
+		t.Fatalf("foreign key violations=%s", got)
+	}
+}
+
 func TestConversationMigrationAddsSessionExecutionAndTaskTransportColumns(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "conversation-schema.db"))
 	if err != nil {
@@ -601,7 +698,7 @@ func TestAssetVersionScopeAndCurrentPointerIntegrity(t *testing.T) {
 		}
 	}
 	for _, project := range []struct{ id, account string }{{"project-1", "account-1"}, {"project-2", "account-1"}} {
-		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,'topic',?,?)`, project.id, project.account, project.id, now, now); err != nil {
+		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,'script',?,?)`, project.id, project.account, project.id, now, now); err != nil {
 			t.Fatalf("insert %s: %v", project.id, err)
 		}
 	}
@@ -873,6 +970,9 @@ func TestV2MigrationTransformsLegacyValuesAndConstraints(t *testing.T) {
 		"mixing": "producing", "review": "producing", "ready": "ready_to_publish",
 		"published": "published", "archived": "archived",
 	}
+	wantStage := map[string]string{
+		"topic": "script", "ready": "review",
+	}
 	for stage := range wantPublication {
 		if _, err := legacy.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,'account-1',?,?,?,?)`, "project-"+stage, stage, stage, now, now); err != nil {
 			t.Fatalf("insert %s project: %v", stage, err)
@@ -923,8 +1023,15 @@ func TestV2MigrationTransformsLegacyValuesAndConstraints(t *testing.T) {
 		t.Fatalf("waiting task status=%s", got)
 	}
 	for stage, want := range wantPublication {
-		if got := scalar(t, db, `SELECT publication_status FROM projects WHERE stage=?`, stage); got != want {
+		if got := scalar(t, db, `SELECT publication_status FROM projects WHERE id=?`, "project-"+stage); got != want {
 			t.Errorf("stage %s publication_status=%s, want %s", stage, got, want)
+		}
+		migratedStage := stage
+		if replacement := wantStage[stage]; replacement != "" {
+			migratedStage = replacement
+		}
+		if got := scalar(t, db, `SELECT stage FROM projects WHERE id=?`, "project-"+stage); got != migratedStage {
+			t.Errorf("project %s stage=%s, want %s", stage, got, migratedStage)
 		}
 	}
 	wantSettings := map[string]string{

@@ -5,9 +5,10 @@ import "time"
 type AssetType string
 
 const (
-	AssetSourceScript      AssetType = "source_script"
-	AssetTopicCard         AssetType = "topic_card"
-	AssetContinuousScript  AssetType = "continuous_script"
+	AssetSourceScript     AssetType = "source_script"
+	AssetTopicCard        AssetType = "topic_card"
+	AssetContinuousScript AssetType = "continuous_script"
+	// Deprecated: retained so historical asset and audit data can be decoded.
 	AssetSpokenScript      AssetType = "spoken_script"
 	AssetNarration         AssetType = "narration"
 	AssetSubtitleSRT       AssetType = "subtitle_srt"
@@ -78,10 +79,9 @@ type AssetDependency struct {
 }
 
 var invalidates = map[AssetType][]AssetType{
-	AssetSourceScript:      {AssetContinuousScript, AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetTopicCard:         {AssetContinuousScript, AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetContinuousScript:  {AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetSpokenScript:      {AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetSourceScript:      {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetTopicCard:         {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetContinuousScript:  {AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
 	AssetNarration:         {AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
 	AssetSubtitleSRT:       {AssetMixDraft, AssetFinalVideo},
 	AssetAccountBackground: {AssetMixDraft, AssetFinalVideo},

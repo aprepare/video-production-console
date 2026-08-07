@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-func TestInvalidatedAssetTypes(t *testing.T) {
+func TestSpokenScriptIsOutsideInvalidationGraph(t *testing.T) {
 	tests := []struct {
 		changed AssetType
 		want    []AssetType
 	}{
-		{AssetSourceScript, []AssetType{AssetContinuousScript, AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
-		{AssetTopicCard, []AssetType{AssetContinuousScript, AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
-		{AssetContinuousScript, []AssetType{AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
-		{AssetSpokenScript, []AssetType{AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetSourceScript, []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetTopicCard, []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetContinuousScript, []AssetType{AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetSpokenScript, nil},
 		{AssetNarration, []AssetType{AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
 		{AssetSubtitleSRT, []AssetType{AssetMixDraft, AssetFinalVideo}},
 		{AssetAccountBackground, []AssetType{AssetMixDraft, AssetFinalVideo}},
@@ -32,7 +32,7 @@ func TestInvalidatedAssetTypes(t *testing.T) {
 func TestInvalidatedAssetTypesReturnsCopy(t *testing.T) {
 	got := InvalidatedAssetTypes(AssetContinuousScript)
 	got[0] = AssetFinalVideo
-	want := []AssetType{AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}
+	want := []AssetType{AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}
 	if next := InvalidatedAssetTypes(AssetContinuousScript); !slices.Equal(next, want) {
 		t.Fatalf("invalidation graph was mutated: %v", next)
 	}

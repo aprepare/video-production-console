@@ -5,11 +5,13 @@ import "time"
 type ProjectStage string
 
 const (
-	StageTopic     ProjectStage = "topic"
-	StageScript    ProjectStage = "script"
-	StageAssets    ProjectStage = "assets"
-	StageMixing    ProjectStage = "mixing"
-	StageReview    ProjectStage = "review"
+	// Deprecated: retained so historical project and audit data can be decoded.
+	StageTopic  ProjectStage = "topic"
+	StageScript ProjectStage = "script"
+	StageAssets ProjectStage = "assets"
+	StageMixing ProjectStage = "mixing"
+	StageReview ProjectStage = "review"
+	// Deprecated: retained so historical project and audit data can be decoded.
 	StageReady     ProjectStage = "ready"
 	StagePublished ProjectStage = "published"
 	StageArchived  ProjectStage = "archived"

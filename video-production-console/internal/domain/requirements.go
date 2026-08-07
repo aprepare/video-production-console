@@ -9,10 +9,11 @@ const (
 	ActionRemixStandard   TaskAction = "remix.standard"
 	ActionRemixEnhanced   TaskAction = "remix.enhanced"
 	ActionRemixFromTopic  TaskAction = "remix.from_topic_card"
-	ActionSpokenFormat    TaskAction = "remix.spoken_format"
-	ActionRemixReview     TaskAction = "remix.review"
-	ActionMontagePlan     TaskAction = "montage.plan"
-	ActionMontageExecute  TaskAction = "montage.execute"
+	// Deprecated: retained so historical task and audit data can be decoded.
+	ActionSpokenFormat   TaskAction = "remix.spoken_format"
+	ActionRemixReview    TaskAction = "remix.review"
+	ActionMontagePlan    TaskAction = "montage.plan"
+	ActionMontageExecute TaskAction = "montage.execute"
 )
 
 type DependencyHealth struct {
@@ -40,7 +41,6 @@ var actionAssets = map[TaskAction][]AssetType{
 	ActionRemixStandard:  {AssetSourceScript},
 	ActionRemixEnhanced:  {AssetSourceScript},
 	ActionRemixFromTopic: {AssetTopicCard},
-	ActionSpokenFormat:   {AssetContinuousScript},
 	ActionRemixReview:    {AssetContinuousScript},
 	ActionMontagePlan:    {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
 	ActionMontageExecute: {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},

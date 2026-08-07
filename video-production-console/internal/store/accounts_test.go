@@ -36,13 +36,13 @@ func TestAccountBackgroundUsesStableLogicalAssetAndReplacementInvalidatesDepende
 	}
 
 	projectID := uuid.NewString()
-	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, projectID, accountID, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, projectID, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	assets := NewAssetRepository(db)
 	connected := addTestVersion(t, assets, projectID, accountID, domain.AssetMixDraft, "", nil, v1)
 	otherProject := uuid.NewString()
-	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','topic',?,?)`, otherProject, accountID, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','script',?,?)`, otherProject, accountID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	unconnected := addTestVersion(t, assets, otherProject, accountID, domain.AssetMixDraft, "", nil)

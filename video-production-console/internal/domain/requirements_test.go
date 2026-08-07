@@ -23,7 +23,7 @@ func TestEvaluateActionRequirements(t *testing.T) {
 	}{
 		{"empty remix", ActionRemixStandard, ready(), DependencyHealth{}, false, []string{"source_script"}},
 		{"direct remix", ActionRemixStandard, ready(AssetSourceScript), DependencyHealth{}, true, nil},
-		{"spoken", ActionSpokenFormat, ready(AssetContinuousScript), DependencyHealth{}, true, nil},
+		{"deprecated spoken", ActionSpokenFormat, ready(AssetContinuousScript), DependencyHealth{}, false, []string{"unknown_action"}},
 		{"montage missing", ActionMontagePlan, ready(AssetContinuousScript), DependencyHealth{Montage: true}, false, []string{"narration", "subtitle_srt", "account_background"}},
 		{"montage ready", ActionMontagePlan, ready(AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground), DependencyHealth{Montage: true}, true, nil},
 		{"topic deps", ActionTopicBrainstorm, ready(), DependencyHealth{Baokuan: false, ObsidianRead: true}, false, []string{"baokuan_mcp"}},
@@ -46,6 +46,21 @@ func TestEvaluateActionTreatsOnlyReadyAssetsAsAvailable(t *testing.T) {
 				t.Fatalf("got %#v", got)
 			}
 		})
+	}
+}
+
+func TestSpokenScriptDoesNotSatisfyMontageExecute(t *testing.T) {
+	assets := map[AssetType]AssetState{
+		AssetContinuousScript:  AssetReady,
+		AssetSpokenScript:      AssetReady,
+		AssetAudio:             AssetReady,
+		AssetSubtitle:          AssetReady,
+		AssetAccountBackground: AssetReady,
+	}
+	got := EvaluateAction(ActionMontageExecute, assets, DependencyHealth{Montage: true})
+	want := []string{string(AssetNarration), string(AssetSubtitleSRT)}
+	if got.Ready || !slices.Equal(got.MissingInputs, want) {
+		t.Fatalf("got %#v, want missing %v", got, want)
 	}
 }
 
