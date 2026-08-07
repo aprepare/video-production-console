@@ -18,15 +18,19 @@ import (
 )
 
 type workflowLauncherScheduler struct {
-	mu    sync.Mutex
-	tasks []domain.CodexTask
-	err   error
+	mu           sync.Mutex
+	tasks        []domain.CodexTask
+	err          error
+	beforeReturn func()
 }
 
 func (s *workflowLauncherScheduler) Enqueue(_ context.Context, task domain.CodexTask) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
+	if s.beforeReturn != nil {
+		s.beforeReturn()
+	}
 	return s.err
 }
 func (*workflowLauncherScheduler) Resume(context.Context, string, string) error { return nil }
@@ -232,6 +236,130 @@ func TestWorkflowTaskLauncherNotifyFailureDoesNotFailWorkflow(t *testing.T) {
 	if run.State != domain.WorkflowRunning || run.CurrentStep != domain.WorkflowStepRemix || run.RemixTaskID == nil {
 		t.Fatalf("run=%+v", run)
 	}
+}
+
+func TestWorkflowTaskLauncherConfirmsAndBindsDurableTaskAfterRequestCancellation(t *testing.T) {
+	for _, step := range []string{"topic", "remix"} {
+		t.Run(step, func(t *testing.T) {
+			db, project, _ := workflowLauncherFixture(t)
+			if step == "topic" {
+				if _, err := db.Exec(`UPDATE asset_versions SET state='stale' WHERE project_id=?`, project.ID); err != nil {
+					t.Fatal(err)
+				}
+				addWorkflowTopicSelection(t, db, project)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			scheduler := &workflowLauncherScheduler{err: errors.New("wake failed"), beforeReturn: cancel}
+			repo := store.NewTaskRepository(db)
+			launcher := NewWorkflowTaskLauncher(db, scheduler, &workflowLauncherPreparer{repo: repo}, nil)
+			coordinator := workflow.NewRemixCoordinator(store.NewWorkflowRepository(db), store.NewProjectRepository(db), store.NewAssetRepository(db), launcher)
+			run, err := coordinator.Start(ctx, workflow.StartRemix{ProjectID: project.ID, AccountID: project.AccountID, ModelName: "m", ReasoningEffort: "high", Now: time.Now().UTC()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var taskID *string
+			if step == "topic" {
+				taskID = run.TopicTaskID
+			} else {
+				taskID = run.RemixTaskID
+			}
+			if run.State != domain.WorkflowRunning || taskID == nil {
+				t.Fatalf("run=%+v", run)
+			}
+			if _, _, err := repo.PreparedManifest(context.Background(), *taskID); err != nil {
+				t.Fatalf("prepared task %s: %v", *taskID, err)
+			}
+			persisted, err := store.NewWorkflowRepository(db).ActiveForProject(context.Background(), project.ID, domain.WorkflowRemix)
+			if err != nil || (step == "topic" && persisted.TopicTaskID == nil) || (step == "remix" && persisted.RemixTaskID == nil) {
+				t.Fatalf("persisted=%+v err=%v", persisted, err)
+			}
+		})
+	}
+}
+
+func TestWorkflowTaskLauncherRepairsQueuedDeterministicTaskWithoutManifest(t *testing.T) {
+	for _, step := range []string{"topic", "remix"} {
+		t.Run(step, func(t *testing.T) {
+			db, project, card := workflowLauncherFixture(t)
+			if step == "topic" {
+				addWorkflowTopicSelection(t, db, project)
+			}
+			workflowID := uuid.NewString()
+			task := workflowLauncherDeterministicTask(workflowID, step, project, time.Now().UTC())
+			if err := store.NewTaskRepository(db).CreateV2(context.Background(), task); err != nil {
+				t.Fatal(err)
+			}
+			scheduler := &workflowLauncherScheduler{}
+			preparer := &workflowLauncherPreparer{repo: store.NewTaskRepository(db)}
+			launcher := NewWorkflowTaskLauncher(db, scheduler, preparer, nil)
+			in := workflow.LaunchTask{WorkflowID: workflowID, Project: project, TopicCard: &card, ModelName: "m", ReasoningEffort: "high", Now: task.CreatedAt}
+			var got domain.CodexTask
+			var err error
+			if step == "topic" {
+				got, err = launcher.LaunchTopicCommit(context.Background(), in)
+			} else {
+				got, err = launcher.LaunchRemixFromTopicCard(context.Background(), in)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != task.ID || len(preparer.requests) != 1 || len(scheduler.tasks) != 1 {
+				t.Fatalf("got=%+v prepares=%d enqueues=%d", got, len(preparer.requests), len(scheduler.tasks))
+			}
+			if _, _, err := store.NewTaskRepository(db).PreparedManifest(context.Background(), task.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWorkflowTaskLauncherDoesNotPrepareStartedOrTerminalDeterministicTask(t *testing.T) {
+	for _, step := range []string{"topic", "remix"} {
+		for _, status := range []domain.TaskStatus{domain.TaskRunning, domain.TaskCompleted} {
+			t.Run(step+"/"+string(status), func(t *testing.T) {
+				db, project, card := workflowLauncherFixture(t)
+				if step == "topic" {
+					addWorkflowTopicSelection(t, db, project)
+				}
+				workflowID := uuid.NewString()
+				task := workflowLauncherDeterministicTask(workflowID, step, project, time.Now().UTC())
+				if err := store.NewTaskRepository(db).CreateV2(context.Background(), task); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.NewTaskRepository(db).UpdateStatus(context.Background(), task.ID, status, "", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				scheduler := &workflowLauncherScheduler{}
+				preparer := &workflowLauncherPreparer{repo: store.NewTaskRepository(db)}
+				launcher := NewWorkflowTaskLauncher(db, scheduler, preparer, nil)
+				in := workflow.LaunchTask{WorkflowID: workflowID, Project: project, TopicCard: &card, ModelName: "m", ReasoningEffort: "high", Now: task.CreatedAt}
+				var got domain.CodexTask
+				var err error
+				if step == "topic" {
+					got, err = launcher.LaunchTopicCommit(context.Background(), in)
+				} else {
+					got, err = launcher.LaunchRemixFromTopicCard(context.Background(), in)
+				}
+				if err != nil || got.Status != status || len(preparer.requests) != 0 || len(scheduler.tasks) != 0 {
+					t.Fatalf("got=%+v err=%v prepares=%d enqueues=%d", got, err, len(preparer.requests), len(scheduler.tasks))
+				}
+				if _, _, err := store.NewTaskRepository(db).PreparedManifest(context.Background(), task.ID); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf("manifest err=%v", err)
+				}
+			})
+		}
+	}
+}
+
+func workflowLauncherDeterministicTask(workflowID, step string, project domain.Project, now time.Time) domain.CodexTask {
+	projectID := project.ID
+	task := domain.CodexTask{ID: workflowStepTaskID(workflowID, step), ProjectID: &projectID, AccountID: project.AccountID, Status: domain.TaskQueued, ModelName: "m", ReasoningEffort: "high", CreatedAt: now}
+	if step == "topic" {
+		task.Type, task.SkillName, task.Action, task.PromptSnapshot = "topic_commit", "finance-topic-selector", domain.ActionTopicCommit, "topic"
+	} else {
+		task.Type, task.SkillName, task.Action, task.PromptSnapshot = "remix", "finance-viral-remix", domain.ActionRemixFromTopic, "remix"
+	}
+	return task
 }
 
 func workflowLauncherFixture(t *testing.T) (*sql.DB, domain.Project, domain.AssetVersion) {

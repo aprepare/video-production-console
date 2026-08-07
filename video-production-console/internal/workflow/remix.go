@@ -40,6 +40,8 @@ type RemixCoordinator struct {
 	mu        sync.Mutex
 }
 
+const durableWorkflowBookkeepingTimeout = 5 * time.Second
+
 func (c *RemixCoordinator) ReconcileTerminalWorkflows(ctx context.Context) error {
 	runs, err := c.workflows.Running(ctx, domain.WorkflowRemix)
 	if err != nil {
@@ -133,6 +135,9 @@ func (c *RemixCoordinator) resumeRunLocked(ctx context.Context, run domain.Proje
 			}
 			if run.TopicTaskID == nil && card != nil {
 				remix, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+				bookkeepingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), durableWorkflowBookkeepingTimeout)
+				defer cancel()
+				ctx = bookkeepingCtx
 				if launchErr != nil {
 					failed, failErr := c.fail(ctx, run, "remix_launch_failed", launchErr, now)
 					return failed, "", failErr
@@ -147,6 +152,9 @@ func (c *RemixCoordinator) resumeRunLocked(ctx context.Context, run domain.Proje
 			}
 			if run.TopicTaskID == nil {
 				topic, launchErr := c.launcher.LaunchTopicCommit(ctx, LaunchTask{WorkflowID: run.ID, Project: project, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+				bookkeepingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), durableWorkflowBookkeepingTimeout)
+				defer cancel()
+				ctx = bookkeepingCtx
 				if launchErr != nil {
 					failed, failErr := c.fail(ctx, run, "topic_launch_failed", launchErr, now)
 					return failed, "", failErr
@@ -176,6 +184,9 @@ func (c *RemixCoordinator) resumeRunLocked(ctx context.Context, run domain.Proje
 				return failed, task.ID, failErr
 			}
 			remix, launchErr := c.launcher.LaunchRemixFromTopicCard(ctx, LaunchTask{WorkflowID: run.ID, Project: project, TopicCard: card, ModelName: run.ModelName, ReasoningEffort: run.ReasoningEffort, Now: now})
+			bookkeepingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), durableWorkflowBookkeepingTimeout)
+			defer cancel()
+			ctx = bookkeepingCtx
 			if launchErr != nil {
 				failed, failErr := c.fail(ctx, run, "remix_launch_failed", launchErr, now)
 				return failed, task.ID, failErr

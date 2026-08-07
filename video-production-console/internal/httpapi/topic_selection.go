@@ -155,6 +155,25 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 			if existing.Action != domain.ActionTopicCommit || existing.ProjectID == nil || *existing.ProjectID != project.ID || existing.AccountID != project.AccountID || existing.ModelName != model.Model || existing.ReasoningEffort != model.ReasoningEffort {
 				return domain.CodexTask{}, errors.New("workflow topic task identity conflict")
 			}
+			if existing.Status != domain.TaskQueued {
+				return existing, nil
+			}
+			if _, _, manifestErr := tasks.PreparedManifest(ctx, existing.ID); manifestErr == nil {
+				return existing, nil
+			} else if !errors.Is(manifestErr, sql.ErrNoRows) {
+				return domain.CodexTask{}, manifestErr
+			}
+			if err := preparer.Prepare(ctx, existing, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}); err != nil {
+				return domain.CodexTask{}, err
+			}
+			publish := scheduler.Enqueue
+			if options[0].publish != nil {
+				publish = options[0].publish
+			}
+			if err := publish(ctx, existing); err != nil {
+				return domain.CodexTask{}, err
+			}
+			_ = store.NewIdeaRepository(db).LinkProject(ctx, selection.SessionID, project.ID, project.AccountID)
 			return existing, nil
 		} else if !errors.Is(readErr, sql.ErrNoRows) {
 			return domain.CodexTask{}, readErr

@@ -25,6 +25,8 @@ type workflowTaskLauncher struct {
 	mu        sync.Mutex
 }
 
+const durableLaunchConfirmationTimeout = 5 * time.Second
+
 func NewWorkflowTaskLauncher(db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver) workflow.TaskLauncher {
 	return &workflowTaskLauncher{db: db, scheduler: scheduler, preparer: preparer, models: models}
 }
@@ -61,6 +63,20 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		if existing.Action != domain.ActionRemixFromTopic || existing.ProjectID == nil || *existing.ProjectID != in.Project.ID || existing.AccountID != in.Project.AccountID || existing.ModelName != model.Model || existing.ReasoningEffort != model.ReasoningEffort {
 			return domain.CodexTask{}, errors.New("workflow remix task identity conflict")
 		}
+		if existing.Status != domain.TaskQueued {
+			return existing, nil
+		}
+		if _, _, manifestErr := tasks.PreparedManifest(ctx, taskID); manifestErr == nil {
+			return existing, nil
+		} else if !errors.Is(manifestErr, sql.ErrNoRows) {
+			return domain.CodexTask{}, manifestErr
+		}
+		if err := l.preparer.Prepare(ctx, existing, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}); err != nil {
+			return domain.CodexTask{}, err
+		}
+		if err := l.publishPreparedTask(ctx, existing); err != nil {
+			return domain.CodexTask{}, err
+		}
 		return existing, nil
 	} else if !errors.Is(readErr, sql.ErrNoRows) {
 		return domain.CodexTask{}, readErr
@@ -90,8 +106,10 @@ func (l *workflowTaskLauncher) publishPreparedTask(ctx context.Context, expected
 	if notifyErr == nil {
 		return nil
 	}
+	confirmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), durableLaunchConfirmationTimeout)
+	defer cancel()
 	tasks := store.NewTaskRepository(l.db)
-	persisted, readErr := tasks.Get(ctx, expected.ID)
+	persisted, readErr := tasks.Get(confirmCtx, expected.ID)
 	if readErr != nil {
 		return errors.Join(notifyErr, readErr)
 	}
@@ -100,11 +118,11 @@ func (l *workflowTaskLauncher) publishPreparedTask(ctx context.Context, expected
 	if !identityMatches {
 		return errors.Join(notifyErr, errors.New("durable workflow task identity mismatch"))
 	}
-	snapshot, path, manifestErr := tasks.PreparedManifest(ctx, expected.ID)
+	snapshot, path, manifestErr := tasks.PreparedManifest(confirmCtx, expected.ID)
 	if manifestErr != nil || strings.TrimSpace(snapshot) == "" || strings.TrimSpace(path) == "" {
 		return errors.Join(notifyErr, manifestErr, errors.New("durable workflow task manifest is missing"))
 	}
-	_ = tasks.AppendEvent(ctx, expected.ID, domain.TaskEvent{Kind: "workflow_scheduler_notify_warning", Level: "warning", DisplayText: notifyErr.Error()})
+	_ = tasks.AppendEvent(confirmCtx, expected.ID, domain.TaskEvent{Kind: "workflow_scheduler_notify_warning", Level: "warning", DisplayText: notifyErr.Error()})
 	return nil
 }
 
