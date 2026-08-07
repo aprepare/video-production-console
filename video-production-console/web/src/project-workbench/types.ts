@@ -21,6 +21,7 @@ export type ProjectAsset = {
   size: number;
   sha256?: string;
   version: number;
+  state: "missing" | "ready" | "stale" | "generating" | "failed";
   status?: string;
   created_at: string;
 };
@@ -66,7 +67,12 @@ export type ProjectDetail = {
   active_workflow?: ActiveWorkflow | null;
 };
 
-export type PrimaryActionID = "start-remix" | "prepare-assets" | "start-mixing" | "publish";
+export type PrimaryActionID =
+  | "start-remix"
+  | "prepare-assets"
+  | "start-mixing"
+  | "upload-final-video"
+  | "publish";
 
 export type PrimaryAction = {
   id: PrimaryActionID;

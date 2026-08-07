@@ -131,14 +131,15 @@ type workflowView struct {
 	CurrentTask     *taskView            `json:"current_task"`
 }
 type assetView struct {
-	ID        string           `json:"id"`
-	Type      domain.AssetType `json:"type"`
-	Filename  string           `json:"filename"`
-	MIMEType  string           `json:"mime_type"`
-	Size      int64            `json:"size"`
-	SHA256    string           `json:"sha256"`
-	Version   int              `json:"version"`
-	CreatedAt time.Time        `json:"created_at"`
+	ID        string            `json:"id"`
+	Type      domain.AssetType  `json:"type"`
+	State     domain.AssetState `json:"state"`
+	Filename  string            `json:"filename"`
+	MIMEType  string            `json:"mime_type"`
+	Size      int64             `json:"size"`
+	SHA256    string            `json:"sha256"`
+	Version   int               `json:"version"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 func (h *projectsHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -586,7 +587,7 @@ func toProjectView(p domain.Project) projectView {
 	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote, PublicationStatus: status}
 }
 func toAssetView(a domain.Asset) assetView {
-	return assetView{ID: a.ID, Type: a.Type, Filename: a.Filename, MIMEType: a.MIMEType, Size: a.Size, SHA256: a.SHA256, Version: a.Version, CreatedAt: a.CreatedAt}
+	return assetView{ID: a.ID, Type: a.Type, State: domain.AssetState(a.Status), Filename: a.Filename, MIMEType: a.MIMEType, Size: a.Size, SHA256: a.SHA256, Version: a.Version, CreatedAt: a.CreatedAt}
 }
 func missingForStage(stage domain.ProjectStage, a map[domain.AssetType]bool) []string {
 	var to domain.ProjectStage

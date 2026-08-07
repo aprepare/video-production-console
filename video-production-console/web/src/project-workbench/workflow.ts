@@ -13,29 +13,50 @@ const activeStepLabels: Partial<Record<ActiveWorkflow["current_step"], string>> 
   remix: "正在二创文案",
 };
 
+function isReady(detail: ProjectDetail, type: string) {
+  return detail.assets?.[type]?.state === "ready";
+}
+
+function isBackgroundReady(detail: ProjectDetail) {
+  return detail.background_reference?.state === "ready";
+}
+
 export function deriveProductionStage(detail: ProjectDetail): ProductionStage {
   if (detail.project.stage === "published") return "published";
-  const assets = detail.assets || {};
-  if (assets.mix_draft || assets.final_video) return "review";
-  if (assets.continuous_script && assets.narration && assets.subtitle_srt) return "mixing";
-  if (assets.continuous_script) return "assets";
+  if (isReady(detail, "mix_draft") || isReady(detail, "final_video")) return "review";
+  if (
+    isReady(detail, "continuous_script") &&
+    isReady(detail, "narration") &&
+    isReady(detail, "subtitle_srt") &&
+    isBackgroundReady(detail)
+  ) return "mixing";
+  if (isReady(detail, "continuous_script")) return "assets";
   return "script";
 }
 
 export function missingProductionInputs(detail: ProjectDetail): string[] {
-  const assets = detail.assets || {};
+  let computed: string[];
   switch (deriveProductionStage(detail)) {
     case "script":
-      return assets.continuous_script ? [] : ["continuous_script"];
+      computed = isReady(detail, "continuous_script") ? [] : ["continuous_script"];
+      break;
     case "assets":
-      return ["narration", "subtitle_srt"].filter((type) => !assets[type]);
+      computed = ["narration", "subtitle_srt"].filter((type) => !isReady(detail, type));
+      if (!isBackgroundReady(detail)) computed.push("account_background");
+      break;
     case "mixing":
-      return assets.mix_draft || assets.final_video ? [] : ["mix_draft"];
+      computed = isReady(detail, "mix_draft") || isReady(detail, "final_video")
+        ? []
+        : ["mix_draft"];
+      break;
     case "review":
-      return assets.final_video ? [] : ["final_video"];
+      computed = isReady(detail, "final_video") ? [] : ["final_video"];
+      break;
     case "published":
-      return [];
+      computed = [];
+      break;
   }
+  return [...new Set([...(detail.missing_assets || []), ...computed])];
 }
 
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
@@ -47,7 +68,9 @@ export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
       ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
       : stage === "mixing"
         ? { id: "start-mixing", label: "开始混剪", disabled: false }
-        : { id: "publish", label: "发布成片", disabled: false };
+        : isReady(detail, "final_video")
+          ? { id: "publish", label: "发布成片", disabled: false }
+          : { id: "upload-final-video", label: "上传成片", disabled: false };
   const workflow = detail.active_workflow;
   const activeLabel = workflow?.state === "running" ? activeStepLabels[workflow.current_step] : undefined;
   return activeLabel

@@ -304,6 +304,68 @@ func TestProjectDetailReviewReportsFinalVideoMissing(t *testing.T) {
 	}
 }
 
+func TestProjectDetailIncludesCurrentAssetAndBackgroundStates(t *testing.T) {
+	handler, db, root, accountID := newProjectsTestHandler(t, "active")
+	if err := os.WriteFile(filepath.Join(root, "bg.png"), []byte("background"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "states"}))
+	for _, file := range []struct {
+		typ, name string
+		data      []byte
+	}{
+		{"continuous_script", "script.txt", []byte("script")},
+		{"audio", "voice.mp3", validProjectMP3()},
+		{"subtitle", "captions.srt", []byte("1\n00:00:00,000 --> 00:00:01,000\nsubtitle\n")},
+	} {
+		if response := uploadProjectFile(t, handler, created.ID, file.typ, file.name, file.data); response.StatusCode != http.StatusCreated {
+			t.Fatalf("upload %s=%d", file.typ, response.StatusCode)
+		}
+	}
+	if _, err := db.Exec(`UPDATE asset_versions SET state='stale' WHERE project_id=? AND type='narration'`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_versions SET state='failed' WHERE project_id=? AND type='subtitle_srt'`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	type stateView struct {
+		State string `json:"state"`
+	}
+	readDetail := func() struct {
+		Assets              map[string]stateView `json:"assets"`
+		BackgroundReference stateView            `json:"background_reference"`
+	} {
+		t.Helper()
+		response := performJSON(t, handler, http.MethodGet, "/api/projects/"+created.ID, nil)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("detail status=%d", response.StatusCode)
+		}
+		var body struct {
+			Assets              map[string]stateView `json:"assets"`
+			BackgroundReference stateView            `json:"background_reference"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	body := readDetail()
+	if body.Assets["continuous_script"].State != "ready" || body.Assets["narration"].State != "stale" || body.Assets["subtitle_srt"].State != "failed" {
+		t.Fatalf("asset states=%+v", body.Assets)
+	}
+	if body.BackgroundReference.State != "ready" {
+		t.Fatalf("background state=%q", body.BackgroundReference.State)
+	}
+	if _, err := db.Exec(`UPDATE asset_versions SET state='stale' WHERE account_id=? AND type='account_background'`, accountID); err != nil {
+		t.Fatal(err)
+	}
+	if body = readDetail(); body.BackgroundReference.State != "stale" {
+		t.Fatalf("stale background state=%q", body.BackgroundReference.State)
+	}
+}
+
 func TestProjectMoveRejectsDeprecatedTopicAndReadyStages(t *testing.T) {
 	handler, _, _, accountID := newProjectsTestHandler(t, "active")
 	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID}))
