@@ -4,9 +4,11 @@ import { ArrowLeft } from "lucide-react";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
+import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import type {
   ProjectAsset,
   ProjectDetail as WorkbenchProjectDetail,
+  ProjectTask as WorkbenchProjectTask,
   ProjectStage,
   ProjectSummary,
 } from "./project-workbench/types";
@@ -254,6 +256,10 @@ function writeProjectLocation(
   const current = `${window.location.pathname}${window.location.search}`;
   if (mode === "push" && current !== target) window.history.pushState({}, "", target);
   else window.history.replaceState({}, "", target);
+}
+
+function renderLegacyProjectDrawer() {
+  return false;
 }
 
 const liveTaskStatuses = new Set([
@@ -1219,7 +1225,7 @@ function App() {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
     const dialogOpen = Boolean(
-      selected || preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
+      preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
     );
     if (!dialogOpen) {
       if (dialogWasOpenRef.current) previousFocusRef.current?.focus();
@@ -1399,6 +1405,20 @@ function App() {
     clearProjectSelection();
     writeProjectLocation("", "push");
   };
+  useEffect(() => {
+    if (!selected || preview || settingsOpen || ideaOpen || chatOpen || taskOpen) return;
+    const returnToBoard = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      taskOpenIDRef.current = "";
+      setTaskOpen(null);
+      writeTaskQuery("", "replace");
+      clearProjectSelection();
+      writeProjectLocation("", "push");
+    };
+    window.addEventListener("keydown", returnToBoard);
+    return () => window.removeEventListener("keydown", returnToBoard);
+  }, [chatOpen, clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
     if (!newAccount.trim() || !accountBackground) {
@@ -1506,6 +1526,79 @@ function App() {
       setProjectTaskModel({ model: "", reasoningEffort: "" });
       if (selectedIDRef.current === project.id) await loadDetail(project);
     }
+  };
+  const startRemixWorkflow = async () => {
+    if (!selected || !detail) return;
+    if (detail.assets?.continuous_script) {
+      const confirmed = window.confirm(
+        `当前项目已有连续文案 v${detail.assets.continuous_script.version}。再次二创会生成新版本，旧版本仍会保留。确定继续吗？`,
+      );
+      if (!confirmed) return;
+    }
+    const response = await api(`/api/projects/${selected.id}/remix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
+        ...(projectTaskModel.reasoningEffort
+          ? { reasoning_effort: projectTaskModel.reasoningEffort }
+          : {}),
+      }),
+    });
+    if (!response.ok) {
+      setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置。");
+      return;
+    }
+    setProjectTaskModel({ model: "", reasoningEffort: "" });
+    await loadDetail(selected);
+  };
+  const publishProject = async () => {
+    if (!selected) return;
+    const response = await api(`/api/projects/${selected.id}/publish`, { method: "POST" });
+    if (!response.ok) {
+      setMessage("发布状态更新失败，请确认成片已上传。");
+      return;
+    }
+    const published = { ...selected, stage: "published" as const };
+    setSelected(published);
+    selectedIDRef.current = published.id;
+    setProjects((current) =>
+      current.map((project) => project.id === published.id ? published : project),
+    );
+    setDetail((current) => current ? { ...current, project: { ...current.project, stage: "published" } } : current);
+    setMessage("项目已标记为已发布。");
+    await load();
+  };
+  const uploadProjectAsset = async (
+    type: "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video",
+    file: File,
+  ) => {
+    if (!selected) return;
+    const body = new FormData();
+    body.set("file", file);
+    const response = await api(`/api/projects/${selected.id}/assets/${type}`, {
+      method: "POST",
+      body,
+    });
+    if (!response.ok) {
+      setMessage("素材上传失败，请检查文件格式。");
+      return;
+    }
+    await loadDetail(selected);
+  };
+  const replaceProjectBackground = async (file: File) => {
+    if (!selected) return;
+    const body = new FormData();
+    body.set("background", file);
+    const response = await api(`/api/accounts/${selected.account_id}/background`, {
+      method: "POST",
+      body,
+    });
+    if (!response.ok) {
+      setMessage("账号背景图上传失败，请选择 PNG、JPEG 或 WebP 图片。");
+      return;
+    }
+    await loadDetail(selected);
   };
   const deleteProject = async () => {
     if (!selected) return;
@@ -2095,7 +2188,7 @@ function App() {
     chatDetail?.messages.filter(isTechnicalChatMessage) || [];
   const openMontagePhase = taskOpen?.montage ? derivedMontagePhase(taskOpen) : "";
   const modalLayerOpen = Boolean(
-    selected || preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
+    preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -2103,6 +2196,36 @@ function App() {
 
   return (
     <div className="shell">
+      {selected && detail ? (
+        <ProjectWorkbench
+          detail={detail as WorkbenchProjectDetail}
+          tasks={tasks as WorkbenchProjectTask[]}
+          accountName={accountName(selected.account_id, accounts)}
+          message={message}
+          onBack={closeProject}
+          onDelete={() => void deleteProject()}
+          onRemix={() => void startRemixWorkflow()}
+          onMix={() => void startTask("montage", "使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
+          onPublish={() => void publishProject()}
+          onUpload={(type, file) => void uploadProjectAsset(type, file)}
+          onReplaceBackground={(file) => void replaceProjectBackground(file)}
+          onViewAsset={(asset) => void openAsset(asset)}
+          onOpenConversation={() => void openGeneralChat()}
+          onOpenTask={(task) => openTask(task as Task)}
+        />
+      ) : selected ? (
+        <main className="project-workbench project-workbench--loading">
+          <button type="button" className="workbench-icon-button" onClick={closeProject} aria-label="返回项目看板">
+            <ArrowLeft size={19} aria-hidden="true" />
+          </button>
+          <div className="empty">
+            <h1>{selected.title}</h1>
+            <p>{detailError || "正在读取当前项目…"}</p>
+            {detailError ? <button type="button" onClick={() => void loadDetail(selected)}>重试读取详情</button> : null}
+          </div>
+        </main>
+      ) : (
+        <>
       <header aria-hidden={modalLayerOpen || undefined}>
         <div>
           <span className="eyebrow">本机视频工作台</span>
@@ -2254,7 +2377,9 @@ function App() {
           )}
         </main>
       </div>
-      {selected && (
+        </>
+      )}
+      {renderLegacyProjectDrawer() && selected && (
         <div
           className="drawer-backdrop"
           aria-hidden={Boolean(taskOpen || chatOpen || ideaOpen || settingsOpen || preview) || undefined}

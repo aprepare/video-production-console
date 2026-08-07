@@ -73,7 +73,7 @@ export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
       : stage === "mixing"
         ? { id: "start-mixing", label: "开始混剪", disabled: false }
         : isReady(detail, "final_video")
-          ? { id: "publish", label: "发布成片", disabled: false }
+          ? { id: "publish", label: "已发布", disabled: false }
           : { id: "upload-final-video", label: "上传成片", disabled: false };
   const workflow = detail.active_workflow;
   const activeLabel = workflow?.state === "running" ? activeStepLabels[workflow.current_step] : undefined;

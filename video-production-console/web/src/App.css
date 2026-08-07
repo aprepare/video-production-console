@@ -746,6 +746,11 @@ summary:focus-visible {
   font-size: 10px;
   font-weight: 700;
 }
+
+/* Project routes replace the board shell with a full-page production surface. */
+.shell > .project-workbench {
+  width: 100%;
+}
 .publishing-block { margin-top: 16px; }
 .publishing-label { margin-bottom: 8px; }
 .publishing-label strong { color: #29473c; font-size: 12px; }

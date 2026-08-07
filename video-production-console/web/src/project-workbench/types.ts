@@ -39,6 +39,20 @@ export type ProjectTask = {
   model?: string;
   reasoning_effort?: string;
   created_at: string;
+  prompt_snapshot?: string;
+  messages?: Array<{
+    id: string;
+    role: string;
+    content: string;
+    question_schema?: string;
+    created_at: string;
+  }>;
+  semantic_events?: Array<{
+    title?: string;
+    detail?: string;
+    phase?: string;
+    created_at?: string;
+  }>;
 };
 
 export type ActiveWorkflow = {

@@ -227,6 +227,7 @@ describe("production workflow view model", () => {
     ).toMatchObject({ id: "start-mixing", disabled: false });
     expect(nextPrimaryAction(detail("review", { final_video: "ready" }))).toMatchObject({
       id: "publish",
+      label: "已发布",
       disabled: false,
     });
     expect(nextPrimaryAction(detail("published"))).toBeNull();

@@ -53,6 +53,7 @@ function routedProjectFetch(taskID = "") {
       if (path === `/api/projects/${routedProjectID}`)
         return json({ project, assets: {}, missing_assets: [], active_workflow: null });
       if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+      if (path === `/api/projects/${routedProjectID}/remix`) return json({ id: "workflow-1" }, 201);
       if (taskID && path === `/api/tasks/${taskID}`)
         return json({
           id: taskID,
@@ -91,7 +92,93 @@ test("a direct project path restores the same project", async () => {
 
   expect(await screen.findByRole("heading", { name: fixture.project.title })).toBeTruthy();
   expect(screen.getByRole("button", { name: "返回项目看板" })).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "开始二创文案" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
+  for (const phrase of ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"]) {
+    expect(screen.queryByText(phrase, { exact: false })).toBeNull();
+  }
 });
+
+test("the project workbench connects remix to the automatic workflow endpoint", async () => {
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
+
+  await waitFor(() =>
+    expect(fixture.fetch).toHaveBeenCalledWith(
+      `/api/projects/${routedProjectID}/remix`,
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+});
+
+test("the project workbench starts mixing through the formal montage task API", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "混剪项目", stage: "mixing" };
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({
+      project,
+      assets: {
+        continuous_script: testAsset("continuous_script"),
+        narration: testAsset("narration"),
+        subtitle_srt: testAsset("subtitle_srt"),
+      },
+      background_reference: testAsset("account_background"),
+      missing_assets: [],
+    });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      requests.push({ path, body: JSON.parse(String(init?.body)) });
+      return json({ id: "montage-task" }, 202);
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "开始混剪" }));
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0].body).toMatchObject({ type: "montage" });
+  expect(JSON.stringify(requests[0].body)).not.toContain("spoken");
+});
+
+test("the published action posts the project publish endpoint", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "待确认项目", stage: "review" };
+  const requests: string[] = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({
+      project,
+      assets: { final_video: testAsset("final_video") },
+      missing_assets: [],
+    });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/publish` && method === "POST") {
+      requests.push(path);
+      return json({ ...project, stage: "published" });
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "将当前项目标记为已发布" }));
+
+  await waitFor(() => expect(requests).toEqual([`/api/projects/${routedProjectID}/publish`]));
+});
+
+function testAsset(type: string) {
+  return {
+    id: `${type}-asset`, type, filename: `${type}.dat`, mime_type: "application/octet-stream",
+    size: 12, version: 1, state: "ready", created_at: "2026-08-08T00:00:00Z",
+  };
+}
 
 test("browser Back returns from a project path to the board", async () => {
   window.history.replaceState({}, "", "/projects");
@@ -307,8 +394,8 @@ test("settings show model defaults and use the PUT response as the saved draft",
   });
 });
 
-test("a project workflow sends and resets only explicit model overrides", async () => {
-  const taskBodies: Record<string, unknown>[] = [];
+test("a project workflow uses the automatic remix endpoint without legacy task controls", async () => {
+  const workflowBodies: Record<string, unknown>[] = [];
   const project = {
     id: "project-1",
     account_id: "account-1",
@@ -322,36 +409,20 @@ test("a project workflow sends and resets only explicit model overrides", async 
       if (path === "/api/projects/project-1")
         return json({ project, assets: {}, missing_assets: [] });
       if (path === "/api/tasks?project_id=project-1") return json([]);
-      if (path === "/api/projects/project-1/tasks" && method === "POST") {
-        taskBodies.push(JSON.parse(String(init?.body)));
-        return json({ id: "task-new" }, 202);
+      if (path === "/api/projects/project-1/remix" && method === "POST") {
+        workflowBodies.push(JSON.parse(String(init?.body)));
+        return json({ id: "workflow-new" }, 201);
       }
     }),
   );
 
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
-  fireEvent.click(await screen.findByText("模型与推理强度（可选）"));
-  fireEvent.change(screen.getByRole("textbox", { name: "临时模型" }), {
-    target: { value: "gpt-project" },
-  });
-  fireEvent.change(screen.getByRole("combobox", { name: "临时推理强度" }), {
-    target: { value: "xhigh" },
-  });
-  expect(screen.getByText("实际将使用：gpt-project · xhigh")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "二创文案" }));
+  expect(screen.queryByText("模型与推理强度（可选）")).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
 
-  await waitFor(() => expect(taskBodies).toHaveLength(1));
-  expect(taskBodies[0]).toMatchObject({
-    type: "remix",
-    model: "gpt-project",
-    reasoning_effort: "xhigh",
-  });
-  expect((screen.getByRole("textbox", { name: "临时模型" }) as HTMLInputElement).value).toBe("");
-  expect(
-    (screen.getByRole("combobox", { name: "临时推理强度" }) as HTMLSelectElement)
-      .value,
-  ).toBe("");
+  await waitFor(() => expect(workflowBodies).toHaveLength(1));
+  expect(workflowBodies[0]).toEqual({});
 });
 
 test("the topic composer has an independent temporary model override", async () => {
@@ -580,10 +651,9 @@ test("tasks show their actual model and awaiting replies keep it read-only", asy
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
 
-  expect(await screen.findByText("gpt-actual · max")).toBeTruthy();
-  const continueHint = screen.getByText("继续使用：gpt-actual · max");
-  expect(continueHint).toBeTruthy();
-  expect(continueHint.parentElement?.querySelector("input, select")).toBeNull();
+  const actualModel = await screen.findByText("gpt-actual · max");
+  expect(actualModel).toBeTruthy();
+  expect(actualModel.parentElement?.querySelector("input, select")).toBeNull();
 });
 
 test("a running task exposes a stop action and sends the cancellation request", async () => {
@@ -623,6 +693,7 @@ test("a running task exposes a stop action and sends the cancellation request", 
 
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
+  fireEvent.click(await screen.findByRole("button", { name: /finance-viral-remix.*处理中/ }));
   fireEvent.click(await screen.findByRole("button", { name: "停止任务" }));
 
   await waitFor(() =>
@@ -633,7 +704,7 @@ test("a running task exposes a stop action and sends the cancellation request", 
   );
 });
 
-test("starting a second remix asks before creating a new script version", async () => {
+test("an existing continuous script advances to asset preparation without a second remix control", async () => {
   const taskRequests: string[] = [];
   const project = {
     id: "project-1",
@@ -656,6 +727,7 @@ test("starting a second remix asks before creating a new script version", async 
               filename: "continuous_script.txt",
               size: 1024,
               version: 1,
+              state: "ready",
             },
           },
           missing_assets: [],
@@ -670,9 +742,9 @@ test("starting a second remix asks before creating a new script version", async 
 
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
-  fireEvent.click(await screen.findByRole("button", { name: "二创文案" }));
-
-  await waitFor(() => expect(confirm).toHaveBeenCalled());
+  expect(await screen.findByRole("button", { name: "补齐制作素材" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "开始二创文案" })).toBeNull();
+  expect(confirm).not.toHaveBeenCalled();
   expect(taskRequests).toHaveLength(0);
 });
 
