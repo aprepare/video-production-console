@@ -354,10 +354,30 @@ test("provides native mobile accordions for project assets and conversation", ()
   expect(container.querySelectorAll(".mobile-accordion")).toHaveLength(2);
 });
 
-test("defines vertical mobile production, safe-area sticky action, touch targets, and reduced motion", () => {
+test("renders the mobile primary action bar as a direct workbench child with a shared action contract", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  detail.missing_assets = [];
+  const props = workbenchProps(detail);
+  const { container } = render(<ProjectWorkbench {...props} />);
+  const workbench = container.querySelector(".project-workbench");
+  const mobileBar = container.querySelector(".mobile-primary-action-bar");
+  const desktopAction = container.querySelector<HTMLButtonElement>(".desktop-primary-action");
+  const mobileAction = mobileBar?.querySelector<HTMLButtonElement>(".primary-action");
+
+  expect(mobileBar?.parentElement).toBe(workbench);
+  expect(mobileBar?.closest(".primary-action-panel")).toBeNull();
+  expect(desktopAction?.textContent).toBe(mobileAction?.textContent);
+  fireEvent.click(mobileAction!);
+  expect(props.onRemix).toHaveBeenCalledTimes(1);
+});
+
+test("defines vertical mobile production, root action bar visibility, safe area, and 44px touch targets", () => {
   const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
   const mobileStart = css.indexOf("@media (max-width: 759px)");
   const reducedStart = css.indexOf("@media (prefers-reduced-motion", mobileStart);
+  const desktop = css.slice(0, mobileStart);
   const mobile = css.slice(mobileStart, reducedStart);
   const reduced = css.slice(reducedStart);
 
@@ -365,8 +385,14 @@ test("defines vertical mobile production, safe-area sticky action, touch targets
   expect(mobile).toContain("grid-template-columns: 1fr");
   expect(mobile).toContain(".production-rail__line");
   expect(mobile).toContain("width: 2px");
-  expect(mobile).toContain("position: sticky");
+  expect(desktop).toMatch(/\.mobile-primary-action-bar\s*\{[^}]*display:\s*none/);
+  expect(mobile).toMatch(/\.mobile-primary-action-bar\s*\{[^}]*display:\s*flex/);
+  expect(mobile).toContain("position: fixed");
+  expect(mobile).toMatch(/\.desktop-primary-action\s*\{[^}]*display:\s*none/);
+  expect(mobile).toContain("padding-bottom: calc(5.5rem + env(safe-area-inset-bottom))");
   expect(mobile).toContain("env(safe-area-inset-bottom)");
+  expect(mobile).toMatch(/\.workbench-icon-button,\s*\.workbench-delete\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/);
+  expect(mobile).toContain("min-width: 44px");
   expect(mobile).toContain("min-height: 44px");
   expect(mobile).toContain(".mobile-accordion > summary");
   expect(reduced).toContain("animation-duration: 0.01ms !important");

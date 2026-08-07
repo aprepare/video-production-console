@@ -81,6 +81,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
   };
 
+  const primaryActionButton = (className: string, mobile = false) => action ? (
+    <button
+      type="button"
+      className={`primary-action ${className}`}
+      disabled={action.disabled || actionPending || Boolean(unknownMissing)}
+      onClick={runPrimaryAction}
+      aria-label={`${mobile ? "移动端：" : ""}${unknownMissing ? "暂无法继续" : action.id === "publish" ? "将当前项目标记为已发布" : action.label}`}
+    >
+      {action.id === "publish" ? <CircleCheck size={19} aria-hidden="true" /> : <MessageSquare size={19} aria-hidden="true" />}
+      {unknownMissing ? "暂无法继续" : action.label}
+    </button>
+  ) : null;
+
   return (
     <main className="project-workbench">
       <header className="workbench-masthead">
@@ -107,16 +120,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <p className="primary-action-panel__stage">当前阶段 · {stage === "script" ? "文案" : stage === "assets" ? "素材" : stage === "mixing" ? "混剪" : stage === "review" ? "审核" : "已发布"}</p>
           {action ? (
             <>
-              <button
-                type="button"
-                className="primary-action"
-                disabled={action.disabled || actionPending || Boolean(unknownMissing)}
-                onClick={runPrimaryAction}
-                aria-label={unknownMissing ? "暂无法继续" : action.id === "publish" ? "将当前项目标记为已发布" : action.label}
-              >
-                {action.id === "publish" ? <CircleCheck size={19} aria-hidden="true" /> : <MessageSquare size={19} aria-hidden="true" />}
-                {unknownMissing ? "暂无法继续" : action.label}
-              </button>
+              {primaryActionButton("desktop-primary-action")}
               <p className="primary-action-panel__hint">
                 {unknownMissing
                   ? `无法识别项目缺项 ${unknownMissing}，请刷新项目；若仍存在，请更新控制台服务。`
@@ -163,6 +167,12 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           uploadRequest={uploadRequest}
         />
         <ProjectConversation task={currentTask} onOpenConversation={props.onOpenConversation} onOpenTask={props.onOpenTask} />
+      </div>
+
+      <div className="mobile-primary-action-bar" aria-label="移动端下一主动作">
+        {action
+          ? primaryActionButton("mobile-primary-action", true)
+          : <div className="primary-action-panel__complete"><CircleCheck size={20} aria-hidden="true" /> 项目流程已完成</div>}
       </div>
     </main>
   );
