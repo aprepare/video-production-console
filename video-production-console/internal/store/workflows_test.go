@@ -142,6 +142,123 @@ func TestWorkflowTransitionReplayAndConflictBoundaries(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskBindingRejectsTaskOutsideRunScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		taskScope func(t *testing.T, db *sql.DB, accountID, projectID string, now time.Time) (string, string)
+	}{
+		{name: "other project", taskScope: func(t *testing.T, db *sql.DB, accountID, projectID string, now time.Time) (string, string) {
+			otherProjectID := uuid.NewString()
+			if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'other','script',?,?)`, otherProjectID, accountID, now, now); err != nil {
+				t.Fatal(err)
+			}
+			return otherProjectID, accountID
+		}},
+		{name: "other account", taskScope: func(t *testing.T, db *sql.DB, accountID, projectID string, now time.Time) (string, string) {
+			otherAccountID := uuid.NewString()
+			if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#000','active',?,?)`, otherAccountID, "other", now, now); err != nil {
+				t.Fatal(err)
+			}
+			return projectID, otherAccountID
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, accountID, projectID, now := workflowFixture(t)
+			taskProjectID, taskAccountID := tt.taskScope(t, db, accountID, projectID, now)
+			taskID := uuid.NewString()
+			seedWorkflowTask(t, db, taskID, taskProjectID, taskAccountID, now)
+			repo := NewWorkflowRepository(db)
+			run, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.BindTopicTask(context.Background(), run.ID, taskID, now.Add(time.Second)); !errors.Is(err, ErrWorkflowTaskScope) {
+				t.Fatalf("BindTopicTask scope err=%v", err)
+			}
+			validTopicID := uuid.NewString()
+			seedWorkflowTask(t, db, validTopicID, projectID, accountID, now)
+			if _, err := repo.BindTopicTask(context.Background(), run.ID, validTopicID, now.Add(2*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.AdvanceToRemix(context.Background(), run.ID, taskID, now.Add(3*time.Second)); !errors.Is(err, ErrWorkflowTaskScope) {
+				t.Fatalf("AdvanceToRemix scope err=%v", err)
+			}
+		})
+	}
+}
+
+func TestWorkflowTaskCannotBindAcrossRunsOrSlots(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	taskID := uuid.NewString()
+	seedWorkflowTask(t, db, taskID, projectID, accountID, now)
+	repo := NewWorkflowRepository(db)
+	first, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BindTopicTask(context.Background(), first.ID, taskID, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AdvanceToRemix(context.Background(), first.ID, taskID, now.Add(2*time.Second)); !errors.Is(err, ErrWorkflowTaskConflict) {
+		t.Fatalf("cross-slot bind err=%v", err)
+	}
+	if _, err := repo.Fail(context.Background(), first.ID, "stopped", "stopped", now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now.Add(4 * time.Second), UpdatedAt: now.Add(4 * time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BindTopicTask(context.Background(), second.ID, taskID, now.Add(5*time.Second)); !errors.Is(err, ErrWorkflowTaskConflict) {
+		t.Fatalf("cross-run bind err=%v", err)
+	}
+}
+
+func TestWorkflowByTaskRejectsAmbiguousHistory(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	taskID := uuid.NewString()
+	seedWorkflowTask(t, db, taskID, projectID, accountID, now)
+	for i := range 2 {
+		runID := uuid.NewString()
+		if _, err := db.Exec(`INSERT INTO project_workflow_runs(id,project_id,account_id,kind,state,current_step,topic_task_id,model_name,reasoning_effort,created_at,updated_at,finished_at) VALUES(?,?,?,'remix','failed','topic_card',?,'gpt-5.4','high',?,?,?)`, runID, projectID, accountID, taskID, now.Add(time.Duration(i)*time.Second), now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := NewWorkflowRepository(db).ByTask(context.Background(), taskID); !errors.Is(err, ErrWorkflowTaskConflict) {
+		t.Fatalf("ByTask ambiguity err=%v", err)
+	}
+}
+
+func TestWorkflowAdvanceReplayAfterCompletionIsIdempotent(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	topicID, remixID := uuid.NewString(), uuid.NewString()
+	seedWorkflowTask(t, db, topicID, projectID, accountID, now)
+	seedWorkflowTask(t, db, remixID, projectID, accountID, now)
+	repo := NewWorkflowRepository(db)
+	run, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BindTopicTask(context.Background(), run.ID, topicID, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AdvanceToRemix(context.Background(), run.ID, remixID, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := repo.Complete(context.Background(), run.ID, now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repo.AdvanceToRemix(context.Background(), run.ID, remixID, now.Add(4*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.State != domain.WorkflowCompleted || replayed.FinishedAt == nil || completed.FinishedAt == nil || !replayed.FinishedAt.Equal(*completed.FinishedAt) || !replayed.UpdatedAt.Equal(completed.UpdatedAt) {
+		t.Fatalf("completed replay changed run: before=%+v after=%+v", completed, replayed)
+	}
+}
+
 func TestWorkflowFailPersistsDetailsAndIsIdempotent(t *testing.T) {
 	db, accountID, projectID, now := workflowFixture(t)
 	repo := NewWorkflowRepository(db)

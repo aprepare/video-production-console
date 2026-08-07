@@ -12,8 +12,10 @@ import (
 )
 
 var (
-	ErrWorkflowNotFound   = errors.New("workflow run not found")
-	ErrWorkflowTransition = errors.New("invalid workflow transition")
+	ErrWorkflowNotFound     = errors.New("workflow run not found")
+	ErrWorkflowTransition   = errors.New("invalid workflow transition")
+	ErrWorkflowTaskScope    = errors.New("workflow task scope mismatch")
+	ErrWorkflowTaskConflict = errors.New("workflow task already bound")
 )
 
 const workflowColumns = `id,project_id,account_id,kind,state,current_step,topic_task_id,remix_task_id,model_name,reasoning_effort,error_code,error_message,created_at,updated_at,finished_at`
@@ -86,6 +88,9 @@ func (r *WorkflowRepository) BeginRemix(ctx context.Context, requested domain.Pr
 
 func (r *WorkflowRepository) BindTopicTask(ctx context.Context, runID, taskID string, now time.Time) (domain.ProjectWorkflowRun, error) {
 	return r.transition(ctx, runID, func(q assetDBTX, run domain.ProjectWorkflowRun) error {
+		if err := validateWorkflowTaskBinding(ctx, q, run, taskID, workflowTaskSlotTopic); err != nil {
+			return err
+		}
 		if run.TopicTaskID != nil {
 			if *run.TopicTaskID == taskID {
 				return nil
@@ -99,17 +104,20 @@ func (r *WorkflowRepository) BindTopicTask(ctx context.Context, runID, taskID st
 		if err != nil {
 			return err
 		}
-		if n, _ := result.RowsAffected(); n != 1 {
-			return ErrWorkflowTransition
-		}
-		return nil
+		return requireOneWorkflowUpdate(result)
 	})
 }
 
 func (r *WorkflowRepository) AdvanceToRemix(ctx context.Context, runID, taskID string, now time.Time) (domain.ProjectWorkflowRun, error) {
 	return r.transition(ctx, runID, func(q assetDBTX, run domain.ProjectWorkflowRun) error {
-		if run.CurrentStep == domain.WorkflowStepRemix && run.RemixTaskID != nil && *run.RemixTaskID == taskID {
-			return nil
+		if err := validateWorkflowTaskBinding(ctx, q, run, taskID, workflowTaskSlotRemix); err != nil {
+			return err
+		}
+		if run.RemixTaskID != nil {
+			if *run.RemixTaskID == taskID {
+				return nil
+			}
+			return ErrWorkflowTransition
 		}
 		if run.State != domain.WorkflowRunning || run.CurrentStep != domain.WorkflowStepTopicCard || run.TopicTaskID == nil || run.RemixTaskID != nil {
 			return ErrWorkflowTransition
@@ -118,10 +126,7 @@ func (r *WorkflowRepository) AdvanceToRemix(ctx context.Context, runID, taskID s
 		if err != nil {
 			return err
 		}
-		if n, _ := result.RowsAffected(); n != 1 {
-			return ErrWorkflowTransition
-		}
-		return nil
+		return requireOneWorkflowUpdate(result)
 	})
 }
 
@@ -133,8 +138,11 @@ func (r *WorkflowRepository) Complete(ctx context.Context, runID string, now tim
 		if run.State != domain.WorkflowRunning || run.CurrentStep != domain.WorkflowStepRemix {
 			return ErrWorkflowTransition
 		}
-		_, err := q.ExecContext(ctx, `UPDATE project_workflow_runs SET state='completed',current_step='completed',updated_at=?,finished_at=? WHERE id=? AND state='running' AND current_step='remix'`, now, now, runID)
-		return err
+		result, err := q.ExecContext(ctx, `UPDATE project_workflow_runs SET state='completed',current_step='completed',updated_at=?,finished_at=? WHERE id=? AND state='running' AND current_step='remix'`, now, now, runID)
+		if err != nil {
+			return err
+		}
+		return requireOneWorkflowUpdate(result)
 	})
 }
 
@@ -146,8 +154,11 @@ func (r *WorkflowRepository) Fail(ctx context.Context, runID, code, message stri
 		if run.State != domain.WorkflowRunning {
 			return ErrWorkflowTransition
 		}
-		_, err := q.ExecContext(ctx, `UPDATE project_workflow_runs SET state='failed',error_code=?,error_message=?,updated_at=?,finished_at=? WHERE id=? AND state='running'`, nullable(code), nullable(message), now, now, runID)
-		return err
+		result, err := q.ExecContext(ctx, `UPDATE project_workflow_runs SET state='failed',error_code=?,error_message=?,updated_at=?,finished_at=? WHERE id=? AND state='running'`, nullable(code), nullable(message), now, now, runID)
+		if err != nil {
+			return err
+		}
+		return requireOneWorkflowUpdate(result)
 	})
 }
 
@@ -156,7 +167,80 @@ func (r *WorkflowRepository) ActiveForProject(ctx context.Context, projectID str
 }
 
 func (r *WorkflowRepository) ByTask(ctx context.Context, taskID string) (domain.ProjectWorkflowRun, error) {
-	return queryWorkflow(ctx, r.db, `SELECT `+workflowColumns+` FROM project_workflow_runs WHERE topic_task_id=? OR remix_task_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, taskID, taskID)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+workflowColumns+` FROM project_workflow_runs WHERE topic_task_id=? OR remix_task_id=? LIMIT 2`, taskID, taskID)
+	if err != nil {
+		return domain.ProjectWorkflowRun{}, err
+	}
+	defer rows.Close()
+	var found domain.ProjectWorkflowRun
+	count := 0
+	for rows.Next() {
+		var run domain.ProjectWorkflowRun
+		if err := scanWorkflow(rows, &run); err != nil {
+			return domain.ProjectWorkflowRun{}, err
+		}
+		found = run
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return domain.ProjectWorkflowRun{}, err
+	}
+	if count == 0 {
+		return domain.ProjectWorkflowRun{}, ErrWorkflowNotFound
+	}
+	if count > 1 {
+		return domain.ProjectWorkflowRun{}, ErrWorkflowTaskConflict
+	}
+	return found, nil
+}
+
+type workflowTaskSlot string
+
+const (
+	workflowTaskSlotTopic workflowTaskSlot = "topic"
+	workflowTaskSlotRemix workflowTaskSlot = "remix"
+)
+
+func validateWorkflowTaskBinding(ctx context.Context, q assetDBTX, run domain.ProjectWorkflowRun, taskID string, slot workflowTaskSlot) error {
+	var taskProjectID *string
+	var taskAccountID string
+	if err := q.QueryRowContext(ctx, `SELECT project_id,account_id FROM codex_tasks WHERE id=?`, taskID).Scan(&taskProjectID, &taskAccountID); errors.Is(err, sql.ErrNoRows) {
+		return ErrWorkflowTaskScope
+	} else if err != nil {
+		return err
+	}
+	if taskProjectID == nil || *taskProjectID != run.ProjectID || taskAccountID != run.AccountID {
+		return ErrWorkflowTaskScope
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id,topic_task_id,remix_task_id FROM project_workflow_runs WHERE topic_task_id=? OR remix_task_id=?`, taskID, taskID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var topicTaskID, remixTaskID *string
+		if err := rows.Scan(&id, &topicTaskID, &remixTaskID); err != nil {
+			return err
+		}
+		sameDesiredSlot := id == run.ID && ((slot == workflowTaskSlotTopic && topicTaskID != nil && *topicTaskID == taskID) || (slot == workflowTaskSlotRemix && remixTaskID != nil && *remixTaskID == taskID))
+		boundOtherSlot := (slot == workflowTaskSlotTopic && remixTaskID != nil && *remixTaskID == taskID) || (slot == workflowTaskSlotRemix && topicTaskID != nil && *topicTaskID == taskID)
+		if !sameDesiredSlot || boundOtherSlot {
+			return ErrWorkflowTaskConflict
+		}
+	}
+	return rows.Err()
+}
+
+func requireOneWorkflowUpdate(result sql.Result) error {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrWorkflowTransition
+	}
+	return nil
 }
 
 func (r *WorkflowRepository) transition(ctx context.Context, runID string, change func(assetDBTX, domain.ProjectWorkflowRun) error) (out domain.ProjectWorkflowRun, returnErr error) {
@@ -198,9 +282,15 @@ type workflowQueryer interface {
 
 func queryWorkflow(ctx context.Context, q workflowQueryer, query string, args ...any) (domain.ProjectWorkflowRun, error) {
 	var run domain.ProjectWorkflowRun
-	err := q.QueryRowContext(ctx, query, args...).Scan(&run.ID, &run.ProjectID, &run.AccountID, &run.Kind, &run.State, &run.CurrentStep, &run.TopicTaskID, &run.RemixTaskID, &run.ModelName, &run.ReasoningEffort, &run.ErrorCode, &run.ErrorMessage, &run.CreatedAt, &run.UpdatedAt, &run.FinishedAt)
+	err := scanWorkflow(q.QueryRowContext(ctx, query, args...), &run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return run, ErrWorkflowNotFound
 	}
 	return run, err
+}
+
+type workflowScanner interface{ Scan(...any) error }
+
+func scanWorkflow(scanner workflowScanner, run *domain.ProjectWorkflowRun) error {
+	return scanner.Scan(&run.ID, &run.ProjectID, &run.AccountID, &run.Kind, &run.State, &run.CurrentStep, &run.TopicTaskID, &run.RemixTaskID, &run.ModelName, &run.ReasoningEffort, &run.ErrorCode, &run.ErrorMessage, &run.CreatedAt, &run.UpdatedAt, &run.FinishedAt)
 }

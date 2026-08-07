@@ -252,7 +252,11 @@ func (r *ProjectRepository) PublishProject(ctx context.Context, id string, now t
 	if err != nil {
 		return out, err
 	}
-	if n, _ := result.RowsAffected(); n != 1 {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return out, err
+	}
+	if n != 1 {
 		return out, ErrProjectNotInReview
 	}
 	out, err = scanProject(conn.QueryRowContext(ctx, `SELECT id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note FROM projects WHERE id=?`, id))
