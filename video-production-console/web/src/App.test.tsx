@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
 import appSource from "./App.tsx?raw";
@@ -13,6 +15,27 @@ afterEach(() => {
 });
 
 const routedProjectID = "814ebfde-7470-418a-a703-a33596f7e8fe";
+
+test("keeps the global modal and notification layers above the mobile action bar", () => {
+  const appCss = readFileSync(resolve(process.cwd(), "src/App.css"), "utf8");
+  const workbenchCss = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
+  const layer = (name: string) => Number(appCss.match(new RegExp(`${name}:\\s*(\\d+)`))?.[1]);
+  const action = layer("--layer-workbench-action");
+  const notice = layer("--layer-notice");
+  const modal = layer("--layer-modal-backdrop");
+  const dialog = layer("--layer-modal-dialog");
+  const toast = layer("--layer-toast");
+
+  expect(action).toBeGreaterThan(0);
+  expect(notice).toBeGreaterThan(action);
+  expect(modal).toBeGreaterThan(notice);
+  expect(dialog).toBeGreaterThan(modal);
+  expect(toast).toBeGreaterThan(dialog);
+  expect(workbenchCss).toMatch(/\.mobile-primary-action-bar\s*\{[^}]*z-index:\s*var\(--layer-workbench-action\)/s);
+  expect(appCss).toMatch(/\.modal-backdrop\s*\{[^}]*z-index:\s*var\(--layer-modal-backdrop\)/s);
+  expect(appCss).toMatch(/\.modal-backdrop\s*>\s*\[role="dialog"\]\s*\{[^}]*z-index:\s*var\(--layer-modal-dialog\)/s);
+  expect(appSource.match(/role="dialog"/g)?.length).toBeGreaterThanOrEqual(5);
+});
 
 test("project location parsing accepts UUID detail paths and rejects invalid paths", () => {
   expect(parseLocation("/")).toEqual({ view: "projects" });

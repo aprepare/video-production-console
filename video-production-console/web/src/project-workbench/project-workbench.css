@@ -363,7 +363,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 20;
+    z-index: var(--layer-workbench-action);
     display: flex;
     align-items: center;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
