@@ -106,7 +106,7 @@ func TestSyncStageFromAssets(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := NewProjectRepository(db)
-			if err := repo.CreateProject(context.Background(), domain.Project{ID: pid, AccountID: aid, Title: "p", Stage: domain.StageTopic, CreatedAt: now, UpdatedAt: now}); err != nil {
+			if err := repo.CreateProject(context.Background(), domain.Project{ID: pid, AccountID: aid, Title: "p", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
 				t.Fatal(err)
 			}
 			if tt.start != "" {
