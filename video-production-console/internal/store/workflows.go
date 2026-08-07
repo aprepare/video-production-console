@@ -35,7 +35,7 @@ func (r *WorkflowRepository) BeginRemix(ctx context.Context, requested domain.Pr
 	if requested.UpdatedAt.IsZero() {
 		requested.UpdatedAt = requested.CreatedAt
 	}
-	if requested.ID == "" || requested.ProjectID == "" || requested.AccountID == "" || requested.Kind != domain.WorkflowRemix || requested.State != domain.WorkflowRunning || requested.CurrentStep != domain.WorkflowStepTopicCard || strings.TrimSpace(requested.ModelName) == "" || strings.TrimSpace(requested.ReasoningEffort) == "" || requested.CreatedAt.IsZero() {
+	if requested.ID == "" || requested.ProjectID == "" || requested.AccountID == "" || requested.Kind != domain.WorkflowRemix || requested.State != domain.WorkflowRunning || requested.CurrentStep != domain.WorkflowStepTopicCard || requested.TopicTaskID != nil || requested.RemixTaskID != nil || requested.ErrorCode != nil || requested.ErrorMessage != nil || requested.FinishedAt != nil || strings.TrimSpace(requested.ModelName) == "" || strings.TrimSpace(requested.ReasoningEffort) == "" || requested.CreatedAt.IsZero() {
 		return out, fmt.Errorf("begin remix: invalid workflow run")
 	}
 	conn, err := r.db.Conn(ctx)

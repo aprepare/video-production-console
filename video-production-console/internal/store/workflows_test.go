@@ -36,6 +36,33 @@ func TestWorkflowBeginRemixIsIdempotentAndActiveIsUnique(t *testing.T) {
 	}
 }
 
+func TestWorkflowBeginRemixRejectsContradictoryInitialState(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*domain.ProjectWorkflowRun)
+	}{
+		{name: "topic task", mutate: func(run *domain.ProjectWorkflowRun) { run.TopicTaskID = stringPtr("") }},
+		{name: "remix task", mutate: func(run *domain.ProjectWorkflowRun) { run.RemixTaskID = stringPtr("") }},
+		{name: "error code", mutate: func(run *domain.ProjectWorkflowRun) { run.ErrorCode = stringPtr("") }},
+		{name: "error message", mutate: func(run *domain.ProjectWorkflowRun) { run.ErrorMessage = stringPtr("") }},
+		{name: "finished at", mutate: func(run *domain.ProjectWorkflowRun) { finished := run.CreatedAt; run.FinishedAt = &finished }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, accountID, projectID, now := workflowFixture(t)
+			run := domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now}
+			tt.mutate(&run)
+			if _, err := NewWorkflowRepository(db).BeginRemix(context.Background(), run); err == nil {
+				t.Fatal("BeginRemix accepted contradictory initial state")
+			}
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM project_workflow_runs`).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("workflow rows=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
 func TestWorkflowTransitionsTopicCardToRemixToCompletedAndFindsBothTasks(t *testing.T) {
 	db, accountID, projectID, now := workflowFixture(t)
 	topicID, remixID := uuid.NewString(), uuid.NewString()
@@ -70,6 +97,48 @@ func TestWorkflowTransitionsTopicCardToRemixToCompletedAndFindsBothTasks(t *test
 	again, err := repo.Complete(context.Background(), run.ID, now.Add(4*time.Second))
 	if err != nil || again.FinishedAt == nil || !again.FinishedAt.Equal(*completed.FinishedAt) {
 		t.Fatalf("repeat complete=%+v err=%v", again, err)
+	}
+}
+
+func TestWorkflowTransitionReplayAndConflictBoundaries(t *testing.T) {
+	db, accountID, projectID, now := workflowFixture(t)
+	topicID, otherTopicID := uuid.NewString(), uuid.NewString()
+	remixID, otherRemixID := uuid.NewString(), uuid.NewString()
+	for _, taskID := range []string{topicID, otherTopicID, remixID, otherRemixID} {
+		seedWorkflowTask(t, db, taskID, projectID, accountID, now)
+	}
+	repo := NewWorkflowRepository(db)
+	run, err := repo.BeginRemix(context.Background(), domain.ProjectWorkflowRun{ID: uuid.NewString(), ProjectID: projectID, AccountID: accountID, Kind: domain.WorkflowRemix, State: domain.WorkflowRunning, CurrentStep: domain.WorkflowStepTopicCard, ModelName: "gpt-5.4", ReasoningEffort: "high", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AdvanceToRemix(context.Background(), run.ID, remixID, now.Add(time.Second)); !errors.Is(err, ErrWorkflowTransition) {
+		t.Fatalf("advance before topic bind err=%v", err)
+	}
+	if _, err := repo.Complete(context.Background(), run.ID, now.Add(time.Second)); !errors.Is(err, ErrWorkflowTransition) {
+		t.Fatalf("early complete err=%v", err)
+	}
+	bound, err := repo.BindTopicTask(context.Background(), run.ID, topicID, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repo.BindTopicTask(context.Background(), run.ID, topicID, now.Add(3*time.Second))
+	if err != nil || replayed.TopicTaskID == nil || *replayed.TopicTaskID != topicID || !replayed.UpdatedAt.Equal(bound.UpdatedAt) {
+		t.Fatalf("topic replay=%+v err=%v", replayed, err)
+	}
+	if _, err := repo.BindTopicTask(context.Background(), run.ID, otherTopicID, now.Add(4*time.Second)); !errors.Is(err, ErrWorkflowTransition) {
+		t.Fatalf("different topic bind err=%v", err)
+	}
+	advanced, err := repo.AdvanceToRemix(context.Background(), run.ID, remixID, now.Add(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err = repo.AdvanceToRemix(context.Background(), run.ID, remixID, now.Add(6*time.Second))
+	if err != nil || replayed.RemixTaskID == nil || *replayed.RemixTaskID != remixID || !replayed.UpdatedAt.Equal(advanced.UpdatedAt) {
+		t.Fatalf("remix replay=%+v err=%v", replayed, err)
+	}
+	if _, err := repo.AdvanceToRemix(context.Background(), run.ID, otherRemixID, now.Add(7*time.Second)); !errors.Is(err, ErrWorkflowTransition) {
+		t.Fatalf("different remix bind err=%v", err)
 	}
 }
 
@@ -120,3 +189,5 @@ func seedWorkflowTask(t *testing.T, db *sql.DB, id, projectID, accountID string,
 		t.Fatal(err)
 	}
 }
+
+func stringPtr(value string) *string { return &value }

@@ -125,6 +125,37 @@ func TestPublishProjectWrongStageDoesNotPartiallyWrite(t *testing.T) {
 	assertProjectPublication(t, db, projectID, domain.StageMixing, "producing", nil, now)
 }
 
+func TestPublishProjectRejectsNonReadyCurrentFinalVideo(t *testing.T) {
+	for _, currentState := range []domain.AssetState{domain.AssetStale, domain.AssetFailed} {
+		t.Run(string(currentState), func(t *testing.T) {
+			db, err := Open(filepath.Join(t.TempDir(), "publish-current.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			now := time.Date(2026, 8, 7, 11, 0, 0, 0, time.UTC)
+			accountID, projectID := uuid.NewString(), uuid.NewString()
+			_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+			_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','review','producing',?,?)`, projectID, accountID, now, now)
+			repo := NewProjectRepository(db)
+			if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "ready.mp4", Filename: "ready.mp4", MIMEType: "video/mp4", SHA256: "ready"}); err != nil {
+				t.Fatal(err)
+			}
+			current, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "current.mp4", Filename: "current.mp4", MIMEType: "video/mp4", SHA256: "current"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE asset_versions SET state=? WHERE id=?`, currentState, current.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.PublishProject(context.Background(), projectID, now.Add(time.Minute)); !errors.Is(err, ErrFinalVideoMissing) {
+				t.Fatalf("current %s err=%v", currentState, err)
+			}
+			assertProjectPublication(t, db, projectID, domain.StageReview, "producing", nil, now)
+		})
+	}
+}
+
 func assertProjectPublication(t *testing.T, db *sql.DB, id string, wantStage domain.ProjectStage, wantStatus string, wantPublished *time.Time, wantUpdated time.Time) {
 	t.Helper()
 	var stage domain.ProjectStage
