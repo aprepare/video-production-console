@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -72,6 +73,69 @@ func TestMoveProjectUsesExpectedStageAndIsIdempotent(t *testing.T) {
 	}
 	if _, err = repo.MoveProject(context.Background(), id, domain.StageScript, domain.StagePublished, time.Now()); !errors.Is(err, ErrProjectStageConflict) {
 		t.Fatalf("conflict error=%v", err)
+	}
+}
+
+func TestPublishProjectRequiresReviewAndReadyFinalVideo(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "publish.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','review','producing',?,?)`, projectID, accountID, now, now)
+	repo := NewProjectRepository(db)
+	if _, err := repo.PublishProject(context.Background(), projectID, now.Add(time.Minute)); !errors.Is(err, ErrFinalVideoMissing) {
+		t.Fatalf("missing final video err=%v", err)
+	}
+	assertProjectPublication(t, db, projectID, domain.StageReview, "producing", nil, now)
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", SHA256: "final"}); err != nil {
+		t.Fatal(err)
+	}
+	publishedAt := now.Add(2 * time.Minute)
+	p, err := repo.PublishProject(context.Background(), projectID, publishedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stage != domain.StagePublished || p.PublishedAt == nil || !p.PublishedAt.Equal(publishedAt) {
+		t.Fatalf("published=%+v", p)
+	}
+	assertProjectPublication(t, db, projectID, domain.StagePublished, "published", &publishedAt, publishedAt)
+}
+
+func TestPublishProjectWrongStageDoesNotPartiallyWrite(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "publish-stage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','mixing','producing',?,?)`, projectID, accountID, now, now)
+	repo := NewProjectRepository(db)
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", SHA256: "final"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.PublishProject(context.Background(), projectID, now.Add(time.Minute)); !errors.Is(err, ErrProjectNotInReview) {
+		t.Fatalf("wrong stage err=%v", err)
+	}
+	assertProjectPublication(t, db, projectID, domain.StageMixing, "producing", nil, now)
+}
+
+func assertProjectPublication(t *testing.T, db *sql.DB, id string, wantStage domain.ProjectStage, wantStatus string, wantPublished *time.Time, wantUpdated time.Time) {
+	t.Helper()
+	var stage domain.ProjectStage
+	var status string
+	var publishedAt *time.Time
+	var updatedAt time.Time
+	if err := db.QueryRow(`SELECT stage,publication_status,published_at,updated_at FROM projects WHERE id=?`, id).Scan(&stage, &status, &publishedAt, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stage != wantStage || status != wantStatus || (publishedAt == nil) != (wantPublished == nil) || (publishedAt != nil && !publishedAt.Equal(*wantPublished)) || !updatedAt.Equal(wantUpdated) {
+		t.Fatalf("publication stage=%s status=%s published=%v updated=%v", stage, status, publishedAt, updatedAt)
 	}
 }
 

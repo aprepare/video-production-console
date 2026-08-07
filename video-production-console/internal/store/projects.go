@@ -18,6 +18,8 @@ var (
 	ErrAccountInactive      = errors.New("account must be active")
 	ErrProjectStageConflict = errors.New("project stage changed")
 	ErrProjectBusy          = errors.New("project has an active task")
+	ErrFinalVideoMissing    = errors.New("final_video_missing")
+	ErrProjectNotInReview   = errors.New("project_not_in_review")
 )
 
 type ProjectRepository struct {
@@ -213,6 +215,55 @@ func (r *ProjectRepository) MoveProject(ctx context.Context, id string, expected
 		return domain.Project{}, ErrProjectStageConflict
 	}
 	return r.GetProject(ctx, id)
+}
+
+func (r *ProjectRepository) PublishProject(ctx context.Context, id string, now time.Time) (out domain.Project, returnErr error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return out, fmt.Errorf("begin publish project: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var stage domain.ProjectStage
+	if err := conn.QueryRowContext(ctx, `SELECT stage FROM projects WHERE id=?`, id).Scan(&stage); errors.Is(err, sql.ErrNoRows) {
+		return out, ErrProjectNotFound
+	} else if err != nil {
+		return out, err
+	}
+	if stage != domain.StageReview {
+		return out, ErrProjectNotInReview
+	}
+	var readyFinal int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM asset_items AS item JOIN asset_versions AS version ON version.id=item.current_version_id WHERE item.project_id=? AND item.type='final_video' AND version.state='ready'`, id).Scan(&readyFinal); err != nil {
+		return out, err
+	}
+	if readyFinal == 0 {
+		return out, ErrFinalVideoMissing
+	}
+	result, err := conn.ExecContext(ctx, `UPDATE projects SET stage='published',publication_status='published',published_at=?,updated_at=? WHERE id=? AND stage='review'`, now, now, id)
+	if err != nil {
+		return out, err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return out, ErrProjectNotInReview
+	}
+	out, err = scanProject(conn.QueryRowContext(ctx, `SELECT id,account_id,title,stage,topic_card_path,created_at,updated_at,ready_at,published_at,publish_note FROM projects WHERE id=?`, id))
+	if err != nil {
+		return out, err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return out, fmt.Errorf("commit publish project outcome unknown: %w", err)
+	}
+	committed = true
+	return out, nil
 }
 func (r *ProjectRepository) SetTopicCardPath(ctx context.Context, id, path string, now time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE projects SET topic_card_path=?,updated_at=? WHERE id=?`, path, now, id)

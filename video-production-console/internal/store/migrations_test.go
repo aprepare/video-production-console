@@ -47,6 +47,7 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 		"thread_cleanup_intents",
 		"semantic_events",
 		"thread_leases",
+		"project_workflow_runs",
 	}
 	for _, table := range wantTables {
 		var name string
@@ -67,6 +68,42 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 	}
 	if concurrency != "2" {
 		t.Errorf("max_codex_concurrency = %q, want %q", concurrency, "2")
+	}
+}
+
+func TestWorkflowMigrationHasConstraintsIndexAndForeignKeys(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "workflow-schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := scalar(t, db, `SELECT sql FROM sqlite_master WHERE type='table' AND name='project_workflow_runs'`); !strings.Contains(got, "kind IN ('remix')") || !strings.Contains(got, "state IN ('running','completed','failed','canceled')") || !strings.Contains(got, "current_step IN ('topic_card','remix','completed')") {
+		t.Fatalf("workflow schema constraints missing: %s", got)
+	}
+	if got := scalar(t, db, `SELECT sql FROM sqlite_master WHERE type='index' AND name='project_workflow_active_uq'`); !strings.Contains(got, "UNIQUE INDEX") || !strings.Contains(got, "WHERE state='running'") {
+		t.Fatalf("workflow active index=%s", got)
+	}
+	rows, err := db.Query(`PRAGMA foreign_key_list('project_workflow_runs')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	want := map[string]string{"project_id": "CASCADE", "account_id": "CASCADE", "topic_task_id": "SET NULL", "remix_task_id": "SET NULL"}
+	for rows.Next() {
+		var id, seq int
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatal(err)
+		}
+		if expected, ok := want[from]; ok {
+			if onDelete != expected {
+				t.Fatalf("%s on delete=%s, want %s", from, onDelete, expected)
+			}
+			delete(want, from)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing workflow foreign keys: %v", want)
 	}
 }
 

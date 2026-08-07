@@ -738,6 +738,25 @@ DROP TABLE projects;
 ALTER TABLE projects_lifecycle_v2 RENAME TO projects;
 CREATE INDEX projects_account_stage_idx ON projects(account_id, stage);
 CREATE INDEX projects_account_publication_idx ON projects(account_id, publication_status, created_at);`,
+	`CREATE TABLE project_workflow_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('remix')),
+    state TEXT NOT NULL CHECK (state IN ('running','completed','failed','canceled')),
+    current_step TEXT NOT NULL CHECK (current_step IN ('topic_card','remix','completed')),
+    topic_task_id TEXT REFERENCES codex_tasks(id) ON DELETE SET NULL,
+    remix_task_id TEXT REFERENCES codex_tasks(id) ON DELETE SET NULL,
+    model_name TEXT NOT NULL,
+    reasoning_effort TEXT NOT NULL,
+    error_code TEXT,
+    error_message TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    finished_at DATETIME
+);
+CREATE UNIQUE INDEX project_workflow_active_uq
+ON project_workflow_runs(project_id,kind) WHERE state='running';`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup
