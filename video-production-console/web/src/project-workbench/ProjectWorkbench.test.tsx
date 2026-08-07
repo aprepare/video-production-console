@@ -75,6 +75,7 @@ function workbenchProps(detail = fixture()) {
     onViewAsset: vi.fn(),
     onOpenConversation: vi.fn(),
     onOpenTask: vi.fn(),
+    pendingActions: [] as string[],
   };
 }
 
@@ -122,7 +123,6 @@ test("shows every project-scoped production asset with state, meaning, and acces
 
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").type).toBe("file");
-  expect(screen.getByLabelText<HTMLInputElement>("上传连续文案").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("上传成片").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("替换账号背景图").type).toBe("file");
 
@@ -229,7 +229,7 @@ test("routes an invalid inherited background to the replacement control", () => 
   expect(click).toHaveBeenCalledOnce();
 });
 
-test("routes an invalid continuous script to its own upload control instead of restarting remix", () => {
+test("restarts the automatic remix workflow when the generated continuous script is invalid", () => {
   const detail = fixture();
   detail.project.stage = "assets";
   detail.assets = {
@@ -238,13 +238,53 @@ test("routes an invalid continuous script to its own upload control instead of r
     subtitle_srt: asset("subtitle_srt"),
   };
   detail.missing_assets = ["continuous_script"];
-  const click = vi.fn();
+  const props = renderWorkbench(detail);
+
+  fireEvent.click(screen.getByRole("button", { name: "开始二创文案" }));
+
+  expect(props.onRemix).toHaveBeenCalledOnce();
+});
+
+test("does not expose manual upload controls for generated continuous scripts or montage drafts", () => {
+  renderWorkbench();
+
+  expect(screen.queryByLabelText("上传连续文案")).toBeNull();
+  expect(screen.queryByLabelText("上传混剪草稿")).toBeNull();
+  expect(screen.getByRole("button", { name: "查看连续文案" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "查看混剪草稿" })).toBeTruthy();
+});
+
+test("selects the newest live task consistently in the action panel and conversation", () => {
+  const older = { ...task, id: "older", created_at: "2026-08-01T00:00:00Z", result_summary: "旧任务" };
+  const newer = { ...task, id: "newer", created_at: "2026-08-09T00:00:00Z", result_summary: "最新任务" };
+  const props = workbenchProps();
+  props.tasks = [older, newer];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getAllByText("最新任务").length).toBeGreaterThan(0);
+  expect(screen.queryByText("旧任务")).toBeNull();
+});
+
+test("blocks an unknown backend missing key with an actionable explanation", () => {
+  const detail = fixture();
+  detail.project.stage = "review";
+  detail.assets.final_video = asset("final_video");
+  detail.missing_assets = ["future_asset"];
   renderWorkbench(detail);
-  screen.getByLabelText("上传连续文案").addEventListener("click", click);
 
-  fireEvent.click(screen.getByRole("button", { name: "补齐制作素材" }));
+  const action = screen.getByRole<HTMLButtonElement>("button", { name: "暂无法继续" });
+  expect(action.disabled).toBe(true);
+  expect(screen.getByText("无法识别项目缺项 future_asset，请刷新项目；若仍存在，请更新控制台服务。")).toBeTruthy();
+});
 
-  expect(click).toHaveBeenCalledOnce();
+test("disables the current action, delete, and related input while pending", () => {
+  const props = workbenchProps();
+  props.pendingActions = ["upload:narration", "delete"];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "补齐制作素材" }).disabled).toBe(true);
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" }).disabled).toBe(true);
+  expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(true);
 });
 
 test("guards the 1366 by 768 compact desktop structure without pretending to measure visibility", () => {

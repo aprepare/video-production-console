@@ -258,10 +258,6 @@ function writeProjectLocation(
   else window.history.replaceState({}, "", target);
 }
 
-function renderLegacyProjectDrawer() {
-  return false;
-}
-
 const liveTaskStatuses = new Set([
   "queued",
   "running",
@@ -321,18 +317,9 @@ const assetLabels: Record<string, string> = {
   source_script: "爆款原文",
   topic_card: "正式选题卡",
   continuous_script: "连续文案",
-  spoken_script: "口播稿",
   narration: "配音",
   subtitle_srt: "SRT 字幕",
   account_background: "账号固定背景图",
-  audio: "配音",
-  subtitle: "SRT 字幕",
-  mix_draft: "混剪草稿",
-  final_video: "成片",
-};
-const uploadAssetLabels: Record<string, string> = {
-  continuous_script: "连续文案",
-  spoken_script: "口播稿",
   audio: "配音",
   subtitle: "SRT 字幕",
   mix_draft: "混剪草稿",
@@ -364,7 +351,6 @@ const taskActionLabels: Record<string, string> = {
   "remix.standard": "二创文案",
   "remix.enhanced": "增强二创文案",
   "remix.from_topic_card": "根据选题写文案",
-  "remix.spoken_format": "口播断句",
   "remix.review": "文案检查",
   "montage.plan": "混剪方案",
   "montage.execute": "混剪草稿",
@@ -600,17 +586,13 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [newAccount, setNewAccount] = useState("");
   const [accountBackground, setAccountBackground] = useState<File | null>(null);
-  const [accountBackgroundReplacement, setAccountBackgroundReplacement] =
-    useState<File | null>(null);
   const [newProject, setNewProject] = useState("");
   const [message, setMessage] = useState("");
   const [selected, setSelected] = useState<Project | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [assetType, setAssetType] = useState("continuous_script");
-  const [assetFile, setAssetFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<{
     asset: Asset;
     text?: string;
@@ -657,8 +639,10 @@ function App() {
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
   const [urlRevision, setURLRevision] = useState(0);
+  const [pendingProjectActions, setPendingProjectActions] = useState<string[]>([]);
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
+  const pendingProjectActionsRef = useRef(new Set<string>());
   const detailGenerationRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
   const detailInFlightRef = useRef(false);
@@ -677,6 +661,17 @@ function App() {
   const activeDialogRef = useRef<HTMLElement | null>(null);
   const nestedDialogFocusRef = useRef<HTMLElement[]>([]);
   const taskRestoreAbortRef = useRef<AbortController | null>(null);
+  const lockProjectAction = useCallback((projectID: string, action: string) => {
+    const key = `${projectID}:${action}`;
+    if (pendingProjectActionsRef.current.has(key)) return "";
+    pendingProjectActionsRef.current.add(key);
+    setPendingProjectActions([...pendingProjectActionsRef.current]);
+    return key;
+  }, []);
+  const unlockProjectAction = useCallback((key: string) => {
+    pendingProjectActionsRef.current.delete(key);
+    setPendingProjectActions([...pendingProjectActionsRef.current]);
+  }, []);
   const clearProjectSelection = useCallback(() => {
     selectedIDRef.current = "";
     detailGenerationRef.current += 1;
@@ -695,36 +690,6 @@ function App() {
       tasks.filter((task) => liveTaskStatuses.has(task.status)),
     [tasks],
   );
-  const publishingPackage = useMemo(
-    () =>
-      [...tasks]
-        .filter((task) => task.status === "completed" && task.publishing_package)
-        .sort(
-          (left, right) =>
-            new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-        )[0]?.publishing_package,
-    [tasks],
-  );
-  const publishingShortTitles = useMemo(() => {
-    if (!publishingPackage) return [];
-    if (publishingPackage.short_titles?.length) return publishingPackage.short_titles;
-    const recommended = publishingPackage.top_titles?.map((item) => item.title) || [];
-    return recommended.length ? recommended : (publishingPackage.titles || []).slice(0, 5);
-  }, [publishingPackage]);
-  const publishingDescriptions = useMemo(() => {
-    if (!publishingPackage) return [];
-    const descriptions = publishingPackage.descriptions?.length
-      ? publishingPackage.descriptions
-      : publishingPackage.description
-        ? [publishingPackage.description]
-        : [];
-    const topicLine = (publishingPackage.topics || []).join(" ");
-    return descriptions.map((description) =>
-      description.includes("#") || !topicLine
-        ? description
-        : `${description}\n${topicLine}`,
-    );
-  }, [publishingPackage]);
   const activeIdeaSessionID = ideaDraft ? undefined : ideaSession?.id;
   const activeTaskIDs = useMemo(
     () => activeTasks.map((task) => task.id).sort().join(","),
@@ -760,33 +725,6 @@ function App() {
     },
     [csrf],
   );
-
-  const copyPublishingText = async (text: string, label: string) => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        try {
-          await navigator.clipboard.writeText(text);
-          setMessage(`${label}已复制，可以直接粘贴到视频号。`);
-          return;
-        } catch {
-          // HTTP LAN access may expose Clipboard API but reject writes.
-        }
-      }
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const copied = document.execCommand("copy");
-      textarea.remove();
-      if (!copied) throw new Error("copy command was rejected");
-      setMessage(`${label}已复制，可以直接粘贴到视频号。`);
-    } catch {
-      setMessage(`${label}复制失败，请长按文字手动复制。`);
-    }
-  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1452,31 +1390,7 @@ function App() {
     setNewProject("");
     await load();
   };
-  const ensureTopicCard = async () => {
-    if (!selected) return;
-    const project = selected;
-    const response = await api(`/api/projects/${project.id}/topic-card`, {
-      method: "POST",
-    });
-    if (!response.ok) {
-      let reason = "无法为当前项目生成正式选题卡";
-      try {
-        const payload = (await response.json()) as { message?: string };
-        if (payload.message) reason = payload.message;
-      } catch {
-        // Keep the concise fallback.
-      }
-      setMessage(`正式选题卡任务创建失败：${reason}`);
-      return;
-    }
-    setMessage("已启动正式选题卡写入任务；完成后会显示在当前项目素材中，并同步到 Obsidian。");
-    if (selectedIDRef.current === project.id) await loadDetail(project);
-  };
-  const startTask = async (type: string, prompt: string) => {
-    if (type === "topic_select") {
-      await openIdeaPlanner();
-      return;
-    }
+  const startMontageTask = async (prompt: string) => {
     if (!selected) return;
     const project = selected;
     const projectDetail = detail;
@@ -1484,148 +1398,192 @@ function App() {
       setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
       return;
     }
-    if (type === "topic_deepen" && !projectDetail.assets?.topic_card) {
-      await ensureTopicCard();
-      return;
-    }
-    if (type === "remix" && projectDetail.assets?.continuous_script) {
-      const currentScript = projectDetail.assets.continuous_script;
-      const confirmed = window.confirm(
-        `当前项目已有连续文案 v${currentScript.version}。\n\n再次二创会生成一个新版本并将它设为当前文案；旧版本仍会保留。\n\n确定继续吗？`,
-      );
-      if (!confirmed) return;
-    }
-    const response = await api(`/api/projects/${project.id}/tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        account_id: project.account_id,
-        type,
-        prompt,
-        ...(type === "remix" && projectDetail.assets?.topic_card
-          ? { action: "remix.from_topic_card" }
-          : {}),
-        ...(projectTaskModel.model.trim()
-          ? { model: projectTaskModel.model.trim() }
-          : {}),
-        ...(projectTaskModel.reasoningEffort
-          ? { reasoning_effort: projectTaskModel.reasoningEffort }
-          : {}),
-      }),
-    });
-    if (!response.ok) {
-      let reason = "请检查当前项目所需素材和配置";
-      try {
-        const payload = (await response.json()) as { message?: string };
-        if (payload.message) reason = payload.message;
-      } catch {
-        // Keep the concise fallback.
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "montage");
+    if (!lockKey) return;
+    try {
+      const response = await api(`/api/projects/${projectID}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: project.account_id,
+          type: "montage",
+          prompt,
+          ...(projectTaskModel.model.trim()
+            ? { model: projectTaskModel.model.trim() }
+            : {}),
+          ...(projectTaskModel.reasoningEffort
+            ? { reasoning_effort: projectTaskModel.reasoningEffort }
+            : {}),
+        }),
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("混剪任务启动失败，请检查项目素材与 Codex 配置后重试。");
+        return;
       }
-      setMessage(`Codex 任务创建失败：${reason}`);
-    } else {
+      if (selectedIDRef.current !== projectID) return;
       setProjectTaskModel({ model: "", reasoningEffort: "" });
-      if (selectedIDRef.current === project.id) await loadDetail(project);
+      await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("混剪任务启动失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
   };
   const startRemixWorkflow = async () => {
     if (!selected || !detail) return;
+    const project = selected;
+    const projectID = project.id;
     if (detail.assets?.continuous_script) {
       const confirmed = window.confirm(
         `当前项目已有连续文案 v${detail.assets.continuous_script.version}。再次二创会生成新版本，旧版本仍会保留。确定继续吗？`,
       );
       if (!confirmed) return;
     }
-    const response = await api(`/api/projects/${selected.id}/remix`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
-        ...(projectTaskModel.reasoningEffort
-          ? { reasoning_effort: projectTaskModel.reasoningEffort }
-          : {}),
-      }),
-    });
-    if (!response.ok) {
-      setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置。");
-      return;
+    const lockKey = lockProjectAction(projectID, "remix");
+    if (!lockKey) return;
+    try {
+      const response = await api(`/api/projects/${projectID}/remix`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
+          ...(projectTaskModel.reasoningEffort
+            ? { reasoning_effort: projectTaskModel.reasoningEffort }
+            : {}),
+        }),
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      setProjectTaskModel({ model: "", reasoningEffort: "" });
+      await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("二创工作流启动失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
-    setProjectTaskModel({ model: "", reasoningEffort: "" });
-    await loadDetail(selected);
   };
   const publishProject = async () => {
     if (!selected) return;
-    const response = await api(`/api/projects/${selected.id}/publish`, { method: "POST" });
-    if (!response.ok) {
-      setMessage("发布状态更新失败，请确认成片已上传。");
-      return;
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "publish");
+    if (!lockKey) return;
+    try {
+      const response = await api(`/api/projects/${projectID}/publish`, { method: "POST" });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("发布状态更新失败，请确认成片已上传后重试。");
+        return;
+      }
+      const published = { ...project, stage: "published" as const };
+      setProjects((current) =>
+        current.map((item) => item.id === projectID ? published : item),
+      );
+      if (selectedIDRef.current !== projectID) return;
+      setSelected(published);
+      setDetail((current) => current && current.project.id === projectID
+        ? { ...current, project: { ...current.project, stage: "published" } }
+        : current);
+      setMessage("项目已标记为已发布。");
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("发布状态更新失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
-    const published = { ...selected, stage: "published" as const };
-    setSelected(published);
-    selectedIDRef.current = published.id;
-    setProjects((current) =>
-      current.map((project) => project.id === published.id ? published : project),
-    );
-    setDetail((current) => current ? { ...current, project: { ...current.project, stage: "published" } } : current);
-    setMessage("项目已标记为已发布。");
-    await load();
   };
   const uploadProjectAsset = async (
-    type: "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video",
+    type: "narration" | "subtitle_srt" | "final_video",
     file: File,
   ) => {
     if (!selected) return;
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, `upload:${type}`);
+    if (!lockKey) return;
     const body = new FormData();
     body.set("file", file);
-    const response = await api(`/api/projects/${selected.id}/assets/${type}`, {
-      method: "POST",
-      body,
-    });
-    if (!response.ok) {
-      setMessage("素材上传失败，请检查文件格式。");
-      return;
+    try {
+      const response = await api(`/api/projects/${projectID}/assets/${type}`, {
+        method: "POST",
+        body,
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("素材上传失败，请检查文件格式后重试。");
+        return;
+      }
+      if (selectedIDRef.current === projectID) await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("素材上传失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
-    await loadDetail(selected);
   };
   const replaceProjectBackground = async (file: File) => {
     if (!selected) return;
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "upload:account_background");
+    if (!lockKey) return;
     const body = new FormData();
     body.set("background", file);
-    const response = await api(`/api/accounts/${selected.account_id}/background`, {
-      method: "POST",
-      body,
-    });
-    if (!response.ok) {
-      setMessage("账号背景图上传失败，请选择 PNG、JPEG 或 WebP 图片。");
-      return;
+    try {
+      const response = await api(`/api/accounts/${project.account_id}/background`, {
+        method: "POST",
+        body,
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("账号背景图上传失败，请选择 PNG、JPEG 或 WebP 图片后重试。");
+        return;
+      }
+      if (selectedIDRef.current === projectID) await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("账号背景图上传失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
-    await loadDetail(selected);
   };
   const deleteProject = async () => {
     if (!selected) return;
+    const project = selected;
     if (
       !window.confirm(
-        `确定删除项目“${selected.title}”吗？项目专属文案、配音、SRT、草稿、成片和任务记录都会一并删除，此操作无法恢复。`,
+        `确定删除项目“${project.title}”吗？项目专属文案、配音、SRT、草稿、成片和任务记录都会一并删除，此操作无法恢复。`,
       )
     )
       return;
-    const response = await api(`/api/projects/${selected.id}`, {
-      method: "DELETE",
-    });
-    if (!response.ok) {
-      let reason = "项目删除失败";
-      try {
-        const payload = (await response.json()) as { message?: string };
-        if (payload.message) reason = payload.message;
-      } catch {
-        // Keep the concise fallback.
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "delete");
+    if (!lockKey) return;
+    try {
+      const response = await api(`/api/projects/${projectID}`, { method: "DELETE" });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("项目删除失败，请稍后重试。");
+        return;
       }
-      setMessage(reason);
-      return;
+      setProjects((current) => current.filter((item) => item.id !== projectID));
+      if (selectedIDRef.current !== projectID) return;
+      closeProject();
+      setMessage(`项目“${project.title}”已删除。`);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("项目删除失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
     }
-    const deletedTitle = selected.title;
-    closeProject();
-    setProjects((current) => current.filter((item) => item.id !== selected.id));
-    setMessage(`项目“${deletedTitle}”已删除。`);
   };
   const answerTask = async (task: Task, providedAnswer?: string) => {
     const questions = taskQuestions(task);
@@ -1687,39 +1645,6 @@ function App() {
     } finally {
       setOpeningDirectory(false);
     }
-  };
-  const uploadAsset = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!selected || !assetFile) return;
-    const body = new FormData();
-    body.set("file", assetFile);
-    const response = await api(
-      `/api/projects/${selected.id}/assets/${assetType}`,
-      { method: "POST", body },
-    );
-    if (!response.ok) setMessage("素材上传失败，请检查文件格式。");
-    else {
-      setAssetFile(null);
-      await loadDetail(selected);
-    }
-  };
-  const replaceAccountBackground = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!selected || !accountBackgroundReplacement) return;
-    const body = new FormData();
-    body.set("background", accountBackgroundReplacement);
-    const response = await api(
-      `/api/accounts/${selected.account_id}/background`,
-      { method: "POST", body },
-    );
-    if (!response.ok) {
-      setMessage("固定背景图上传失败，请选择 PNG、JPEG 或 WebP 图片。");
-      return;
-    }
-    setAccountBackgroundReplacement(null);
-    setMessage("固定背景图已更新，该账号下的项目都会使用新图片。");
-    await load();
-    await loadDetail(selected);
   };
   const openAsset = async (asset: Asset) => {
     const url = `/api/assets/${asset.id}/content`;
@@ -2193,6 +2118,11 @@ function App() {
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
   );
+  const selectedPendingActions = selected
+    ? pendingProjectActions
+        .filter((key) => key.startsWith(`${selected.id}:`))
+        .map((key) => key.slice(selected.id.length + 1))
+    : [];
 
   return (
     <div className="shell">
@@ -2205,13 +2135,14 @@ function App() {
           onBack={closeProject}
           onDelete={() => void deleteProject()}
           onRemix={() => void startRemixWorkflow()}
-          onMix={() => void startTask("montage", "使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
+          onMix={() => void startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
           onPublish={() => void publishProject()}
           onUpload={(type, file) => void uploadProjectAsset(type, file)}
           onReplaceBackground={(file) => void replaceProjectBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenConversation={() => void openGeneralChat()}
           onOpenTask={(task) => openTask(task as Task)}
+          pendingActions={selectedPendingActions}
         />
       ) : selected ? (
         <main className="project-workbench project-workbench--loading">
@@ -2378,444 +2309,6 @@ function App() {
         </main>
       </div>
         </>
-      )}
-      {renderLegacyProjectDrawer() && selected && (
-        <div
-          className="drawer-backdrop"
-          aria-hidden={Boolean(taskOpen || chatOpen || ideaOpen || settingsOpen || preview) || undefined}
-          onClick={closeProject}
-        >
-          <aside
-            className="drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="project-dialog-title"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="drawer-head">
-              <div>
-                <span className="muted">
-                  {accountName(selected.account_id, accounts)}
-                </span>
-                <h2 id="project-dialog-title">{selected.title}</h2>
-                <span className="project-identity">项目 #{selected.id.slice(0, 8)}</span>
-              </div>
-              <button
-                className="close"
-                onClick={closeProject}
-                aria-label="返回项目看板"
-              >
-                <ArrowLeft aria-hidden="true" size={20} />
-              </button>
-            </div>
-            {detailLoading && !detail ? (
-              <div className="empty">正在读取详情…</div>
-            ) : detail ? (
-                <>
-                  <section className="drawer-section">
-                    <h3>项目状态</h3>
-                    <div className="detail-meta">
-                      <span className="stage-badge">
-                        {stageLabel(detail.project.stage)}
-                      </span>
-                      <span>
-                        更新于 {formatDate(detail.project.updated_at)}
-                      </span>
-                    </div>
-                    {detail.project.stage === "topic" && !detail.assets?.topic_card ? (
-                      <p className="warning">尚未生成正式选题卡；项目专属文案、配音和字幕也还未产生。</p>
-                    ) : detail.missing_assets?.length ? (
-                      <p className="warning">
-                        待补充：
-                        {detail.missing_assets
-                          .map((item) => assetLabels[item] || item)
-                          .join("、")}
-                      </p>
-                    ) : (
-                      <p className="ok">
-                        当前已登记 {Object.keys(detail.assets || {}).length} 项项目专属素材
-                        {detail.background_reference ? "，并继承 1 张账号固定背景图" : ""}。
-                      </p>
-                    )}
-                  </section>
-                  {detail.topic_context && (
-                    <section className="drawer-section topic-context">
-                      <h3>当前项目选中的题</h3>
-                      <strong>{detail.topic_context.title}</strong>
-                      {detail.topic_context.summary && <p>{detail.topic_context.summary}</p>}
-                      <dl>
-                        {detail.topic_context.mother_theme && <><dt>母题</dt><dd>{detail.topic_context.mother_theme}</dd></>}
-                        {detail.topic_context.family_conflict && <><dt>家庭冲突</dt><dd>{detail.topic_context.family_conflict}</dd></>}
-                        {detail.topic_context.anomaly_framing && <><dt>异常定性</dt><dd>{detail.topic_context.anomaly_framing}</dd></>}
-                        {detail.topic_context.narrative_entry && <><dt>叙事入口</dt><dd>{detail.topic_context.narrative_entry}</dd></>}
-                        {typeof detail.topic_context.score === "number" && <><dt>选题评分</dt><dd>{detail.topic_context.score}</dd></>}
-                      </dl>
-                      {!!detail.topic_context.source_refs?.length && (
-                        <details>
-                          <summary>引用来源（{detail.topic_context.source_refs.length}）</summary>
-                          <ul>{detail.topic_context.source_refs.map((ref) => <li key={ref}>{ref}</li>)}</ul>
-                        </details>
-                      )}
-                    </section>
-                  )}
-                  {publishingPackage && (
-                    <section className="drawer-section publishing-desk">
-                      <div className="publishing-head">
-                        <div>
-                          <span className="publishing-kicker">发布时直接使用</span>
-                          <h3>视频号发布信息</h3>
-                        </div>
-                        <span className="publishing-ready">已生成</span>
-                      </div>
-                      <div className="publishing-block">
-                        <div className="publishing-label">
-                          <strong>短标题</strong>
-                          <span>点击任意一条即可复制</span>
-                        </div>
-                        <div className="short-title-grid">
-                          {publishingShortTitles.map((title, index) => (
-                            <button
-                              type="button"
-                              className="short-title-option"
-                              key={`${title}-${index}`}
-                              onClick={() => void copyPublishingText(title, "短标题")}
-                            >
-                              <span>{title}</span>
-                              <small>复制</small>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="publishing-block">
-                        <div className="publishing-label">
-                          <strong>视频描述</strong>
-                          <span>已包含发布话题</span>
-                        </div>
-                        <div className="description-stack">
-                          {publishingDescriptions.map((description, index) => (
-                            <article className="description-option" key={`${description}-${index}`}>
-                              <p>{description}</p>
-                              <button
-                                type="button"
-                                onClick={() => void copyPublishingText(description, "视频描述")}
-                              >
-                                复制整段
-                              </button>
-                            </article>
-                          ))}
-                        </div>
-                      </div>
-                      {!publishingShortTitles.length && !publishingDescriptions.length && (
-                        <p className="warning">发布包存在，但没有可用的短标题或视频描述，请重新运行二创文案任务。</p>
-                      )}
-                    </section>
-                  )}
-                  <section className="drawer-section">
-                    <h3>启动工作流</h3>
-                    <TaskModelFields
-                      value={projectTaskModel}
-                      onChange={setProjectTaskModel}
-                      defaults={settings?.public}
-                    />
-                    <div className="workflow-actions">
-                      <button
-                        onClick={() =>
-                          void startTask(
-                            "topic_select",
-                            "给我选题，并在 Obsidian 创建候选选题卡。",
-                          )
-                        }
-                      >
-                        给我选题
-                      </button>
-                      <button
-                        onClick={() =>
-                          void startTask(
-                            "topic_deepen",
-                            "深化当前选题卡，从爆款库补充依据和可借鉴片段。",
-                          )
-                        }
-                      >
-                        {detail.assets?.topic_card ? "深化一下" : "生成正式选题卡"}
-                      </button>
-                      <button
-                        onClick={() =>
-                          void startTask(
-                            "remix",
-                            "根据当前项目素材完成财经爆款二创。",
-                          )
-                        }
-                      >
-                        二创文案
-                      </button>
-                      <button
-                        onClick={() =>
-                          void startTask(
-                            "spoken_format",
-                            "把连续版文案转换为口播稿，不删词不漏段。",
-                          )
-                        }
-                      >
-                        口播稿
-                      </button>
-                      <button
-                        onClick={() =>
-                          void startTask(
-                            "montage",
-                            "使用当前文案、配音、SRT 和固定背景图生成混剪草稿。",
-                          )
-                        }
-                      >
-                        生成混剪
-                      </button>
-                    </div>
-                  </section>
-                  <section className="drawer-section">
-                    <h3>当前项目专属素材</h3>
-                    <p className="section-help">下面的文案、配音、SRT、草稿和成片只属于项目 #{selected.id.slice(0, 8)}。</p>
-                    <form className="asset-upload" onSubmit={uploadAsset}>
-                      <select
-                        value={assetType}
-                        onChange={(event) => setAssetType(event.target.value)}
-                      >
-                        {Object.entries(uploadAssetLabels).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="file"
-                        onChange={(event) =>
-                          setAssetFile(event.target.files?.[0] || null)
-                        }
-                      />
-                      <button disabled={!assetFile}>上传</button>
-                    </form>
-                    <div className="asset-list">
-                      {Object.entries(detail.assets || {}).map(
-                        ([type, asset]) => (
-                          <button
-                            className="asset-row"
-                            key={type}
-                            onClick={() => void openAsset(asset)}
-                          >
-                            <span>{assetLabels[type] || type}</span>
-                            <div>
-                              <strong>{asset.filename}</strong>
-                              <small>
-                                属于“{selected.title}” · {formatSize(asset.size)} · v{asset.version} · 查看
-                              </small>
-                            </div>
-                          </button>
-                        ),
-                      )}
-                      {!Object.keys(detail.assets || {}).length && (
-                        <p className="muted">暂无项目素材</p>
-                      )}
-                    </div>
-                    <h3 className="inherited-title">账号继承素材</h3>
-                    <p className="section-help">固定背景图属于账号，可供该账号下的每个项目使用，不会复制成多份。</p>
-                    <div className="asset-list">
-                      {detail.background_reference ? (
-                        <>
-                          <button
-                            className="asset-row inherited"
-                            onClick={() => void openAsset(detail.background_reference!)}
-                          >
-                            <span>账号固定背景图</span>
-                            <div>
-                              <strong>{detail.background_reference.filename}</strong>
-                              <small>
-                                {detail.background_reference.status === "missing"
-                                  ? "文件不存在，请重新上传"
-                                  : `${formatSize(detail.background_reference.size)} · 继承自账号 · 查看`}
-                              </small>
-                            </div>
-                          </button>
-                          <form
-                            className="background-replace"
-                            onSubmit={replaceAccountBackground}
-                          >
-                            <label>
-                              <span>替换固定背景图</span>
-                              <input
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                onChange={(event) =>
-                                  setAccountBackgroundReplacement(
-                                    event.target.files?.[0] || null,
-                                  )
-                                }
-                              />
-                            </label>
-                            <button disabled={!accountBackgroundReplacement}>
-                              重新上传
-                            </button>
-                          </form>
-                        </>
-                      ) : (
-                        <>
-                          <p className="muted">当前账号尚未配置固定背景图</p>
-                          <form
-                            className="background-replace"
-                            onSubmit={replaceAccountBackground}
-                          >
-                            <label>
-                              <span>上传固定背景图</span>
-                              <input
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                onChange={(event) =>
-                                  setAccountBackgroundReplacement(
-                                    event.target.files?.[0] || null,
-                                  )
-                                }
-                              />
-                            </label>
-                            <button disabled={!accountBackgroundReplacement}>
-                              上传
-                            </button>
-                          </form>
-                        </>
-                      )}
-                    </div>
-                  </section>
-                  <section className="drawer-section">
-                    <h3>
-                      Codex 任务 <span className="count">{tasks.length}</span>
-                    </h3>
-                    <div className="task-list">
-                      {tasks.map((task) => (
-                        <article
-                          className="task-row"
-                          key={task.id}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={`打开任务详情：${taskTitle(task)}`}
-                          onClick={(event) => {
-                            const interactive = (event.target as HTMLElement).closest(
-                              "button, summary, a, input, select, textarea",
-                            );
-                            if (interactive && interactive !== event.currentTarget) return;
-                            openTask(task);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.target !== event.currentTarget) return;
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              openTask(task);
-                            }
-                          }}
-                        >
-                          <div className="task-top">
-                            <strong>{taskTitle(task)}</strong>
-                            <span
-                              className={`task-status status-${task.status}`}
-                            >
-                              {statusLabels[task.status] || task.status}
-                            </span>
-                          </div>
-                          {(task.model || task.reasoning_effort) && (
-                            <p className="task-model-actual">
-                              {[task.model, task.reasoning_effort].filter(Boolean).join(" · ")}
-                            </p>
-                          )}
-                          {task.prompt_snapshot && (
-                            <details>
-                              <summary>发送给 CLI 的任务说明</summary>
-                              <pre>{task.prompt_snapshot}</pre>
-                            </details>
-                          )}
-                          {task.messages?.length ? (
-                            <details>
-                              <summary>
-                                对话记录（{task.messages.length}）
-                              </summary>
-                              {task.messages.map((item, index) => (
-                                <div className={`task-message ${item.role}`} key={item.id || `${item.role}-${item.created_at}-${index}`}>
-                                  <b>{item.role === "user" ? "你" : "Codex"}</b>
-                                  <p>{taskMessageContent(item.content)}</p>
-                                </div>
-                              ))}
-                            </details>
-                          ) : null}
-                          {taskTimeline(task).length ? (
-                            <ol className="task-timeline" aria-label="任务进度">
-                              {taskTimeline(task).map((item, index) => (
-                                <li key={`${task.id}-progress-${index}`}>{item}</li>
-                              ))}
-                            </ol>
-                          ) : null}
-                          {task.result_summary && <p>{task.result_summary}</p>}
-                          {task.error_message && (
-                            <p className="warning">{task.error_message}</p>
-                          )}
-                          {taskQuestions(task).length > 0 && (
-                            <div className="task-question">
-                              <strong>Codex 正在问：</strong>
-                              {taskQuestions(task).map((question, index) => (
-                                <p key={`${task.id}-question-${index}`}>{question}</p>
-                              ))}
-                            </div>
-                          )}
-                          {cancellableTaskStatuses.has(task.status) && (
-                            <div>
-                              {["awaiting_input", "waiting_input"].includes(task.status) &&
-                                (task.model || task.reasoning_effort) && (
-                                <p className="task-model-continue">
-                                  继续使用：{[task.model, task.reasoning_effort].filter(Boolean).join(" · ")}
-                                </p>
-                              )}
-                              <div className="task-actions">
-                                {["awaiting_input", "waiting_input"].includes(task.status) && (
-                                  <button
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void answerTask(task);
-                                    }}
-                                  >
-                                    回复
-                                  </button>
-                                )}
-                                <button
-                                  className="secondary"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void cancelTask(task);
-                                  }}
-                                >
-                                  停止任务
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </article>
-                      ))}
-                      {!tasks.length && (
-                        <p className="muted">暂无 Codex 任务</p>
-                      )}
-                    </div>
-                  </section>
-                  <section className="drawer-section danger-zone">
-                    <h3>项目管理</h3>
-                    <button className="delete-project" onClick={() => void deleteProject()}>
-                      删除当前视频项目
-                    </button>
-                  </section>
-                </>
-            ) : detailError ? (
-              <div className="detail-load-error" role="alert">
-                <strong>{detailError}</strong>
-                <p>项目已经创建并保留，只有详情读取暂时中断，不会丢失项目。</p>
-                <button type="button" onClick={() => void loadDetail(selected)}>
-                  重试读取详情
-                </button>
-              </div>
-            ) : null}
-          </aside>
-        </div>
       )}
       {preview && (
         <div className="modal-backdrop" onClick={() => setPreview(null)}>

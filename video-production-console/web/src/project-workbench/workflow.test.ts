@@ -208,8 +208,8 @@ describe("production workflow view model", () => {
   test("selects the next primary action from durable state", () => {
     expect(nextPrimaryAction(detail())).toMatchObject({ id: "start-remix", disabled: false });
     expect(nextPrimaryAction(detail("assets", { continuous_script: "stale" }))).toMatchObject({
-      id: "prepare-assets",
-      label: "补齐制作素材",
+      id: "start-remix",
+      label: "开始二创文案",
       disabled: false,
     });
     expect(nextPrimaryAction(detail("script", { continuous_script: "ready" }))).toMatchObject({

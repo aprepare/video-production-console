@@ -9,9 +9,12 @@ import {
   Video,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { useEffect, useRef } from "react";
 import type { ProjectAsset, ProjectDetail } from "./types";
 
 type AssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video";
+export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "final_video" | "account_background";
+export type AssetUploadRequest = { type: ProjectAssetUploadType; token: number } | null;
 
 const assetDefinitions: Array<{
   type: AssetType;
@@ -19,6 +22,7 @@ const assetDefinitions: Array<{
   description: string;
   accept: string;
   icon: ComponentType<{ size?: number; "aria-hidden"?: boolean }>;
+  manualUpload?: boolean;
 }> = [
   {
     type: "continuous_script",
@@ -33,6 +37,7 @@ const assetDefinitions: Array<{
     description: "与连续文案对应的最终旁白音频。",
     accept: "audio/*",
     icon: AudioLines,
+    manualUpload: true,
   },
   {
     type: "subtitle_srt",
@@ -40,6 +45,7 @@ const assetDefinitions: Array<{
     description: "带真实时间轴的字幕文件，用于画面同步。",
     accept: ".srt,application/x-subrip,text/plain",
     icon: Captions,
+    manualUpload: true,
   },
   {
     type: "mix_draft",
@@ -54,6 +60,7 @@ const assetDefinitions: Array<{
     description: "审核完成的最终视频，确认发布状态前必须存在。",
     accept: "video/*",
     icon: Video,
+    manualUpload: true,
   },
 ];
 
@@ -66,12 +73,29 @@ function assetState(asset?: ProjectAsset) {
 
 type ProjectAssetsProps = {
   detail: ProjectDetail;
-  onUpload: (type: AssetType, file: File) => void;
+  onUpload: (type: "narration" | "subtitle_srt" | "final_video", file: File) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
+  pendingActions: string[];
+  uploadRequest: AssetUploadRequest;
 };
 
-export function ProjectAssets({ detail, onUpload, onReplaceBackground, onViewAsset }: ProjectAssetsProps) {
+export function ProjectAssets({
+  detail,
+  onUpload,
+  onReplaceBackground,
+  onViewAsset,
+  pendingActions,
+  uploadRequest,
+}: ProjectAssetsProps) {
+  const uploadRefs = useRef<Partial<Record<ProjectAssetUploadType, HTMLInputElement | null>>>({});
+
+  useEffect(() => {
+    if (!uploadRequest) return;
+    uploadRefs.current[uploadRequest.type]?.click();
+  }, [uploadRequest]);
+
+  const isPending = (type: ProjectAssetUploadType) => pendingActions.includes(`upload:${type}`);
   return (
     <section className="project-assets" aria-label="当前项目资产">
       <div className="workbench-section-heading">
@@ -105,21 +129,28 @@ export function ProjectAssets({ detail, onUpload, onReplaceBackground, onViewAss
                     查看
                   </button>
                 ) : null}
-                <label className="asset-upload-control">
-                  <Upload size={15} aria-hidden="true" />
-                  <span>{asset ? "替换" : "上传"}</span>
-                  <input
-                    type="file"
-                    data-upload-type={definition.type}
-                    accept={definition.accept}
-                    aria-label={`上传${definition.label}`}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) onUpload(definition.type, file);
-                      event.target.value = "";
-                    }}
-                  />
-                </label>
+                {definition.manualUpload ? (
+                  <label className="asset-upload-control">
+                    <Upload size={15} aria-hidden="true" />
+                    <span>{asset ? "替换" : "上传"}</span>
+                    <input
+                      ref={(node) => { uploadRefs.current[definition.type as ProjectAssetUploadType] = node; }}
+                      type="file"
+                      accept={definition.accept}
+                      aria-label={`上传${definition.label}`}
+                      disabled={isPending(definition.type as ProjectAssetUploadType)}
+                      onChange={(event) => {
+                        if (isPending(definition.type as ProjectAssetUploadType)) {
+                          event.target.value = "";
+                          return;
+                        }
+                        const file = event.target.files?.[0];
+                        if (file) onUpload(definition.type as "narration" | "subtitle_srt" | "final_video", file);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                ) : null}
               </div>
             </article>
           );
@@ -148,11 +179,16 @@ export function ProjectAssets({ detail, onUpload, onReplaceBackground, onViewAss
               <Upload size={15} aria-hidden="true" />
               <span>{detail.background_reference ? "替换" : "上传"}</span>
               <input
+                ref={(node) => { uploadRefs.current.account_background = node; }}
                 type="file"
-                data-upload-type="account_background"
                 accept="image/png,image/jpeg,image/webp"
                 aria-label={detail.background_reference ? "替换账号背景图" : "上传账号背景图"}
+                disabled={isPending("account_background")}
                 onChange={(event) => {
+                  if (isPending("account_background")) {
+                    event.target.value = "";
+                    return;
+                  }
                   const file = event.target.files?.[0];
                   if (file) onReplaceBackground(file);
                   event.target.value = "";

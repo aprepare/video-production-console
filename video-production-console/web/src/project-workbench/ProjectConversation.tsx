@@ -20,13 +20,12 @@ function taskLabel(task: ProjectTask) {
 }
 
 type ProjectConversationProps = {
-  tasks: ProjectTask[];
+  task?: ProjectTask;
   onOpenConversation: () => void;
   onOpenTask: (task: ProjectTask) => void;
 };
 
-export function ProjectConversation({ tasks, onOpenConversation, onOpenTask }: ProjectConversationProps) {
-  const task = [...tasks].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+export function ProjectConversation({ task, onOpenConversation, onOpenTask }: ProjectConversationProps) {
   const assistantMessages = task?.messages?.filter((message) => message.role === "assistant") || [];
   const latestAssistant = assistantMessages[assistantMessages.length - 1];
 

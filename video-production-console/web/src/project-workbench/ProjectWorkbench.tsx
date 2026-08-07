@@ -4,10 +4,11 @@ import type { ProjectAsset, ProjectDetail, ProjectTask } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
+import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets";
 import { ProjectConversation } from "./ProjectConversation";
 import "./project-workbench.css";
 
-type UploadAssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video";
+type UploadAssetType = "narration" | "subtitle_srt" | "final_video";
 
 export type ProjectWorkbenchProps = {
   detail: ProjectDetail;
@@ -24,6 +25,7 @@ export type ProjectWorkbenchProps = {
   onViewAsset: (asset: ProjectAsset) => void;
   onOpenConversation: () => void;
   onOpenTask: (task: ProjectTask) => void;
+  pendingActions: string[];
 };
 
 const missingLabels: Record<string, string> = {
@@ -40,7 +42,11 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const stage = deriveProductionStage(detail);
   const action = nextPrimaryAction(detail);
   const missing = missingProductionInputs(detail);
-  const activeTask = props.tasks.find((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  const currentTask = [...props.tasks]
+    .filter((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status))
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0]
+    || [...props.tasks].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+  const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const [compactDesktop, setCompactDesktop] = useState(
     () => window.innerWidth >= 1024 && window.innerHeight <= 900,
   );
@@ -52,16 +58,34 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     return () => window.removeEventListener("resize", updateLayoutContract);
   }, []);
 
+  const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]);
+  const unknownMissing = missing.find((type) => !knownMissing.has(type));
+  const pendingForAction = action?.id === "start-remix"
+    ? "remix"
+    : action?.id === "start-mixing"
+      ? "montage"
+      : action?.id === "publish"
+        ? "publish"
+        : action?.id === "upload-final-video"
+          ? "upload:final_video"
+          : "";
+  const actionPending = action?.id === "prepare-assets"
+    ? missing.some((type) => props.pendingActions.includes(`upload:${type}`))
+    : pendingForAction ? props.pendingActions.includes(pendingForAction) : false;
+
+  const requestUpload = (type: ProjectAssetUploadType) => {
+    setUploadRequest((current) => ({ type, token: (current?.token || 0) + 1 }));
+  };
+
   const runPrimaryAction = () => {
     if (!action || action.disabled) return;
     if (action.id === "start-remix") props.onRemix();
     else if (action.id === "start-mixing") props.onMix();
     else if (action.id === "publish") props.onPublish();
     else {
-      const target = action.id === "upload-final-video"
-        ? "final_video"
-        : missing[0] || "narration";
-      document.querySelector<HTMLInputElement>(`input[data-upload-type="${target}"]`)?.click();
+      const target = action.id === "upload-final-video" ? "final_video" : missing[0];
+      if (["narration", "subtitle_srt", "account_background", "final_video"].includes(target))
+        requestUpload(target as ProjectAssetUploadType);
     }
   };
 
@@ -76,7 +100,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <h1>{detail.project.title}</h1>
           <p>项目 #{detail.project.id.slice(0, 8)} · 所有资产与任务均限定在当前项目</p>
         </div>
-        <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目">
+        <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={props.pendingActions.includes("delete")}>
           <Trash2 size={16} aria-hidden="true" />
           删除项目
         </button>
@@ -94,15 +118,17 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <button
                 type="button"
                 className="primary-action"
-                disabled={action.disabled}
+                disabled={action.disabled || actionPending || Boolean(unknownMissing)}
                 onClick={runPrimaryAction}
-                aria-label={action.id === "publish" ? "将当前项目标记为已发布" : action.label}
+                aria-label={unknownMissing ? "暂无法继续" : action.id === "publish" ? "将当前项目标记为已发布" : action.label}
               >
                 {action.id === "publish" ? <CircleCheck size={19} aria-hidden="true" /> : <MessageSquare size={19} aria-hidden="true" />}
-                {action.label}
+                {unknownMissing ? "暂无法继续" : action.label}
               </button>
               <p className="primary-action-panel__hint">
-                {action.disabled
+                {unknownMissing
+                  ? `无法识别项目缺项 ${unknownMissing}，请刷新项目；若仍存在，请更新控制台服务。`
+                  : action.disabled
                   ? "自动工作流正在推进，完成后这里会切换到下一步。"
                   : action.id === "start-remix"
                     ? "一次启动自动完成选题卡与二创文案。"
@@ -125,10 +151,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
           <div className="active-task-summary">
             <span>ACTIVE TASK</span>
-            {activeTask ? (
-              <button type="button" onClick={() => props.onOpenTask(activeTask)}>
-                <strong>{activeTask.action === "montage.execute" ? "混剪草稿处理中" : "Codex 正在处理"}</strong>
-                <small>{activeTask.result_summary || "查看进度与问题"}</small>
+            {currentTask ? (
+              <button type="button" onClick={() => props.onOpenTask(currentTask)}>
+                <strong>{currentTask.action === "montage.execute" ? "混剪草稿处理中" : "Codex 正在处理"}</strong>
+                <small>{currentTask.result_summary || "查看进度与问题"}</small>
               </button>
             ) : <p>当前没有运行中的任务。</p>}
           </div>
@@ -139,8 +165,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onUpload={props.onUpload}
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
+          pendingActions={props.pendingActions}
+          uploadRequest={uploadRequest}
         />
-        <ProjectConversation tasks={props.tasks} onOpenConversation={props.onOpenConversation} onOpenTask={props.onOpenTask} />
+        <ProjectConversation task={currentTask} onOpenConversation={props.onOpenConversation} onOpenTask={props.onOpenTask} />
       </div>
     </main>
   );

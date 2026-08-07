@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
+import appSource from "./App.tsx?raw";
 import { parseLocation } from "./project-workbench/routes";
 
 afterEach(() => {
@@ -179,6 +180,112 @@ function testAsset(type: string) {
     size: 12, version: 1, state: "ready", created_at: "2026-08-08T00:00:00Z",
   };
 }
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<Response>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+test("locks a pending remix against double click and unlocks after completion", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "请求锁项目", stage: "script" };
+  const pending = deferredResponse();
+  let remixRequests = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
+      remixRequests += 1;
+      return pending.promise;
+    }
+  }));
+  render(<App />);
+  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始二创文案" });
+
+  fireEvent.click(action);
+  fireEvent.click(action);
+
+  await waitFor(() => expect(remixRequests).toBe(1));
+  expect(action.disabled).toBe(true);
+  pending.resolve(json({ id: "workflow-1" }, 201));
+  await waitFor(() => expect(action.disabled).toBe(false));
+});
+
+test("turns a rejected remix request into an actionable error and allows retry", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "错误恢复项目", stage: "script" };
+  let attempts = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error("network down"))
+        : json({ id: "workflow-retry" }, 201);
+    }
+  }));
+  render(<App />);
+  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始二创文案" });
+
+  fireEvent.click(action);
+
+  expect(await screen.findByText("二创工作流启动失败，请检查网络连接后重试。")).toBeTruthy();
+  await waitFor(() => expect(action.disabled).toBe(false));
+  fireEvent.click(action);
+  await waitFor(() => expect(attempts).toBe(2));
+});
+
+test("does not let a completed project A publish request abort or replace project B", async () => {
+  const projectA = { id: routedProjectID, account_id: "account-1", title: "项目 A", stage: "review" };
+  const projectB = { id: "94a1ddc8-7972-464e-b485-a849c7886be3", account_id: "account-1", title: "项目 B", stage: "script" };
+  const publish = deferredResponse();
+  const detailB = deferredResponse();
+  let detailBSignal: AbortSignal | undefined;
+  window.history.replaceState({}, "", `/projects/${projectA.id}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([projectA, projectB]);
+    if (path === `/api/projects/${projectA.id}`) return json({
+      project: projectA,
+      assets: { final_video: testAsset("final_video") },
+      missing_assets: [],
+    });
+    if (path === `/api/projects/${projectB.id}`) {
+      detailBSignal = init?.signal as AbortSignal;
+      return detailB.promise;
+    }
+    if (path === `/api/tasks?project_id=${projectA.id}` || path === `/api/tasks?project_id=${projectB.id}`) return json([]);
+    if (path === `/api/projects/${projectA.id}/publish` && method === "POST") return publish.promise;
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "将当前项目标记为已发布" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回项目看板" }));
+  fireEvent.click(await screen.findByText("项目 B"));
+  expect(await screen.findByRole("heading", { name: "项目 B" })).toBeTruthy();
+
+  publish.resolve(json({ ...projectA, stage: "published" }));
+  await waitFor(() => expect(detailBSignal).toBeTruthy());
+  expect(detailBSignal?.aborted).toBe(false);
+  detailB.resolve(json({ project: projectB, assets: {}, missing_assets: [] }));
+
+  expect(await screen.findByRole("heading", { name: "项目 B" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "当前项目资产" })).toBeTruthy();
+  expect(window.location.pathname).toBe(`/projects/${projectB.id}`);
+});
+
+test("contains no legacy project drawer or bypass production controls in App source", () => {
+  for (const forbidden of ["renderLegacyProjectDrawer", "remix.spoken_format", "口播稿", "topic_deepen", "spoken_format"]) {
+    expect(appSource).not.toContain(forbidden);
+  }
+  expect(appSource).not.toContain("{selected && (\n        <div\n          className=\"drawer-backdrop\"");
+});
 
 test.each([
   ["narration", "上传配音"],
@@ -429,12 +536,12 @@ const publicSettings = {
 };
 
 function baseFetch(
-  handler: (path: string, method: string, init?: RequestInit) => Response | undefined,
+  handler: (path: string, method: string, init?: RequestInit) => Response | Promise<Response> | undefined,
 ) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === "string" ? input : input.toString();
     const method = (init?.method || "GET").toUpperCase();
-    const response = handler(path, method, init);
+    const response = await handler(path, method, init);
     if (response) return response;
     if (path === "/api/auth/me") return json({ csrfToken: "csrf" });
     if (path === "/api/accounts")
