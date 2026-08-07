@@ -543,6 +543,175 @@ BEGIN
 END;`,
 	`ALTER TABLE admins ADD COLUMN singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1);
 CREATE UNIQUE INDEX admins_singleton_uq ON admins(singleton);`,
+	`ALTER TABLE codex_tasks ADD COLUMN model_name TEXT NOT NULL DEFAULT 'gpt-5.6-sol';
+ALTER TABLE codex_tasks ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium';
+UPDATE codex_tasks SET model_name='gpt-5.6-sol' WHERE trim(model_name)='';
+UPDATE codex_tasks SET reasoning_effort='medium' WHERE trim(reasoning_effort)='';`,
+	`CREATE TABLE chat_sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('general', 'idea', 'project', 'history')),
+    status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'awaiting_input', 'failed')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    idea_session_id TEXT REFERENCES idea_sessions(id) ON DELETE SET NULL,
+    codex_thread_id TEXT,
+    working_directory TEXT NOT NULL,
+    model TEXT NOT NULL,
+    reasoning_effort TEXT NOT NULL,
+    skill_names_json TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX chat_sessions_updated_idx ON chat_sessions(updated_at DESC, id);
+CREATE INDEX chat_sessions_project_idx ON chat_sessions(project_id, updated_at DESC);
+CREATE UNIQUE INDEX chat_sessions_thread_uq ON chat_sessions(codex_thread_id) WHERE codex_thread_id IS NOT NULL;
+
+CREATE TABLE chat_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    delivery_status TEXT NOT NULL CHECK (delivery_status IN ('pending', 'sending', 'accepted', 'queued', 'failed')),
+    client_key TEXT NOT NULL,
+    codex_item_id TEXT,
+    turn_id TEXT,
+    sequence INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    UNIQUE(session_id, sequence)
+);
+CREATE INDEX chat_messages_session_created_idx ON chat_messages(session_id, sequence, created_at, id);
+CREATE UNIQUE INDEX chat_messages_client_key_uq ON chat_messages(session_id, client_key) WHERE client_key <> '';
+
+CREATE TABLE chat_turns (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    codex_turn_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'awaiting_input', 'completed', 'failed')),
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('auto', 'steer', 'queue')),
+    input_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+    error_code TEXT,
+    error_message TEXT,
+    started_at DATETIME,
+    finished_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX chat_turns_session_updated_idx ON chat_turns(session_id, updated_at DESC, id);
+CREATE UNIQUE INDEX chat_turns_codex_uq ON chat_turns(session_id, codex_turn_id) WHERE codex_turn_id IS NOT NULL;
+
+CREATE TABLE chat_outbox (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+    client_key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('auto', 'steer', 'queue')),
+    delivery_status TEXT NOT NULL CHECK (delivery_status IN ('pending', 'sending', 'accepted', 'queued', 'failed')),
+    expected_turn_id TEXT,
+    codex_turn_id TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    available_at DATETIME NOT NULL,
+    claimed_at DATETIME,
+    last_error TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE(session_id, client_key)
+);
+CREATE INDEX chat_outbox_delivery_idx ON chat_outbox(delivery_status, available_at, created_at, id);
+
+CREATE TABLE semantic_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    task_id TEXT REFERENCES codex_tasks(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    level TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    CHECK (session_id IS NOT NULL OR task_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX semantic_events_session_seq_uq ON semantic_events(session_id, sequence) WHERE session_id IS NOT NULL;
+CREATE UNIQUE INDEX semantic_events_task_seq_uq ON semantic_events(task_id, sequence) WHERE task_id IS NOT NULL;
+
+CREATE TABLE thread_leases (
+    thread_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX thread_leases_expiry_idx ON thread_leases(expires_at);
+
+ALTER TABLE codex_tasks ADD COLUMN chat_session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL;
+ALTER TABLE codex_tasks ADD COLUMN codex_thread_id TEXT;
+ALTER TABLE codex_tasks ADD COLUMN codex_turn_id TEXT;
+ALTER TABLE codex_tasks ADD COLUMN completion_phase TEXT NOT NULL DEFAULT 'agent_running'
+    CHECK (completion_phase IN ('agent_running', 'plaintext_ready', 'registering', 'registered'));
+ALTER TABLE codex_tasks ADD COLUMN transport TEXT NOT NULL DEFAULT 'legacy_exec'
+    CHECK (transport IN ('legacy_exec', 'app_server'));
+CREATE INDEX codex_tasks_chat_session_idx ON codex_tasks(chat_session_id, created_at DESC);
+CREATE INDEX codex_tasks_thread_turn_idx ON codex_tasks(codex_thread_id, codex_turn_id);`,
+	`CREATE TABLE montage_registration_attempts (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES codex_tasks(id) ON DELETE CASCADE,
+    manifest_path TEXT NOT NULL,
+    workspace_path TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','interrupted')),
+    attempt INTEGER NOT NULL,
+    registered_path TEXT,
+    receipt_path TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    started_at DATETIME NOT NULL,
+    finished_at DATETIME,
+    UNIQUE(task_id, attempt)
+);
+CREATE INDEX montage_registration_state_idx ON montage_registration_attempts(state, started_at);`,
+	`WITH ranked AS (
+    SELECT id,ROW_NUMBER() OVER (
+        PARTITION BY project_id
+        ORDER BY CASE WHEN title LIKE '% (fork)' THEN 1 ELSE 0 END,
+                 updated_at DESC,created_at DESC,id DESC
+    ) AS position
+    FROM chat_sessions
+    WHERE source='console' AND kind='project' AND project_id IS NOT NULL
+)
+UPDATE chat_sessions
+SET source='console_fork'
+WHERE id IN (SELECT id FROM ranked WHERE position>1);
+
+CREATE UNIQUE INDEX chat_sessions_project_main_uq
+ON chat_sessions(project_id)
+WHERE source='console' AND kind='project' AND project_id IS NOT NULL;`,
+	`CREATE TABLE thread_cleanup_intents (
+    thread_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);`,
+	`CREATE TABLE chat_completion_inbox (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    codex_turn_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK (status IN ('pending','processing','done')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at DATETIME NOT NULL,
+    claimed_at DATETIME,
+    last_error TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    completed_at DATETIME
+);
+CREATE INDEX chat_completion_inbox_pending_idx
+ON chat_completion_inbox(status,available_at,created_at,id);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

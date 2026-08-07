@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,18 @@ func TestNewServerHasDefensiveTimeouts(t *testing.T) {
 		server.WriteTimeout != 2*time.Minute || server.IdleTimeout != time.Minute || server.MaxHeaderBytes != 1<<20 {
 		t.Fatalf("server limits = header:%v read:%v write:%v idle:%v max-header:%d",
 			server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout, server.MaxHeaderBytes)
+	}
+}
+
+func TestResolveBootDataRootIsStableForDistExecutable(t *testing.T) {
+	installRoot := t.TempDir()
+	executablePath := filepath.Join(installRoot, "dist", "video-production-console.exe")
+	workingDirectory := filepath.Join(installRoot, "dist")
+
+	got := resolveBootDataRoot("./video-console-data", executablePath, workingDirectory)
+	want := filepath.Join(installRoot, "video-console-data")
+	if got != want {
+		t.Fatalf("data root = %q, want stable install root %q", got, want)
 	}
 }
 
@@ -129,7 +142,7 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	base.SecretEnvironment = map[string]string{"GROK_SEARCH_API_KEY": "secret"}
 	makeCommand, makeResume := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
 	projectID := "project-1"
-	task := domain.CodexTask{ID: "task-1", ProjectID: &projectID, Type: "topic_select", PromptSnapshot: "stored prompt"}
+	task := domain.CodexTask{ID: "task-1", ProjectID: &projectID, Type: "topic_select", PromptSnapshot: "stored prompt", ModelName: "openai/custom", ReasoningEffort: "high"}
 
 	cmd, root, err := makeCommand(task)
 	if err != nil {
@@ -139,7 +152,8 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	wantTaskRoot := filepath.Join(wantRoot, "tasks", task.ID)
 	wantLast := filepath.Join(wantTaskRoot, "output-last-message.json")
 	wantArgs := []string{
-		"codex", "exec", "--json", "--skip-git-repo-check",
+		"codex", "--ask-for-approval", "never", "--sandbox", "workspace-write", "exec", "--json", "--skip-git-repo-check",
+		"-m", "openai/custom", "-c", `model_reasoning_effort="high"`,
 		"--output-schema", schema,
 		"--output-last-message", wantLast,
 		"-C", wantRoot, "-",
@@ -161,6 +175,9 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wantRoot, projectLockNameForTest)); !os.IsNotExist(err) {
 		t.Fatalf("command factory left project guard behind: %v", err)
 	}
+	if err := os.WriteFile(wantManifest, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write prepared manifest fixture: %v", err)
+	}
 
 	sessionID := "session-1"
 	task.CodexSessionID = &sessionID
@@ -169,7 +186,8 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 		t.Fatalf("makeResume returned error: %v", err)
 	}
 	resumeWant := []string{
-		"codex", "exec", "resume", "--json",
+		"codex", "--ask-for-approval", "never", "--sandbox", "workspace-write", "exec", "resume", "--json",
+		"-m", "openai/custom", "-c", `model_reasoning_effort="high"`,
 		"--output-schema", schema,
 		"--output-last-message", wantLast,
 		"session-1", "-",
@@ -179,6 +197,10 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	}
 	if resume.Dir != wantRoot || resumeRoot != wantRoot {
 		t.Fatalf("resume roots: Dir=%q root=%q want=%q", resume.Dir, resumeRoot, wantRoot)
+	}
+	manifestEnvironment := "VIDEO_CONSOLE_TASK_MANIFEST=" + wantManifest
+	if !slices.Contains(resume.Env, manifestEnvironment) {
+		t.Fatalf("resume environment does not contain %q: %#v", manifestEnvironment, resume.Env)
 	}
 	answer, err := codex.StdinText(resume.Stdin)
 	if err != nil || answer != "answer" {

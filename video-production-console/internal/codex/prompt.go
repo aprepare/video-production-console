@@ -11,6 +11,7 @@ import (
 
 var skills = map[string]string{
 	"topic_select":  "finance-topic-selector",
+	"topic_commit":  "finance-topic-selector",
 	"topic_deepen":  "finance-topic-selector",
 	"remix":         "finance-viral-remix",
 	"spoken_format": "finance-viral-remix",
@@ -18,16 +19,17 @@ var skills = map[string]string{
 }
 
 var legacyWireActions = map[string]string{
-	"topic_select": "brainstorm", "topic_deepen": "deepen", "remix": "standard",
-	"spoken_format": "spoken_format", "montage": "plan",
+	"topic_select": "brainstorm", "topic_commit": "commit_topic", "topic_deepen": "deepen", "remix": "standard",
+	"spoken_format": "spoken_format", "montage": "execute",
 }
 
 var legacyTaskActions = map[string]domain.TaskAction{
 	"topic_select":  domain.ActionTopicBrainstorm,
+	"topic_commit":  domain.ActionTopicCommit,
 	"topic_deepen":  domain.ActionTopicDeepen,
 	"remix":         domain.ActionRemixStandard,
 	"spoken_format": domain.ActionSpokenFormat,
-	"montage":       domain.ActionMontagePlan,
+	"montage":       domain.ActionMontageExecute,
 }
 
 // ResolveTaskAction bridges the original HTTP task type vocabulary to the
@@ -104,6 +106,18 @@ func buildPrompt(normalized TaskContext, skill string) (string, error) {
 // BuildManifestPrompt returns the complete bounded instruction for a V2 task.
 // The manifest is the only source of input paths; none are copied into Prompt.
 func BuildManifestPrompt(manifest TaskManifest, manifestPath string) (string, error) {
+	return buildManifestPrompt(manifest, manifestPath, true)
+}
+
+// BuildManifestAppServerPrompt is the App Server equivalent of
+// BuildManifestPrompt. App Server turns cannot receive a task-specific process
+// environment, so they use the already validated absolute manifest path rather
+// than VIDEO_CONSOLE_TASK_MANIFEST.
+func BuildManifestAppServerPrompt(manifest TaskManifest, manifestPath string) (string, error) {
+	return buildManifestPrompt(manifest, manifestPath, false)
+}
+
+func buildManifestPrompt(manifest TaskManifest, manifestPath string, useEnvironmentPath bool) (string, error) {
 	resolved, err := ResolveAction(manifest.Action)
 	if err != nil {
 		return "", err
@@ -132,6 +146,9 @@ func BuildManifestPrompt(manifest TaskManifest, manifestPath string) (string, er
 	if !canonicalSamePath(canonical, expected) {
 		return "", fmt.Errorf("manifest path must equal canonical task manifest path")
 	}
+	if useEnvironmentPath {
+		return formatManifestPrompt(manifest.Skill, resolved.WireAction, taskManifestEnvironmentKey)
+	}
 	return formatManifestPrompt(manifest.Skill, resolved.WireAction, canonical)
 }
 
@@ -139,13 +156,18 @@ func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error
 	if skill == "" || wireAction == "" {
 		return "", fmt.Errorf("skill and wire action are required")
 	}
+	manifestInstruction := fmt.Sprintf("Execute action=%s using the task manifest at %s.", wireAction, manifestPath)
+	if manifestPath == taskManifestEnvironmentKey {
+		manifestInstruction = fmt.Sprintf("Execute action=%s using the task manifest path from environment variable %s. Read the variable at runtime; do not retype or reconstruct the absolute path.", wireAction, taskManifestEnvironmentKey)
+	}
 	prompt := fmt.Sprintf(`Use the $%s skill.
-Execute action=%s using the task manifest at %s.
+%s
 Treat manifest inputs as authoritative and do not ask for paths already present.
 Write declared artifacts only under output_dir.
 Return exactly one JSON object matching the configured result schema.
+On Windows, never pipe non-ASCII text or JSON through PowerShell into another process; use a UTF-8 file or the Skill's UTF-8 writer.
 Do not open WeChat Channels.
-Do not launch Jianying; this manifest protocol contains no UI authorization.`, skill, wireAction, manifestPath)
+Do not launch Jianying; this manifest protocol contains no UI authorization.`, skill, manifestInstruction)
 	if len(prompt) > 1200 {
 		return "", fmt.Errorf("prompt exceeds bounded length")
 	}
@@ -212,6 +234,7 @@ func normalizeInside(label, path, boundary string) (string, error) {
 // resolvePath canonicalizes every existing component. For a new output path,
 // it resolves the nearest existing parent before appending the missing tail.
 func resolvePath(path string) (string, error) {
+	path = normalizeWindowsExtendedPath(path)
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return "", err
@@ -238,4 +261,22 @@ func resolvePath(path string) (string, error) {
 		missing = append(missing, base)
 		probe = parent
 	}
+}
+
+// normalizeWindowsExtendedPath converts Win32 extended-length paths emitted by
+// some tools (for example, \\?\\C:\\work\\file) to the regular form used by
+// filepath.Rel and filepath.EvalSymlinks. The prefix changes the spelling, not
+// the filesystem location, so retaining it during containment checks would
+// incorrectly report a path inside the output directory as external.
+func normalizeWindowsExtendedPath(path string) string {
+	if filepath.Separator != '\\' {
+		return path
+	}
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	}
+	if strings.HasPrefix(path, `\\?\`) {
+		return strings.TrimPrefix(path, `\\?\`)
+	}
+	return path
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,14 +14,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
 )
 
 const (
@@ -69,6 +73,8 @@ type Service struct {
 	now       func() time.Time
 	runner    CommandRunner
 	http      HTTPClient
+	activeMu  sync.RWMutex
+	active    *Runtime
 }
 
 type BootSettings struct {
@@ -81,12 +87,17 @@ type BootSettings struct {
 	MediaIndexPath       string
 	MediaRoot            string
 	JianyingRoot         string
+	MachineProfilePath   string
+	CodexWorkspaceRoots  []string
 }
 
 type View struct {
-	Public          domain.PublicSettings          `json:"public"`
-	SettingsVersion int64                          `json:"settings_version"`
-	Secrets         map[string]domain.SecretStatus `json:"secrets"`
+	Public           domain.PublicSettings          `json:"public"`
+	ConfiguredPublic domain.PublicSettings          `json:"configured_public"`
+	ActivePublic     domain.PublicSettings          `json:"active_public"`
+	SettingsVersion  int64                          `json:"settings_version"`
+	Secrets          map[string]domain.SecretStatus `json:"secrets"`
+	RestartRequired  bool                           `json:"restart_required"`
 }
 
 // Runtime is process-only configuration. It intentionally has no JSON tags
@@ -147,6 +158,7 @@ func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings)
 		{"media_index_path", boot.MediaIndexPath},
 		{"media_root", boot.MediaRoot},
 		{"jianying_root", boot.JianyingRoot},
+		{"machine_profile_path", boot.MachineProfilePath},
 	}
 	values := make(map[string]string, len(paths)+1)
 	if boot.ListenAddr != "" {
@@ -161,6 +173,24 @@ func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings)
 		}
 		values[path.name] = path.value
 	}
+	if len(boot.CodexWorkspaceRoots) > 0 {
+		roots := make([]string, 0, len(boot.CodexWorkspaceRoots))
+		for _, root := range boot.CodexWorkspaceRoots {
+			if err := validateCanonicalAbsolutePath(root); err != nil {
+				return invalid("codex_workspace_roots")
+			}
+			roots = append(roots, root)
+		}
+		encoded, err := json.Marshal(roots)
+		if err != nil {
+			return invalid("codex_workspace_roots")
+		}
+		values["codex_workspace_roots"] = string(encoded)
+	}
+	// The console's primary workflow is now conversational. New installations
+	// should be able to create a Codex conversation without a hidden opt-in.
+	values["app_server_enabled"] = "true"
+	values["codex_history_limit"] = "10"
 	return s.repo.InitializeBoot(ctx, values)
 }
 
@@ -174,17 +204,28 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 		SettingsVersion: version,
 		Secrets:         make(map[string]domain.SecretStatus, len(secretKeys)),
 	}
+	view.ConfiguredPublic = clonePublic(view.Public)
+	configuredSecretVersions := map[string]int64{}
 	for _, key := range secretKeys {
-		_, err := s.repo.Secret(ctx, key)
+		secret, err := s.repo.Secret(ctx, key)
 		switch {
 		case err == nil:
 			view.Secrets[key] = domain.SecretStatus{Configured: true, Masked: secretMask}
+			configuredSecretVersions[key] = secret.Version
 		case errors.Is(err, store.ErrSecretNotFound):
 			view.Secrets[key] = domain.SecretStatus{}
 		default:
 			return View{}, err
 		}
 	}
+	s.activeMu.RLock()
+	if s.active == nil {
+		view.ActivePublic = view.Public
+	} else {
+		view.ActivePublic = clonePublic(s.active.PublicSettings)
+		view.RestartRequired = restartSensitiveChanged(view.Public, s.active.PublicSettings) || !sameSecretVersions(configuredSecretVersions, s.active.SecretVersions)
+	}
+	s.activeMu.RUnlock()
 	return view, nil
 }
 
@@ -192,7 +233,23 @@ func (s *Service) PutPublic(ctx context.Context, value domain.PublicSettings) (i
 	if err := validatePublic(value); err != nil {
 		return 0, err
 	}
-	return s.repo.UpdatePublic(ctx, publicValues(value))
+	version, err := s.repo.UpdatePublic(ctx, publicValues(value))
+	if err == nil {
+		s.applyHotSettings(value)
+	}
+	return version, err
+}
+
+func (s *Service) ResolveTaskModel(ctx context.Context, override taskmodel.Selection) (taskmodel.Selection, error) {
+	runtime, err := s.Runtime(ctx)
+	if err != nil {
+		return taskmodel.Selection{}, err
+	}
+	defaults := taskmodel.Selection{
+		Model:           runtime.CodexDefaultModel,
+		ReasoningEffort: runtime.CodexDefaultReasoningEffort,
+	}
+	return taskmodel.Resolve(defaults, override)
 }
 
 // Update validates the complete request before changing public settings.
@@ -219,7 +276,20 @@ func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secr
 	if _, err := s.repo.UpdateAtomic(ctx, publicValues(public), encrypted, s.now().UTC()); err != nil {
 		return View{}, errors.New("settings could not be stored")
 	}
+	s.applyHotSettings(public)
 	return s.Get(ctx)
+}
+
+func (s *Service) applyHotSettings(configured domain.PublicSettings) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.active == nil {
+		return
+	}
+	s.active.MaxCodexConcurrency = configured.MaxCodexConcurrency
+	s.active.CodexHistoryLimit = configured.CodexHistoryLimit
+	s.active.CodexDefaultModel = configured.CodexDefaultModel
+	s.active.CodexDefaultReasoningEffort = configured.CodexDefaultReasoningEffort
 }
 
 func (s *Service) PutSecret(ctx context.Context, key, value string) error {
@@ -260,6 +330,28 @@ func (s *Service) protectSecret(value string) (string, error) {
 }
 
 func (s *Service) Runtime(ctx context.Context) (Runtime, error) {
+	s.activeMu.RLock()
+	if s.active != nil {
+		runtime := cloneRuntime(*s.active)
+		s.activeMu.RUnlock()
+		return runtime, nil
+	}
+	s.activeMu.RUnlock()
+	runtime, err := s.configuredRuntime(ctx)
+	if err != nil {
+		return Runtime{}, err
+	}
+	s.activeMu.Lock()
+	if s.active == nil {
+		copy := cloneRuntime(runtime)
+		s.active = &copy
+	}
+	result := cloneRuntime(*s.active)
+	s.activeMu.Unlock()
+	return result, nil
+}
+
+func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 	view, err := s.Get(ctx)
 	if err != nil {
 		return Runtime{}, err
@@ -288,6 +380,31 @@ func (s *Service) Runtime(ctx context.Context) (Runtime, error) {
 		runtime.SecretVersions[key] = version
 	}
 	return runtime, nil
+}
+
+func clonePublic(value domain.PublicSettings) domain.PublicSettings {
+	value.CodexWorkspaceRoots = append([]string(nil), value.CodexWorkspaceRoots...)
+	return value
+}
+
+func cloneRuntime(value Runtime) Runtime {
+	value.PublicSettings = clonePublic(value.PublicSettings)
+	versions := make(map[string]int64, len(value.SecretVersions))
+	for key, version := range value.SecretVersions {
+		versions[key] = version
+	}
+	value.SecretVersions = versions
+	return value
+}
+
+func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
+	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
+	configured.CodexHistoryLimit, active.CodexHistoryLimit = 0, 0
+	return !reflect.DeepEqual(configured, active)
+}
+
+func sameSecretVersions(configured, active map[string]int64) bool {
+	return reflect.DeepEqual(configured, active)
 }
 
 func (s *Service) secretValue(ctx context.Context, key string) (string, int64, bool, error) {
@@ -335,6 +452,17 @@ func validatePublic(value domain.PublicSettings) error {
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
 	}
+	if value.CodexHistoryLimit != 0 && (value.CodexHistoryLimit < 5 || value.CodexHistoryLimit > 50) {
+		return invalid("codex_history_limit")
+	}
+	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
+	if err != nil || normalizedModel.Model != value.CodexDefaultModel {
+		return invalid("codex_default_model")
+	}
+	normalizedEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.CodexDefaultReasoningEffort})
+	if err != nil || normalizedEffort.ReasoningEffort != value.CodexDefaultReasoningEffort {
+		return invalid("codex_default_reasoning_effort")
+	}
 	if err := validateListenAddr(value.ListenAddr); err != nil {
 		return invalid("listen_addr")
 	}
@@ -361,6 +489,7 @@ func validatePublic(value domain.PublicSettings) error {
 		{"media_index_path", value.MediaIndexPath, false},
 		{"media_root", value.MediaRoot, false},
 		{"jianying_root", value.JianyingRoot, false},
+		{"machine_profile_path", value.MachineProfilePath, false},
 	}
 	for _, path := range paths {
 		if path.value == "" && !path.required {
@@ -373,8 +502,13 @@ func validatePublic(value domain.PublicSettings) error {
 	if value.TopicCardsDir != "" && (value.ObsidianVault == "" || !pathWithin(value.ObsidianVault, value.TopicCardsDir)) {
 		return invalid("topic_cards_dir")
 	}
-	if value.MediaIndexPath != "" && !pathWithin(value.DataRoot, value.MediaIndexPath) {
+	if value.MediaIndexPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaIndexPath)) {
 		return invalid("media_index_path")
+	}
+	for _, root := range value.CodexWorkspaceRoots {
+		if err := validateCanonicalAbsolutePath(root); err != nil {
+			return invalid("codex_workspace_roots")
+		}
 	}
 	return nil
 }
@@ -487,26 +621,56 @@ func pathWithin(root, target string) bool {
 }
 
 func publicValues(value domain.PublicSettings) map[string]string {
+	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
+	historyLimit := value.CodexHistoryLimit
+	if historyLimit == 0 {
+		historyLimit = 10
+	}
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
 		"max_codex_concurrency": strconv.Itoa(value.MaxCodexConcurrency),
-		"baokuan_base_url":      value.BaokuanBaseURL, "baokuan_mcp_executable": value.BaokuanMCPExecutable,
+		"codex_default_model":   value.CodexDefaultModel, "codex_default_reasoning_effort": value.CodexDefaultReasoningEffort,
+		"baokuan_base_url": value.BaokuanBaseURL, "baokuan_mcp_executable": value.BaokuanMCPExecutable,
 		"obsidian_vault": value.ObsidianVault, "topic_cards_dir": value.TopicCardsDir,
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
 		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
+		"machine_profile_path":  value.MachineProfilePath,
+		"app_server_enabled":    strconv.FormatBool(value.AppServerEnabled),
+		"codex_workspace_roots": string(workspaceRoots),
+		"codex_history_limit":   strconv.Itoa(historyLimit),
 	}
 }
 
 func publicFromValues(values map[string]string) domain.PublicSettings {
 	concurrency, _ := strconv.Atoi(values["max_codex_concurrency"])
+	codexDefaultModel := values["codex_default_model"]
+	if strings.TrimSpace(codexDefaultModel) == "" {
+		codexDefaultModel = taskmodel.DefaultModel
+	}
+	codexDefaultReasoningEffort := values["codex_default_reasoning_effort"]
+	if strings.TrimSpace(codexDefaultReasoningEffort) == "" {
+		codexDefaultReasoningEffort = taskmodel.DefaultReasoningEffort
+	}
+	workspaceRoots := []string{}
+	if raw := strings.TrimSpace(values["codex_workspace_roots"]); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &workspaceRoots)
+	}
+	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
+	historyLimit, _ := strconv.Atoi(values["codex_history_limit"])
+	if historyLimit < 5 || historyLimit > 50 {
+		historyLimit = 10
+	}
 	return domain.PublicSettings{
 		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
+		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
 		BaokuanBaseURL: values["baokuan_base_url"], BaokuanMCPExecutable: values["baokuan_mcp_executable"],
 		ObsidianVault: values["obsidian_vault"], TopicCardsDir: values["topic_cards_dir"],
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
 		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
+		MachineProfilePath: values["machine_profile_path"],
+		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots, CodexHistoryLimit: historyLimit,
 	}
 }
 

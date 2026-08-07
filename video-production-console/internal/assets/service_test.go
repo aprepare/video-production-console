@@ -228,6 +228,47 @@ func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
 	}
 }
 
+func TestReconcileProjectAssetsPreservesRegisteredTaskDirectories(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	accountID, taskID, orphanRootID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.CodexTask{
+		ID: taskID, AccountID: accountID, Type: "topic_select", SkillName: "finance-topic-selector",
+		Action: domain.ActionTopicBrainstorm, Status: domain.TaskCompleted, PromptSnapshot: "topic", CreatedAt: now,
+	}
+	if err := store.NewTaskRepository(db).CreateV2(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(root, "projects", taskID, "tasks", taskID, "output", "topic_candidates.json")
+	orphan := filepath.Join(root, "projects", orphanRootID, "tasks", orphanRootID, "output", "orphan.json")
+	for _, path := range []string{keep, orphan} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := NewService(root).ReconcileProjectAssets(context.Background(), db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("registered task output removed: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("unregistered task-like file remains: %v", err)
+	}
+}
+
 func TestReconcileProjectAssetsProtectsOnlyRegisteredDirectorySubtree(t *testing.T) {
 	root := t.TempDir()
 	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))

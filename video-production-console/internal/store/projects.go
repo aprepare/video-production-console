@@ -17,6 +17,7 @@ var (
 	ErrAssetNotFound        = errors.New("asset not found")
 	ErrAccountInactive      = errors.New("account must be active")
 	ErrProjectStageConflict = errors.New("project stage changed")
+	ErrProjectBusy          = errors.New("project has an active task")
 )
 
 type ProjectRepository struct {
@@ -42,6 +43,85 @@ func (r *ProjectRepository) CreateProject(ctx context.Context, project domain.Pr
 		return ErrAccountInactive
 	}
 	return nil
+}
+
+func (r *ProjectRepository) DeleteProject(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id=?`, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return ErrProjectNotFound
+	} else if err != nil {
+		return err
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM codex_tasks WHERE project_id=? AND status IN ('queued','running','awaiting_input','resuming','waiting_input')`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrProjectBusy
+	}
+	// Remove dependency edges first because downstream-version references use
+	// ON DELETE RESTRICT while the asset versions themselves cascade.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM asset_dependencies WHERE asset_version_id IN (SELECT id FROM asset_versions WHERE project_id=?) OR depends_on_version_id IN (SELECT id FROM asset_versions WHERE project_id=?)`, id, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SyncStageFromAssets advances the project card to the next meaningful
+// production lane. It never regresses, publishes, or unarchives a project.
+func (r *ProjectRepository) SyncStageFromAssets(ctx context.Context, id string, now time.Time) (domain.Project, error) {
+	project, err := r.GetProject(ctx, id)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	if project.Stage == domain.StageArchived || project.Stage == domain.StagePublished {
+		return project, nil
+	}
+	versions, err := r.assets.CurrentByProject(ctx, id)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	ready := map[domain.AssetType]bool{}
+	for _, version := range versions {
+		if version.State == domain.AssetReady {
+			ready[version.Type] = true
+		}
+	}
+	target := domain.StageTopic
+	if ready[domain.AssetTopicCard] {
+		target = domain.StageScript
+	}
+	if ready[domain.AssetContinuousScript] || ready[domain.AssetSpokenScript] || ready[domain.AssetSourceScript] {
+		target = domain.StageAssets
+	}
+	if ready[domain.AssetNarration] && ready[domain.AssetSubtitleSRT] {
+		target = domain.StageMixing
+	}
+	if ready[domain.AssetMixDraft] {
+		target = domain.StageReview
+	}
+	if ready[domain.AssetFinalVideo] {
+		target = domain.StageReady
+	}
+	order := map[domain.ProjectStage]int{
+		domain.StageTopic: 0, domain.StageScript: 1, domain.StageAssets: 2,
+		domain.StageMixing: 3, domain.StageReview: 4, domain.StageReady: 5,
+	}
+	if order[target] <= order[project.Stage] {
+		return project, nil
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE projects SET stage=?,updated_at=? WHERE id=?`, target, now, id); err != nil {
+		return domain.Project{}, err
+	}
+	return r.GetProject(ctx, id)
 }
 
 func (r *ProjectRepository) ListProjects(ctx context.Context, accountID string, stage domain.ProjectStage, q string) ([]domain.Project, error) {

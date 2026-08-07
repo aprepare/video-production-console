@@ -211,7 +211,11 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 	}
 	approval := in.ApprovalMode
 	if approval == "" {
-		approval = "plan_then_wait"
+		if in.Action == domain.ActionMontageExecute {
+			approval = "auto_after_valid_plan"
+		} else {
+			approval = "plan_then_wait"
+		}
 	}
 	if approval != "plan_then_wait" && approval != "plan_only" && approval != "auto_after_valid_plan" {
 		return TaskManifest{}, fmt.Errorf("unsupported approval mode %q", approval)
@@ -530,7 +534,7 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 	}
 	for i, input := range manifest.Inputs {
 		if err := validateManifestInput(manifest.Action, input); err != nil {
-			return fmt.Errorf("input %d: %w", i, err)
+			return fmt.Errorf("input %d (%s): %w", i, input.Role, err)
 		}
 	}
 	for i, input := range manifest.EngineeringInputs {
@@ -619,8 +623,11 @@ var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixEnhanced:  {"continuous_script": true, "spoken_script": true},
 	domain.ActionRemixFromTopic: {"continuous_script": true, "spoken_script": true},
 	domain.ActionSpokenFormat:   {"spoken_script": true}, domain.ActionRemixReview: {},
-	domain.ActionMontagePlan:    {"production_plan": true},
-	domain.ActionMontageExecute: {"production_plan": true, "mix_draft": true},
+	domain.ActionMontagePlan: {"production_plan": true},
+	// A montage execution produces a validated plaintext workspace only. The
+	// trusted host registers it into Jianying before a formal mix_draft asset
+	// can exist.
+	domain.ActionMontageExecute: {"production_plan": true, "plaintext_workspace": true},
 }
 
 var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
@@ -630,14 +637,14 @@ var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
 	domain.ActionRemixFromTopic: {domain.AssetTopicCard: "topic_brief"},
 	domain.ActionSpokenFormat:   {domain.AssetContinuousScript: "approved_script"},
 	domain.ActionRemixReview:    {domain.AssetSourceScript: "review_target", domain.AssetContinuousScript: "review_target"},
-	domain.ActionMontagePlan:    {domain.AssetSpokenScript: "spoken_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
-	domain.ActionMontageExecute: {domain.AssetSpokenScript: "spoken_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
+	domain.ActionMontagePlan:    {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
+	domain.ActionMontageExecute: {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
 }
 
 var requiredExpectedOutputTypes = map[domain.TaskAction][]string{
 	domain.ActionTopicBrainstorm: {"topic_candidates"}, domain.ActionTopicCommit: {"topic_card"}, domain.ActionTopicDeepen: {"topic_card"},
 	domain.ActionRemixStandard: {"continuous_script"}, domain.ActionRemixEnhanced: {"continuous_script"}, domain.ActionRemixFromTopic: {"continuous_script"},
-	domain.ActionSpokenFormat: {"spoken_script"}, domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "mix_draft"},
+	domain.ActionSpokenFormat: {"spoken_script"}, domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
 }
 
 func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
@@ -652,8 +659,8 @@ func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
 var requiredInputRoles = map[domain.TaskAction][]string{
 	domain.ActionRemixStandard: {"primary_source"}, domain.ActionRemixEnhanced: {"primary_source"},
 	domain.ActionRemixFromTopic: {"topic_brief"}, domain.ActionSpokenFormat: {"approved_script"},
-	domain.ActionMontagePlan:    {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
-	domain.ActionMontageExecute: {string(domain.AssetSpokenScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+	domain.ActionMontagePlan:    {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+	domain.ActionMontageExecute: {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 }
 
 func validateActionManifestContract(manifest TaskManifest) error {
@@ -745,6 +752,8 @@ func canonicalContained(label, path, root string) (string, error) {
 }
 
 func pathInside(root, path string) bool {
+	root = normalizeWindowsExtendedPath(root)
+	path = normalizeWindowsExtendedPath(path)
 	if filepath.Separator == '\\' {
 		root, path = strings.ToLower(root), strings.ToLower(path)
 	}

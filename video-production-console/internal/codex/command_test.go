@@ -108,6 +108,40 @@ func TestWindowsBinaryResolverRejectsExeSymlinkToCommandScript(t *testing.T) {
 	}
 }
 
+func TestResolveWindowsNPMCodexShimLaunchesNativeNode(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows npm shim resolution")
+	}
+	root := t.TempDir()
+	shim := filepath.Join(root, "codex.cmd")
+	entry := filepath.Join(root, "node_modules", "@openai", "codex", "bin", "codex.js")
+	node := filepath.Join(root, "node.exe")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, contents := range map[string]string{shim: "@echo off\r\n", entry: "console.log('codex')\n", node: "node"} {
+		if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	launch, err := resolveCommandLaunch(shim, func(name string) (string, error) {
+		switch name {
+		case shim:
+			return shim, nil
+		case "node.exe":
+			return node, nil
+		default:
+			return "", os.ErrNotExist
+		}
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.Executable != node || !reflect.DeepEqual(launch.PrefixArgs, []string{entry}) {
+		t.Fatalf("launch = %#v", launch)
+	}
+}
+
 func copyCurrentTestExecutable(t *testing.T, destination string) {
 	t.Helper()
 	source, err := os.Executable()
@@ -130,7 +164,8 @@ func TestBuildExecCommandV2UsesExactArgumentsStdinAndManagedDirectory(t *testing
 		t.Fatalf("BuildExecCommand returned error: %v", err)
 	}
 	want := []string{
-		"codex", "exec", "--json", "--skip-git-repo-check",
+		"codex", "--ask-for-approval", "never", "exec", "--json", "--skip-git-repo-check",
+		"-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`,
 		"--output-schema", cfg.ResultSchema,
 		"--output-last-message", cfg.OutputLastMessage,
 		"-C", cfg.WorkingDirectory, "-",
@@ -281,7 +316,7 @@ func TestBuildExecCommandCanonicalizesAbsolutePaths(t *testing.T) {
 	}
 	wantSchema := filepath.Join(ctx.WorkspaceDir, "schema.json")
 	wantLast := filepath.Join(ctx.ProjectDir, "last.json")
-	wantArgs := []string{"codex", "exec", "--json", "--skip-git-repo-check", "--output-schema", wantSchema, "--output-last-message", wantLast, "-C", ctx.ProjectDir, "-"}
+	wantArgs := []string{"codex", "--ask-for-approval", "never", "exec", "--json", "--skip-git-repo-check", "-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`, "--output-schema", wantSchema, "--output-last-message", wantLast, "-C", ctx.ProjectDir, "-"}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", cmd.Args, wantArgs)
 	}
@@ -339,7 +374,8 @@ func TestBuildResumeCommandV2UsesExactArgumentsStdinAndManagedDirectory(t *testi
 		t.Fatalf("BuildResumeCommand returned error: %v", err)
 	}
 	want := []string{
-		"codex", "exec", "resume", "--json",
+		"codex", "--ask-for-approval", "never", "exec", "resume", "--json",
+		"-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`,
 		"--output-schema", cfg.ResultSchema,
 		"--output-last-message", cfg.OutputLastMessage,
 		"session-1", "-",

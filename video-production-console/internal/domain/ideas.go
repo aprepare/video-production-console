@@ -26,16 +26,22 @@ type IdeaMessage struct {
 }
 
 type IdeaCandidate struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	TaskID    *string   `json:"task_id,omitempty"`
-	Position  int       `json:"position"`
-	Title     string    `json:"title"`
-	Summary   string    `json:"summary"`
-	Score     float64   `json:"score"`
-	Source    string    `json:"source"`
-	Selected  bool      `json:"selected"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	SessionID      string    `json:"session_id"`
+	TaskID         *string   `json:"task_id,omitempty"`
+	Position       int       `json:"position"`
+	Title          string    `json:"title"`
+	Summary        string    `json:"summary"`
+	MotherTheme    string    `json:"mother_theme,omitempty"`
+	FamilyConflict string    `json:"family_conflict,omitempty"`
+	AnomalyFraming string    `json:"anomaly_framing,omitempty"`
+	NarrativeEntry string    `json:"narrative_entry,omitempty"`
+	SourceRefs     []string  `json:"source_refs,omitempty"`
+	FragmentRefs   []string  `json:"fragment_refs,omitempty"`
+	Score          float64   `json:"score"`
+	Source         string    `json:"source"`
+	Selected       bool      `json:"selected"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type IdeaSessionDetail struct {

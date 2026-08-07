@@ -14,6 +14,7 @@ import (
 
 var ErrIdeaSessionNotFound = errors.New("idea session not found")
 var ErrIdeaCandidateNotFound = errors.New("idea candidate not found")
+var ErrIdeaSessionBusy = errors.New("idea session has an active task")
 
 type IdeaRepository struct{ db *sql.DB }
 
@@ -35,12 +36,18 @@ func (r *IdeaRepository) CreateSession(ctx context.Context, session domain.IdeaS
 }
 
 func (r *IdeaRepository) ListSessions(ctx context.Context) ([]domain.IdeaSession, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,account_id,title,status,selected_id,topic_card_path,topic_card_state,topic_card_sha256,project_id,created_at,updated_at FROM idea_sessions ORDER BY updated_at DESC,id`)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,account_id,title,status,selected_id,topic_card_path,topic_card_state,topic_card_sha256,project_id,created_at,updated_at
+		FROM idea_sessions
+		WHERE selected_id IS NOT NULL OR project_id IS NOT NULL
+		   OR EXISTS (SELECT 1 FROM idea_messages m WHERE m.session_id=idea_sessions.id)
+		   OR EXISTS (SELECT 1 FROM idea_candidates c WHERE c.session_id=idea_sessions.id)
+		ORDER BY updated_at DESC,id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.IdeaSession
+	out := make([]domain.IdeaSession, 0)
 	for rows.Next() {
 		session, err := scanIdeaSession(rows)
 		if err != nil {
@@ -57,6 +64,34 @@ func (r *IdeaRepository) GetSession(ctx context.Context, id string) (domain.Idea
 		return domain.IdeaSession{}, ErrIdeaSessionNotFound
 	}
 	return session, err
+}
+
+func (r *IdeaRepository) DeleteSession(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM idea_sessions WHERE id=?`, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return ErrIdeaSessionNotFound
+	} else if err != nil {
+		return err
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM idea_messages m
+		JOIN codex_tasks t ON t.id=m.task_id
+		WHERE m.session_id=? AND t.status IN ('queued','running','awaiting_input','resuming','waiting_input')`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrIdeaSessionBusy
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM idea_sessions WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *IdeaRepository) AddMessage(ctx context.Context, message domain.IdeaMessage) error {
@@ -191,6 +226,39 @@ func (r *IdeaRepository) SelectCandidate(ctx context.Context, sessionID, candida
 	}
 	c.Selected = true
 	return c, nil
+}
+
+// LinkProject records the concrete video project created from a confirmed
+// candidate. The explicit account is also persisted so later confirmations
+// use the account selected at confirmation time rather than a stale planner
+// filter.
+func (r *IdeaRepository) LinkProject(ctx context.Context, sessionID, projectID, accountID string) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE idea_sessions SET project_id=?,account_id=?,updated_at=? WHERE id=?`, projectID, accountID, time.Now().UTC(), sessionID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return ErrIdeaSessionNotFound
+	}
+	return nil
+}
+
+// UpdateAccount persists the account explicitly chosen in the topic planner.
+// This keeps later messages and candidate confirmation on the same account
+// even when the global sidebar filter changes or the session is refreshed.
+func (r *IdeaRepository) UpdateAccount(ctx context.Context, sessionID, accountID string) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE idea_sessions SET account_id=?,updated_at=? WHERE id=?`, accountID, time.Now().UTC(), sessionID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return ErrIdeaSessionNotFound
+	}
+	return nil
 }
 
 func scanIdeaSession(row interface{ Scan(...any) error }) (domain.IdeaSession, error) {

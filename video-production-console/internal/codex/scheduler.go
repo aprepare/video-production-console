@@ -10,6 +10,7 @@ import (
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskcompletion"
 )
 
 type SchedulerSnapshot struct{ Limit, Running, Queued int }
@@ -30,18 +31,19 @@ type scheduled struct {
 	cancelled bool
 }
 type TaskScheduler struct {
-	tasks         *store.TaskRepository
-	makeCommand   CommandFactory
-	makeResume    ResumeCommandFactory
-	broadcast     func(Event)
-	broadcastTask func(string, Event)
-	mu            sync.Mutex
-	limit         int
-	running       map[string]*scheduled
-	projectLocks  map[string]string
-	wake          chan struct{}
-	stop          chan struct{}
-	done          chan struct{}
+	tasks          *store.TaskRepository
+	makeCommand    CommandFactory
+	makeResume     ResumeCommandFactory
+	broadcast      func(Event)
+	broadcastTask  func(string, Event)
+	completionGate taskcompletion.Gate
+	mu             sync.Mutex
+	limit          int
+	running        map[string]*scheduled
+	projectLocks   map[string]string
+	wake           chan struct{}
+	stop           chan struct{}
+	done           chan struct{}
 }
 
 func NewScheduler(tasks *store.TaskRepository, limit int, makeCommand CommandFactory, makeResume ResumeCommandFactory, broadcast func(Event)) (*TaskScheduler, error) {
@@ -94,7 +96,10 @@ func (s *TaskScheduler) dispatch() {
 		if slots <= 0 {
 			break
 		}
-		key := ""
+		// Project-less planning tasks are independent. Giving all of them the
+		// empty lock key accidentally serialized every account's topic work.
+		// Use the task ID unless a real project needs exclusive asset writes.
+		key := t.ID
 		if t.ProjectID != nil {
 			key = *t.ProjectID
 		}
@@ -141,11 +146,13 @@ func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.C
 	broadcast := s.broadcast
 	s.mu.Lock()
 	taskBroadcast := s.broadcastTask
+	completionGate := s.completionGate
 	s.mu.Unlock()
 	if taskBroadcast != nil {
 		broadcast = func(e Event) { taskBroadcast(t.ID, e) }
 	}
 	r := NewRunner(cmd, s.tasks, t.ID, root, broadcast)
+	r.CompletionGate = completionGate
 	err := r.Run(ctx)
 	s.mu.Lock()
 	item := s.running[t.ID]
@@ -154,7 +161,7 @@ func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.C
 	delete(s.projectLocks, key)
 	s.mu.Unlock()
 	if cancelled {
-		_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskCancelled, "", "cancelled", "task cancelled")
+		_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskCanceled, "", "canceled", "task canceled")
 	} else if err != nil { /* Runner persists failure details. */
 	}
 	s.signal()
@@ -164,6 +171,12 @@ func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.C
 func (s *TaskScheduler) SetTaskBroadcast(fn func(string, Event)) {
 	s.mu.Lock()
 	s.broadcastTask = fn
+	s.mu.Unlock()
+}
+
+func (s *TaskScheduler) SetCompletionGate(gate taskcompletion.Gate) {
+	s.mu.Lock()
+	s.completionGate = gate
 	s.mu.Unlock()
 }
 func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
@@ -236,13 +249,14 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 			terminateProcess(item.cmd)
 		}
 		s.mu.Unlock()
-		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancel_requested", Level: "warning", DisplayText: "Task cancellation requested"})
-		return nil
+		persistCtx := context.WithoutCancel(ctx)
+		_ = s.tasks.AppendEvent(persistCtx, id, domain.TaskEvent{Kind: "cancel_requested", Level: "warning", DisplayText: "Task cancellation requested"})
+		return s.tasks.UpdateStatus(persistCtx, id, domain.TaskCanceled, "", "canceled", "task canceled")
 	}
 	s.mu.Unlock()
 	if t.Status == domain.TaskQueued || t.Status == domain.TaskAwaitingInput || t.Status == domain.TaskWaitingInput {
 		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
-		return s.tasks.UpdateStatus(ctx, id, domain.TaskCancelled, "", "cancelled", "task cancelled")
+		return s.tasks.UpdateStatus(ctx, id, domain.TaskCanceled, "", "canceled", "task canceled")
 	}
 	return fmt.Errorf("task cannot be cancelled in status %s", t.Status)
 }

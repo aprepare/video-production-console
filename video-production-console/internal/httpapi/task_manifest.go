@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,7 @@ type skillSnapshotProvider interface {
 }
 
 type taskManifestPreparer struct {
+	db       *sql.DB
 	projects *store.ProjectRepository
 	assets   *store.AssetRepository
 	settings runtimeSettingsProvider
@@ -57,7 +59,7 @@ func NewTaskManifestPreparer(db *sql.DB, settings runtimeSettingsProvider, skill
 		return nil
 	}
 	return &taskManifestPreparer{
-		projects: store.NewProjectRepository(db), assets: store.NewAssetRepository(db),
+		db: db, projects: store.NewProjectRepository(db), assets: store.NewAssetRepository(db),
 		settings: settings, skills: skills,
 	}
 }
@@ -104,12 +106,30 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 		byType := make(map[domain.AssetType]domain.AssetVersion, len(versions))
 		for _, version := range versions {
+			version.Path = resolveStoredAssetPath(runtime.DataRoot, version.Path)
 			byType[version.Type] = version
 		}
 		inputs, err = manifestInputs(task.Action, byType, p, ctx, project.ID)
 		if err != nil {
 			return err
 		}
+		// Account backgrounds are loaded through the account repository rather
+		// than CurrentByProject, so they must pass through the same legacy-path
+		// normalization as project assets. Older versions stored paths relative
+		// to the data-root parent (for example, "video-console-data\\accounts\\...").
+		for i := range inputs {
+			inputs[i].Path = resolveStoredAssetPath(runtime.DataRoot, inputs[i].Path)
+			if inputs[i].Type == domain.AssetAccountBackground {
+				info, statErr := os.Stat(inputs[i].Path)
+				if statErr != nil || !info.Mode().IsRegular() {
+					return fmt.Errorf("required asset %q is missing or not a regular file; re-upload the account background image", domain.AssetAccountBackground)
+				}
+			}
+		}
+	}
+	machineProfilePath := strings.TrimSpace(req.MachineProfilePath)
+	if machineProfilePath == "" && (task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute) {
+		machineProfilePath = strings.TrimSpace(runtime.MachineProfilePath)
 	}
 	settings := codex.ManifestSettings{
 		ListenAddr: runtime.ListenAddr, DataRoot: runtime.DataRoot,
@@ -121,7 +141,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		MediaRoot: runtime.MediaRoot, JianyingRoot: runtime.JianyingRoot,
 		SessionID: strings.TrimSpace(req.SessionID), CandidateID: strings.TrimSpace(req.CandidateID),
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
-		MachineProfilePath: strings.TrimSpace(req.MachineProfilePath),
+		MachineProfilePath: machineProfilePath,
 	}
 	// Project-less planning tasks use their task ID as the managed root; this
 	// matches the scheduler's projectIDForTask fallback and keeps the manifest
@@ -133,6 +153,16 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	if err := os.MkdirAll(projectRoot, 0o700); err != nil {
 		return fmt.Errorf("create manifest project root: %w", err)
 	}
+	if task.Action == domain.ActionTopicCommit {
+		settings.TopicCandidatesPath, err = snapshotTopicCandidatesInput(runtime.DataRoot, projectRoot, task.ID, req.TopicCandidatesPath)
+		if err != nil {
+			return fmt.Errorf("snapshot topic candidates input: %w", err)
+		}
+	}
+	accountAssetsRoot := filepath.Join(runtime.DataRoot, "accounts")
+	if err := os.MkdirAll(accountAssetsRoot, 0o700); err != nil {
+		return fmt.Errorf("create account-assets root: %w", err)
+	}
 	manifest, err := codex.BuildManifest(codex.BuildManifestInput{
 		Task: task, Project: projectPtr, Inputs: inputs, Action: task.Action,
 		OutputDir:    filepath.Join(projectRoot, "tasks", task.ID, "output"),
@@ -141,16 +171,148 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	if err != nil {
 		return fmt.Errorf("build task manifest: %w", err)
 	}
-	_, err = codex.WriteManifest(manifest, codex.ManifestRoots{
+	manifestPath, err := codex.WriteManifest(manifest, codex.ManifestRoots{
 		Project:       projectRoot,
-		AccountAssets: filepath.Join(runtime.DataRoot, "accounts"),
+		AccountAssets: accountAssetsRoot,
 		Obsidian:      runtime.ObsidianVault, TopicCards: runtime.TopicCardsDir,
 		MachineProfiles: runtime.DataRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("write task manifest: %w", err)
 	}
+	// Formal Skills require the manifest path from a task-specific environment
+	// variable. Keep their persisted prompt aligned with the CLI runner rather
+	// than embedding a path that the Skill contract deliberately rejects.
+	task.PromptSnapshot, err = codex.BuildManifestPrompt(manifest, manifestPath)
+	if err != nil {
+		return fmt.Errorf("build task prompt: %w", err)
+	}
+	// The HTTP task endpoints prepare the manifest before calling Scheduler.Enqueue.
+	// Persist the task only after all validation and file writes have succeeded;
+	// Scheduler.Enqueue then finds this row and only signals the worker. This
+	// avoids both the old "no rows" callback failure and a worker racing an
+	// incomplete manifest.
+	if p.db != nil {
+		tasks := store.NewTaskRepository(p.db)
+		if _, readErr := tasks.Get(ctx, task.ID); errors.Is(readErr, sql.ErrNoRows) {
+			task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
+			task.Transport, task.CompletionPhase = codex.TransportLegacyExec, ""
+			if createErr := tasks.CreateV2(ctx, task); createErr != nil {
+				return fmt.Errorf("persist prepared task: %w", createErr)
+			}
+		} else if readErr != nil {
+			return fmt.Errorf("read prepared task: %w", readErr)
+		}
+		if err := tasks.SetPreparedManifest(ctx, task.ID, snapshot.ID, manifestPath); err != nil {
+			return fmt.Errorf("record prepared task manifest: %w", err)
+		}
+	}
 	return nil
+}
+
+// resolveStoredAssetPath keeps assets created by older console versions usable.
+// Those versions stored paths such as "video-console-data\\accounts\\..."
+// relative to the process working directory. Resolve them against the configured
+// data root's parent so task creation no longer depends on where the executable
+// happened to be started.
+func resolveStoredAssetPath(dataRoot, storedPath string) string {
+	storedPath = strings.TrimSpace(storedPath)
+	if storedPath == "" || filepath.IsAbs(storedPath) {
+		return storedPath
+	}
+	dataRoot = filepath.Clean(dataRoot)
+	storedPath = filepath.Clean(storedPath)
+	parts := strings.Split(storedPath, string(filepath.Separator))
+	if len(parts) > 0 && strings.EqualFold(parts[0], filepath.Base(dataRoot)) {
+		return filepath.Join(filepath.Dir(dataRoot), storedPath)
+	}
+	return filepath.Join(dataRoot, storedPath)
+}
+
+const maxTopicCandidatesInputSize int64 = 8 << 20
+
+func snapshotTopicCandidatesInput(dataRoot, projectRoot, taskID, sourcePath string) (string, error) {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return "", fmt.Errorf("topic candidates path is required")
+	}
+	managedProjectsRoot, err := filepath.Abs(filepath.Join(dataRoot, "projects"))
+	if err != nil {
+		return "", fmt.Errorf("resolve managed projects root: %w", err)
+	}
+	managedProjectsRoot, err = filepath.EvalSymlinks(managedProjectsRoot)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize managed projects root: %w", err)
+	}
+	resolvedSource, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve topic candidates source: %w", err)
+	}
+	resolvedSource, err = filepath.EvalSymlinks(resolvedSource)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize topic candidates source: %w", err)
+	}
+	relative, err := filepath.Rel(managedProjectsRoot, resolvedSource)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("topic candidates source is outside managed projects root")
+	}
+	source, err := os.Open(resolvedSource)
+	if err != nil {
+		return "", fmt.Errorf("open topic candidates source: %w", err)
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect topic candidates source: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("topic candidates source must be a regular file")
+	}
+	if info.Size() > maxTopicCandidatesInputSize {
+		return "", fmt.Errorf("topic candidates source exceeds %d bytes", maxTopicCandidatesInputSize)
+	}
+
+	inputDir := filepath.Join(projectRoot, "tasks", taskID, "input")
+	if err := os.MkdirAll(inputDir, 0o700); err != nil {
+		return "", fmt.Errorf("create topic candidates input directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(inputDir, ".topic-candidates-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create topic candidates snapshot: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	keepTemporary := true
+	defer func() {
+		_ = temporary.Close()
+		if keepTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return "", fmt.Errorf("secure topic candidates snapshot: %w", err)
+	}
+	written, err := io.Copy(temporary, io.LimitReader(source, maxTopicCandidatesInputSize+1))
+	if err != nil {
+		return "", fmt.Errorf("copy topic candidates snapshot: %w", err)
+	}
+	if written > maxTopicCandidatesInputSize {
+		return "", fmt.Errorf("topic candidates source exceeds %d bytes", maxTopicCandidatesInputSize)
+	}
+	if err := temporary.Sync(); err != nil {
+		return "", fmt.Errorf("sync topic candidates snapshot: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return "", fmt.Errorf("close topic candidates snapshot: %w", err)
+	}
+	destination := filepath.Join(inputDir, "topic_candidates.json")
+	if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("replace topic candidates snapshot: %w", err)
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return "", fmt.Errorf("publish topic candidates snapshot: %w", err)
+	}
+	keepTemporary = false
+	return destination, nil
 }
 
 func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain.AssetVersion, repo *taskManifestPreparer, ctx context.Context, projectID string) ([]domain.AssetVersion, error) {
@@ -158,8 +320,8 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 		domain.ActionRemixStandard: {domain.AssetSourceScript}, domain.ActionRemixEnhanced: {domain.AssetSourceScript},
 		domain.ActionRemixFromTopic: {domain.AssetTopicCard}, domain.ActionSpokenFormat: {domain.AssetContinuousScript},
 		domain.ActionRemixReview:    {domain.AssetContinuousScript},
-		domain.ActionMontagePlan:    {domain.AssetSpokenScript, domain.AssetNarration, domain.AssetSubtitleSRT},
-		domain.ActionMontageExecute: {domain.AssetSpokenScript, domain.AssetNarration, domain.AssetSubtitleSRT},
+		domain.ActionMontagePlan:    {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
+		domain.ActionMontageExecute: {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
 		domain.ActionTopicDeepen:    {domain.AssetTopicCard},
 	}
 	want := types[action]

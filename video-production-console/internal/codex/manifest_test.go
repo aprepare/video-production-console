@@ -17,7 +17,7 @@ import (
 func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	taskID, projectID, accountID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	root := t.TempDir()
-	paths := []string{filepath.Join(root, "spoken.md"), filepath.Join(root, "narration.wav"), filepath.Join(root, "subtitles.srt"), filepath.Join(root, "background.png")}
+	paths := []string{filepath.Join(root, "continuous.md"), filepath.Join(root, "narration.wav"), filepath.Join(root, "subtitles.srt"), filepath.Join(root, "background.png")}
 	for _, path := range paths {
 		if err := os.WriteFile(path, []byte("input"), 0o600); err != nil {
 			t.Fatal(err)
@@ -29,7 +29,7 @@ func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	}
 	project := domain.Project{ID: projectID, AccountID: accountID}
 	inputs := []domain.AssetVersion{
-		manifestVersion(projectID, accountID, domain.AssetSpokenScript, paths[0]),
+		manifestVersion(projectID, accountID, domain.AssetContinuousScript, paths[0]),
 		manifestVersion(projectID, accountID, domain.AssetNarration, paths[1]),
 		manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, paths[2]),
 		manifestVersion("", accountID, domain.AssetAccountBackground, paths[3]),
@@ -49,7 +49,7 @@ func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	if manifest.Skill != "jianying-montage-draft" || manifest.Action != domain.ActionMontagePlan {
 		t.Fatalf("wrong action mapping: %#v", manifest)
 	}
-	for _, role := range []string{"spoken_script", "narration", "subtitle_srt", "account_background"} {
+	for _, role := range []string{"continuous_script", "narration", "subtitle_srt", "account_background"} {
 		if !manifestHasRole(manifest, role) {
 			t.Fatalf("role %q missing from %#v", role, manifest.Inputs)
 		}
@@ -98,7 +98,7 @@ func TestBuildManifestRejectsMissingMontageInput(t *testing.T) {
 		Project:   &domain.Project{ID: projectID, AccountID: accountID},
 		OutputDir: filepath.Join(projectRoot, "tasks", taskID, "output"), SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()},
 		Inputs: []domain.AssetVersion{
-			manifestVersion(projectID, accountID, domain.AssetSpokenScript, `C:\x\spoken.md`),
+			manifestVersion(projectID, accountID, domain.AssetContinuousScript, `C:\x\continuous.md`),
 		},
 	}
 	if _, err := BuildManifest(base); err == nil || !strings.Contains(err.Error(), "narration") {
@@ -229,7 +229,7 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spoken := filepath.Join(projectRoot, "spoken.md")
+	spoken := filepath.Join(projectRoot, "continuous.md")
 	background := filepath.Join(accountRoot, "background.png")
 	writeFile(spoken)
 	writeFile(background)
@@ -240,7 +240,7 @@ func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 		Action: domain.ActionMontagePlan, OutputDir: filepath.Join(projectRoot, "tasks", taskID, "output"),
 		SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()},
 		Inputs: []domain.AssetVersion{
-			manifestVersion(projectID, accountID, domain.AssetSpokenScript, spoken),
+			manifestVersion(projectID, accountID, domain.AssetContinuousScript, spoken),
 			manifestVersion(projectID, accountID, domain.AssetNarration, spoken),
 			manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, spoken),
 			manifestVersion("", accountID, domain.AssetAccountBackground, background),

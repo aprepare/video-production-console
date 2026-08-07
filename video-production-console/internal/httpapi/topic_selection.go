@@ -1,0 +1,172 @@
+package httpapi
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"video-production-console/internal/codex"
+	"video-production-console/internal/domain"
+	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
+)
+
+type persistedTopicCandidates struct {
+	SessionID  string `json:"session_id"`
+	Candidates []struct {
+		ID             string   `json:"id"`
+		Topic          string   `json:"topic"`
+		MotherTheme    string   `json:"mother_theme"`
+		FamilyConflict string   `json:"family_conflict"`
+		AnomalyFraming string   `json:"anomaly_framing"`
+		NarrativeEntry string   `json:"narrative_entry"`
+		SourceRefs     []string `json:"source_refs"`
+		FragmentRefs   []string `json:"fragment_refs"`
+	} `json:"candidates"`
+}
+
+type projectTopicSelection struct {
+	SessionID           string
+	Candidate           domain.IdeaCandidate
+	TopicCandidatesPath string
+}
+
+func hydrateIdeaCandidates(ctx context.Context, db *sql.DB, candidates []domain.IdeaCandidate) []domain.IdeaCandidate {
+	if db == nil || len(candidates) == 0 {
+		return candidates
+	}
+	cache := map[string]persistedTopicCandidates{}
+	for i := range candidates {
+		if candidates[i].TaskID == nil || strings.TrimSpace(*candidates[i].TaskID) == "" {
+			continue
+		}
+		taskID := *candidates[i].TaskID
+		artifact, ok := cache[taskID]
+		if !ok {
+			path, err := topicCandidatesArtifactPath(ctx, db, taskID)
+			if err != nil {
+				continue
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(data, &artifact) != nil {
+				continue
+			}
+			cache[taskID] = artifact
+		}
+		for _, item := range artifact.Candidates {
+			if item.ID != candidates[i].ID {
+				continue
+			}
+			candidates[i].MotherTheme = item.MotherTheme
+			candidates[i].FamilyConflict = item.FamilyConflict
+			candidates[i].AnomalyFraming = item.AnomalyFraming
+			candidates[i].NarrativeEntry = item.NarrativeEntry
+			candidates[i].SourceRefs = append([]string(nil), item.SourceRefs...)
+			candidates[i].FragmentRefs = append([]string(nil), item.FragmentRefs...)
+			if candidates[i].Summary == "" {
+				candidates[i].Summary = item.NarrativeEntry
+			}
+			break
+		}
+	}
+	return candidates
+}
+
+func topicCandidatesArtifactPath(ctx context.Context, db *sql.DB, taskID string) (string, error) {
+	artifacts, err := store.NewTaskRepository(db).Artifacts(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	for _, artifact := range artifacts {
+		if artifact.Kind == "topic_candidates" && strings.TrimSpace(artifact.Path) != "" {
+			return artifact.Path, nil
+		}
+	}
+	return "", fmt.Errorf("topic candidates artifact is missing")
+}
+
+func findProjectTopicSelection(ctx context.Context, db *sql.DB, project domain.Project) (projectTopicSelection, error) {
+	if db == nil {
+		return projectTopicSelection{}, sql.ErrNoRows
+	}
+	var candidate domain.IdeaCandidate
+	var task sql.NullString
+	var selected int
+	row := db.QueryRowContext(ctx, `
+		SELECT s.id,c.id,c.session_id,c.task_id,c.position,c.title,c.summary,c.score,c.source,c.selected,c.created_at
+		FROM idea_sessions s
+		JOIN idea_candidates c ON c.session_id=s.id
+		WHERE (s.project_id=? AND c.id=s.selected_id)
+		   OR (c.title=? AND (s.account_id=? OR s.account_id IS NULL))
+		ORDER BY CASE WHEN s.project_id=? THEN 0 ELSE 1 END,c.created_at DESC
+		LIMIT 1`, project.ID, project.Title, project.AccountID, project.ID)
+	var sessionID string
+	if err := row.Scan(&sessionID, &candidate.ID, &candidate.SessionID, &task, &candidate.Position, &candidate.Title, &candidate.Summary, &candidate.Score, &candidate.Source, &selected, &candidate.CreatedAt); err != nil {
+		return projectTopicSelection{}, err
+	}
+	if task.Valid {
+		candidate.TaskID = &task.String
+	}
+	candidate.Selected = selected != 0
+	candidate = hydrateIdeaCandidates(ctx, db, []domain.IdeaCandidate{candidate})[0]
+	if candidate.TaskID == nil {
+		return projectTopicSelection{}, fmt.Errorf("candidate source task is missing")
+	}
+	path, err := topicCandidatesArtifactPath(ctx, db, *candidate.TaskID)
+	if err != nil {
+		return projectTopicSelection{}, err
+	}
+	return projectTopicSelection{SessionID: sessionID, Candidate: candidate, TopicCandidatesPath: path}, nil
+}
+
+func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver, project domain.Project, selection projectTopicSelection) (domain.CodexTask, error) {
+	if scheduler == nil || preparer == nil {
+		return domain.CodexTask{}, errors.New("topic card task service is unavailable")
+	}
+	tasks := store.NewTaskRepository(db)
+	existing, err := tasks.List(ctx, project.ID, "")
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	for _, task := range existing {
+		if task.Action == domain.ActionTopicCommit && (task.Status == domain.TaskQueued || task.Status == domain.TaskRunning || task.Status == domain.TaskResuming || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput) {
+			return task, nil
+		}
+	}
+	model, err := resolveTaskModel(ctx, models, taskmodel.Selection{})
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	taskID := uuid.NewString()
+	projectID := project.ID
+	now := time.Now().UTC()
+	task := domain.CodexTask{
+		ID: taskID, ProjectID: &projectID, AccountID: project.AccountID,
+		Type: "topic_commit", SkillName: "finance-topic-selector", Action: domain.ActionTopicCommit,
+		Status: domain.TaskQueued, PromptSnapshot: "将已确认候选写入 Obsidian 正式选题卡。",
+		ModelName: model.Model, ReasoningEffort: model.ReasoningEffort, CreatedAt: now,
+	}
+	if err := preparer.Prepare(ctx, task, TaskManifestRequest{
+		SessionID: selection.SessionID, CandidateID: selection.Candidate.ID,
+		TopicCandidatesPath: selection.TopicCandidatesPath,
+	}); err != nil {
+		return domain.CodexTask{}, err
+	}
+	if err := scheduler.Enqueue(ctx, task); err != nil {
+		return domain.CodexTask{}, err
+	}
+	_ = store.NewIdeaRepository(db).LinkProject(ctx, selection.SessionID, project.ID, project.AccountID)
+	message := domain.IdeaMessage{
+		ID: uuid.NewString(), SessionID: selection.SessionID, TaskID: &taskID,
+		Role: "user", Content: "已确认候选并创建项目：" + selection.Candidate.Title, CreatedAt: now,
+	}
+	_ = store.NewIdeaRepository(db).AddMessage(ctx, message)
+	return task, nil
+}

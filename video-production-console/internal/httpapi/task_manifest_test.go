@@ -33,11 +33,44 @@ func (s manifestTestSkills) Latest(context.Context, string) (domain.SkillSnapsho
 	return s.snapshot, nil
 }
 
-type manifestTestScheduler struct{ enqueued int }
+type manifestTestScheduler struct {
+	enqueued int
+	task     domain.CodexTask
+}
 
-func (s *manifestTestScheduler) Enqueue(context.Context, domain.CodexTask) error {
+func (s *manifestTestScheduler) Enqueue(_ context.Context, task domain.CodexTask) error {
 	s.enqueued++
+	s.task = task
 	return nil
+}
+
+func TestTaskHTTPResolvesModelSelectionBeforeEnqueue(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, false)
+	for _, tt := range []struct {
+		name, extra, model, effort string
+		status, enqueued           int
+	}{
+		{"defaults", "", "gpt-5.6-sol", "medium", 201, 1},
+		{"single field", `,"reasoning_effort":"high"`, "gpt-5.6-sol", "high", 201, 1},
+		{"both fields", `,"model":"openai/custom","reasoning_effort":"xhigh"`, "openai/custom", "xhigh", 201, 1},
+		{"invalid", `,"model":"bad model"`, "", "", 400, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scheduler := &manifestTestScheduler{}
+			handler := NewTasksHandler(db.db, scheduler, nil, nil)
+			body := `{"account_id":"` + accountID + `","type":"topic_select","prompt":"go"` + tt.extra + `}`
+			req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != tt.status || scheduler.enqueued != tt.enqueued {
+				t.Fatalf("status=%d enqueued=%d body=%s", res.Code, scheduler.enqueued, res.Body.String())
+			}
+			if tt.enqueued == 1 && (scheduler.task.ModelName != tt.model || scheduler.task.ReasoningEffort != tt.effort) {
+				t.Fatalf("task=%+v", scheduler.task)
+			}
+		})
+	}
 }
 func (*manifestTestScheduler) Resume(context.Context, string, string) error { return nil }
 func (*manifestTestScheduler) Cancel(context.Context, string) error         { return nil }
@@ -114,11 +147,56 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 }
 
+func TestTaskManifestPreparerPersistsFormalTaskForLegacyExecWhenAppServerIsEnabled(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	snapshot := domain.SkillSnapshot{
+		ID: uuid.NewString(), Name: "finance-viral-remix", Path: filepath.Join(root, "SKILL.md"),
+		SHA256: strings.Repeat("a", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+	}
+	if err := store.NewSkillRepository(db.db).Save(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	threadID := "project-thread"
+	session := domain.ChatSession{
+		ID: uuid.NewString(), Title: "project", Source: "console", Kind: domain.ChatProject,
+		Status: domain.ChatIdle, ProjectID: &projectID, CodexThreadID: &threadID,
+		WorkingDirectory: root, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.NewConversationRepository(db.db).CreateSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	preparer := &taskManifestPreparer{
+		db: db.db, projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db),
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{
+			DataRoot: root, MaxCodexConcurrency: 2, AppServerEnabled: true,
+		}}},
+		skills: manifestTestSkills{snapshot: snapshot},
+	}
+	task := domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID,
+		Action: domain.ActionRemixEnhanced, Type: "remix", SkillName: "finance-viral-remix",
+		Status: domain.TaskQueued,
+	}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.NewTaskRepository(db.db).Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Transport != codex.TransportLegacyExec || persisted.ChatSessionID != nil || persisted.CodexThreadID != nil {
+		t.Fatalf("formal task transport = %#v", persisted)
+	}
+	if !strings.Contains(persisted.PromptSnapshot, "VIDEO_CONSOLE_TASK_MANIFEST") {
+		t.Fatalf("formal task prompt does not use the manifest environment: %q", persisted.PromptSnapshot)
+	}
+}
+
 func TestTaskHTTPRejectsMissingRemixAssetBeforeEnqueue(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, false)
 	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
 	scheduler := &manifestTestScheduler{}
-	handler := NewTasksHandler(db.db, scheduler, preparer)
+	handler := NewTasksHandler(db.db, scheduler, preparer, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(`{"account_id":"`+accountID+`","type":"remix","action":"remix.enhanced","prompt":"go"}`))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -151,5 +229,57 @@ func TestTaskManifestPreparerWritesProjectlessTopicManifest(t *testing.T) {
 	}
 	if manifest.Action != domain.ActionTopicBrainstorm || manifest.Skill != "finance-topic-selector" || manifest.NonSecretSettings.SessionID != sessionID {
 		t.Fatalf("manifest=%+v", manifest)
+	}
+}
+
+func TestTaskManifestPreparerSnapshotsTopicCandidatesIntoCurrentProject(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, false)
+	vault := filepath.Join(root, "vault")
+	cards := filepath.Join(vault, "选题卡")
+	if err := os.MkdirAll(cards, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceTaskID := uuid.NewString()
+	source := filepath.Join(root, "projects", sourceTaskID, "tasks", sourceTaskID, "output", "topic_candidates.json")
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantCandidates := []byte(`{"schema_version":"2.0","session_id":"session-1","candidates":[]}`)
+	if err := os.WriteFile(source, wantCandidates, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preparer := &taskManifestPreparer{
+		projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db),
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{
+			DataRoot: root, MaxCodexConcurrency: 2, ObsidianVault: vault, TopicCardsDir: cards,
+		}}},
+		skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-topic-selector"}},
+	}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionTopicCommit, Type: "topic_commit"}
+	request := TaskManifestRequest{SessionID: "session-1", CandidateID: "candidate-1", TopicCandidatesPath: source}
+
+	if err := preparer.Prepare(context.Background(), task, request); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestPath := filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	wantSnapshot := filepath.Join(root, "projects", projectID, "tasks", task.ID, "input", "topic_candidates.json")
+	if len(manifest.EngineeringInputs) != 1 || manifest.EngineeringInputs[0].Path != wantSnapshot || manifest.NonSecretSettings.TopicCandidatesPath != wantSnapshot {
+		t.Fatalf("topic candidate snapshot not bound to current task: %+v", manifest)
+	}
+	gotCandidates, err := os.ReadFile(wantSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCandidates) != string(wantCandidates) {
+		t.Fatalf("snapshot bytes = %q, want %q", gotCandidates, wantCandidates)
 	}
 }

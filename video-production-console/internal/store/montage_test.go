@@ -1,0 +1,353 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"video-production-console/internal/domain"
+)
+
+func TestCompleteAndBeginRollsBackPlaintextWhenAttemptCannotBeQueued(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	_, err := repo.CompleteAndBegin(context.Background(), CompleteRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace, Result: TaskResultWrite{Status: domain.TaskCompleted, Summary: "plaintext", AssistantContent: "plaintext", EventKind: "plaintext_ready"}, Artifacts: []TaskArtifact{{Kind: "plaintext_workspace", Path: workspace}}})
+	if err == nil {
+		t.Fatal("invalid artifact unexpectedly committed")
+	}
+	for _, table := range []string{"montage_registration_attempts", "task_artifacts", "task_messages", "task_events"} {
+		var count int
+		if err := repo.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE task_id=?`, taskID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s retained %d orphan rows", table, count)
+		}
+	}
+}
+
+func TestCompleteAndBeginReconcilesCommittedUnknownOutcome(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	repo.commit = func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return err
+		}
+		return errors.New("transport lost after commit")
+	}
+	attempt, err := repo.CompleteAndBegin(context.Background(), CompleteRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace, Result: TaskResultWrite{Status: domain.TaskCompleted, Summary: "plaintext", AssistantContent: "plaintext", EventKind: "plaintext_ready"}, Artifacts: []TaskArtifact{{Kind: "plaintext_workspace", Path: workspace, Filename: "workspace", MIMEType: "inode/directory", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.ID == "" || attempt.State != domain.RegistrationQueued {
+		t.Fatalf("attempt=%#v", attempt)
+	}
+	var artifacts, attempts int
+	if err := repo.db.QueryRow(`SELECT COUNT(*) FROM task_artifacts WHERE task_id=?`, taskID).Scan(&artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRow(`SELECT COUNT(*) FROM montage_registration_attempts WHERE task_id=?`, taskID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if artifacts != 1 || attempts != 1 {
+		t.Fatalf("artifacts=%d attempts=%d", artifacts, attempts)
+	}
+}
+
+func TestBeginRetryReconcilesCommittedUnknownOutcome(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	first, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Fail(context.Background(), first.ID, "failed", "failed"); err != nil {
+		t.Fatal(err)
+	}
+	repo.commit = committedThenUnknown
+	retry, err := repo.BeginRetry(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.State != domain.RegistrationQueued || retry.Attempt != 2 {
+		t.Fatalf("retry=%#v", retry)
+	}
+}
+
+func TestRecoverReconcilesCommittedUnknownOutcome(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunning(context.Background(), attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	repo.commit = committedThenUnknown
+	if _, err := repo.RecoverActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Attempt(context.Background(), attempt.ID)
+	if err != nil || got.State != domain.RegistrationInterrupted {
+		t.Fatalf("attempt=%#v err=%v", got, err)
+	}
+}
+
+func committedThenUnknown(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	return errors.New("transport lost after commit")
+}
+
+func montageFixture(t *testing.T) (*MontageRepository, *AssetRepository, string, string, string) {
+	t.Helper()
+	db, err := Open(filepath.Join(t.TempDir(), "montage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC()
+	accountID, projectID, taskID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, accountID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','mixing',?,?)`, projectID, accountID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,completion_phase,transport,prompt_snapshot,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, taskID, projectID, accountID, "montage", "jianying-montage-draft", domain.ActionMontageExecute, domain.TaskRunning, domain.CompletionPlaintextReady, "legacy_exec", "prompt", now); err != nil {
+		t.Fatal(err)
+	}
+	return NewMontageRepository(db), NewAssetRepository(db), accountID, projectID, taskID
+}
+
+func retainedRegistrationPaths(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	manifest := filepath.Join(root, "task_manifest.json")
+	if err := os.WriteFile(manifest, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return manifest, workspace
+}
+
+func TestMontageBeginRetryUsesRetainedPathsAndFailedState(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	first, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Fail(context.Background(), first.ID, "failed", "failed"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := repo.BeginRetry(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Attempt != 2 || retry.ManifestPath != manifest || retry.WorkspacePath != workspace || retry.State != domain.RegistrationQueued {
+		t.Fatalf("retry=%#v", retry)
+	}
+	if _, err := repo.BeginRetry(context.Background(), taskID); err == nil {
+		t.Fatal("queued attempt must not be retryable")
+	}
+}
+
+func TestMontageBeginRetryRejectsMissingRetainedWorkspace(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	first, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Fail(context.Background(), first.ID, "failed", "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginRetry(context.Background(), taskID); err == nil {
+		t.Fatal("missing workspace was accepted")
+	}
+}
+
+func TestMontageRecoverInterruptsRunningAndReturnsQueued(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	running, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunning(context.Background(), running.ID); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := repo.RecoverActive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Interrupted) != 1 || recovery.Interrupted[0].ID != running.ID || len(recovery.Queued) != 0 {
+		t.Fatalf("recovery=%#v", recovery)
+	}
+	latest, err := repo.Latest(context.Background(), taskID)
+	if err != nil || latest.State != domain.RegistrationInterrupted {
+		t.Fatalf("latest=%#v err=%v", latest, err)
+	}
+	queued, err := repo.BeginRetry(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err = repo.RecoverActive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Queued) != 1 || recovery.Queued[0].ID != queued.ID || len(recovery.Interrupted) != 0 {
+		t.Fatalf("queued recovery=%#v", recovery)
+	}
+}
+
+func TestAuditMixDraftsStalesUnregisteredMontageAsset(t *testing.T) {
+	repo, assets, accountID, projectID, taskID := montageFixture(t)
+	trustedRoot := t.TempDir()
+	draft := filepath.Join(trustedRoot, taskID)
+	if err := os.Mkdir(draft, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	version, err := assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: draft, Filename: taskID, MIMEType: "inode/directory", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceTaskID: &taskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := repo.AuditMixDrafts(context.Background(), trustedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Inspected != 1 || report.Staled != 1 || len(report.Findings) != 1 {
+		t.Fatalf("report=%#v", report)
+	}
+	got, err := assets.Version(context.Background(), version.ID)
+	if err != nil || got.State != domain.AssetStale {
+		t.Fatalf("version=%#v err=%v", got, err)
+	}
+}
+
+func TestAuditMixDraftsStalesSucceededAttemptOutsideTrustedRoot(t *testing.T) {
+	repo, assets, _, projectID, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunning(context.Background(), attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	workspaceHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if _, err := repo.db.Exec(`INSERT INTO task_artifacts(id,task_id,kind,path,filename,mime_type,size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, "plaintext_workspace", workspace, "workspace", "inode/directory", 0, workspaceHash, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), taskID)
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := repo.Succeed(context.Background(), RegistrationSuccess{AttemptID: attempt.ID, RegisteredPath: outside, ReceiptPath: filepath.Join(workspace, "receipt.json"), SHA256: hash, WorkspaceSHA256: workspaceHash, Filename: taskID}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := repo.AuditMixDrafts(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Staled != 1 || len(report.Findings) != 1 {
+		t.Fatalf("report=%#v", report)
+	}
+	versions, err := assets.CurrentByProject(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range versions {
+		if version.Type == domain.AssetMixDraft && version.State != domain.AssetStale {
+			t.Fatalf("mix draft remained ready: %#v", version)
+		}
+	}
+}
+
+func TestAuditMixDraftsStalesMissingAndNonMontageSources(t *testing.T) {
+	repo, assets, accountID, projectID, taskID := montageFixture(t)
+	trustedRoot := t.TempDir()
+	withoutSource := filepath.Join(trustedRoot, "without-source")
+	nonMontage := filepath.Join(trustedRoot, "non-montage")
+	if err := os.Mkdir(withoutSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(nonMontage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first, err := assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: withoutSource, Filename: "without-source", MIMEType: "inode/directory", SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.Exec(`UPDATE codex_tasks SET action=? WHERE id=?`, domain.ActionMontagePlan, taskID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := assets.AddVersion(context.Background(), AddAssetVersion{LogicalAssetID: first.AssetID, ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: nonMontage, Filename: "non-montage", MIMEType: "inode/directory", SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", SourceTaskID: &taskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := repo.AuditMixDrafts(context.Background(), trustedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Inspected != 2 || report.Staled != 2 || len(report.Findings) != 2 {
+		t.Fatalf("report=%#v", report)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		version, err := assets.Version(context.Background(), id)
+		if err != nil || version.State != domain.AssetStale {
+			t.Fatalf("version=%#v err=%v", version, err)
+		}
+	}
+}
+
+func TestAuditMixDraftsStalesDanglingSourceTask(t *testing.T) {
+	repo, assets, accountID, projectID, _ := montageFixture(t)
+	trustedRoot := t.TempDir()
+	draft := filepath.Join(trustedRoot, "dangling-source")
+	if err := os.Mkdir(draft, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	version, err := assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: draft, Filename: "dangling-source", MIMEType: "inode/directory", SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := repo.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=OFF`); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	missingTaskID := uuid.NewString()
+	if _, err := conn.ExecContext(context.Background(), `UPDATE asset_versions SET source_task_id=? WHERE id=?`, missingTaskID, version.ID); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := repo.AuditMixDrafts(context.Background(), trustedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Staled != 1 || len(report.Findings) != 1 || report.Findings[0].TaskID == nil || *report.Findings[0].TaskID != missingTaskID {
+		t.Fatalf("report=%#v", report)
+	}
+}

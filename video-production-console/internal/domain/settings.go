@@ -3,19 +3,25 @@ package domain
 import "time"
 
 type PublicSettings struct {
-	ListenAddr           string `json:"listen_addr"`
-	DataRoot             string `json:"data_root"`
-	MaxCodexConcurrency  int    `json:"max_codex_concurrency"`
-	BaokuanBaseURL       string `json:"baokuan_base_url"`
-	BaokuanMCPExecutable string `json:"baokuan_mcp_executable"`
-	ObsidianVault        string `json:"obsidian_vault"`
-	TopicCardsDir        string `json:"topic_cards_dir"`
-	GrokBaseURL          string `json:"grok_base_url"`
-	GrokModel            string `json:"grok_model"`
-	CodexBinaryPath      string `json:"codex_binary_path"`
-	MediaIndexPath       string `json:"media_index_path"`
-	MediaRoot            string `json:"media_root"`
-	JianyingRoot         string `json:"jianying_root"`
+	ListenAddr                  string   `json:"listen_addr"`
+	DataRoot                    string   `json:"data_root"`
+	MaxCodexConcurrency         int      `json:"max_codex_concurrency"`
+	CodexDefaultModel           string   `json:"codex_default_model"`
+	CodexDefaultReasoningEffort string   `json:"codex_default_reasoning_effort"`
+	BaokuanBaseURL              string   `json:"baokuan_base_url"`
+	BaokuanMCPExecutable        string   `json:"baokuan_mcp_executable"`
+	ObsidianVault               string   `json:"obsidian_vault"`
+	TopicCardsDir               string   `json:"topic_cards_dir"`
+	GrokBaseURL                 string   `json:"grok_base_url"`
+	GrokModel                   string   `json:"grok_model"`
+	CodexBinaryPath             string   `json:"codex_binary_path"`
+	MediaIndexPath              string   `json:"media_index_path"`
+	MediaRoot                   string   `json:"media_root"`
+	JianyingRoot                string   `json:"jianying_root"`
+	MachineProfilePath          string   `json:"machine_profile_path"`
+	AppServerEnabled            bool     `json:"app_server_enabled"`
+	CodexWorkspaceRoots         []string `json:"codex_workspace_roots"`
+	CodexHistoryLimit           int      `json:"codex_history_limit"`
 }
 
 type SecretStatus struct {

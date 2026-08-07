@@ -82,16 +82,23 @@ type CodexTask struct {
 	SkillName string
 	// Action is the versioned workflow contract used to validate the result.
 	// Type is retained only as the compatibility-facing task family.
-	Action         TaskAction
-	Status         TaskStatus
-	CodexSessionID *string
-	PromptSnapshot string
-	ResultSummary  *string
-	ErrorCode      *string
-	ErrorMessage   *string
-	CreatedAt      time.Time
-	StartedAt      *time.Time
-	FinishedAt     *time.Time
+	Action          TaskAction
+	Status          TaskStatus
+	CodexSessionID  *string
+	ChatSessionID   *string
+	CodexThreadID   *string
+	CodexTurnID     *string
+	CompletionPhase string
+	Transport       string
+	PromptSnapshot  string
+	ModelName       string
+	ReasoningEffort string
+	ResultSummary   *string
+	ErrorCode       *string
+	ErrorMessage    *string
+	CreatedAt       time.Time
+	StartedAt       *time.Time
+	FinishedAt      *time.Time
 }
 
 type TaskEvent struct {
@@ -106,10 +113,10 @@ type TaskEvent struct {
 }
 
 type TaskMessage struct {
-	ID             string
-	TaskID         string
-	Role           string
-	Content        string
-	QuestionSchema *string
-	CreatedAt      time.Time
+	ID             string    `json:"id"`
+	TaskID         string    `json:"task_id"`
+	Role           string    `json:"role"`
+	Content        string    `json:"content"`
+	QuestionSchema *string   `json:"question_schema,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }

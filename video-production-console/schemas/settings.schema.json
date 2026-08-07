@@ -25,6 +25,8 @@
         "listen_addr",
         "data_root",
         "max_codex_concurrency",
+        "codex_default_model",
+        "codex_default_reasoning_effort",
         "baokuan_base_url",
         "baokuan_mcp_executable",
         "obsidian_vault",
@@ -34,7 +36,11 @@
         "codex_binary_path",
         "media_index_path",
         "media_root",
-        "jianying_root"
+        "jianying_root",
+        "machine_profile_path",
+        "app_server_enabled",
+        "codex_workspace_roots",
+        "codex_history_limit"
       ],
       "properties": {
         "listen_addr": {
@@ -44,6 +50,16 @@
         },
         "data_root": { "$ref": "#/$defs/absolutePath" },
         "max_codex_concurrency": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "codex_default_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_./:][A-Za-z0-9_.:/-]{0,127}$"
+        },
+        "codex_default_reasoning_effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "xhigh", "max", "ultra"]
+        },
         "baokuan_base_url": {
           "type": "string",
           "maxLength": 2048,
@@ -61,7 +77,15 @@
         "codex_binary_path": { "$ref": "#/$defs/optionalAbsolutePath" },
         "media_index_path": { "$ref": "#/$defs/optionalAbsolutePath" },
         "media_root": { "$ref": "#/$defs/optionalAbsolutePath" },
-        "jianying_root": { "$ref": "#/$defs/optionalAbsolutePath" }
+        "jianying_root": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "machine_profile_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "app_server_enabled": { "type": "boolean" },
+        "codex_workspace_roots": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/absolutePath" }
+        },
+        "codex_history_limit": { "type": "integer", "minimum": 5, "maximum": 50 }
       }
     },
     "secretInput": {

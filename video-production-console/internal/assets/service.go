@@ -69,6 +69,29 @@ func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType,
 	return s.saveProjectAsset(projectID, assetType, assetType, filename, reader)
 }
 
+// DeleteProjectData removes only the managed directory for one validated
+// project UUID. It never accepts a broad path, a relative traversal, or the
+// projects root itself.
+func (s *Service) DeleteProjectData(projectID string) error {
+	parsed, err := uuid.Parse(projectID)
+	if err != nil {
+		return ErrInvalidProjectAsset
+	}
+	root, err := filepath.Abs(filepath.Join(s.dataRoot, "projects"))
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(filepath.Join(root, parsed.String()))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel != parsed.String() || filepath.IsAbs(rel) {
+		return fmt.Errorf("project deletion target is outside the managed project root")
+	}
+	return os.RemoveAll(target)
+}
+
 func (s *Service) saveProjectAsset(projectID string, targetType, validationType domain.AssetType, filename string, reader io.Reader) (saved SavedAsset, err error) {
 	parsedID, parseErr := uuid.Parse(projectID)
 	if parseErr != nil {
@@ -619,7 +642,7 @@ func (s *Service) OpenAsset(asset domain.Asset) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, ErrAssetPathInvalid
 	}
-	path, err := filepath.Abs(asset.Path)
+	path, err := resolveStoredAssetPath(s.dataRoot, asset.Path)
 	if err != nil {
 		return nil, nil, ErrAssetPathInvalid
 	}
@@ -627,21 +650,7 @@ func (s *Service) OpenAsset(asset domain.Asset) (*os.File, os.FileInfo, error) {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return nil, nil, ErrAssetPathInvalid
 	}
-	// Resolve before opening to reject symlink/reparse paths. The final file is
-	// opened and served by handle, so the HTTP layer never reopens a pathname.
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	resolved, err = filepath.Abs(resolved)
-	if err != nil {
-		return nil, nil, ErrAssetPathInvalid
-	}
-	resolvedRel, err := filepath.Rel(root, resolved)
-	if err != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(os.PathSeparator)) || resolved != path {
-		return nil, nil, ErrAssetPathInvalid
-	}
-	f, err := os.Open(path)
+	f, err := openPathNoFollow(path, root, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -779,7 +788,7 @@ func (s *Service) ReconcileAccountBackgrounds(ctx context.Context, db *sql.DB, l
 			rows.Close()
 			return fmt.Errorf("scan referenced background: %w", err)
 		}
-		absolute, err := filepath.Abs(path)
+		absolute, err := resolveStoredAssetPath(s.dataRoot, path)
 		if err == nil {
 			referenced[filepath.Clean(absolute)] = struct{}{}
 		}
@@ -847,6 +856,30 @@ func (s *Service) ReconcileAccountBackgrounds(ctx context.Context, db *sql.DB, l
 	return errors.Join(cleanupErrors...)
 }
 
+// resolveStoredAssetPath resolves paths written by both the current and
+// legacy console versions. Current uploads use absolute paths; older records
+// may contain either "accounts\\..." relative to dataRoot or
+// "video-console-data\\accounts\\..." relative to dataRoot's parent.
+func resolveStoredAssetPath(dataRoot, storedPath string) (string, error) {
+	storedPath = strings.TrimSpace(storedPath)
+	if storedPath == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(storedPath) {
+		return filepath.Abs(filepath.Clean(storedPath))
+	}
+	root, err := filepath.Abs(filepath.Clean(dataRoot))
+	if err != nil {
+		return "", err
+	}
+	cleaned := filepath.Clean(storedPath)
+	parts := strings.Split(cleaned, string(filepath.Separator))
+	if len(parts) > 0 && strings.EqualFold(parts[0], filepath.Base(root)) {
+		return filepath.Abs(filepath.Join(filepath.Dir(root), cleaned))
+	}
+	return filepath.Abs(filepath.Join(root, cleaned))
+}
+
 func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger *log.Logger) error {
 	root, err := filepath.Abs(filepath.Join(s.dataRoot, "projects"))
 	if err != nil {
@@ -893,6 +926,32 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 	if err := rows.Close(); err != nil {
 		return err
 	}
+	taskRows, err := db.QueryContext(ctx, `SELECT id,project_id FROM codex_tasks`)
+	if err != nil {
+		return fmt.Errorf("list managed task directories: %w", err)
+	}
+	for taskRows.Next() {
+		var taskID string
+		var projectID sql.NullString
+		if err := taskRows.Scan(&taskID, &projectID); err != nil {
+			taskRows.Close()
+			return fmt.Errorf("scan managed task directory: %w", err)
+		}
+		ownerID := taskID
+		if projectID.Valid && strings.TrimSpace(projectID.String) != "" {
+			ownerID = projectID.String
+		}
+		if taskDir, valid := validManagedTaskDirectory(root, ownerID, taskID); valid {
+			protectedDirectories[taskDir] = true
+		}
+	}
+	if err := taskRows.Err(); err != nil {
+		taskRows.Close()
+		return fmt.Errorf("iterate managed task directories: %w", err)
+	}
+	if err := taskRows.Close(); err != nil {
+		return fmt.Errorf("close managed task directories: %w", err)
+	}
 	var errs []error
 	_ = filepath.WalkDir(root, func(path string, e os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -918,6 +977,28 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 		return nil
 	})
 	return errors.Join(errs...)
+}
+
+func validManagedTaskDirectory(root, ownerID, taskID string) (string, bool) {
+	if _, err := uuid.Parse(ownerID); err != nil {
+		return "", false
+	}
+	if _, err := uuid.Parse(taskID); err != nil {
+		return "", false
+	}
+	taskDir := filepath.Clean(filepath.Join(root, ownerID, "tasks", taskID))
+	if !pathInside(filepath.Join(root, ownerID, "tasks"), taskDir) {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(taskDir)
+	if err != nil || filepath.Clean(resolved) != taskDir {
+		return "", false
+	}
+	info, err := os.Stat(taskDir)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return taskDir, true
 }
 
 func validManagedProjectAssetPath(root, projectID string, typ domain.AssetType, path string, directory bool) (string, bool) {

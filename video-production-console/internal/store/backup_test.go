@@ -132,8 +132,8 @@ func TestOpenBacksUpAndUpgradesCurrentV3Database(t *testing.T) {
 	if got := len(mustGlob(t, filepath.Join(backupDir, "console-*.db"))); got != 1 {
 		t.Fatalf("v3 upgrade backups=%d, want one", got)
 	}
-	if got := scalar(t, db, `SELECT MAX(version) FROM schema_migrations`); got != "6" {
-		t.Fatalf("schema version=%s, want 6", got)
+	if got := scalar(t, db, `SELECT MAX(version) FROM schema_migrations`); got != fmt.Sprint(len(migrations)) {
+		t.Fatalf("schema version=%s, want %d", got, len(migrations))
 	}
 	var triggers int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'asset_%'`).Scan(&triggers); err != nil {

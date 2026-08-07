@@ -18,6 +18,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
 )
 
 type fakeProtector struct {
@@ -60,7 +61,7 @@ func TestSettingsPublicUpdateSecretMaskingAndRuntimeSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.SettingsVersion != 1 || view.Public != public {
+	if view.SettingsVersion != 1 || !reflect.DeepEqual(view.Public, public) {
 		t.Fatalf("view=%+v", view)
 	}
 	if !view.Secrets[SecretGrokAPIKey].Configured || view.Secrets[SecretGrokAPIKey].Masked == "" {
@@ -76,7 +77,7 @@ func TestSettingsPublicUpdateSecretMaskingAndRuntimeSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GrokAPIKey != "secret-value" || runtime.PexelsAPIKey != "pexels-value" || runtime.PublicSettings != public {
+	if runtime.GrokAPIKey != "secret-value" || runtime.PexelsAPIKey != "pexels-value" || !reflect.DeepEqual(runtime.PublicSettings, public) {
 		t.Fatalf("runtime=%+v", runtime)
 	}
 	runtimeJSON, err := json.Marshal(runtime)
@@ -104,6 +105,110 @@ func TestSettingsPublicUpdateSecretMaskingAndRuntimeSeparation(t *testing.T) {
 	}
 	if beforeVersion != afterVersion || len(protector.protected) != protectCalls {
 		t.Fatalf("empty secret changed state: versions %d -> %d, protect calls %d -> %d", beforeVersion, afterVersion, protectCalls, len(protector.protected))
+	}
+}
+
+func TestSettingsPublicCodexDefaultsWhenKeysAreMissingOrEmpty(t *testing.T) {
+	service, db, _, _ := newSettingsTestService(t, Options{})
+	assertDefaults := func() {
+		view, err := service.Get(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.Public.CodexDefaultModel != taskmodel.DefaultModel || view.Public.CodexDefaultReasoningEffort != taskmodel.DefaultReasoningEffort {
+			t.Fatalf("codex defaults=%q/%q", view.Public.CodexDefaultModel, view.Public.CodexDefaultReasoningEffort)
+		}
+	}
+	assertDefaults()
+	if _, err := db.Exec(`INSERT INTO settings(key,value) VALUES('codex_default_model',''),('codex_default_reasoning_effort','')`); err != nil {
+		t.Fatal(err)
+	}
+	assertDefaults()
+	if _, err := db.Exec(`UPDATE settings SET value='   ' WHERE key IN ('codex_default_model','codex_default_reasoning_effort')`); err != nil {
+		t.Fatal(err)
+	}
+	assertDefaults()
+}
+
+func TestSettingsPublicCodexDefaultsRoundTripAndResolveTaskModel(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexDefaultModel = "openai/gpt-5.6-sol:preview"
+	public.CodexDefaultReasoningEffort = "xhigh"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(view.Public, public) {
+		t.Fatalf("round trip=%+v, want %+v", view.Public, public)
+	}
+	selection, err := service.ResolveTaskModel(t.Context(), taskmodel.Selection{ReasoningEffort: " ULTRA "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := taskmodel.Selection{Model: public.CodexDefaultModel, ReasoningEffort: "ultra"}
+	if selection != want {
+		t.Fatalf("ResolveTaskModel()=%+v, want %+v", selection, want)
+	}
+}
+
+func TestResolveTaskModelUsesSavedDefaultsAfterRuntimeWasCached(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexDefaultModel = "gpt-5.6-terra"
+	public.CodexDefaultReasoningEffort = "high"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Runtime(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	public.CodexDefaultModel = "gpt-5.6-sol"
+	public.CodexDefaultReasoningEffort = "medium"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := service.ResolveTaskModel(t.Context(), taskmodel.Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := taskmodel.Selection{Model: "gpt-5.6-sol", ReasoningEffort: "medium"}
+	if selection != want {
+		t.Fatalf("ResolveTaskModel()=%+v, want newly saved %+v", selection, want)
+	}
+}
+
+func TestSettingsPublicRejectsInvalidCodexDefaultsWithoutPartialWrite(t *testing.T) {
+	service, _, _, valid := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), valid); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*domain.PublicSettings)
+	}{
+		{"model", func(value *domain.PublicSettings) { value.CodexDefaultModel = "bad model\nsecret" }},
+		{"model whitespace", func(value *domain.PublicSettings) { value.CodexDefaultModel = " gpt-5.6-sol " }},
+		{"effort", func(value *domain.PublicSettings) { value.CodexDefaultReasoningEffort = "impossible" }},
+		{"effort uppercase", func(value *domain.PublicSettings) { value.CodexDefaultReasoningEffort = "HIGH" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := valid
+			test.mutate(&invalid)
+			if _, err := service.PutPublic(t.Context(), invalid); !errors.Is(err, ErrInvalidSettings) {
+				t.Fatalf("PutPublic() error=%v", err)
+			}
+			view, err := service.Get(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view.SettingsVersion != 1 || !reflect.DeepEqual(view.Public, valid) {
+				t.Fatalf("invalid update was partial: %+v", view)
+			}
+		})
 	}
 }
 
@@ -172,7 +277,7 @@ func TestSettingsValidationRejectsUnsafeValuesWithoutPartialWrite(t *testing.T) 
 			v.DataRoot = v.DataRoot + string(filepath.Separator) + "child" + string(filepath.Separator) + ".."
 		}},
 		{"topic cards escape vault", func(v *domain.PublicSettings) { v.TopicCardsDir = outside }},
-		{"media index escape data root", func(v *domain.PublicSettings) { v.MediaIndexPath = filepath.Join(outside, "index.json") }},
+		{"media index escape media root", func(v *domain.PublicSettings) { v.MediaIndexPath = filepath.Join(outside, "index.json") }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -185,7 +290,7 @@ func TestSettingsValidationRejectsUnsafeValuesWithoutPartialWrite(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if view.SettingsVersion != 1 || view.Public != valid {
+			if view.SettingsVersion != 1 || !reflect.DeepEqual(view.Public, valid) {
 				t.Fatalf("invalid update was partial: %+v", view)
 			}
 		})
@@ -541,11 +646,12 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 	mediaRoot := filepath.Join(root, "media")
 	public := domain.PublicSettings{
 		ListenAddr: "127.0.0.1:2030", DataRoot: dataRoot, MaxCodexConcurrency: 2,
+		CodexDefaultModel: taskmodel.DefaultModel, CodexDefaultReasoningEffort: taskmodel.DefaultReasoningEffort,
 		BaokuanBaseURL: "http://127.0.0.1:2022", BaokuanMCPExecutable: filepath.Join(root, "baokuan.exe"),
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
-		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(dataRoot, "media-index.json"),
-		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
+		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
+		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"), CodexHistoryLimit: 10,
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

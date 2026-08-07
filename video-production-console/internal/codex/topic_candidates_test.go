@@ -31,3 +31,14 @@ func TestLoadTopicCandidatesRejectsUnknownFields(t *testing.T) {
 		t.Fatal("expected strict decoder to reject unknown fields")
 	}
 }
+
+func TestLoadTopicCandidatesRejectsQuestionMarkEncodingCorruption(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "topic_candidates.json")
+	data := `{"schema_version":"2.0","task_id":"task-1","session_id":"session-1","candidates":[{"id":"c1","topic":"????????????????","mother_theme":"????????","family_conflict":"????????","anomaly_framing":"????????","narrative_entry":"????????","score":{"audience":1,"evidence":2,"freshness":3,"distance":4,"course_fit":5,"total":15},"source_refs":["source-a"],"fragment_refs":[]},{"id":"c2","topic":"主题二","mother_theme":"母题","family_conflict":"冲突","anomaly_framing":"反常","narrative_entry":"入口二","score":{"audience":1,"evidence":2,"freshness":3,"distance":4,"course_fit":5,"total":14},"source_refs":["source-b"],"fragment_refs":[]},{"id":"c3","topic":"主题三","mother_theme":"母题","family_conflict":"冲突","anomaly_framing":"反常","narrative_entry":"入口三","score":{"audience":1,"evidence":2,"freshness":3,"distance":4,"course_fit":5,"total":13},"source_refs":["source-c"],"fragment_refs":[]}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadTopicCandidates(path, "task-1"); err == nil {
+		t.Fatal("expected question-mark encoding corruption to be rejected")
+	}
+}

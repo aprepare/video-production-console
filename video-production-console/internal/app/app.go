@@ -11,8 +11,11 @@ import (
 	consoleauth "video-production-console/internal/auth"
 	"video-production-console/internal/baokuan"
 	"video-production-console/internal/codex"
+	"video-production-console/internal/codexapp"
 	"video-production-console/internal/config"
+	"video-production-console/internal/conversation"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/history"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
@@ -24,18 +27,26 @@ import (
 
 // Options provides dependencies and settings used by the application.
 type Options struct {
-	Config        config.Config
-	DB            *sql.DB
-	AssetService  *assets.Service
-	Realtime      *realtime.Hub
-	Scheduler     codex.Scheduler
-	Obsidian      obsidian.Service
-	BaokuanClient *baokuan.Client
-	MCPExecutable string
-	AuthService   *consoleauth.Service
-	Settings      *consoleSettings.Service
-	Skills        *skillregistry.Service
-	TaskPreparer  httpapi.TaskManifestPreparer
+	Config          config.Config
+	DB              *sql.DB
+	AssetService    *assets.Service
+	Realtime        *realtime.Hub
+	Scheduler       codex.Scheduler
+	Obsidian        obsidian.Service
+	BaokuanClient   *baokuan.Client
+	MCPExecutable   string
+	AuthService     *consoleauth.Service
+	Settings        *consoleSettings.Service
+	Skills          *skillregistry.Service
+	TaskPreparer    httpapi.TaskManifestPreparer
+	Conversations   *conversation.Service
+	AppServerHealth func() codexapp.Health
+	History         *history.Service
+	MontageRetryer  interface {
+		Retry(context.Context, string) (domain.RegistrationAttempt, error)
+	}
+	CompletionRetryer httpapi.CompletionRetryer
+	DesktopOpener     assets.DesktopOpener
 }
 
 // App is the HTTP application.
@@ -60,11 +71,22 @@ func New(options Options) *App {
 		mux.Handle("/api/accounts/", accounts)
 		projects := httpapi.NewProjectsHandler(options.DB, assetService)
 		mux.Handle("/api/projects", projects)
-		assetsHandler := httpapi.NewAssetsHandler(options.DB, assetService)
+		assetOptions := httpapi.AssetHandlerOptions{DesktopOpener: options.DesktopOpener}
+		if options.Settings != nil {
+			assetOptions.Runtime = options.Settings
+		}
+		assetsHandler := httpapi.NewAssetsHandler(options.DB, assetService, assetOptions)
 		mux.Handle("/api/assets/", assetsHandler)
-		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler, options.TaskPreparer)
+		var models httpapi.TaskModelResolver
+		if options.Settings != nil {
+			models = options.Settings
+		}
+		tasksHandler := httpapi.NewTasksHandler(options.DB, options.Scheduler, options.TaskPreparer, models)
+		taskResultsHandler := httpapi.NewTaskResultsHandler(store.NewTaskRepository(options.DB))
+		montageHandler := httpapi.NewMontageHandler(options.MontageRetryer)
+		completionRetryHandler := httpapi.NewCompletionRetryHandler(options.CompletionRetryer)
 		mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/tasks") && options.Scheduler != nil {
+			if options.Scheduler != nil && (strings.HasSuffix(r.URL.Path, "/tasks") || strings.HasSuffix(r.URL.Path, "/topic-card")) {
 				tasksHandler.ServeHTTP(w, r)
 				return
 			}
@@ -80,6 +102,18 @@ func New(options Options) *App {
 			path := r.URL.Path
 			if !strings.HasPrefix(path, prefix) {
 				http.NotFound(w, r)
+				return
+			}
+			if strings.HasSuffix(path, "/artifacts") || strings.HasSuffix(path, "/result") || strings.HasSuffix(path, "/diagnostics") || strings.HasSuffix(path, "/semantic-events") {
+				taskResultsHandler.ServeHTTP(w, r)
+				return
+			}
+			if strings.HasSuffix(path, "/retry-registration") {
+				montageHandler.ServeHTTP(w, r)
+				return
+			}
+			if strings.HasSuffix(path, "/retry-completion") {
+				completionRetryHandler.ServeHTTP(w, r)
 				return
 			}
 			if !strings.HasSuffix(path, "/events") {
@@ -107,13 +141,33 @@ func New(options Options) *App {
 			mux.Handle("/api/skills", skillsHandler)
 			mux.Handle("/api/skills/", skillsHandler)
 		}
-		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer)
+		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer, models)
 		mux.Handle("/api/ideas", ideasHandler)
 		mux.Handle("/api/ideas/", ideasHandler)
+		if options.Conversations != nil {
+			conversationsHandler := httpapi.NewConversationsHandler(options.Conversations)
+			mux.Handle("/api/chat/sessions", conversationsHandler)
+			mux.Handle("/api/chat/sessions/", conversationsHandler)
+		}
+		if options.History != nil {
+			historyHandler := httpapi.NewHistoryHandler(options.History)
+			mux.Handle("/api/codex/history", historyHandler)
+			mux.Handle("/api/codex/history/", historyHandler)
+		}
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(options.Scheduler.Snapshot())
+				view := struct {
+					codex.SchedulerSnapshot
+					AppServer *codexapp.Health `json:"app_server,omitempty"`
+				}{SchedulerSnapshot: options.Scheduler.Snapshot()}
+				if options.AppServerHealth != nil {
+					health := options.AppServerHealth()
+					// Do not expose raw CLI diagnostics through the public runtime view.
+					health.StderrTail = ""
+					view.AppServer = &health
+				}
+				_ = json.NewEncoder(w).Encode(view)
 			})
 		}
 	}

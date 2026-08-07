@@ -16,6 +16,7 @@ import (
 	"video-production-console/internal/domain"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
 )
 
 type httpFakeProtector struct{}
@@ -101,6 +102,28 @@ func TestSettingsHTTPMasksSecretsAndTreatsEmptySecretAsUnchanged(t *testing.T) {
 	}
 }
 
+func TestSettingsPublicCodexDefaultJSONRoundTrip(t *testing.T) {
+	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{})
+	public.CodexDefaultModel = "openai/gpt-5.6-sol:preview"
+	public.CodexDefaultReasoningEffort = "ultra"
+	body, err := json.Marshal(map[string]any{"public": public, "secrets": map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var view consoleSettings.View
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.CodexDefaultModel != public.CodexDefaultModel || view.Public.CodexDefaultReasoningEffort != public.CodexDefaultReasoningEffort {
+		t.Fatalf("HTTP round trip=%+v", view.Public)
+	}
+}
+
 func TestSettingsHTTPDependencyProbeAndRepairContracts(t *testing.T) {
 	runner := &httpRunner{}
 	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{Runner: runner, HTTPClient: httpDoer{}})
@@ -163,13 +186,15 @@ func newSettingsHTTPTest(t *testing.T, options consoleSettings.Options) (http.Ha
 	root := t.TempDir()
 	dataRoot := filepath.Join(root, "data")
 	vault := filepath.Join(root, "vault")
+	mediaRoot := filepath.Join(root, "media")
 	public := domain.PublicSettings{
 		ListenAddr: "127.0.0.1:2030", DataRoot: dataRoot, MaxCodexConcurrency: 2,
+		CodexDefaultModel: taskmodel.DefaultModel, CodexDefaultReasoningEffort: taskmodel.DefaultReasoningEffort,
 		BaokuanBaseURL: "http://127.0.0.1:2022", BaokuanMCPExecutable: filepath.Join(root, "baokuan.exe"),
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
-		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(dataRoot, "media-index.json"),
-		MediaRoot: filepath.Join(root, "media"), JianyingRoot: filepath.Join(root, "jianying"),
+		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
+		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 	}
 	service := consoleSettings.NewService(store.NewSettingsRepository(db), httpFakeProtector{}, options)
 	return NewSettingsHandler(service), db, public

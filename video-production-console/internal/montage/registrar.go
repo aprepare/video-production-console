@@ -1,0 +1,139 @@
+package montage
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+var ErrInvalidRegistration = errors.New("invalid montage registration")
+
+type CommandSpec struct {
+	Program string
+	Args    []string
+	Dir     string
+}
+type CommandResult struct {
+	Stdout, Stderr []byte
+	ExitCode       int
+}
+type CommandRunner interface {
+	Run(context.Context, CommandSpec, int64) (CommandResult, error)
+}
+type RegisterRequest struct{ TaskID, ManifestPath, WorkspacePath, SkillRoot, ScriptPath, PythonBinary, JianyingRoot string }
+type RegisterResult struct {
+	RegisteredPath, ReceiptPath, DraftID, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+	DurationUS                                                                                          int64
+}
+type Registrar struct{ runner CommandRunner }
+
+func NewRegistrar(runner CommandRunner) *Registrar { return &Registrar{runner: runner} }
+
+func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (RegisterResult, error) {
+	if r == nil || r.runner == nil {
+		return RegisterResult{}, errors.New("montage registrar is not configured")
+	}
+	if request.TaskID == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" {
+		return RegisterResult{}, fmt.Errorf("%w: missing registration input", ErrInvalidRegistration)
+	}
+	manifest, manifestErr := canonicalNoFollow(request.ManifestPath, false)
+	workspace, workspaceErr := canonicalNoFollow(request.WorkspacePath, true)
+	skillRoot, skillErr := canonicalNoFollow(request.SkillRoot, true)
+	script, scriptErr := canonicalNoFollow(request.ScriptPath, false)
+	root, rootErr := canonicalNoFollow(request.JianyingRoot, true)
+	python, pythonErr := trustedPythonBinary(request.PythonBinary)
+	if manifestErr != nil || workspaceErr != nil || skillErr != nil || scriptErr != nil || rootErr != nil || pythonErr != nil || !samePath(manifest, request.ManifestPath) || !samePath(workspace, request.WorkspacePath) || !samePath(skillRoot, request.SkillRoot) || !samePath(script, filepath.Join(skillRoot, "scripts", "run_montage_job.py")) || !samePath(root, request.JianyingRoot) {
+		return RegisterResult{}, fmt.Errorf("%w: registration script is unavailable", ErrInvalidRegistration)
+	}
+	receiptPath := filepath.Join(filepath.Dir(filepath.Dir(workspace)), "registration", "registration-result.json")
+	targetPath := filepath.Join(root, request.TaskID)
+	receiptExists, err := retainedPathExists(receiptPath)
+	if err != nil {
+		return RegisterResult{}, fmt.Errorf("%w: existing registration receipt could not be inspected", ErrInvalidRegistration)
+	}
+	targetExists, err := retainedPathExists(targetPath)
+	if err != nil {
+		return RegisterResult{}, fmt.Errorf("%w: existing registered draft could not be inspected", ErrInvalidRegistration)
+	}
+	if receiptExists || targetExists {
+		if !receiptExists || !targetExists {
+			return RegisterResult{}, fmt.Errorf("%w: existing registration is incomplete", ErrInvalidRegistration)
+		}
+		return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
+	}
+	command, err := r.runner.Run(ctx, CommandSpec{Program: python, Args: []string{script, "register", "--manifest", manifest, "--draft", workspace}, Dir: skillRoot}, 1<<20)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	envelope, parseErr := parseRegistrationEnvelope(command.Stdout)
+	if parseErr != nil {
+		return RegisterResult{}, parseErr
+	}
+	if command.ExitCode != 0 || envelope.Status != "completed" {
+		message := strings.TrimSpace(envelope.Summary)
+		if message == "" {
+			message = "registration command failed"
+		}
+		return RegisterResult{}, fmt.Errorf("%w: %s", ErrInvalidRegistration, message)
+	}
+	receiptReported := false
+	for _, artifact := range envelope.Artifacts {
+		if artifact.Type == "registration_result" {
+			receiptReported = true
+			break
+		}
+	}
+	if !receiptReported {
+		return RegisterResult{}, fmt.Errorf("%w: registration receipt was not reported", ErrInvalidRegistration)
+	}
+	// The registration subprocess is required to report that it produced a
+	// receipt, but the subprocess-provided path is not authoritative. On
+	// Windows, stdout encoding can corrupt non-ASCII path components even when
+	// the receipt was written successfully. Validate the task-bound location
+	// derived before execution instead; all receipt contents, fingerprints,
+	// registered paths, and Jianying index entries remain strictly verified.
+	return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
+}
+
+func retainedPathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+type registrationEnvelope struct {
+	Status    string `json:"status"`
+	Summary   string `json:"summary"`
+	Artifacts []struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	} `json:"artifacts"`
+}
+
+func parseRegistrationEnvelope(raw []byte) (registrationEnvelope, error) {
+	if len(raw) == 0 || len(raw) > 1<<20 {
+		return registrationEnvelope{}, fmt.Errorf("%w: invalid registration response size", ErrInvalidRegistration)
+	}
+	var envelope registrationEnvelope
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := decoder.Decode(&envelope); err != nil {
+		return envelope, fmt.Errorf("%w: malformed registration response", ErrInvalidRegistration)
+	}
+	return envelope, nil
+}
+
+func WithinJianyingRoot(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}

@@ -18,7 +18,7 @@ func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"$finance-viral-remix", "action=enhanced", manifestPath, "manifest inputs as authoritative", "output_dir", "exactly one JSON object", "Do not open WeChat Channels", "Do not launch Jianying"} {
+	for _, want := range []string{"$finance-viral-remix", "action=enhanced", taskManifestEnvironmentKey, "manifest inputs as authoritative", "output_dir", "exactly one JSON object", "never pipe non-ASCII", "Do not open WeChat Channels", "Do not launch Jianying"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q: %s", want, prompt)
 		}
@@ -67,5 +67,22 @@ func TestManifestPromptRejectsPathOutsideCanonicalTaskLocation(t *testing.T) {
 	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, OutputDir: output}
 	if _, err := BuildManifestPrompt(manifest, filepath.Join(root, "other", "task_manifest.json")); err == nil {
 		t.Fatal("expected manifest-path escape rejection")
+	}
+}
+
+func TestBuildManifestAppServerPromptUsesVerifiedManifestPath(t *testing.T) {
+	root, taskID := t.TempDir(), uuid.NewString()
+	output := filepath.Join(root, "tasks", taskID, "output")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "tasks", taskID, "task_manifest.json")
+	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, JobID: taskID, Skill: "jianying-montage-draft", Action: domain.ActionMontageExecute, OutputDir: output}
+	prompt, err := BuildManifestAppServerPrompt(manifest, manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, manifestPath) || strings.Contains(prompt, taskManifestEnvironmentKey) {
+		t.Fatalf("App Server prompt does not contain the verified manifest path: %s", prompt)
 	}
 }

@@ -13,6 +13,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const legacyThreadCleanupMigrationVersion = 11
+
+const legacyThreadCleanupMigrationSQL = `CREATE TABLE thread_cleanup_intents (
+    thread_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);`
+
 func TestOpenCreatesInitialSchema(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "data", "console.db"))
 	if err != nil {
@@ -28,6 +39,14 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 		"codex_tasks",
 		"task_events",
 		"task_messages",
+		"chat_sessions",
+		"chat_turns",
+		"chat_messages",
+		"chat_outbox",
+		"chat_completion_inbox",
+		"thread_cleanup_intents",
+		"semantic_events",
+		"thread_leases",
 	}
 	for _, table := range wantTables {
 		var name string
@@ -48,6 +67,150 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 	}
 	if concurrency != "2" {
 		t.Errorf("max_codex_concurrency = %q, want %q", concurrency, "2")
+	}
+}
+
+func TestConversationMigrationAddsSessionExecutionAndTaskTransportColumns(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "conversation-schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for table, columns := range map[string][]string{
+		"chat_sessions": {"working_directory", "model", "reasoning_effort", "skill_names_json"},
+		"codex_tasks":   {"chat_session_id", "codex_thread_id", "codex_turn_id", "completion_phase", "transport"},
+	} {
+		for _, column := range columns {
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Errorf("%s.%s count=%d, want 1", table, column, count)
+			}
+		}
+	}
+}
+
+func TestCompletionInboxMigrationCreatesDurableClaimQueue(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "completion-inbox-schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, column := range []string{"session_id", "codex_turn_id", "status", "attempts", "available_at", "claimed_at", "last_error", "completed_at"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chat_completion_inbox') WHERE name=?`, column).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("chat_completion_inbox.%s count=%d, want 1", column, count)
+		}
+	}
+	var indexCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='chat_completion_inbox_pending_idx'`).Scan(&indexCount); err != nil {
+		t.Fatal(err)
+	}
+	if indexCount != 1 {
+		t.Fatalf("completion inbox pending index count=%d, want 1", indexCount)
+	}
+}
+
+func TestCompletionInboxMigrationUpgradesFixedCleanupVersion(t *testing.T) {
+	if len(migrations) < legacyThreadCleanupMigrationVersion+1 {
+		t.Fatalf("migrations=%d, want cleanup version %d plus an appended completion migration", len(migrations), legacyThreadCleanupMigrationVersion)
+	}
+	if strings.TrimSpace(migrations[legacyThreadCleanupMigrationVersion-1]) != strings.TrimSpace(legacyThreadCleanupMigrationSQL) {
+		t.Fatal("thread cleanup migration SQL or version changed")
+	}
+	if !strings.Contains(migrations[legacyThreadCleanupMigrationVersion], "CREATE TABLE chat_completion_inbox") {
+		t.Fatal("completion inbox migration is not appended immediately after the fixed cleanup migration")
+	}
+	path := filepath.Join(t.TempDir(), "completion-upgrade.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < legacyThreadCleanupMigrationVersion-1; index++ {
+		migration := migrations[index]
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply fixed predecessor migration %d: %v", index+1, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(legacyThreadCleanupMigrationSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, legacyThreadCleanupMigrationVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, table := range []string{"thread_cleanup_intents", "chat_completion_inbox"} {
+		if !tableExists(t, db, table) {
+			t.Fatalf("upgraded database is missing %s", table)
+		}
+	}
+	var count, maximum int
+	if err := db.QueryRow(`SELECT COUNT(*),MAX(version) FROM schema_migrations`).Scan(&count, &maximum); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(migrations) || maximum != len(migrations) {
+		t.Fatalf("migration history count/max=%d/%d", count, maximum)
+	}
+}
+
+func TestTaskModelMigrationBackfillsHistoricalRowsAndDefaultsNewRows(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "model-migration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE codex_tasks(id TEXT PRIMARY KEY); INSERT INTO codex_tasks(id) VALUES('old')`); err != nil {
+		t.Fatal(err)
+	}
+	var modelMigration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, `ALTER TABLE codex_tasks ADD COLUMN model_name`) {
+			modelMigration = migration
+			break
+		}
+	}
+	if modelMigration == "" {
+		t.Fatal("model migration not found")
+	}
+	if _, err := db.Exec(modelMigration); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE codex_tasks SET model_name='',reasoning_effort='' WHERE id='old'`); err != nil {
+		t.Fatal(err)
+	}
+	// Re-run only the data repair statements to model legacy blank values found during upgrade.
+	if _, err := db.Exec(`UPDATE codex_tasks SET model_name='gpt-5.6-sol' WHERE trim(model_name)=''; UPDATE codex_tasks SET reasoning_effort='medium' WHERE trim(reasoning_effort)=''`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO codex_tasks(id) VALUES('new')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"old", "new"} {
+		var model, effort string
+		if err := db.QueryRow(`SELECT model_name,reasoning_effort FROM codex_tasks WHERE id=?`, id).Scan(&model, &effort); err != nil {
+			t.Fatal(err)
+		}
+		if model != "gpt-5.6-sol" || effort != "medium" {
+			t.Fatalf("%s=%q/%q", id, model, effort)
+		}
 	}
 }
 

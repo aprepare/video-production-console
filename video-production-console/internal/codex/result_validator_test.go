@@ -34,6 +34,23 @@ func TestValidateResultEnvelopeAcceptsCompletedAndTransitionStatus(t *testing.T)
 	}
 }
 
+func TestValidateResultEnvelopeAcceptsWindowsExtendedLengthArtifactPath(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("Windows path semantics only")
+	}
+	out := t.TempDir()
+	file := filepath.Join(out, "script.md")
+	if err := os.WriteFile(file, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extended := `\\?\` + file
+	taskID := uuid.NewString()
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionRemixEnhanced, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: extended, StorageKind: domain.StorageFile, Filename: "script.md", MIME: "text/markdown", Size: 5, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err != nil {
+		t.Fatalf("extended-length path should be accepted: %v", err)
+	}
+}
+
 func TestValidateResultEnvelopeRejectsInvalidContract(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
 	base := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontagePlan, Status: "completed", Summary: "ok", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
@@ -69,6 +86,60 @@ func TestValidateResultEnvelopeRejectsInvalidContract(t *testing.T) {
 	missingSummary := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.plan","status":"completed","questions":[],"artifacts":[],"asset_outputs":[],"warnings":[]}`)
 	if _, err := ValidateResultEnvelopeJSON(missingSummary, taskID, domain.ActionMontagePlan, out); err == nil {
 		t.Fatal("expected missing exact field rejection")
+	}
+}
+
+func TestValidateResultEnvelopeAllowsOnlyMontageExecutePlaintextWorkspaceDirectory(t *testing.T) {
+	out := t.TempDir()
+	workspace := filepath.Join(out, "plaintext_workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "draft.json"), []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := HashResultDirectory(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{{Type: "plaintext_workspace", Path: workspace, Description: "directory", SHA256: digest}}, AssetOutputs: []AssetOutput{}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("expected plaintext workspace hash mismatch")
+	}
+	envelope.Artifacts[0].SHA256 = digest
+	envelope.Action = domain.ActionMontagePlan
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("montage.plan must not accept a directory artifact")
+	}
+}
+
+func TestValidateResultEnvelopeJSONAcceptsPlaintextWorkspacePresenceMetadata(t *testing.T) {
+	out := t.TempDir()
+	workspace := filepath.Join(out, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "draft_content.json"), []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[{"type":"plaintext_workspace","kind":"directory","path":` + mustJSONQuote(t, workspace) + `,"metadata":{"narration_present":true,"bgm_present":true,"sfx_present":true,"transitions_present":true}}],"asset_outputs":[],"warnings":[]}`)
+	if _, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionMontageExecute, out); err != nil {
+		t.Fatalf("plaintext workspace presence metadata should be accepted: %v", err)
+	}
+
+	badType := strings.Replace(string(data), `"type":"plaintext_workspace"`, `"type":"production_plan"`, 1)
+	if _, err := ValidateResultEnvelopeJSON([]byte(badType), taskID, domain.ActionMontageExecute, out); err == nil {
+		t.Fatal("metadata on a non-workspace artifact must be rejected")
+	}
+	missingPresence := strings.Replace(string(data), `,"transitions_present":true`, "", 1)
+	if _, err := ValidateResultEnvelopeJSON([]byte(missingPresence), taskID, domain.ActionMontageExecute, out); err == nil {
+		t.Fatal("incomplete workspace presence metadata must be rejected")
 	}
 }
 

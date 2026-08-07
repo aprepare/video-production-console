@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,13 @@ func init() {
 }
 
 func TestRunnerOversizedJSONLHelper(t *testing.T) {}
+
+func TestFriendlyCodexFailureExplainsUnavailableModelChannel(t *testing.T) {
+	got := friendlyCodexFailure("unexpected status 503: No available channel for model gpt-5.6-sol under group default")
+	if !strings.Contains(got, "gpt-5.6-sol") || !strings.Contains(got, "模型通道不可用") {
+		t.Fatalf("friendly failure = %q", got)
+	}
+}
 
 func TestRunnerKillsBlockedChildOnOversizedJSONL(t *testing.T) {
 	fixture := newTestRunner(t, "completed")
@@ -174,6 +182,33 @@ func TestRunnerPersistsFakeCodexOutputAndCompletedStatus(t *testing.T) {
 	var snapshot string
 	if err := fixture.db.QueryRow(`SELECT config_snapshot_json FROM codex_tasks WHERE id=?`, fixture.taskID).Scan(&snapshot); err != nil || !strings.Contains(snapshot, "output-last-message") {
 		t.Fatalf("snapshot=%q err=%v", snapshot, err)
+	}
+}
+
+func TestRunnerUsesValidatedOutputResultFileForAppServerCompletion(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	output := filepath.Join(fixture.root, "continuous_script.txt")
+	if err := os.WriteFile(output, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{
+		SchemaVersion: ProtocolSchemaVersion, TaskID: fixture.taskID, Action: domain.ActionRemixStandard,
+		Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{},
+		AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: output, StorageKind: domain.StorageFile, Filename: filepath.Base(output), MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, output)}},
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.root, "result.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, received, usedFile, err := fixture.runner.resolveAppServerResult("Mixed draft completed.", domain.ActionRemixStandard, ManifestRoots{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usedFile || result.Status != "completed" || string(received) != string(raw) {
+		t.Fatalf("result=%+v usedFile=%t received=%q", result, usedFile, received)
 	}
 }
 
@@ -391,6 +426,28 @@ func TestRunnerRejectsFormalAssetWhoseDigestDoesNotMatchFile(t *testing.T) {
 	var formalAssets int
 	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
 		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestWithinRootAcceptsWindowsExtendedPathForContainedArtifact(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("Windows extended paths are Windows-specific")
+	}
+	root := `C:\work\task\output`
+	artifact := `\\?\C:\work\task\output\production_plan.json`
+	if !withinRoot(root, artifact) {
+		t.Fatalf("extended path %q was not recognized inside %q", artifact, root)
+	}
+}
+
+func TestSamePathTreatsWindowsExtendedPathAsSameFile(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("Windows extended paths are Windows-specific")
+	}
+	regular := `C:\work\task\output\production_plan.json`
+	extended := `\\?\C:\work\task\output\production_plan.json`
+	if !samePath(regular, extended) {
+		t.Fatalf("extended path %q was not recognized as %q", extended, regular)
 	}
 }
 

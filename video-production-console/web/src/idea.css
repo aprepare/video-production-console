@@ -3,6 +3,114 @@
   flex-direction: column;
   gap: 14px;
 }
+.idea-head-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.idea-account-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #667684;
+  font-size: 12px;
+}
+.idea-account-control select {
+  max-width: 180px;
+  border: 1px solid #cbd5dc;
+  border-radius: 4px;
+  background: #fff;
+  color: #17212b;
+  padding: 7px 9px;
+}
+.idea-workspace {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  min-height: 430px;
+  gap: 14px;
+}
+.idea-conversations {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 12px;
+  border-right: 1px solid #e0e6ea;
+}
+.idea-new-conversation {
+  width: 100%;
+  border: 1px solid #1e6d52;
+  border-radius: 5px;
+  background: #f5fbf8;
+  color: #1e6d52;
+  padding: 9px 12px;
+  font-weight: 700;
+}
+.idea-conversation-list {
+  display: flex;
+  max-height: 52vh;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+.idea-conversation-item {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: 5px;
+}
+.idea-conversation-item.selected {
+  border-color: #bad1c7;
+  background: #eaf4ef;
+}
+.idea-conversation-list button {
+  cursor: pointer;
+}
+.idea-conversation-select {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #33434d;
+  padding: 9px 10px;
+  text-align: left;
+}
+.idea-conversation-list button:hover {
+  background: #f4f7f6;
+}
+.idea-conversation-select.selected {
+  color: #175a43;
+}
+.idea-delete-conversation {
+  flex: 0 0 32px;
+  border: 0;
+  background: transparent;
+  color: #9aa7a1;
+  font-size: 18px;
+}
+.idea-delete-conversation:hover {
+  background: #fbeeee;
+  color: #a64444;
+}
+.idea-conversation-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.idea-conversation-list small {
+  color: #7a8b84;
+}
+.idea-current-conversation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
 .idea-messages {
   min-height: 180px;
   max-height: 42vh;
@@ -105,8 +213,13 @@
   white-space: nowrap;
 }
 .idea-compose {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+.idea-compose .task-model-fields {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
 }
 .idea-compose input {
   flex: 1;
@@ -135,4 +248,59 @@
 }
 .task-modal h3 {
   margin-bottom: 8px;
+}
+@media (max-width: 760px) {
+  .idea-modal > .drawer-head {
+    gap: 10px;
+  }
+  .idea-head-actions {
+    align-items: flex-end;
+    flex-direction: column-reverse;
+  }
+  .idea-account-control {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .idea-workspace {
+    grid-template-columns: 1fr;
+  }
+  .idea-conversations {
+    padding-right: 0;
+    padding-bottom: 10px;
+    border-right: 0;
+    border-bottom: 1px solid #e0e6ea;
+  }
+  .idea-conversation-list {
+    max-height: 150px;
+  }
+  .idea-modal {
+    min-height: calc(100dvh - 40px);
+  }
+  .idea-current-conversation {
+    min-height: 0;
+  }
+  .idea-messages {
+    max-height: none;
+    overflow-wrap: anywhere;
+  }
+  .idea-compose {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    grid-template-columns: minmax(0, 1fr) 72px;
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+    background: #f8fafb;
+  }
+  .idea-new-conversation,
+  .idea-conversation-select,
+  .idea-delete-conversation,
+  .idea-candidates button,
+  .idea-compose button,
+  .idea-compose input {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-progress-dot { animation: none; }
 }

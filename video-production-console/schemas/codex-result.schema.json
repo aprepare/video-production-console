@@ -32,9 +32,21 @@
           "description": {"type": "string", "minLength": 1},
           "kind": {"enum": ["file", "directory"]},
           "relative_path": {"type": "string", "minLength": 1},
-          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
+          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+          "metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["narration_present", "bgm_present", "sfx_present", "transitions_present"],
+            "properties": {
+              "narration_present": {"const": true},
+              "bgm_present": {"const": true},
+              "sfx_present": {"const": true},
+              "transitions_present": {"const": true}
+            }
+          }
         },
-        "oneOf": [{"required": ["description"], "not": {"required": ["kind"]}}, {"required": ["kind"], "not": {"required": ["description"]}}]
+        "oneOf": [{"required": ["description"], "not": {"required": ["kind"]}}, {"required": ["kind"], "not": {"required": ["description"]}}],
+        "allOf": [{"if": {"required": ["metadata"]}, "then": {"required": ["kind"], "properties": {"type": {"const": "plaintext_workspace"}, "kind": {"const": "directory"}}}}]
       }
     },
     "asset_outputs": {
@@ -72,7 +84,7 @@
     {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card"]}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["viral_analysis", "structure_design", "publishing_package", "self_check"]}}}}, "asset_outputs": {"items": {"properties": {"type": {"enum": ["continuous_script", "spoken_script"]}}}}}}},
     {"if": {"properties": {"action": {"const": "remix.spoken_format"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"const": "self_check"}}}}, "asset_outputs": {"items": {"properties": {"type": {"const": "spoken_script"}}}}}}},
     {"if": {"properties": {"action": {"const": "remix.review"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["viral_analysis", "structure_design", "self_check"]}}}}, "asset_outputs": {"maxItems": 0}}}},
-    {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["production_plan", "production_plan_validation", "draft_validation", "selected_media_summary", "registration_result", "qc_report", "events", "stderr_log", "plaintext_workspace"]}}}}, "asset_outputs": {"maxItems": 0}}}},
-    {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["production_plan", "production_plan_validation", "draft_validation", "selected_media_summary", "registration_result", "qc_report", "events", "stderr_log", "plaintext_workspace"]}}}}, "asset_outputs": {"items": {"properties": {"type": {"const": "mix_draft"}}}}}}}
+    {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["production_plan", "production_plan_readable", "production_plan_validation", "draft_validation", "selected_media_summary", "registration_result", "qc_report", "events", "stderr_log", "plaintext_workspace"]}}}}, "asset_outputs": {"maxItems": 0}}}},
+    {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"artifacts": {"items": {"properties": {"type": {"enum": ["production_plan", "production_plan_readable", "production_plan_validation", "draft_validation", "selected_media_summary", "qc_report", "events", "stderr_log", "plaintext_workspace"]}}}}, "asset_outputs": {"maxItems": 0}}}}
   ]
 }

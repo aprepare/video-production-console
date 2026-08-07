@@ -63,11 +63,31 @@ func loadTopicCandidates(path, taskID string) (string, []domain.IdeaCandidate, e
 		if strings.TrimSpace(candidate.ID) == "" || strings.TrimSpace(candidate.Topic) == "" {
 			return "", nil, fmt.Errorf("candidate %d is missing id or topic", i)
 		}
+		for field, value := range map[string]string{
+			"topic": candidate.Topic, "mother_theme": candidate.MotherTheme,
+			"family_conflict": candidate.FamilyConflict, "anomaly_framing": candidate.AnomalyFraming,
+			"narrative_entry": candidate.NarrativeEntry,
+		} {
+			if containsEncodingCorruption(value) {
+				return "", nil, fmt.Errorf("candidate %d field %s contains encoding corruption", i, field)
+			}
+		}
 		summary := strings.TrimSpace(candidate.NarrativeEntry)
 		if summary == "" {
 			summary = strings.TrimSpace(strings.Join([]string{candidate.MotherTheme, candidate.FamilyConflict, candidate.AnomalyFraming}, "；"))
 		}
-		out = append(out, domain.IdeaCandidate{ID: candidate.ID, SessionID: artifact.SessionID, Position: i + 1, Title: candidate.Topic, Summary: summary, Score: candidate.Score.Total, Source: strings.Join(candidate.SourceRefs, ",")})
+		out = append(out, domain.IdeaCandidate{
+			ID: candidate.ID, SessionID: artifact.SessionID, Position: i + 1,
+			Title: candidate.Topic, Summary: summary, MotherTheme: candidate.MotherTheme,
+			FamilyConflict: candidate.FamilyConflict, AnomalyFraming: candidate.AnomalyFraming,
+			NarrativeEntry: candidate.NarrativeEntry, SourceRefs: append([]string(nil), candidate.SourceRefs...),
+			FragmentRefs: append([]string(nil), candidate.FragmentRefs...), Score: candidate.Score.Total,
+			Source: strings.Join(candidate.SourceRefs, ","),
+		})
 	}
 	return artifact.SessionID, out, nil
+}
+
+func containsEncodingCorruption(value string) bool {
+	return strings.Contains(value, "???") || strings.ContainsRune(value, '\uFFFD')
 }

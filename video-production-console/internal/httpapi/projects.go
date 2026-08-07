@@ -32,20 +32,57 @@ type projectStore interface {
 type projectsHandler struct {
 	repository projectStore
 	assets     *assets.Service
+	db         *sql.DB
 }
 
 func NewProjectsHandler(db *sql.DB, service *assets.Service) http.Handler {
-	return newProjectsHandler(store.NewProjectRepository(db), service)
+	return newProjectsHandlerWithDB(store.NewProjectRepository(db), service, db)
 }
 func newProjectsHandler(repository projectStore, service *assets.Service) http.Handler {
-	h := &projectsHandler{repository: repository, assets: service}
+	return newProjectsHandlerWithDB(repository, service, nil)
+}
+func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, db *sql.DB) http.Handler {
+	h := &projectsHandler{repository: repository, assets: service, db: db}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects", h.create)
 	mux.HandleFunc("GET /api/projects", h.list)
 	mux.HandleFunc("GET /api/projects/{id}", h.get)
+	mux.HandleFunc("DELETE /api/projects/{id}", h.delete)
 	mux.HandleFunc("POST /api/projects/{id}/assets/{type}", h.upload)
 	mux.HandleFunc("POST /api/projects/{id}/move", h.move)
 	return mux
+}
+
+func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	deleter, ok := h.repository.(interface {
+		DeleteProject(context.Context, string) error
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "project_delete_unavailable", "Project deletion is unavailable.")
+		return
+	}
+	err := deleter.DeleteProject(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	case errors.Is(err, store.ErrProjectBusy):
+		writeError(w, http.StatusConflict, "project_active_task", "Stop the active Codex task before deleting this project.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "project_delete_failed", "Project could not be deleted.")
+		return
+	}
+	if h.assets != nil {
+		if err := h.assets.DeleteProjectData(id); err != nil {
+			log.Printf("remove deleted project data %s: %v", id, err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type projectView struct {
@@ -168,15 +205,33 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	var bg any = nil
 	if background.ID != "" {
-		available[domain.AssetAccountBackground] = true
+		backgroundAvailable := true
+		if h.assets != nil {
+			file, _, openErr := h.assets.OpenAsset(background)
+			if openErr != nil {
+				backgroundAvailable = false
+				background.Status = "missing"
+			} else {
+				_ = file.Close()
+			}
+		}
+		if backgroundAvailable {
+			available[domain.AssetAccountBackground] = true
+		}
 		v := toAssetView(background)
 		bg = v
-		if background.Status != string(domain.AssetReady) {
+		if background.Status != string(domain.AssetReady) || !backgroundAvailable {
 			delete(available, domain.AssetAccountBackground)
 		}
 	}
 	missing := missingForStage(p.Stage, available)
-	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing})
+	var topicContext any = nil
+	if h.db != nil {
+		if selection, topicErr := findProjectTopicSelection(r.Context(), h.db, p); topicErr == nil {
+			topicContext = selection.Candidate
+		}
+	}
+	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext})
 }
 
 func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +295,13 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, 500, "asset_store_failed", "Asset could not be recorded.")
 		return
+	}
+	if syncer, ok := h.repository.(interface {
+		SyncStageFromAssets(context.Context, string, time.Time) (domain.Project, error)
+	}); ok {
+		if _, syncErr := syncer.SyncStageFromAssets(r.Context(), id, time.Now().UTC()); syncErr != nil {
+			log.Printf("sync project stage after upload %s: %v", id, syncErr)
+		}
 	}
 	writeJSON(w, 201, toAssetView(a))
 }

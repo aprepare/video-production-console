@@ -42,8 +42,8 @@ var actionAssets = map[TaskAction][]AssetType{
 	ActionRemixFromTopic: {AssetTopicCard},
 	ActionSpokenFormat:   {AssetContinuousScript},
 	ActionRemixReview:    {AssetContinuousScript},
-	ActionMontagePlan:    {AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
-	ActionMontageExecute: {AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
+	ActionMontagePlan:    {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
+	ActionMontageExecute: {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
 }
 
 func EvaluateAction(action TaskAction, assets map[AssetType]AssetState, deps DependencyHealth) ActionReadiness {

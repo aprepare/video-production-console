@@ -24,8 +24,8 @@ func TestEvaluateActionRequirements(t *testing.T) {
 		{"empty remix", ActionRemixStandard, ready(), DependencyHealth{}, false, []string{"source_script"}},
 		{"direct remix", ActionRemixStandard, ready(AssetSourceScript), DependencyHealth{}, true, nil},
 		{"spoken", ActionSpokenFormat, ready(AssetContinuousScript), DependencyHealth{}, true, nil},
-		{"montage missing", ActionMontagePlan, ready(AssetSpokenScript), DependencyHealth{Montage: true}, false, []string{"narration", "subtitle_srt", "account_background"}},
-		{"montage ready", ActionMontagePlan, ready(AssetSpokenScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground), DependencyHealth{Montage: true}, true, nil},
+		{"montage missing", ActionMontagePlan, ready(AssetContinuousScript), DependencyHealth{Montage: true}, false, []string{"narration", "subtitle_srt", "account_background"}},
+		{"montage ready", ActionMontagePlan, ready(AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground), DependencyHealth{Montage: true}, true, nil},
 		{"topic deps", ActionTopicBrainstorm, ready(), DependencyHealth{Baokuan: false, ObsidianRead: true}, false, []string{"baokuan_mcp"}},
 	}
 	for _, tt := range tests {

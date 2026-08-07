@@ -33,7 +33,17 @@ func openPathNoFollow(path, allowedRoot string, directory bool) (*os.File, error
 		_ = file.Close()
 		return nil, ErrAssetPathInvalid
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil || filepath.Clean(resolved) != filepath.Clean(abs) {
+		_ = file.Close()
+		return nil, ErrAssetPathInvalid
+	}
 	if allowedRoot != "" && !pathInside(allowedRoot, resolved) {
+		_ = file.Close()
+		return nil, ErrAssetPathInvalid
+	}
+	current, err := os.Stat(path)
+	if err != nil || !os.SameFile(after, current) {
 		_ = file.Close()
 		return nil, ErrAssetPathInvalid
 	}

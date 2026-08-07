@@ -16,10 +16,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"video-production-console/internal/domain"
+	"video-production-console/internal/progress"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
+	"video-production-console/internal/taskcompletion"
 )
 
 const (
@@ -38,6 +41,9 @@ type Runner struct {
 	Redactor              *security.Redactor
 	Broadcast             func(Event)
 	Cleanup               func() error
+	Action                domain.TaskAction
+	CompletionGate        taskcompletion.Gate
+	ExpectedTurnID        *string
 
 	maxJSONLBytes             int
 	maxOutputLastMessageBytes int64
@@ -71,6 +77,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	r.Action = expectedAction
 	stdout, err := r.Command.StdoutPipe()
 	if err != nil {
 		return err
@@ -153,6 +160,13 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	persistenceErr := <-writerErr
 	persistCtx := context.WithoutCancel(ctx)
 
+	// A user-requested cancellation closes the process pipes, which can surface
+	// as ordinary read errors on Windows. Cancellation is authoritative here:
+	// let the scheduler persist the cancelled state instead of misclassifying
+	// the closed pipe as a task failure.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	if persistenceErr != nil {
 		return r.persistFailure(persistCtx, "event_persistence_failed", persistenceErr)
 	}
@@ -166,7 +180,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		return r.persistFailure(persistCtx, "stream_failed", stoppedWith)
 	}
 	if waitErr != nil {
-		return r.persistFailure(persistCtx, "process_failed", waitErr)
+		return r.persistFailure(persistCtx, "process_failed", r.processFailureCause(persistCtx, waitErr))
 	}
 
 	latestMu.Lock()
@@ -181,26 +195,16 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		err = pathErr
 	}
 	if err != nil {
-		artifacts := []store.TaskArtifact{}
-		if len(rawLast) > 0 {
-			if artifact, artifactErr := r.taskArtifact("raw_output_last_message", lastPath, "application/json"); artifactErr == nil {
-				artifacts = append(artifacts, artifact)
-			}
-		}
 		raw := rawLast
 		if len(raw) == 0 {
 			raw = []byte(agentText)
 		}
-		write := store.TaskResultWrite{
-			Status: domain.TaskFailed, Summary: "Codex output did not match the result contract",
-			EventKind: "result_invalid", RawJSON: r.redact(string(raw)), ErrorCode: "output_invalid", ErrorMessage: r.redact(err.Error()),
-		}
-		if persistErr := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); persistErr != nil {
-			return r.persistFailure(persistCtx, "result_persistence_failed", persistErr)
-		}
-		return fmt.Errorf("output_invalid: %w", err)
+		return r.persistOutputInvalid(persistCtx, lastPath, raw, err)
 	}
+	return r.persistValidatedResult(persistCtx, result, rawResult, lastPath, rawLast)
+}
 
+func (r *Runner) persistValidatedResult(persistCtx context.Context, result ResultEnvelope, rawResult []byte, lastPath string, rawLast []byte) error {
 	rawJSON := r.redact(string(rawResult))
 	switch result.Status {
 	case "awaiting_input":
@@ -210,32 +214,40 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		}
 		questionSchema := r.redact(string(questionJSON))
 		summary := r.redact(result.Summary)
+		assistantContent := summary
+		for _, question := range result.Questions {
+			assistantContent += "\n\nQuestion: " + r.redact(question.Text)
+		}
 		write := store.TaskResultWrite{
-			Status: domain.TaskAwaitingInput, Summary: summary, AssistantContent: summary,
+			Status: domain.TaskAwaitingInput, Summary: summary, AssistantContent: assistantContent,
 			QuestionSchema: &questionSchema, EventKind: "result_awaiting_input", RawJSON: rawJSON,
+			ExpectedTurnID: r.ExpectedTurnID,
 		}
 		if err := r.Tasks.AwaitInput(persistCtx, r.TaskID, write); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
 		}
 		return nil
 	case "failed":
-		artifacts, artifactErr := r.engineeringArtifacts(result.Artifacts)
+		artifacts, artifactErr := r.engineeringArtifacts(result.Action, result.Artifacts)
 		if artifactErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, artifactErr)
 		}
 		write := store.TaskResultWrite{
 			Status: domain.TaskFailed, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
 			EventKind: "result_failed", RawJSON: rawJSON, ErrorCode: "result_failed", ErrorMessage: r.redact(result.Summary),
+			ExpectedTurnID: r.ExpectedTurnID,
 		}
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
 		}
 		return fmt.Errorf("task failed: %s", result.Summary)
 	case "completed":
-		artifacts, artifactErr := r.engineeringArtifacts(result.Artifacts)
+		artifacts, artifactErr := r.engineeringArtifacts(result.Action, result.Artifacts)
 		if artifactErr != nil {
 			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, artifactErr)
 		}
+		var ideaSessionID string
+		var ideaCandidates []domain.IdeaCandidate
 		if result.Action == domain.ActionTopicBrainstorm {
 			var candidatesPath string
 			for _, output := range result.Artifacts {
@@ -248,9 +260,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 			if parseErr != nil {
 				return r.persistOutputInvalid(persistCtx, lastPath, rawLast, parseErr)
 			}
-			if err := store.NewIdeaRepository(r.Tasks.DB()).ReplaceCandidates(persistCtx, sessionID, r.TaskID, candidates); err != nil {
-				return r.persistOutputInvalid(persistCtx, lastPath, rawLast, fmt.Errorf("persist topic candidates: %w", err))
-			}
+			ideaSessionID, ideaCandidates = sessionID, candidates
 		}
 		assetOutputs, assetErr := r.verifiedFormalAssets(result.AssetOutputs)
 		if assetErr != nil {
@@ -260,6 +270,21 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		if taskErr != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", taskErr)
 		}
+		if result.Action == domain.ActionMontageExecute {
+			if r.CompletionGate == nil {
+				return r.persistFailure(persistCtx, "registration_coordinator_unavailable", errors.New("montage registration coordinator is unavailable"))
+			}
+			handled, gateErr := r.CompletionGate.HandleCompleted(persistCtx, taskcompletion.CompletedInput{
+				Task: task, ManifestPath: filepath.Join(r.AssetRoot, "tasks", r.TaskID, "task_manifest.json"),
+				Action: result.Action, Summary: r.redact(result.Summary), RawJSON: rawJSON, Artifacts: artifacts, ExpectedTurnID: r.ExpectedTurnID,
+			})
+			if gateErr != nil {
+				return r.persistFailure(persistCtx, "completion_gate_failed", gateErr)
+			}
+			if handled {
+				return nil
+			}
+		}
 		assets := make([]store.AddAssetVersion, 0, len(assetOutputs))
 		for _, output := range assetOutputs {
 			assets = append(assets, store.AddAssetVersion{
@@ -268,17 +293,99 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 				SourceTaskID: &r.TaskID,
 			})
 		}
+		// The topic Skill is required to return the Obsidian card as an
+		// artifact, not as asset_outputs. The console owns project registration,
+		// so it promotes that verified receipt into the project's locked
+		// topic_card asset here.
+		if (result.Action == domain.ActionTopicCommit || result.Action == domain.ActionTopicDeepen) && task.ProjectID != nil {
+			for _, artifact := range artifacts {
+				if artifact.Kind != "topic_card" {
+					continue
+				}
+				assets = append(assets, store.AddAssetVersion{
+					ProjectID: task.ProjectID, AccountID: task.AccountID, Type: domain.AssetTopicCard,
+					StorageKind: domain.StorageFile, Path: artifact.Path, Filename: artifact.Filename,
+					MIMEType: artifact.MIMEType, Size: artifact.Size, SHA256: artifact.SHA256,
+					SourceTaskID: &r.TaskID,
+				})
+				break
+			}
+		}
 		write := store.TaskResultWrite{
 			Status: domain.TaskCompleted, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
 			EventKind: "result_completed", RawJSON: rawJSON,
+			ExpectedTurnID: r.ExpectedTurnID, IdeaSessionID: ideaSessionID, IdeaCandidates: ideaCandidates,
 		}
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, assets); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
+		}
+		if task.ProjectID != nil {
+			_, _ = store.NewProjectRepository(r.Tasks.DB()).SyncStageFromAssets(persistCtx, *task.ProjectID, time.Now().UTC())
 		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported validated result status %q", result.Status)
 	}
+}
+
+// CompleteAgentResult applies the same V2 envelope validation, artifact
+// verification, asset registration, and CompletionGate used by the legacy
+// exec Runner to a final App Server assistant item.
+func (r *Runner) CompleteAgentResult(ctx context.Context, agentText string) error {
+	if r == nil || r.Tasks == nil || strings.TrimSpace(r.TaskID) == "" {
+		return errors.New("result completion requires a task repository and task id")
+	}
+	action, err := r.Tasks.ExpectedAction(ctx, r.TaskID)
+	if err != nil {
+		return err
+	}
+	r.Action = action
+	roots, err := r.resultManifestRoots(action)
+	if err != nil {
+		return r.persistOutputInvalid(ctx, "", []byte(agentText), err)
+	}
+	result, raw, usedResultFile, err := r.resolveAppServerResult(agentText, action, roots)
+	if err != nil {
+		return r.persistOutputInvalid(ctx, "", raw, err)
+	}
+	if usedResultFile {
+		// The Skill's structured receipt is authoritative only after the same
+		// strict validation as an assistant response. This makes App Server task
+		// completion resilient when the final chat message is a human summary.
+		_ = r.Tasks.AppendEvent(ctx, r.TaskID, domain.TaskEvent{Kind: "result_file_fallback", Level: "info", DisplayText: "Used validated output/result.json as the formal task result"})
+	}
+	return r.persistValidatedResult(ctx, result, raw, "", raw)
+}
+
+func (r *Runner) resolveAppServerResult(agentText string, action domain.TaskAction, roots ManifestRoots) (ResultEnvelope, []byte, bool, error) {
+	agentRaw := []byte(agentText)
+	if result, err := ParseResultEnvelopeWithRoots(agentRaw, r.TaskID, action, r.outputDir(), roots); err == nil {
+		return result, agentRaw, false, nil
+	} else if strings.TrimSpace(agentText) == "" {
+		return r.resolveOutputResultFile(action, roots, "assistant returned no final result")
+	} else {
+		result, raw, usedFile, fileErr := r.resolveOutputResultFile(action, roots, "")
+		if fileErr == nil {
+			return result, raw, usedFile, nil
+		}
+		return ResultEnvelope{}, agentRaw, false, fmt.Errorf("assistant result is not a valid envelope: %w; output/result.json fallback failed: %v", err, fileErr)
+	}
+}
+
+func (r *Runner) resolveOutputResultFile(action domain.TaskAction, roots ManifestRoots, agentFailure string) (ResultEnvelope, []byte, bool, error) {
+	resultPath := filepath.Join(r.outputDir(), "result.json")
+	raw, err := r.readOutputLastMessage(resultPath)
+	if err != nil {
+		if agentFailure != "" {
+			return ResultEnvelope{}, nil, false, fmt.Errorf("%s; read output/result.json: %w", agentFailure, err)
+		}
+		return ResultEnvelope{}, nil, false, err
+	}
+	result, err := ParseResultEnvelopeWithRoots(raw, r.TaskID, action, r.outputDir(), roots)
+	if err != nil {
+		return ResultEnvelope{}, raw, false, err
+	}
+	return result, raw, true, nil
 }
 
 func runnerCommandSnapshot(cmd *exec.Cmd, provided *CommandSnapshot, redactor *security.Redactor) CommandSnapshot {
@@ -321,11 +428,38 @@ func (r *Runner) persistEvents(ctx context.Context, events <-chan persistedEvent
 			terminate(err)
 			continue
 		}
+		r.persistSemanticEvent(ctx, e)
 		if r.Broadcast != nil {
 			r.Broadcast(e)
 		}
 	}
 	result <- firstErr
+}
+
+// persistSemanticEvent keeps the UI-facing timeline separate from raw JSONL
+// diagnostics. Failure to add a presentation event must never interrupt a
+// production task whose authoritative task event has already been persisted.
+func (r *Runner) persistSemanticEvent(ctx context.Context, e Event) {
+	if r == nil || r.Tasks == nil {
+		return
+	}
+	projected := progress.Project(progress.Input{
+		TaskID:     r.TaskID,
+		Action:     r.Action,
+		Method:     e.Kind,
+		RawJSON:    string(e.RawJSON),
+		LegacyKind: e.Kind,
+	})
+	if !projected.Visible || projected.Kind == "" || projected.DisplayText == "" {
+		return
+	}
+	_, _ = store.NewConversationRepository(r.Tasks.DB()).AppendSemantic(ctx, store.SemanticWrite{
+		TaskID: r.TaskID,
+		Kind:   string(projected.Kind),
+		Phase:  projected.Phase,
+		Level:  e.Level,
+		Title:  projected.DisplayText,
+	})
 }
 
 func (r *Runner) readStdout(_ context.Context, reader io.Reader, events chan<- persistedEvent, stop <-chan struct{}, terminate func(error), mu *sync.Mutex, latestAgentMessage *string) error {
@@ -379,9 +513,13 @@ func (r *Runner) readStderr(_ context.Context, reader io.Reader, events chan<- p
 }
 
 func (r *Runner) resolveFinalResult(agentText, lastMessagePath string, action domain.TaskAction) (ResultEnvelope, []byte, []byte, error) {
+	roots, rootsErr := r.resultManifestRoots(action)
+	if rootsErr != nil {
+		return ResultEnvelope{}, nil, nil, rootsErr
+	}
 	if strings.TrimSpace(agentText) != "" {
 		raw := []byte(agentText)
-		if result, err := ParseResultEnvelope(raw, r.TaskID, action, r.outputDir()); err == nil {
+		if result, err := ParseResultEnvelopeWithRoots(raw, r.TaskID, action, r.outputDir(), roots); err == nil {
 			return result, raw, nil, nil
 		}
 	}
@@ -389,11 +527,38 @@ func (r *Runner) resolveFinalResult(agentText, lastMessagePath string, action do
 	if err != nil {
 		return ResultEnvelope{}, nil, nil, fmt.Errorf("output_last_message_missing: %w", err)
 	}
-	result, err := ParseResultEnvelope(rawLast, r.TaskID, action, r.outputDir())
+	result, err := ParseResultEnvelopeWithRoots(rawLast, r.TaskID, action, r.outputDir(), roots)
 	if err != nil {
 		return ResultEnvelope{}, nil, rawLast, err
 	}
 	return result, rawLast, rawLast, nil
+}
+
+func (r *Runner) resultManifestRoots(action domain.TaskAction) (ManifestRoots, error) {
+	if action != domain.ActionTopicCommit && action != domain.ActionTopicDeepen {
+		return ManifestRoots{}, nil
+	}
+	path := filepath.Join(r.AssetRoot, "tasks", r.TaskID, "task_manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ManifestRoots{}, fmt.Errorf("read result validation manifest: %w", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var manifest TaskManifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return ManifestRoots{}, fmt.Errorf("decode result validation manifest: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return ManifestRoots{}, fmt.Errorf("decode result validation manifest: %w", err)
+	}
+	if manifest.TaskID != r.TaskID || manifest.Action != action {
+		return ManifestRoots{}, fmt.Errorf("result validation manifest identity mismatch")
+	}
+	return ManifestRoots{
+		Obsidian:   manifest.NonSecretSettings.ObsidianVault,
+		TopicCards: manifest.NonSecretSettings.TopicCardsDir,
+	}, nil
 }
 
 func (r *Runner) outputLastMessagePath() (string, error) {
@@ -480,16 +645,52 @@ func (r *Runner) outputDir() string {
 	return r.AssetRoot
 }
 
-func (r *Runner) engineeringArtifacts(outputs []ArtifactOutput) ([]store.TaskArtifact, error) {
+func (r *Runner) engineeringArtifacts(action domain.TaskAction, outputs []ArtifactOutput) ([]store.TaskArtifact, error) {
+	roots := ManifestRoots{}
+	if len(outputs) > 0 && outputs[0].Type == "topic_card" {
+		var err error
+		roots, err = r.resultManifestRoots(action)
+		if err != nil {
+			return nil, err
+		}
+	}
 	artifacts := make([]store.TaskArtifact, 0, len(outputs))
 	for _, output := range outputs {
-		artifact, err := r.taskArtifact(output.Type, output.Path, "")
+		var artifact store.TaskArtifact
+		var err error
+		if action == domain.ActionMontageExecute && output.Type == "plaintext_workspace" {
+			artifact, err = r.taskDirectoryArtifact(output.Type, output.Path)
+		} else if output.Type == "topic_card" {
+			artifact, err = r.taskArtifactWithinRoot(output.Type, output.Path, "text/markdown", roots.TopicCards)
+		} else {
+			artifact, err = r.taskArtifact(output.Type, output.Path, "")
+		}
 		if err != nil {
 			return nil, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts, nil
+}
+
+func (r *Runner) taskDirectoryArtifact(kind, path string) (store.TaskArtifact, error) {
+	root, err := resolvePath(r.outputDir())
+	if err != nil {
+		return store.TaskArtifact{}, err
+	}
+	resolved, err := validateResultPath("task directory artifact", path, root)
+	if err != nil {
+		return store.TaskArtifact{}, err
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return store.TaskArtifact{}, fmt.Errorf("task directory artifact must be a contained no-follow directory")
+	}
+	digest, err := HashResultDirectory(resolved)
+	if err != nil {
+		return store.TaskArtifact{}, err
+	}
+	return store.TaskArtifact{Kind: kind, Path: resolved, Filename: filepath.Base(resolved), MIMEType: "inode/directory", SHA256: digest}, nil
 }
 
 func (r *Runner) verifiedFormalAssets(outputs []AssetOutput) ([]AssetOutput, error) {
@@ -567,7 +768,11 @@ func recognizedMIMEForPath(path string) string {
 }
 
 func (r *Runner) taskArtifact(kind, path, mimeType string) (store.TaskArtifact, error) {
-	root, err := filepath.Abs(filepath.Clean(r.outputDir()))
+	return r.taskArtifactWithinRoot(kind, path, mimeType, r.outputDir())
+}
+
+func (r *Runner) taskArtifactWithinRoot(kind, path, mimeType, allowedRoot string) (store.TaskArtifact, error) {
+	root, err := filepath.Abs(filepath.Clean(allowedRoot))
 	if err != nil {
 		return store.TaskArtifact{}, err
 	}
@@ -641,6 +846,7 @@ func (r *Runner) persistOutputInvalid(ctx context.Context, lastPath string, rawL
 	write := store.TaskResultWrite{
 		Status: domain.TaskFailed, Summary: "Codex output did not match the result contract", EventKind: "result_invalid",
 		RawJSON: r.redact(string(rawLast)), ErrorCode: "output_invalid", ErrorMessage: r.redact(cause.Error()),
+		ExpectedTurnID: r.ExpectedTurnID,
 	}
 	if err := r.Tasks.CompleteWithResult(ctx, r.TaskID, write, artifacts, nil); err != nil {
 		return r.persistFailure(ctx, "result_persistence_failed", err)
@@ -650,11 +856,73 @@ func (r *Runner) persistOutputInvalid(ctx context.Context, lastPath string, rawL
 
 func (r *Runner) persistFailure(ctx context.Context, code string, cause error) error {
 	message := r.redact(cause.Error())
-	statusErr := r.Tasks.UpdateStatus(ctx, r.TaskID, domain.TaskFailed, "", code, message)
+	var statusErr error
+	if r.ExpectedTurnID != nil {
+		_, statusErr = r.Tasks.FailAppServerTurn(ctx, r.TaskID, *r.ExpectedTurnID, code, message)
+	} else {
+		statusErr = r.Tasks.UpdateStatus(ctx, r.TaskID, domain.TaskFailed, "", code, message)
+	}
 	if statusErr != nil {
 		return errors.Join(cause, fmt.Errorf("persist failure status: %w", statusErr))
 	}
+	_, _ = store.NewConversationRepository(r.Tasks.DB()).AppendSemantic(ctx, store.SemanticWrite{
+		TaskID: r.TaskID,
+		Kind:   string(domain.SemanticFailure),
+		Phase:  "failed",
+		Level:  "error",
+		Title:  message,
+	})
 	return cause
+}
+
+// processFailureCause preserves the useful terminal Codex error instead of
+// replacing it with the operating system's unhelpful "exit status 1".
+func (r *Runner) processFailureCause(ctx context.Context, fallback error) error {
+	events, err := r.Tasks.Events(ctx, r.TaskID)
+	if err != nil {
+		return fallback
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		var envelope struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(events[i].RawJSON), &envelope) != nil {
+			continue
+		}
+		message := strings.TrimSpace(envelope.Error.Message)
+		if message == "" {
+			message = strings.TrimSpace(envelope.Message)
+		}
+		if message == "" || (envelope.Type != "turn.failed" && envelope.Type != "error") {
+			continue
+		}
+		return errors.New(friendlyCodexFailure(message))
+	}
+	return fallback
+}
+
+func friendlyCodexFailure(message string) string {
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "no available channel for model") {
+		model := "当前模型"
+		if marker := strings.Index(lower, "no available channel for model "); marker >= 0 {
+			rest := message[marker+len("no available channel for model "):]
+			if end := strings.IndexAny(rest, " ;,)(\r\n"); end > 0 {
+				model = rest[:end]
+			} else if strings.TrimSpace(rest) != "" {
+				model = strings.TrimSpace(rest)
+			}
+		}
+		return fmt.Sprintf("模型通道不可用：%s 当前没有可用线路，请在设置中更换模型后重试", model)
+	}
+	if strings.Contains(lower, "service unavailable") {
+		return "模型服务暂时不可用，请稍后重试或在设置中更换模型"
+	}
+	return message
 }
 
 func (r *Runner) redact(value string) string {
@@ -688,6 +956,5 @@ func (r *Runner) registerCommandSecrets() {
 }
 
 func withinRoot(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return pathInside(root, path)
 }

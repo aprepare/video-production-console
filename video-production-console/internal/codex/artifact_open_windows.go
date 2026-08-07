@@ -68,6 +68,8 @@ func finalPathByHandle(h windows.Handle) (string, error) {
 }
 
 func samePath(a, b string) bool {
+	a = normalizeWindowsExtendedPath(a)
+	b = normalizeWindowsExtendedPath(b)
 	a, _ = filepath.Abs(a)
 	b, _ = filepath.Abs(b)
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))

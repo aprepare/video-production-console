@@ -23,10 +23,12 @@ var (
 
 var publicSettingKeys = map[string]struct{}{
 	"listen_addr": {}, "data_root": {}, "max_codex_concurrency": {},
+	"codex_default_model": {}, "codex_default_reasoning_effort": {},
 	"baokuan_base_url": {}, "baokuan_mcp_executable": {},
 	"obsidian_vault": {}, "topic_cards_dir": {},
 	"grok_base_url": {}, "grok_model": {}, "codex_binary_path": {},
 	"media_index_path": {}, "media_root": {}, "jianying_root": {},
+	"machine_profile_path": {}, "app_server_enabled": {}, "codex_workspace_roots": {}, "codex_history_limit": {},
 }
 
 type EncryptedSecret struct {

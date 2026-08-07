@@ -154,13 +154,40 @@ func normalizeNestedResultFields(fields map[string]json.RawMessage) error {
 		if err := json.Unmarshal(raw, &artifact); err != nil {
 			return fmt.Errorf("artifact %d must be an object", i)
 		}
-		allowed := []string{"type", "path", "description", "relative_path", "sha256", "kind"}
+		allowed := []string{"type", "path", "description", "relative_path", "sha256", "kind", "metadata"}
 		if err := validateExactJSONFields(artifact, allowed, []string{"type", "path"}); err != nil {
 			return fmt.Errorf("artifact %d fields: %w", i, err)
 		}
 		for _, field := range []string{"type", "path"} {
 			if err := requireJSONString(artifact[field]); err != nil {
 				return fmt.Errorf("artifact %d field %q: %w", i, field, err)
+			}
+		}
+		if rawMetadata, ok := artifact["metadata"]; ok {
+			var artifactType, kind string
+			_ = json.Unmarshal(artifact["type"], &artifactType)
+			if rawKind, hasKind := artifact["kind"]; hasKind {
+				_ = json.Unmarshal(rawKind, &kind)
+			}
+			if artifactType != "plaintext_workspace" || kind != "directory" {
+				return fmt.Errorf("artifact %d metadata is only allowed for a plaintext_workspace directory", i)
+			}
+			var metadata map[string]json.RawMessage
+			if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+				return fmt.Errorf("artifact %d metadata: must be an object", i)
+			}
+			presenceFields := []string{"narration_present", "bgm_present", "sfx_present", "transitions_present"}
+			if err := validateExactJSONFields(metadata, presenceFields, presenceFields); err != nil {
+				return fmt.Errorf("artifact %d metadata: %w", i, err)
+			}
+			for _, name := range presenceFields {
+				var present bool
+				if err := json.Unmarshal(metadata[name], &present); err != nil {
+					return fmt.Errorf("artifact %d metadata %s must be boolean", i, name)
+				}
+				if !present {
+					return fmt.Errorf("artifact %d metadata %s must be true for a completed workspace", i, name)
+				}
 			}
 		}
 		var decoded ArtifactOutput
@@ -378,8 +405,23 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 		if err != nil {
 			return fmt.Errorf("artifact %d: %w", i, err)
 		}
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("artifact %d must name a no-follow filesystem entry", i)
+		}
+		directoryArtifact := envelope.Action == domain.ActionMontageExecute && artifact.Type == "plaintext_workspace"
+		if directoryArtifact {
+			if !info.IsDir() {
+				return fmt.Errorf("artifact %d plaintext_workspace must name a directory", i)
+			}
+			actual, hashErr := HashResultDirectory(path)
+			if hashErr != nil {
+				return fmt.Errorf("artifact %d hash plaintext workspace: %w", i, hashErr)
+			}
+			if artifact.SHA256 != "" && (!sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256)) {
+				return fmt.Errorf("artifact %d sha256 does not match directory content", i)
+			}
+		} else if !info.Mode().IsRegular() {
 			return fmt.Errorf("artifact %d must name a regular file", i)
 		}
 		if artifact.Type == "topic_card" {
@@ -399,7 +441,7 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 			if !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
 				return fmt.Errorf("artifact %d sha256 does not match file content", i)
 			}
-		} else if artifact.RelativePath != "" || artifact.SHA256 != "" {
+		} else if artifact.RelativePath != "" || (artifact.SHA256 != "" && !directoryArtifact) {
 			return fmt.Errorf("artifact %d receipt fields are only allowed for topic_card", i)
 		}
 		artifactPaths = append(artifactPaths, path)
@@ -443,6 +485,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 }
 
 func validateResultPath(label, path, root string) (string, error) {
+	path = normalizeWindowsExtendedPath(path)
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("%s path must be absolute", label)
 	}
@@ -461,6 +504,8 @@ func validateResultPath(label, path, root string) (string, error) {
 }
 
 func canonicalSamePath(a, b string) bool {
+	a = normalizeWindowsExtendedPath(a)
+	b = normalizeWindowsExtendedPath(b)
 	if filepath.Separator == '\\' {
 		return strings.EqualFold(a, b)
 	}
@@ -468,6 +513,8 @@ func canonicalSamePath(a, b string) bool {
 }
 
 func pathsOverlap(a, b string) bool {
+	a = normalizeWindowsExtendedPath(a)
+	b = normalizeWindowsExtendedPath(b)
 	return canonicalSamePath(a, b) || pathInside(a, b) || pathInside(b, a)
 }
 
@@ -531,11 +578,19 @@ var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionSpokenFormat:   {"self_check": true},
 	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "self_check": true},
-	domain.ActionMontagePlan:    montageArtifactTypes(), domain.ActionMontageExecute: montageArtifactTypes(),
+	domain.ActionMontagePlan:    montagePlanArtifactTypes(), domain.ActionMontageExecute: montageExecuteArtifactTypes(),
 }
 
-func montageArtifactTypes() map[string]bool {
-	return map[string]bool{"production_plan": true, "production_plan_validation": true, "draft_validation": true, "selected_media_summary": true, "registration_result": true, "qc_report": true, "events": true, "stderr_log": true, "plaintext_workspace": true}
+func montagePlanArtifactTypes() map[string]bool {
+	return map[string]bool{"production_plan": true, "production_plan_readable": true, "production_plan_validation": true, "selected_media_summary": true, "qc_report": true, "events": true, "stderr_log": true}
+}
+
+func montageExecuteArtifactTypes() map[string]bool {
+	types := montagePlanArtifactTypes()
+	types["draft_validation"] = true
+	types["registration_result"] = true
+	types["plaintext_workspace"] = true
+	return types
 }
 
 var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
@@ -544,7 +599,7 @@ var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
 	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
 	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true, domain.AssetSpokenScript: true},
 	domain.ActionSpokenFormat:   {domain.AssetSpokenScript: true}, domain.ActionRemixReview: {},
-	domain.ActionMontagePlan: {}, domain.ActionMontageExecute: {domain.AssetMixDraft: true},
+	domain.ActionMontagePlan: {}, domain.ActionMontageExecute: {},
 }
 
 type resultDirectoryEntry struct {
