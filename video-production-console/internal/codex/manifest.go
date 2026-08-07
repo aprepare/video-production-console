@@ -666,6 +666,7 @@ func validateActionManifestContract(manifest TaskManifest) error {
 	if !ok {
 		return fmt.Errorf("unsupported manifest action %q", manifest.Action)
 	}
+	seen := map[string]bool{}
 	for _, output := range manifest.ExpectedOutputs {
 		if !allowed[output.Type] {
 			return fmt.Errorf("expected output %q is not allowed for action %q", output.Type, manifest.Action)
@@ -673,9 +674,9 @@ func validateActionManifestContract(manifest TaskManifest) error {
 		if !output.Required {
 			return fmt.Errorf("expected output %q must be required", output.Type)
 		}
-	}
-	seen := map[string]bool{}
-	for _, output := range manifest.ExpectedOutputs {
+		if seen[output.Type] {
+			return fmt.Errorf("duplicate expected output %q", output.Type)
+		}
 		seen[output.Type] = true
 	}
 	for _, typ := range requiredExpectedOutputTypes[manifest.Action] {

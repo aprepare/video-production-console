@@ -429,6 +429,30 @@ func TestValidateResultEnvelopeRejectsSpokenScriptForRemixActions(t *testing.T) 
 	}
 }
 
+func TestValidateResultEnvelopeJSONRejectsCompatibilitySpokenScript(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "spoken.txt")
+	if err := os.WriteFile(file, []byte("spoken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"remix.standard","status":"completed","summary":"done","questions":[],"artifacts":[],"asset_outputs":[{"type":"spoken_script","kind":"file","path":` + mustJSONQuote(t, file) + `,"metadata":{}}],"warnings":[]}`)
+	if _, err := ValidateResultEnvelopeJSON(data, taskID, domain.ActionRemixStandard, out); err == nil || !strings.Contains(err.Error(), "spoken_script") {
+		t.Fatalf("compatibility result accepted spoken_script: %v", err)
+	}
+}
+
+func TestValidateResultEnvelopeRejectsSpokenScriptForNonRemixAction(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "spoken.txt")
+	if err := os.WriteFile(file, []byte("spoken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionTopicBrainstorm, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetSpokenScript, Path: file, StorageKind: domain.StorageFile, Filename: "spoken.txt", MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, domain.ActionTopicBrainstorm, out); err == nil || !strings.Contains(err.Error(), "spoken_script") {
+		t.Fatalf("non-remix action accepted spoken_script: %v", err)
+	}
+}
+
 func TestCompletedResultMustDeliverManifestRequiredOutputs(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
 	manifest := TaskManifest{TaskID: taskID, Action: domain.ActionRemixStandard, OutputDir: out, ExpectedOutputs: []ExpectedOutput{{Type: "continuous_script", Required: true}}}

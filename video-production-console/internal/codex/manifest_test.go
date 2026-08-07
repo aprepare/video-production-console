@@ -236,6 +236,19 @@ func TestRemixOutputsRequireOnlyContinuousScript(t *testing.T) {
 	}
 }
 
+func TestRemixOutputsRejectDuplicateContinuousScript(t *testing.T) {
+	manifest := TaskManifest{
+		Action: domain.ActionRemixStandard,
+		ExpectedOutputs: []ExpectedOutput{
+			{Type: "continuous_script", Required: true},
+			{Type: "continuous_script", Required: true},
+		},
+	}
+	if err := validateActionManifestContract(manifest); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate continuous_script outputs accepted: %v", err)
+	}
+}
+
 func TestBuildManifestRequiresActionOutputs(t *testing.T) {
 	root, taskID := t.TempDir(), uuid.NewString()
 	if _, err := BuildManifest(BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicBrainstorm, OutputDir: filepath.Join(root, "tasks", taskID, "output"), ExpectedOutputs: []ExpectedOutput{}, SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, NonSecretSettings: ManifestSettings{SessionID: "session"}}); err == nil {
