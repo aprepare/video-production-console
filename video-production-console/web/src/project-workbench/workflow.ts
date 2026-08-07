@@ -67,7 +67,9 @@ export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
   const stage = deriveProductionStage(detail);
   if (stage === "published") return null;
   const base: PrimaryAction = stage === "script"
-    ? { id: "start-remix", label: "开始二创文案", disabled: false }
+    ? detail.assets?.continuous_script
+      ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
+      : { id: "start-remix", label: "开始二创文案", disabled: false }
     : stage === "assets"
       ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
       : stage === "mixing"

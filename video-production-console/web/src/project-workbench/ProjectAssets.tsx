@@ -110,6 +110,7 @@ export function ProjectAssets({ detail, onUpload, onReplaceBackground, onViewAss
                   <span>{asset ? "替换" : "上传"}</span>
                   <input
                     type="file"
+                    data-upload-type={definition.type}
                     accept={definition.accept}
                     aria-label={`上传${definition.label}`}
                     onChange={(event) => {
@@ -148,6 +149,7 @@ export function ProjectAssets({ detail, onUpload, onReplaceBackground, onViewAss
               <span>{detail.background_reference ? "替换" : "上传"}</span>
               <input
                 type="file"
+                data-upload-type="account_background"
                 accept="image/png,image/jpeg,image/webp"
                 aria-label={detail.background_reference ? "替换账号背景图" : "上传账号背景图"}
                 onChange={(event) => {

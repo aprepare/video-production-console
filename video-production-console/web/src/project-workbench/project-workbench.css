@@ -156,6 +156,10 @@
   box-shadow: 0 16px 38px rgba(23, 33, 38, 0.06);
 }
 
+.project-workbench--compact-desktop .workbench-grid {
+  grid-template-columns: minmax(225px, 0.72fr) minmax(490px, 1.6fr) minmax(280px, 0.9fr);
+}
+
 .primary-action-panel,
 .project-assets,
 .project-conversation { min-width: 0; padding: 20px; }

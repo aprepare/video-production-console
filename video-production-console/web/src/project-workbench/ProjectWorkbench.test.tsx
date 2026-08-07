@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ProjectWorkbench } from "./ProjectWorkbench";
 import type { ProjectDetail, ProjectTask } from "./types";
@@ -60,8 +60,8 @@ const task: ProjectTask = {
   ],
 };
 
-function renderWorkbench(detail = fixture()) {
-  const props = {
+function workbenchProps(detail = fixture()) {
+  return {
     detail,
     tasks: [task],
     accountName: "稳健养老号",
@@ -76,6 +76,10 @@ function renderWorkbench(detail = fixture()) {
     onOpenConversation: vi.fn(),
     onOpenTask: vi.fn(),
   };
+}
+
+function renderWorkbench(detail = fixture()) {
+  const props = workbenchProps(detail);
   render(<ProjectWorkbench {...props} />);
   return props;
 }
@@ -176,4 +180,87 @@ test("keeps the published button wording while exposing its operation through ar
   fireEvent.click(publish);
 
   expect(props.onPublish).toHaveBeenCalledOnce();
+});
+
+test.each([
+  ["narration", "上传配音"],
+  ["subtitle_srt", "上传SRT 字幕"],
+  ["account_background", "上传账号背景图"],
+] as const)("routes a single missing %s input to its matching upload control", (missingType, uploadLabel) => {
+  const detail = fixture();
+  detail.project.stage = "assets";
+  detail.assets = {
+    continuous_script: asset("continuous_script"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+  };
+  detail.background_reference = { ...asset("account_background"), mime_type: "image/png" };
+  detail.missing_assets = [missingType];
+  if (missingType === "account_background") {
+    detail.background_reference = null;
+  } else {
+    delete detail.assets[missingType];
+  }
+  const click = vi.fn();
+  renderWorkbench(detail);
+  screen.getByLabelText(uploadLabel).addEventListener("click", click);
+
+  fireEvent.click(screen.getByRole("button", { name: "补齐制作素材" }));
+
+  expect(click).toHaveBeenCalledOnce();
+});
+
+test("routes an invalid inherited background to the replacement control", () => {
+  const detail = fixture();
+  detail.project.stage = "assets";
+  detail.assets = {
+    continuous_script: asset("continuous_script"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+  };
+  detail.background_reference = { ...asset("account_background", "stale"), mime_type: "image/png" };
+  detail.missing_assets = ["account_background"];
+  const click = vi.fn();
+  renderWorkbench(detail);
+  screen.getByLabelText("替换账号背景图").addEventListener("click", click);
+
+  fireEvent.click(screen.getByRole("button", { name: "补齐制作素材" }));
+
+  expect(click).toHaveBeenCalledOnce();
+});
+
+test("routes an invalid continuous script to its own upload control instead of restarting remix", () => {
+  const detail = fixture();
+  detail.project.stage = "assets";
+  detail.assets = {
+    continuous_script: asset("continuous_script", "stale"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+  };
+  detail.missing_assets = ["continuous_script"];
+  const click = vi.fn();
+  renderWorkbench(detail);
+  screen.getByLabelText("上传连续文案").addEventListener("click", click);
+
+  fireEvent.click(screen.getByRole("button", { name: "补齐制作素材" }));
+
+  expect(click).toHaveBeenCalledOnce();
+});
+
+test("guards the 1366 by 768 compact desktop structure without pretending to measure visibility", () => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1366 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+  window.dispatchEvent(new Event("resize"));
+
+  const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
+  window.dispatchEvent(new Event("resize"));
+
+  const workbench = container.querySelector(".project-workbench--compact-desktop");
+  expect(workbench).toBeTruthy();
+  expect(window.innerWidth).toBe(1366);
+  expect(window.innerHeight).toBe(768);
+  expect(within(workbench as HTMLElement).getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
+  expect(within(workbench as HTMLElement).getByRole("region", { name: "下一主动作" })).toBeTruthy();
+  expect(within(workbench as HTMLElement).getByRole("region", { name: "当前项目资产" })).toBeTruthy();
+  expect(within(workbench as HTMLElement).getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
 });

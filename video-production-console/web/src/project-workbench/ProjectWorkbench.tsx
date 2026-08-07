@@ -1,4 +1,5 @@
 import { ArrowLeft, CircleCheck, MessageSquare, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { ProjectAsset, ProjectDetail, ProjectTask } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
@@ -40,6 +41,16 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const action = nextPrimaryAction(detail);
   const missing = missingProductionInputs(detail);
   const activeTask = props.tasks.find((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  const [compactDesktop, setCompactDesktop] = useState(
+    () => window.innerWidth >= 1024 && window.innerHeight <= 900,
+  );
+
+  useEffect(() => {
+    const updateLayoutContract = () =>
+      setCompactDesktop(window.innerWidth >= 1024 && window.innerHeight <= 900);
+    window.addEventListener("resize", updateLayoutContract);
+    return () => window.removeEventListener("resize", updateLayoutContract);
+  }, []);
 
   const runPrimaryAction = () => {
     if (!action || action.disabled) return;
@@ -47,13 +58,15 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     else if (action.id === "start-mixing") props.onMix();
     else if (action.id === "publish") props.onPublish();
     else {
-      const target = action.id === "upload-final-video" ? "上传成片" : "上传配音";
-      document.querySelector<HTMLInputElement>(`input[aria-label="${target}"]`)?.click();
+      const target = action.id === "upload-final-video"
+        ? "final_video"
+        : missing[0] || "narration";
+      document.querySelector<HTMLInputElement>(`input[data-upload-type="${target}"]`)?.click();
     }
   };
 
   return (
-    <main className="project-workbench">
+    <main className={`project-workbench${compactDesktop ? " project-workbench--compact-desktop" : ""}`}>
       <header className="workbench-masthead">
         <button type="button" className="workbench-icon-button" onClick={props.onBack} aria-label="返回项目看板">
           <ArrowLeft size={19} aria-hidden="true" />

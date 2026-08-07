@@ -180,6 +180,106 @@ function testAsset(type: string) {
   };
 }
 
+test.each([
+  ["narration", "上传配音"],
+  ["subtitle_srt", "上传SRT 字幕"],
+  ["final_video", "上传成片"],
+] as const)("uploads %s to its formal project endpoint and refreshes detail", async (type, label) => {
+  const project = { id: routedProjectID, account_id: "account-upload", title: "上传素材项目", stage: "assets" };
+  const uploads: Array<{ path: string; body: FormData }> = [];
+  let detailReads = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}` && method === "GET") {
+      detailReads += 1;
+      return json({
+        project,
+        assets: { continuous_script: testAsset("continuous_script") },
+        background_reference: testAsset("account_background"),
+        missing_assets: [type],
+      });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/${type}` && method === "POST") {
+      uploads.push({ path, body: init?.body as FormData });
+      return json(testAsset(type), 201);
+    }
+  }));
+  render(<App />);
+  const file = new File([type], `${type}.dat`, { type: "application/octet-stream" });
+
+  fireEvent.change(await screen.findByLabelText(label), { target: { files: [file] } });
+
+  await waitFor(() => expect(uploads).toHaveLength(1));
+  expect(uploads[0].path).toBe(`/api/projects/${routedProjectID}/assets/${type}`);
+  expect(uploads[0].body).toBeInstanceOf(FormData);
+  expect(uploads[0].body.get("file")).toBe(file);
+  await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+});
+
+test("replaces the selected project's account background through the existing account endpoint and refreshes detail", async () => {
+  const project = { id: routedProjectID, account_id: "account-from-project", title: "背景素材项目", stage: "assets" };
+  const uploads: Array<{ path: string; body: FormData }> = [];
+  let detailReads = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}` && method === "GET") {
+      detailReads += 1;
+      return json({
+        project,
+        assets: { continuous_script: testAsset("continuous_script") },
+        background_reference: { ...testAsset("account_background"), mime_type: "image/png" },
+        missing_assets: [],
+      });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === "/api/accounts/account-from-project/background" && method === "POST") {
+      uploads.push({ path, body: init?.body as FormData });
+      return json(testAsset("account_background"), 201);
+    }
+  }));
+  render(<App />);
+  const file = new File(["png"], "background.png", { type: "image/png" });
+
+  fireEvent.change(await screen.findByLabelText("替换账号背景图"), { target: { files: [file] } });
+
+  await waitFor(() => expect(uploads).toHaveLength(1));
+  expect(uploads[0].path).toBe("/api/accounts/account-from-project/background");
+  expect(uploads[0].body.get("background")).toBe(file);
+  await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+});
+
+test.each([false, true])("deletes only after confirmation=%s and returns to the board on success", async (confirmed) => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "待删除项目", stage: "script" };
+  const deletes: string[] = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("confirm", vi.fn(() => confirmed));
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}` && method === "GET") return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}` && method === "DELETE") {
+      deletes.push(path);
+      return new Response(null, { status: 204 });
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "删除当前项目" }));
+
+  expect(confirm).toHaveBeenCalledOnce();
+  if (confirmed) {
+    await waitFor(() => expect(deletes).toEqual([`/api/projects/${routedProjectID}`]));
+    await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+    expect(screen.getByRole("heading", { name: "视频项目" })).toBeTruthy();
+  } else {
+    expect(deletes).toEqual([]);
+    expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
+  }
+});
+
 test("browser Back returns from a project path to the board", async () => {
   window.history.replaceState({}, "", "/projects");
   const fixture = routedProjectFetch();
