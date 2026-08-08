@@ -137,7 +137,7 @@ func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (Re
 	} else if exists {
 		return ValidateReconciledDraft(validation)
 	}
-	command, err := r.runner.Run(ctx, CommandSpec{Program: python, Args: []string{script, "reconcile-name", "--manifest", manifest, "--draft", registered}, Dir: skillRoot}, 1<<20)
+	command, err := r.runner.Run(ctx, CommandSpec{Program: python, Args: []string{script, "reconcile-name", "--manifest", manifest, "--draft", registered, "--expected-directory-sha256", strings.ToLower(request.ExpectedDirectorySHA256)}, Dir: skillRoot}, 1<<20)
 	if err != nil {
 		return ReconcileResult{}, err
 	}

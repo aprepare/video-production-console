@@ -501,7 +501,11 @@ func TestRegistrarReturnsTypedBusyReconciliationResult(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runner := commandRunnerFunc(func(context.Context, CommandSpec, int64) (CommandResult, error) {
+	runner := commandRunnerFunc(func(_ context.Context, spec CommandSpec, _ int64) (CommandResult, error) {
+		joined := strings.Join(spec.Args, " ")
+		if !strings.Contains(joined, "--expected-directory-sha256 "+strings.Repeat("a", 64)) {
+			t.Fatalf("reconcile args=%q, missing trusted DB directory hash", spec.Args)
+		}
 		return CommandResult{Stdout: []byte(`{"status":"awaiting_input","summary":"lock busy","retry":{"after_seconds":30,"owner_job_id":"other-task"}}`)}, nil
 	})
 	_, err := NewRegistrar(runner).Reconcile(context.Background(), ReconcileRequest{

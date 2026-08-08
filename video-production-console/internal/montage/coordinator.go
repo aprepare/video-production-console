@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,13 +31,13 @@ type registrationJob struct {
 }
 
 type TrustedRuntime struct {
-	MachineProfilePath         string
-	MachineProfileSHA256       string
-	JianyingRoot               string
-	PythonBinary               string
-	ReconciliationSkillRoot    string
-	ReconciliationScriptPath   string
-	ReconciliationScriptSHA256 string
+	MachineProfilePath        string
+	MachineProfileSHA256      string
+	JianyingRoot              string
+	PythonBinary              string
+	ReconciliationSkillRoot   string
+	ReconciliationScriptPath  string
+	ReconciliationPythonFiles []domain.SkillFileSnapshot
 }
 
 var ErrCoordinatorStopped = errors.New("montage registration coordinator is stopped")
@@ -129,38 +130,94 @@ func WithTrustedReconciliationSkill(runtime TrustedRuntime, snapshot domain.Skil
 	if err != nil || !samePath(root, snapshot.Path) {
 		return TrustedRuntime{}, errors.New("current Jianying montage Skill root is not canonical")
 	}
-	script, err := canonicalNoFollow(filepath.Join(root, "scripts", "run_montage_job.py"), false)
-	if err != nil || !WithinJianyingRoot(root, script) {
-		return TrustedRuntime{}, errors.New("current Jianying montage reconciliation script is unavailable")
-	}
-	expected := ""
+	var pythonFiles []domain.SkillFileSnapshot
 	for _, file := range snapshot.Files {
-		if filepath.ToSlash(file.Path) == "scripts/run_montage_job.py" {
-			expected = strings.ToLower(file.SHA256)
-			break
+		if strings.EqualFold(filepath.Ext(file.Path), ".py") {
+			pythonFiles = append(pythonFiles, domain.SkillFileSnapshot{Path: filepath.ToSlash(file.Path), SHA256: strings.ToLower(file.SHA256), Size: file.Size})
 		}
 	}
-	actual, err := hashFile(script)
-	if err != nil || !validHash(expected) || !strings.EqualFold(actual, expected) {
-		return TrustedRuntime{}, errors.New("current Jianying montage reconciliation script fingerprint changed")
+	script, err := verifyReconciliationPythonFiles(root, pythonFiles)
+	if err != nil {
+		return TrustedRuntime{}, err
 	}
 	runtime.ReconciliationSkillRoot = root
 	runtime.ReconciliationScriptPath = script
-	runtime.ReconciliationScriptSHA256 = expected
+	runtime.ReconciliationPythonFiles = append([]domain.SkillFileSnapshot(nil), pythonFiles...)
 	return runtime, nil
 }
 
 func trustedReconciliationSkill(runtime TrustedRuntime) (string, string, error) {
 	root, rootErr := canonicalNoFollow(runtime.ReconciliationSkillRoot, true)
-	script, scriptErr := canonicalNoFollow(runtime.ReconciliationScriptPath, false)
-	if rootErr != nil || scriptErr != nil || !samePath(root, runtime.ReconciliationSkillRoot) || !samePath(script, runtime.ReconciliationScriptPath) || !samePath(script, filepath.Join(root, "scripts", "run_montage_job.py")) || !WithinJianyingRoot(root, script) {
+	if rootErr != nil || !samePath(root, runtime.ReconciliationSkillRoot) {
 		return "", "", errors.New("trusted current reconciliation Skill runtime is unavailable")
 	}
-	actual, err := hashFile(script)
-	if err != nil || !validHash(runtime.ReconciliationScriptSHA256) || !strings.EqualFold(actual, runtime.ReconciliationScriptSHA256) {
-		return "", "", errors.New("trusted current reconciliation script fingerprint changed")
+	script, err := verifyReconciliationPythonFiles(root, runtime.ReconciliationPythonFiles)
+	if err != nil || !samePath(script, runtime.ReconciliationScriptPath) {
+		return "", "", errors.New("trusted current reconciliation Python dependency fingerprint changed")
 	}
 	return root, script, nil
+}
+
+func verifyReconciliationPythonFiles(root string, expected []domain.SkillFileSnapshot) (string, error) {
+	if len(expected) == 0 {
+		return "", errors.New("current Jianying montage Python dependency snapshot is empty")
+	}
+	expectedByPath := make(map[string]string, len(expected))
+	for _, file := range expected {
+		rel := filepath.Clean(filepath.FromSlash(file.Path))
+		if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || !validHash(file.SHA256) {
+			return "", errors.New("current Jianying montage Python dependency identity is invalid")
+		}
+		path, err := canonicalNoFollow(filepath.Join(root, rel), false)
+		if err != nil || !WithinJianyingRoot(root, path) {
+			return "", errors.New("current Jianying montage Python dependency is unavailable")
+		}
+		actual, err := hashFile(path)
+		if err != nil || !strings.EqualFold(actual, file.SHA256) {
+			return "", errors.New("current Jianying montage Python dependency fingerprint changed")
+		}
+		canonicalRel, err := filepath.Rel(root, path)
+		if err != nil {
+			return "", errors.New("current Jianying montage Python dependency is outside the Skill root")
+		}
+		key := strings.ToLower(filepath.ToSlash(canonicalRel))
+		if _, duplicate := expectedByPath[key]; duplicate {
+			return "", errors.New("current Jianying montage Python dependency snapshot contains duplicates")
+		}
+		expectedByPath[key] = strings.ToLower(file.SHA256)
+	}
+	actualPaths := make(map[string]struct{}, len(expectedByPath))
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("current Jianying montage Skill contains a symlink")
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".py") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		actualPaths[strings.ToLower(filepath.ToSlash(rel))] = struct{}{}
+		return nil
+	})
+	if err != nil || len(actualPaths) != len(expectedByPath) {
+		return "", errors.New("current Jianying montage Python dependency set changed")
+	}
+	for path := range actualPaths {
+		if _, ok := expectedByPath[path]; !ok {
+			return "", errors.New("current Jianying montage Python dependency set changed")
+		}
+	}
+	for _, required := range []string{"scripts/run_montage_job.py", "scripts/jianying_concurrency_lock.py"} {
+		if _, ok := expectedByPath[required]; !ok {
+			return "", fmt.Errorf("current Jianying montage required Python dependency is unbound: %s", required)
+		}
+	}
+	return canonicalNoFollow(filepath.Join(root, "scripts", "run_montage_job.py"), false)
 }
 
 func (c *Coordinator) HandleCompleted(ctx context.Context, input taskcompletion.CompletedInput) (bool, error) {

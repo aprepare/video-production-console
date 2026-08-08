@@ -108,19 +108,27 @@ func TestCoordinatorQueuesBackfillDisplayOnRegistrationSerialQueue(t *testing.T)
 func TestWithTrustedReconciliationSkillUsesCurrentInstalledSnapshot(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "scripts", "run_montage_job.py")
+	lockModule := filepath.Join(root, "scripts", "jianying_concurrency_lock.py")
 	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(script, []byte("current installed reconciliation runtime"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(lockModule, []byte("trusted lock dependency"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	hash, err := hashFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockHash, err := hashFile(lockModule)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{}, domain.SkillSnapshot{
 		Name: "jianying-montage-draft", Path: root,
-		Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: hash}},
+		Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: hash}, {Path: "scripts/jianying_concurrency_lock.py", SHA256: lockHash}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,19 +145,27 @@ func TestWithTrustedReconciliationSkillUsesCurrentInstalledSnapshot(t *testing.T
 func TestTrustedReconciliationSkillRejectsChangedCurrentScript(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "scripts", "run_montage_job.py")
+	lockModule := filepath.Join(root, "scripts", "jianying_concurrency_lock.py")
 	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(script, []byte("trusted"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(lockModule, []byte("trusted lock dependency"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	hash, err := hashFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockHash, err := hashFile(lockModule)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{}, domain.SkillSnapshot{
 		Name: "jianying-montage-draft", Path: root,
-		Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: hash}},
+		Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: hash}, {Path: "scripts/jianying_concurrency_lock.py", SHA256: lockHash}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +175,72 @@ func TestTrustedReconciliationSkillRejectsChangedCurrentScript(t *testing.T) {
 	}
 	if _, _, err := trustedReconciliationSkill(runtime); err == nil {
 		t.Fatal("changed current installed reconciliation script was accepted")
+	}
+}
+
+func TestTrustedReconciliationSkillRejectsChangedLockDependency(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "scripts", "run_montage_job.py")
+	lockModule := filepath.Join(root, "scripts", "jianying_concurrency_lock.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("import jianying_concurrency_lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockModule, []byte("trusted lock dependency"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptHash, _ := hashFile(script)
+	lockHash, _ := hashFile(lockModule)
+	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{}, domain.SkillSnapshot{
+		Name: "jianying-montage-draft", Path: root,
+		Files: []domain.SkillFileSnapshot{
+			{Path: "scripts/run_montage_job.py", SHA256: scriptHash},
+			{Path: "scripts/jianying_concurrency_lock.py", SHA256: lockHash},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockModule, []byte("changed after startup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trustedReconciliationSkill(runtime); err == nil {
+		t.Fatal("changed current lock dependency was accepted")
+	}
+}
+
+func TestTrustedReconciliationSkillRejectsNewUnboundPythonDependency(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "scripts", "run_montage_job.py")
+	lockModule := filepath.Join(root, "scripts", "jianying_concurrency_lock.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("import jianying_concurrency_lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockModule, []byte("trusted lock dependency"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptHash, _ := hashFile(script)
+	lockHash, _ := hashFile(lockModule)
+	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{}, domain.SkillSnapshot{
+		Name: "jianying-montage-draft", Path: root,
+		Files: []domain.SkillFileSnapshot{
+			{Path: "scripts/run_montage_job.py", SHA256: scriptHash},
+			{Path: "scripts/jianying_concurrency_lock.py", SHA256: lockHash},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "new_dependency.py"), []byte("new dependency"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trustedReconciliationSkill(runtime); err == nil {
+		t.Fatal("new unbound Python dependency was accepted")
 	}
 }
 
@@ -174,6 +256,7 @@ func TestResolveReconciliationRuntimeIgnoresChangedHistoricalTaskScript(t *testi
 	registered := filepath.Join(jianyingRoot, taskID)
 	currentRoot := filepath.Join(base, "current-skill")
 	currentScript := filepath.Join(currentRoot, "scripts", "run_montage_job.py")
+	currentLockModule := filepath.Join(currentRoot, "scripts", "jianying_concurrency_lock.py")
 	historicalRoot := filepath.Join(base, "historical-skill")
 	historicalScript := filepath.Join(historicalRoot, "scripts", "run_montage_job.py")
 	for _, directory := range []string{workspace, registered, filepath.Dir(currentScript), filepath.Dir(historicalScript)} {
@@ -182,7 +265,7 @@ func TestResolveReconciliationRuntimeIgnoresChangedHistoricalTaskScript(t *testi
 		}
 	}
 	for path, content := range map[string]string{
-		profile: "{}", python: "python", currentScript: "current trusted", historicalScript: "changed historical",
+		profile: "{}", python: "python", currentScript: "current trusted", currentLockModule: "trusted lock", historicalScript: "changed historical",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
@@ -199,10 +282,11 @@ func TestResolveReconciliationRuntimeIgnoresChangedHistoricalTaskScript(t *testi
 		t.Fatal(err)
 	}
 	currentHash, _ := hashFile(currentScript)
+	currentLockHash, _ := hashFile(currentLockModule)
 	profileHash, _ := hashFile(profile)
 	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{
 		MachineProfilePath: profile, MachineProfileSHA256: profileHash, PythonBinary: python, JianyingRoot: jianyingRoot,
-	}, domain.SkillSnapshot{Name: "jianying-montage-draft", Path: currentRoot, Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: currentHash}}})
+	}, domain.SkillSnapshot{Name: "jianying-montage-draft", Path: currentRoot, Files: []domain.SkillFileSnapshot{{Path: "scripts/run_montage_job.py", SHA256: currentHash}, {Path: "scripts/jianying_concurrency_lock.py", SHA256: currentLockHash}}})
 	if err != nil {
 		t.Fatal(err)
 	}
