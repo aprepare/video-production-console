@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -200,6 +201,39 @@ func TestValidateRegisteredDraftRejectsMissingReceiptDisplayForReadableName(t *t
 	})
 	if _, err := ValidateRegisteredDraft(fixture.request); !errors.Is(err, ErrInvalidRegistration) {
 		t.Fatalf("missing readable receipt identity error=%v, want ErrInvalidRegistration", err)
+	}
+}
+
+func TestValidateRegisteredDraftRejectsPresentInvalidLegacyReceiptIdentity(t *testing.T) {
+	identities := []map[string]any{
+		{"task_id": "", "draft_display_name": ""},
+		{"task_id": nil, "draft_display_name": nil},
+		{"task_id": "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"},
+		{"draft_display_name": "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"},
+		{"task_id": 7, "draft_display_name": "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"},
+	}
+	for _, identity := range identities {
+		t.Run(fmt.Sprint(identity), func(t *testing.T) {
+			fixture := newRegistrationFixture(t, true, false)
+			fixture.request.DisplayName = fixture.request.TaskID
+			rewriteJSONFixture(t, filepath.Join(fixture.registered, "draft_meta_info.json"), func(value map[string]any) {
+				value["draft_name"] = fixture.request.TaskID
+			})
+			rewriteJSONFixture(t, filepath.Join(fixture.root, "root_meta_info.json"), func(value map[string]any) {
+				entries := value["all_draft_store"].([]any)
+				entries[0].(map[string]any)["draft_name"] = fixture.request.TaskID
+			})
+			rewriteJSONFixture(t, fixture.receiptPath, func(value map[string]any) {
+				delete(value, "task_id")
+				delete(value, "draft_display_name")
+				for key, item := range identity {
+					value[key] = item
+				}
+			})
+			if _, err := ValidateRegisteredDraft(fixture.request); !errors.Is(err, ErrInvalidRegistration) {
+				t.Fatalf("present invalid legacy identity error=%v, want ErrInvalidRegistration", err)
+			}
+		})
 	}
 }
 

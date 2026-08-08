@@ -17,16 +17,16 @@ import (
 type ValidationRequest struct{ TaskID, DisplayName, WorkspacePath, ReceiptPath, JianyingRoot string }
 
 type registrationReceipt struct {
-	Status                  string `json:"status"`
-	TaskID                  string `json:"task_id"`
-	DraftDisplayName        string `json:"draft_display_name"`
-	RegisteredPath          string `json:"registered_path"`
-	DraftID                 string `json:"draft_id"`
-	SourceDraftID           string `json:"source_draft_id"`
-	DraftIDRekeyed          *bool  `json:"draft_id_rekeyed"`
-	DurationUS              int64  `json:"duration_us"`
-	SourceContentSHA256     string `json:"source_content_sha256"`
-	RegisteredContentSHA256 string `json:"registered_content_sha256"`
+	Status                  string          `json:"status"`
+	TaskID                  json.RawMessage `json:"task_id"`
+	DraftDisplayName        json.RawMessage `json:"draft_display_name"`
+	RegisteredPath          string          `json:"registered_path"`
+	DraftID                 string          `json:"draft_id"`
+	SourceDraftID           string          `json:"source_draft_id"`
+	DraftIDRekeyed          *bool           `json:"draft_id_rekeyed"`
+	DurationUS              int64           `json:"duration_us"`
+	SourceContentSHA256     string          `json:"source_content_sha256"`
+	RegisteredContentSHA256 string          `json:"registered_content_sha256"`
 }
 
 func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) {
@@ -57,9 +57,7 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil {
 		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
 	}
-	legacyIdentity := request.DisplayName == request.TaskID && receipt.TaskID == "" && receipt.DraftDisplayName == ""
-	identityMatches := receipt.TaskID == request.TaskID && receipt.DraftDisplayName == request.DisplayName
-	if receipt.Status != "completed" || (!identityMatches && !legacyIdentity) || receipt.DraftID == "" || receipt.DurationUS <= 0 {
+	if receipt.Status != "completed" || !receiptIdentityMatches(receipt, request) || receipt.DraftID == "" || receipt.DurationUS <= 0 {
 		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
 	}
 	registered, err := canonicalDirectory(receipt.RegisteredPath)
@@ -123,6 +121,19 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 		return RegisterResult{}, invalidRegistration("registered directory could not be hashed")
 	}
 	return RegisterResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: receipt.DraftID, DisplayName: request.DisplayName, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash, DurationUS: receipt.DurationUS}, nil
+}
+
+func receiptIdentityMatches(receipt registrationReceipt, request ValidationRequest) bool {
+	taskPresent := len(receipt.TaskID) != 0
+	displayPresent := len(receipt.DraftDisplayName) != 0
+	if !taskPresent || !displayPresent {
+		return !taskPresent && !displayPresent && request.DisplayName == request.TaskID
+	}
+	var taskID, displayName string
+	if json.Unmarshal(receipt.TaskID, &taskID) != nil || json.Unmarshal(receipt.DraftDisplayName, &displayName) != nil {
+		return false
+	}
+	return taskID == request.TaskID && displayName == request.DisplayName
 }
 
 func readDraftID(path string) (string, error) {
