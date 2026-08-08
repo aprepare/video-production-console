@@ -54,7 +54,12 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 		return RegisterResult{}, invalidRegistration("registration receipt could not be read")
 	}
 	var receipt registrationReceipt
-	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil || receipt.Status != "completed" || receipt.TaskID != request.TaskID || receipt.DraftDisplayName != request.DisplayName || receipt.DraftID == "" || receipt.DurationUS <= 0 {
+	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil {
+		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
+	}
+	legacyIdentity := request.DisplayName == request.TaskID && receipt.TaskID == "" && receipt.DraftDisplayName == ""
+	identityMatches := receipt.TaskID == request.TaskID && receipt.DraftDisplayName == request.DisplayName
+	if receipt.Status != "completed" || (!identityMatches && !legacyIdentity) || receipt.DraftID == "" || receipt.DurationUS <= 0 {
 		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
 	}
 	registered, err := canonicalDirectory(receipt.RegisteredPath)

@@ -169,6 +169,40 @@ func TestValidateRegisteredDraftRejectsDisplayNameMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateRegisteredDraftAcceptsLegacyReceiptOnlyForUUIDDisplayFallback(t *testing.T) {
+	fixture := newRegistrationFixture(t, true, false)
+	fixture.request.DisplayName = fixture.request.TaskID
+	rewriteJSONFixture(t, filepath.Join(fixture.registered, "draft_meta_info.json"), func(value map[string]any) {
+		value["draft_name"] = fixture.request.TaskID
+	})
+	rewriteJSONFixture(t, filepath.Join(fixture.root, "root_meta_info.json"), func(value map[string]any) {
+		entries := value["all_draft_store"].([]any)
+		entries[0].(map[string]any)["draft_name"] = fixture.request.TaskID
+	})
+	rewriteJSONFixture(t, fixture.receiptPath, func(value map[string]any) {
+		delete(value, "task_id")
+		delete(value, "draft_display_name")
+	})
+	result, err := ValidateRegisteredDraft(fixture.request)
+	if err != nil {
+		t.Fatalf("legacy UUID display receipt was rejected: %v", err)
+	}
+	if result.DisplayName != fixture.request.TaskID {
+		t.Fatalf("legacy display name=%q, want task UUID", result.DisplayName)
+	}
+}
+
+func TestValidateRegisteredDraftRejectsMissingReceiptDisplayForReadableName(t *testing.T) {
+	fixture := newRegistrationFixture(t, true, false)
+	rewriteJSONFixture(t, fixture.receiptPath, func(value map[string]any) {
+		delete(value, "task_id")
+		delete(value, "draft_display_name")
+	})
+	if _, err := ValidateRegisteredDraft(fixture.request); !errors.Is(err, ErrInvalidRegistration) {
+		t.Fatalf("missing readable receipt identity error=%v, want ErrInvalidRegistration", err)
+	}
+}
+
 func writeJSONFixture(t *testing.T, path string, value any) {
 	t.Helper()
 	data, err := json.Marshal(value)

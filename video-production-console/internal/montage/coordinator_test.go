@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +36,45 @@ func TestFrozenDraftDisplayNameReadsReadableName(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("display name=%q, want %q", got, want)
+	}
+}
+
+func TestFrozenDraftDisplayNameFallsBackOnlyWhenFieldIsMissing(t *testing.T) {
+	taskID := "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"
+	writeManifest := func(t *testing.T, settings map[string]any) string {
+		t.Helper()
+		manifest := filepath.Join(t.TempDir(), "task_manifest.json")
+		data, err := json.Marshal(map[string]any{
+			"task_id":             taskID,
+			"job_id":              taskID,
+			"non_secret_settings": settings,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(manifest, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+
+	got, err := frozenDraftDisplayName(writeManifest(t, map[string]any{}), taskID)
+	if err != nil {
+		t.Fatalf("missing legacy display field was rejected: %v", err)
+	}
+	if got != taskID {
+		t.Fatalf("legacy display=%q, want task UUID", got)
+	}
+	if _, err := frozenDraftDisplayName(writeManifest(t, map[string]any{"draft_display_name": ""}), taskID); err == nil {
+		t.Fatal("explicit empty display name was accepted")
+	}
+	if _, err := frozenDraftDisplayName(writeManifest(t, map[string]any{"draft_display_name": nil}), taskID); err == nil {
+		t.Fatal("explicit null display name was accepted")
+	}
+	for _, invalid := range []string{"unsafe/name", "trailing.", strings.Repeat("长", 69)} {
+		if _, err := frozenDraftDisplayName(writeManifest(t, map[string]any{"draft_display_name": invalid}), taskID); err == nil {
+			t.Fatalf("explicit invalid display name %q was accepted", invalid)
+		}
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
@@ -430,12 +431,16 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 		TaskID            string `json:"task_id"`
 		JobID             string `json:"job_id"`
 		NonSecretSettings struct {
-			MachineProfilePath string `json:"machine_profile_path"`
-			DraftDisplayName   string `json:"draft_display_name"`
+			MachineProfilePath string          `json:"machine_profile_path"`
+			DraftDisplayName   json.RawMessage `json:"draft_display_name"`
 		} `json:"non_secret_settings"`
 	}
-	if json.Unmarshal(manifestData, &manifest) != nil || manifest.TaskID != attempt.TaskID || manifest.JobID != attempt.TaskID || strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath) == "" || strings.TrimSpace(manifest.NonSecretSettings.DraftDisplayName) == "" {
+	if json.Unmarshal(manifestData, &manifest) != nil || manifest.TaskID != attempt.TaskID || manifest.JobID != attempt.TaskID || strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath) == "" {
 		return RegisterRequest{}, errors.New("manifest task identity or machine profile is invalid")
+	}
+	displayName, err := decodeFrozenDraftDisplayName(manifest.NonSecretSettings.DraftDisplayName, attempt.TaskID)
+	if err != nil {
+		return RegisterRequest{}, err
 	}
 	profilePath, err := canonicalNoFollow(manifest.NonSecretSettings.MachineProfilePath, false)
 	if err != nil || !samePath(profilePath, c.runtime.MachineProfilePath) {
@@ -453,7 +458,7 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 	if err != nil || !samePath(jianyingRoot, c.runtime.JianyingRoot) {
 		return RegisterRequest{}, errors.New("trusted Jianying root identity changed")
 	}
-	return RegisterRequest{TaskID: attempt.TaskID, DisplayName: manifest.NonSecretSettings.DraftDisplayName, ManifestPath: manifestPath, WorkspacePath: workspacePath, SkillRoot: skillRoot, ScriptPath: scriptPath, PythonBinary: pythonBinary, JianyingRoot: jianyingRoot}, nil
+	return RegisterRequest{TaskID: attempt.TaskID, DisplayName: displayName, ManifestPath: manifestPath, WorkspacePath: workspacePath, SkillRoot: skillRoot, ScriptPath: scriptPath, PythonBinary: pythonBinary, JianyingRoot: jianyingRoot}, nil
 }
 
 func frozenDraftDisplayName(manifestPath, taskID string) (string, error) {
@@ -469,13 +474,29 @@ func frozenDraftDisplayName(manifestPath, taskID string) (string, error) {
 		TaskID            string `json:"task_id"`
 		JobID             string `json:"job_id"`
 		NonSecretSettings struct {
-			DraftDisplayName string `json:"draft_display_name"`
+			DraftDisplayName json.RawMessage `json:"draft_display_name"`
 		} `json:"non_secret_settings"`
 	}
-	if json.Unmarshal(data, &identity) != nil || identity.TaskID != taskID || identity.JobID != taskID || strings.TrimSpace(identity.NonSecretSettings.DraftDisplayName) == "" {
+	if json.Unmarshal(data, &identity) != nil || identity.TaskID != taskID || identity.JobID != taskID {
 		return "", invalidRegistration("task manifest display identity is invalid")
 	}
-	return identity.NonSecretSettings.DraftDisplayName, nil
+	return decodeFrozenDraftDisplayName(identity.NonSecretSettings.DraftDisplayName, taskID)
+}
+
+func decodeFrozenDraftDisplayName(raw json.RawMessage, taskID string) (string, error) {
+	if len(raw) == 0 {
+		return taskID, nil
+	}
+	var displayName string
+	if json.Unmarshal(raw, &displayName) != nil || strings.TrimSpace(displayName) == "" || displayName != strings.TrimSpace(displayName) || utf8.RuneCountInString(displayName) > 68 || strings.ContainsAny(displayName, `<>:"/\|?*`) || strings.HasSuffix(displayName, ".") {
+		return "", invalidRegistration("task manifest display identity is invalid")
+	}
+	for _, character := range displayName {
+		if character < 0x20 {
+			return "", invalidRegistration("task manifest display identity is invalid")
+		}
+	}
+	return displayName, nil
 }
 
 func trustedPythonBinary(value string) (string, error) {
