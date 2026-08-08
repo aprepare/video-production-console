@@ -44,6 +44,58 @@ func TestTaskRepositoryCompletedByProjectUsesStableIDTieBreaker(t *testing.T) {
 	}
 }
 
+func TestTaskRepositoryQueuedAtPersistenceAndStableBoundaries(t *testing.T) {
+	db, err := Open(t.TempDir() + "/queued-at.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	created := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	queued := created.Add(time.Second)
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, created, created); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	task := domain.CodexTask{ID: "queued", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: created, QueuedAt: &queued}
+	if err := repo.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, task.ID)
+	if err != nil || got.QueuedAt == nil || !got.QueuedAt.Equal(queued) {
+		t.Fatalf("created task=%+v err=%v", got, err)
+	}
+	later := queued.Add(time.Hour)
+	if err := repo.MarkQueued(ctx, task.ID, later); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = repo.Get(ctx, task.ID)
+	if got.QueuedAt == nil || !got.QueuedAt.Equal(queued) {
+		t.Fatalf("MarkQueued overwrote first boundary: %+v", got.QueuedAt)
+	}
+	firstStart := created.Add(2 * time.Second)
+	if _, err := db.Exec(`UPDATE codex_tasks SET started_at=? WHERE id=?`, firstStart, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Start(ctx, task.ID, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(ctx, task.ID, domain.TaskCompleted, "done", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	firstTerminal, err := repo.Get(ctx, task.ID)
+	if err != nil || firstTerminal.FinishedAt == nil {
+		t.Fatalf("first terminal=%+v err=%v", firstTerminal, err)
+	}
+	if err := repo.UpdateStatus(ctx, task.ID, domain.TaskFailed, "late", "x", "late"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = repo.Get(ctx, task.ID)
+	if got.StartedAt == nil || !got.StartedAt.Equal(firstStart) || got.FinishedAt == nil || !got.FinishedAt.Equal(*firstTerminal.FinishedAt) {
+		t.Fatalf("boundaries changed: start=%v finish=%v", got.StartedAt, got.FinishedAt)
+	}
+}
+
 func TestTaskRepositoryEnsurePreparedTaskPublishesTaskAndManifestAtomically(t *testing.T) {
 	db, err := Open(t.TempDir() + "/prepared.db")
 	if err != nil {

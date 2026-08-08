@@ -37,3 +37,34 @@ type TaskPhaseRun struct {
 	DurationMS  *int64
 	CreatedAt   time.Time
 }
+
+type TaskTimingSummary struct {
+	TaskID              string
+	TotalMS             int64
+	PreparationMS       int64
+	QueueMS             int64
+	ExecutionMS         int64
+	QueueEstimated      bool
+	SlowestPhase        *TaskPhaseRun
+	SlowestPhasePercent float64
+	Phases              []TaskPhaseRun
+	LegacyWithoutPhases bool
+}
+
+type TaskTimingAggregate struct {
+	Action            TaskAction
+	TaskCount         int
+	MedianTotalMS     int64
+	MaxTotalMS        int64
+	MedianExecutionMS int64
+	MaxExecutionMS    int64
+	Phases            []TaskPhaseTimingAggregate
+}
+
+type TaskPhaseTimingAggregate struct {
+	PhaseKey         string
+	DisplayName      string
+	Samples          int
+	MedianDurationMS int64
+	MaxDurationMS    int64
+}

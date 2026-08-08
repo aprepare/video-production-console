@@ -14,7 +14,7 @@ import (
 	"video-production-console/internal/taskmodel"
 )
 
-const taskColumns = `id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,result_summary,error_code,error_message,created_at,started_at,finished_at`
+const taskColumns = `id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,result_summary,error_code,error_message,created_at,queued_at,started_at,finished_at`
 const formalTaskClientKeyPrefix = "__formal_task__:"
 
 type TaskRepository struct {
@@ -93,7 +93,7 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CodexTask) erro
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt)
 	return err
 }
 
@@ -114,7 +114,7 @@ func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) er
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt)
 	return err
 }
 
@@ -141,7 +141,7 @@ func (r *TaskRepository) EnsurePreparedTask(ctx context.Context, task domain.Cod
 		var snapshot, path sql.NullString
 		readErr := q.QueryRowContext(ctx, `SELECT project_id,account_id,type,skill_name,action,status,prompt_snapshot,model_name,reasoning_effort,completion_phase,transport,skill_snapshot_id,manifest_path FROM codex_tasks WHERE id=?`, task.ID).Scan(&project, &account, &typ, &skill, &action, &status, &prompt, &model, &effort, &existingPhase, &existingTransport, &snapshot, &path)
 		if errors.Is(readErr, sql.ErrNoRows) {
-			_, insertErr := q.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,skill_snapshot_id,manifest_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, phase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, skillSnapshotID, manifestPath, task.CreatedAt)
+			_, insertErr := q.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,skill_snapshot_id,manifest_path,created_at,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, phase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, skillSnapshotID, manifestPath, task.CreatedAt, task.QueuedAt)
 			if insertErr != nil {
 				return insertErr
 			}
@@ -293,7 +293,7 @@ func (r *TaskRepository) InterruptInFlight(ctx context.Context) (int, error) {
 func (r *TaskRepository) Get(ctx context.Context, id string) (domain.CodexTask, error) {
 	var t domain.CodexTask
 	var action sql.NullString
-	err := r.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM codex_tasks WHERE id=?`, id).Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.ChatSessionID, &t.CodexThreadID, &t.CodexTurnID, &t.CompletionPhase, &t.Transport, &t.PromptSnapshot, &t.ModelName, &t.ReasoningEffort, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+	err := r.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM codex_tasks WHERE id=?`, id).Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.ChatSessionID, &t.CodexThreadID, &t.CodexTurnID, &t.CompletionPhase, &t.Transport, &t.PromptSnapshot, &t.ModelName, &t.ReasoningEffort, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.QueuedAt, &t.StartedAt, &t.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
 	}
@@ -320,7 +320,7 @@ func (r *TaskRepository) GetByCodexTurn(ctx context.Context, turnID string) (dom
 		&t.CodexSessionID, &t.ChatSessionID, &t.CodexThreadID, &t.CodexTurnID,
 		&t.CompletionPhase, &t.Transport, &t.PromptSnapshot, &t.ModelName,
 		&t.ReasoningEffort, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage,
-		&t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+		&t.CreatedAt, &t.QueuedAt, &t.StartedAt, &t.FinishedAt)
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
@@ -456,7 +456,7 @@ func (r *TaskRepository) List(ctx context.Context, projectID string, status doma
 	for rows.Next() {
 		var t domain.CodexTask
 		var action sql.NullString
-		if err := rows.Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.ChatSessionID, &t.CodexThreadID, &t.CodexTurnID, &t.CompletionPhase, &t.Transport, &t.PromptSnapshot, &t.ModelName, &t.ReasoningEffort, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.AccountID, &t.Type, &t.SkillName, &action, &t.Status, &t.CodexSessionID, &t.ChatSessionID, &t.CodexThreadID, &t.CodexTurnID, &t.CompletionPhase, &t.Transport, &t.PromptSnapshot, &t.ModelName, &t.ReasoningEffort, &t.ResultSummary, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.QueuedAt, &t.StartedAt, &t.FinishedAt); err != nil {
 			return nil, err
 		}
 		if action.Valid {
@@ -570,8 +570,24 @@ func (r *TaskRepository) SetTransportMetadata(ctx context.Context, id string, ch
 }
 func (r *TaskRepository) UpdateStatus(ctx context.Context, id string, status domain.TaskStatus, summary, code, message string) error {
 	now := time.Now().UTC()
-	_, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IN ('completed','failed','canceled','cancelled','interrupted') THEN ? ELSE finished_at END,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END WHERE id=?`, status, nullable(summary), nullable(code), nullable(message), status, now, status, now, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IN ('completed','failed','canceled','cancelled','interrupted') THEN COALESCE(finished_at,?) ELSE finished_at END,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END WHERE id=?`, status, nullable(summary), nullable(code), nullable(message), status, now, status, now, id)
 	return err
+}
+
+func (r *TaskRepository) MarkQueued(ctx context.Context, id string, at time.Time) error {
+	if strings.TrimSpace(id) == "" || at.IsZero() {
+		return fmt.Errorf("task and queue time are required")
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=?`, at, id)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
+	}
+	return nil
 }
 func nullable(s string) any {
 	if s == "" {
