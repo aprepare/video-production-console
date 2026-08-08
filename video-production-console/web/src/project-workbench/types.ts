@@ -26,6 +26,23 @@ export type ProjectAsset = {
   created_at: string;
 };
 
+export type RegisteredMontageAsset = {
+  id: string;
+  filename?: string;
+  display_name?: string;
+  storage_name?: string;
+  draft_id?: string;
+  path: string;
+  sha256: string;
+  created_at: string;
+};
+
+export type MontageTaskResult = {
+  phase: string;
+  registered_asset?: RegisteredMontageAsset | null;
+  can_retry_registration: boolean;
+};
+
 export type ProjectTask = {
   id: string;
   project_id?: string;
@@ -53,6 +70,7 @@ export type ProjectTask = {
     phase?: string;
     created_at?: string;
   }>;
+  montage?: MontageTaskResult;
 };
 
 export type ActiveWorkflow = {

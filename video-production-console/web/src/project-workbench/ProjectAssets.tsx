@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useEffect, useRef } from "react";
-import type { ProjectAsset, ProjectDetail } from "./types";
+import type { ProjectAsset, ProjectDetail, RegisteredMontageAsset } from "./types";
 
 type AssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video";
 export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "final_video" | "account_background";
@@ -50,7 +50,7 @@ const assetDefinitions: Array<{
   },
   {
     type: "mix_draft",
-    label: "混剪草稿",
+    label: "剪映草稿",
     description: "已登记的可编辑剪映工程，用于最后检查。",
     accept: ".zip,application/zip",
     icon: Clapperboard,
@@ -74,6 +74,7 @@ function assetState(asset?: ProjectAsset) {
 
 type ProjectAssetsProps = {
   detail: ProjectDetail;
+  registeredDraft?: RegisteredMontageAsset & { task_id: string };
   onUpload: (type: "narration" | "subtitle_srt" | "final_video", file: File) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
@@ -83,6 +84,7 @@ type ProjectAssetsProps = {
 
 export function ProjectAssets({
   detail,
+  registeredDraft,
   onUpload,
   onReplaceBackground,
   onViewAsset,
@@ -118,16 +120,45 @@ export function ProjectAssets({
           const asset = detail.assets[definition.type];
           const state = assetState(asset);
           const Icon = definition.icon;
+          const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
+          const draftDisplayName = isRegisteredDraft
+            ? registeredDraft?.display_name?.trim()
+              || registeredDraft?.filename?.trim()
+              || registeredDraft?.storage_name?.trim()
+              || asset?.filename?.trim()
+              || "未命名草稿"
+            : "";
           return (
             <article className="project-asset" key={definition.type}>
               <div className="project-asset__icon" aria-hidden="true"><Icon size={18} /></div>
               <div className="project-asset__copy">
                 <div className="project-asset__title">
                   <strong>{definition.label}</strong>
-                  <span className={`asset-state asset-state--${state.className}`}>{state.label}</span>
+                  <span className={`asset-state asset-state--${state.className}`}>
+                    {isRegisteredDraft ? "已登记 · 可继续编辑" : state.label}
+                  </span>
                 </div>
-                <p>{definition.description}</p>
-                {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>尚未上传到当前项目</small>}
+                {isRegisteredDraft ? (
+                  <>
+                    <strong className="project-asset__display-name">{draftDisplayName}</strong>
+                    <p>{definition.description}</p>
+                    <details className="technical-history project-asset__technical">
+                      <summary>技术信息</summary>
+                      <dl>
+                        <dt>存储名</dt><dd>{registeredDraft?.storage_name || asset.filename}</dd>
+                        {registeredDraft?.draft_id ? <><dt>草稿 ID</dt><dd>{registeredDraft.draft_id}</dd></> : null}
+                        {registeredDraft?.task_id ? <><dt>任务 UUID</dt><dd>{registeredDraft.task_id}</dd></> : null}
+                        {registeredDraft?.path ? <><dt>登记路径</dt><dd>{registeredDraft.path}</dd></> : null}
+                        <dt>资产 ID</dt><dd>{asset.id}</dd>
+                      </dl>
+                    </details>
+                  </>
+                ) : (
+                  <>
+                    <p>{definition.description}</p>
+                    {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>尚未上传到当前项目</small>}
+                  </>
+                )}
               </div>
               <div className="project-asset__actions">
                 {asset ? (

@@ -118,7 +118,7 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(screen.getByText("二创生成的完整连续文本，用于配音和混剪。")).toBeTruthy();
   expect(screen.getByText("配音")).toBeTruthy();
   expect(screen.getByText("SRT 字幕")).toBeTruthy();
-  expect(screen.getByText("混剪草稿")).toBeTruthy();
+  expect(screen.getByText("剪映草稿")).toBeTruthy();
   expect(screen.getByText("成片")).toBeTruthy();
   expect(screen.getAllByText("存在").length).toBeGreaterThan(0);
   expect(screen.getAllByText("失效").length).toBeGreaterThan(0);
@@ -135,6 +135,104 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(props.onUpload).toHaveBeenCalledWith("narration", expect.any(File));
   fireEvent.click(screen.getByRole("button", { name: "查看连续文案" }));
   expect(props.onViewAsset).toHaveBeenCalledWith(expect.objectContaining({ type: "continuous_script" }));
+});
+
+test("shows the current registered Jianying display name while keeping storage identity in collapsed technical details", () => {
+  const detail = fixture();
+  detail.project.stage = "review";
+  detail.assets.mix_draft = {
+    ...asset("mix_draft"),
+    id: "ready-mix-version",
+    filename: "984c42ec-67b8-4d3f-99e3-d3d7a4b66205",
+    mime_type: "inode/directory",
+  };
+  const registeredTask = {
+    ...task,
+    id: "984c42ec-67b8-4d3f-99e3-d3d7a4b66205",
+    project_id: projectID,
+    status: "completed",
+    completion_phase: "registered",
+    created_at: "2026-08-08T03:00:00Z",
+    montage: {
+      phase: "registered",
+      registered_asset: {
+        id: "ready-mix-version",
+        filename: "账号_旧标题_b66205",
+        display_name: "账号_短标题_b66205",
+        storage_name: "984c42ec-67b8-4d3f-99e3-d3d7a4b66205",
+        draft_id: "draft-id-123",
+        path: "C:\\Jianying\\984c42ec-67b8-4d3f-99e3-d3d7a4b66205",
+        sha256: "a".repeat(64),
+        created_at: "2026-08-08T03:00:00Z",
+      },
+      can_retry_registration: false,
+    },
+  };
+  const laterFailedTask = {
+    ...registeredTask,
+    id: "later-failed-task",
+    status: "failed",
+    created_at: "2026-08-08T04:00:00Z",
+    montage: {
+      ...registeredTask.montage,
+      registered_asset: {
+        ...registeredTask.montage.registered_asset,
+        display_name: "错误失败草稿",
+      },
+    },
+  };
+  const otherProjectTask = {
+    ...registeredTask,
+    id: "other-project-task",
+    project_id: "other-project",
+    created_at: "2026-08-08T05:00:00Z",
+  };
+  const props = workbenchProps(detail);
+  props.tasks = [laterFailedTask, otherProjectTask, registeredTask];
+  const { container } = render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByText("账号_短标题_b66205")).toBeTruthy();
+  expect(screen.getByText("已登记 · 可继续编辑")).toBeTruthy();
+  expect(screen.queryByText("错误失败草稿")).toBeNull();
+
+  const technical = container.querySelector<HTMLDetailsElement>(".project-asset__technical");
+  expect(technical?.open).toBe(false);
+  expect(within(technical!).getAllByText("984c42ec-67b8-4d3f-99e3-d3d7a4b66205")).toHaveLength(2);
+  expect(within(technical!).getByText("draft-id-123")).toBeTruthy();
+  expect(within(technical!).getByText("C:\\Jianying\\984c42ec-67b8-4d3f-99e3-d3d7a4b66205")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "查看剪映草稿" }));
+  expect(props.onViewAsset).toHaveBeenCalledWith(expect.objectContaining({ id: "ready-mix-version" }));
+});
+
+test("falls back to the legacy registered filename when display_name is absent", () => {
+  const detail = fixture();
+  detail.assets.mix_draft = { ...asset("mix_draft"), id: "legacy-mix-version" };
+  const legacyTask = {
+    ...task,
+    id: "legacy-task",
+    project_id: projectID,
+    status: "completed",
+    completion_phase: "registered",
+    montage: {
+      phase: "registered",
+      registered_asset: {
+        id: "legacy-mix-version",
+        filename: "旧版可读草稿",
+        storage_name: "legacy-storage-name",
+        path: "C:\\Jianying\\legacy-storage-name",
+        sha256: "b".repeat(64),
+        created_at: "2026-08-08T00:00:00Z",
+      },
+      can_retry_registration: false,
+    },
+  };
+  const props = workbenchProps(detail);
+  props.tasks = [legacyTask];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByText("旧版可读草稿")).toBeTruthy();
+  expect(screen.getByText("已登记 · 可继续编辑")).toBeTruthy();
 });
 
 test("disables the single primary action while the automatic remix workflow is active", () => {
@@ -252,9 +350,9 @@ test("does not expose manual upload controls for generated continuous scripts or
   renderWorkbench();
 
   expect(screen.queryByLabelText("上传连续文案")).toBeNull();
-  expect(screen.queryByLabelText("上传混剪草稿")).toBeNull();
+  expect(screen.queryByLabelText("上传剪映草稿")).toBeNull();
   expect(screen.getByRole("button", { name: "查看连续文案" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "查看混剪草稿" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "查看剪映草稿" })).toBeTruthy();
 });
 
 test("selects the newest live task consistently in the action panel and conversation", () => {

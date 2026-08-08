@@ -47,6 +47,17 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0]
     || [...props.tasks].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
   const currentTaskIsLive = Boolean(currentTask && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(currentTask.status));
+  const readyMixDraft = detail.assets.mix_draft?.state === "ready" ? detail.assets.mix_draft : undefined;
+  const registeredDraftTask = [...props.tasks]
+    .filter((task) =>
+      task.project_id === detail.project.id
+      && task.action === "montage.execute"
+      && task.status === "completed"
+      && task.montage?.registered_asset?.id === readyMixDraft?.id)
+    .sort((left, right) => {
+      const timeOrder = Date.parse(right.created_at) - Date.parse(left.created_at);
+      return timeOrder || right.id.localeCompare(left.id);
+    })[0];
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const projectPending = props.pendingActions.length > 0;
 
@@ -160,6 +171,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
         <ProjectAssets
           detail={detail}
+          registeredDraft={registeredDraftTask?.montage?.registered_asset
+            ? { ...registeredDraftTask.montage.registered_asset, task_id: registeredDraftTask.id }
+            : undefined}
           onUpload={props.onUpload}
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
