@@ -99,6 +99,7 @@ type CodexTask struct {
 	ErrorCode       *string
 	ErrorMessage    *string
 	CreatedAt       time.Time
+	QueuedAt        *time.Time
 	StartedAt       *time.Time
 	FinishedAt      *time.Time
 }

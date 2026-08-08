@@ -757,6 +757,34 @@ CREATE INDEX projects_account_publication_idx ON projects(account_id, publicatio
 );
 CREATE UNIQUE INDEX project_workflow_active_uq
 ON project_workflow_runs(project_id,kind) WHERE state='running';`,
+	`ALTER TABLE codex_tasks ADD COLUMN queued_at DATETIME;
+
+CREATE TABLE task_phase_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES codex_tasks(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    phase_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('host','app_server','skill')),
+    state TEXT NOT NULL CHECK (state IN ('queued','running','completed','failed','canceled','interrupted')),
+    started_at DATETIME NOT NULL,
+    running_at DATETIME,
+    finished_at DATETIME,
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    external_id TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail_json)),
+    created_at DATETIME NOT NULL,
+    CHECK (running_at IS NULL OR running_at >= started_at),
+    CHECK (finished_at IS NULL OR finished_at >= started_at),
+    CHECK (finished_at IS NULL OR running_at IS NULL OR finished_at >= running_at)
+);
+CREATE UNIQUE INDEX task_phase_one_running_uq
+ON task_phase_runs(task_id,attempt,phase_key) WHERE state='running';
+CREATE UNIQUE INDEX task_phase_external_event_uq
+ON task_phase_runs(task_id,attempt,phase_key,source,external_id)
+WHERE external_id IS NOT NULL;
+CREATE INDEX task_phase_task_attempt_idx
+ON task_phase_runs(task_id,attempt,started_at,id);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

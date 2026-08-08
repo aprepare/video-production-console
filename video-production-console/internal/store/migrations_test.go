@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,7 +12,98 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"video-production-console/internal/domain"
 )
+
+func TestTimingMigrationCreatesPhaseSchemaAndStateVocabulary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "timings.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM pragma_table_info('codex_tasks') WHERE name='queued_at'`); got != "1" {
+		t.Fatalf("queued_at columns=%s, want 1", got)
+	}
+	if !tableExists(t, db, "task_phase_runs") {
+		t.Fatal("task_phase_runs table missing")
+	}
+	for name, fragment := range map[string]string{
+		"task_phase_one_running_uq":   "WHERE state='running'",
+		"task_phase_task_attempt_idx": "task_id,attempt,started_at,id",
+	} {
+		if got := strings.ReplaceAll(scalar(t, db, `SELECT sql FROM sqlite_master WHERE type='index' AND name=?`, name), " ", ""); !strings.Contains(got, strings.ReplaceAll(fragment, " ", "")) {
+			t.Fatalf("index %s=%q, want %q", name, got, fragment)
+		}
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?);
+		INSERT INTO codex_tasks(id,account_id,type,skill_name,status,prompt_snapshot,created_at) VALUES('t','a','x','s','queued','p',?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	states := []domain.TaskPhaseState{domain.PhaseQueued, domain.PhaseRunning, domain.PhaseCompleted, domain.PhaseFailed, domain.PhaseCanceled, domain.PhaseInterrupted}
+	for i, state := range states {
+		finished, duration := any(nil), any(nil)
+		if state != domain.PhaseQueued && state != domain.PhaseRunning {
+			finished, duration = now, int64(0)
+		}
+		if _, err := db.Exec(`INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,finished_at,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, fmt.Sprintf("p%d", i), "t", i+1, "phase", "任务准备", domain.PhaseSourceHost, state, now, finished, duration, now); err != nil {
+			t.Fatalf("insert state %s: %v", state, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	if got := scalar(t, db, `SELECT COUNT(*) FROM task_phase_runs`); got != fmt.Sprint(len(states)) {
+		t.Fatalf("phase rows after reopen=%s", got)
+	}
+}
+
+func TestQueuedAtMigrationPreservesHistoricalTasksWithoutSyntheticPhases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "timing-upgrade.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	for i, migration := range migrations[:len(migrations)-1] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply predecessor migration %d: %v", i+1, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?);
+		INSERT INTO codex_tasks(id,account_id,type,skill_name,status,prompt_snapshot,created_at) VALUES('old','a','x','s','completed','p',?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var queuedAt sql.NullTime
+	if err := db.QueryRow(`SELECT queued_at FROM codex_tasks WHERE id='old'`).Scan(&queuedAt); err != nil {
+		t.Fatal(err)
+	}
+	if queuedAt.Valid {
+		t.Fatalf("historical queued_at=%v, want NULL", queuedAt.Time)
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM task_phase_runs WHERE task_id='old'`); got != "0" {
+		t.Fatalf("synthetic historical phases=%s, want 0", got)
+	}
+}
 
 const legacyThreadCleanupMigrationVersion = 11
 
