@@ -122,10 +122,9 @@ export function ProjectAssets({
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
           const draftDisplayName = isRegisteredDraft
-            ? registeredDraft?.display_name?.trim()
-              || registeredDraft?.filename?.trim()
-              || registeredDraft?.storage_name?.trim()
-              || asset?.filename?.trim()
+            ? readableDraftName(registeredDraft?.display_name, registeredDraft?.storage_name)
+              || readableDraftName(registeredDraft?.filename, registeredDraft?.storage_name)
+              || readableDraftName(asset?.filename, registeredDraft?.storage_name)
               || "未命名草稿"
             : "";
           return (
@@ -240,4 +239,12 @@ export function ProjectAssets({
       </details>
     </section>
   );
+}
+
+const storageIdentityPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function readableDraftName(value: string | undefined, storageName?: string) {
+  const candidate = value?.trim();
+  if (!candidate || storageIdentityPattern.test(candidate) || candidate === storageName?.trim()) return "";
+  return candidate;
 }

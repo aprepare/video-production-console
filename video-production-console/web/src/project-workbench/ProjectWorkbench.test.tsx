@@ -235,6 +235,23 @@ test("falls back to the legacy registered filename when display_name is absent",
   expect(screen.getByText("已登记 · 可继续编辑")).toBeTruthy();
 });
 
+test("shows an unnamed draft when no task identity matches a UUID storage filename", () => {
+  const detail = fixture();
+  detail.assets.mix_draft = {
+    ...asset("mix_draft"),
+    id: "orphan-mix-version",
+    filename: "984c42ec-67b8-4d3f-99e3-d3d7a4b66205",
+    mime_type: "inode/directory",
+  };
+  const props = workbenchProps(detail);
+  props.tasks = [];
+  const { container } = render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByText("未命名草稿")).toBeTruthy();
+  expect(container.querySelector(".project-asset__display-name")?.textContent).not.toContain("984c42ec");
+  expect(within(container.querySelector(".project-asset__technical")!).getByText("984c42ec-67b8-4d3f-99e3-d3d7a4b66205")).toBeTruthy();
+});
+
 test("disables the single primary action while the automatic remix workflow is active", () => {
   const detail = fixture();
   detail.project.stage = "script";

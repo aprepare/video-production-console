@@ -26,7 +26,7 @@ func NewMontageRepository(db *sql.DB) *MontageRepository { return &MontageReposi
 
 type BeginRegistration struct{ TaskID, ManifestPath, WorkspacePath string }
 type RegistrationSuccess struct {
-	AttemptID, RegisteredPath, ReceiptPath, SHA256, WorkspaceSHA256, Filename string
+	AttemptID, RegisteredPath, ReceiptPath, DraftID, SHA256, WorkspaceSHA256, Filename string
 }
 
 var ErrRegistrationNotRetryable = errors.New("montage registration is not retryable")
@@ -431,7 +431,7 @@ func (r *MontageRepository) MarkRunning(ctx context.Context, id string) error {
 }
 
 func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuccess) error {
-	if strings.TrimSpace(success.AttemptID) == "" || strings.TrimSpace(success.RegisteredPath) == "" || strings.TrimSpace(success.ReceiptPath) == "" || len(success.SHA256) != 64 || len(success.WorkspaceSHA256) != 64 {
+	if strings.TrimSpace(success.AttemptID) == "" || strings.TrimSpace(success.RegisteredPath) == "" || strings.TrimSpace(success.ReceiptPath) == "" || strings.TrimSpace(success.DraftID) == "" || len(success.SHA256) != 64 || len(success.WorkspaceSHA256) != 64 {
 		return fmt.Errorf("invalid montage registration success")
 	}
 	if success.Filename == "" {
@@ -466,7 +466,7 @@ func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuc
 		if _, err := NewAssetRepository(r.db).addVersion(ctx, q, AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft, StorageKind: domain.StorageDirectory, Path: success.RegisteredPath, Filename: success.Filename, MIMEType: "inode/directory", Size: 0, SHA256: strings.ToLower(success.SHA256), SourceTaskID: &taskID}, now); err != nil {
 			return err
 		}
-		result, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,registered_path=?,receipt_path=?,error_code=NULL,error_message=NULL,finished_at=? WHERE id=? AND state=?`, domain.RegistrationSucceeded, success.RegisteredPath, success.ReceiptPath, now, success.AttemptID, domain.RegistrationRunning)
+		result, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,registered_path=?,receipt_path=?,draft_id=?,error_code=NULL,error_message=NULL,finished_at=? WHERE id=? AND state=?`, domain.RegistrationSucceeded, success.RegisteredPath, success.ReceiptPath, success.DraftID, now, success.AttemptID, domain.RegistrationRunning)
 		if err != nil {
 			return err
 		}
@@ -499,7 +499,7 @@ func (r *MontageRepository) registrationSuccessDurable(ctx context.Context, succ
 	}
 	defer conn.Close()
 	var count int
-	err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id JOIN asset_versions version ON version.source_task_id=task.id JOIN task_artifacts artifact ON artifact.task_id=task.id AND artifact.kind='plaintext_workspace' AND LOWER(artifact.sha256)=? WHERE attempt.id=? AND attempt.state=? AND attempt.registered_path=? AND attempt.receipt_path=? AND version.type=? AND version.path=? AND version.sha256=? AND version.state=? AND task.status=? AND task.completion_phase=?`, strings.ToLower(success.WorkspaceSHA256), success.AttemptID, domain.RegistrationSucceeded, success.RegisteredPath, success.ReceiptPath, domain.AssetMixDraft, success.RegisteredPath, strings.ToLower(success.SHA256), domain.AssetReady, domain.TaskCompleted, domain.CompletionRegistered).Scan(&count)
+	err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id JOIN asset_versions version ON version.source_task_id=task.id JOIN task_artifacts artifact ON artifact.task_id=task.id AND artifact.kind='plaintext_workspace' AND LOWER(artifact.sha256)=? WHERE attempt.id=? AND attempt.state=? AND attempt.registered_path=? AND attempt.receipt_path=? AND attempt.draft_id=? AND version.type=? AND version.path=? AND version.sha256=? AND version.state=? AND task.status=? AND task.completion_phase=?`, strings.ToLower(success.WorkspaceSHA256), success.AttemptID, domain.RegistrationSucceeded, success.RegisteredPath, success.ReceiptPath, success.DraftID, domain.AssetMixDraft, success.RegisteredPath, strings.ToLower(success.SHA256), domain.AssetReady, domain.TaskCompleted, domain.CompletionRegistered).Scan(&count)
 	return count == 1, err
 }
 

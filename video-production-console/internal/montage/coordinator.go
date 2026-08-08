@@ -559,7 +559,7 @@ func (c *Coordinator) process(job registrationJob) {
 		}
 		return
 	}
-	if err := c.repo.Succeed(ctx, store.RegistrationSuccess{AttemptID: job.Attempt.ID, RegisteredPath: result.RegisteredPath, ReceiptPath: result.ReceiptPath, SHA256: result.DirectorySHA256, WorkspaceSHA256: workspaceDigest, Filename: result.DisplayName}); err != nil {
+	if err := c.repo.Succeed(ctx, store.RegistrationSuccess{AttemptID: job.Attempt.ID, RegisteredPath: result.RegisteredPath, ReceiptPath: result.ReceiptPath, DraftID: result.DraftID, SHA256: result.DirectorySHA256, WorkspaceSHA256: workspaceDigest, Filename: result.DisplayName}); err != nil {
 		if failErr := c.repo.FailCommit(context.Background(), job.Attempt.ID, err.Error()); failErr != nil {
 			c.reportFailure(job.Attempt.TaskID, "registration_commit_reconcile_failed", failErr)
 		}

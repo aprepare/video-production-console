@@ -129,7 +129,11 @@ func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTas
 		}
 		if found {
 			storageName = filepath.Base(filepath.Clean(asset.Path))
-			registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "display_name": displayName, "storage_name": storageName, "created_at": asset.CreatedAt}
+			var draftID sql.NullString
+			if err := h.repo.DB().QueryRowContext(r.Context(), `SELECT draft_id FROM montage_registration_attempts WHERE task_id=? AND state='succeeded' AND registered_path=? AND draft_id IS NOT NULL ORDER BY attempt DESC LIMIT 1`, task.ID, asset.Path).Scan(&draftID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+			registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "display_name": displayName, "storage_name": storageName, "draft_id": draftID.String, "created_at": asset.CreatedAt}
 		}
 	}
 	canRetry := false

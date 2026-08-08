@@ -395,6 +395,7 @@ func preparedMontageSuccess(t *testing.T) (*MontageRepository, string, Registrat
 		AttemptID:       attempt.ID,
 		RegisteredPath:  filepath.Join(t.TempDir(), taskID),
 		ReceiptPath:     filepath.Join(workspace, "receipt.json"),
+		DraftID:         "verified-draft-id",
 		SHA256:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		WorkspaceSHA256: workspaceHash,
 		Filename:        taskID,
@@ -511,7 +512,7 @@ func TestAuditMixDraftsStalesSucceededAttemptOutsideTrustedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if err := repo.Succeed(context.Background(), RegistrationSuccess{AttemptID: attempt.ID, RegisteredPath: outside, ReceiptPath: filepath.Join(workspace, "receipt.json"), SHA256: hash, WorkspaceSHA256: workspaceHash, Filename: taskID}); err != nil {
+	if err := repo.Succeed(context.Background(), RegistrationSuccess{AttemptID: attempt.ID, RegisteredPath: outside, ReceiptPath: filepath.Join(workspace, "receipt.json"), DraftID: "verified-draft-id", SHA256: hash, WorkspaceSHA256: workspaceHash, Filename: taskID}); err != nil {
 		t.Fatal(err)
 	}
 	report, err := repo.AuditMixDrafts(context.Background(), t.TempDir())

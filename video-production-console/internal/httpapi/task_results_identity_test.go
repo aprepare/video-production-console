@@ -63,6 +63,12 @@ func addReadyMixDraft(t *testing.T, db *sqlDBForManifestTest, projectID, account
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if sourceTaskID != nil {
+		now := time.Now().UTC()
+		if _, err := db.db.Exec(`INSERT INTO montage_registration_attempts(id,task_id,manifest_path,workspace_path,state,attempt,registered_path,receipt_path,draft_id,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), *sourceTaskID, "manifest.json", "workspace", domain.RegistrationSucceeded, 1, path, "receipt.json", "draft-"+(*sourceTaskID)[:8], now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestMontageResultReturnsOnlyTheDraftProducedByTheRequestedHistoricalTask(t *testing.T) {
@@ -81,6 +87,9 @@ func TestMontageResultReturnsOnlyTheDraftProducedByTheRequestedHistoricalTask(t 
 		t.Fatal(err)
 	}
 	registered, ok := view["registered_asset"].(map[string]any)
+	if registered["draft_id"] != "draft-"+firstID[:8] {
+		t.Fatalf("historical draft identity=%#v", registered["draft_id"])
+	}
 	if !ok || registered["path"] != firstPath || registered["storage_name"] != firstID || registered["display_name"] != "第一任务草稿" {
 		t.Fatalf("historical registered asset=%#v", view["registered_asset"])
 	}

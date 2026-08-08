@@ -9,6 +9,7 @@ import type {
   ProjectAsset,
   ProjectDetail as WorkbenchProjectDetail,
   ProjectTask as WorkbenchProjectTask,
+  MontageResult,
   ProjectStage,
   ProjectSummary,
 } from "./project-workbench/types";
@@ -19,13 +20,6 @@ type Project = Omit<ProjectSummary, "stage"> & {
   missing_assets?: string[];
 };
 type Asset = ProjectAsset;
-type TaskMessage = {
-  id: string;
-  role: string;
-  content: string;
-  question_schema?: string;
-  created_at: string;
-};
 type TaskEvent = {
   id?: string;
   sequence?: number;
@@ -60,24 +54,10 @@ type SemanticEvent = {
 };
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 type TaskModelOverride = { model: string; reasoningEffort: ReasoningEffort | "" };
-type Task = {
-  id: string;
-  project_id?: string;
-  type: string;
-  skill_name: string;
-  status: string;
-  action?: string;
-  completion_phase?: string;
-  prompt_snapshot?: string;
-  result_summary?: string;
-  error_message?: string;
-  created_at: string;
+type Task = WorkbenchProjectTask & {
   model?: string;
   reasoning_effort?: ReasoningEffort;
-  messages?: TaskMessage[];
   events?: TaskEvent[];
-  semantic_events?: SemanticEvent[];
-  montage?: MontageResult;
   publishing_package?: PublishingPackage;
 };
 type PublishingPackage = {
@@ -88,23 +68,6 @@ type PublishingPackage = {
   description?: string;
   topics?: string[];
   cta?: string;
-};
-type MontageResult = {
-  phase: string;
-  workspace?: { id: string; filename: string; mime_type: string; size: number; created_at: string };
-  registration_attempts?: Array<{
-    id: string;
-    attempt: number;
-    state: string;
-    registered_path?: string;
-    receipt_path?: string;
-    error_code?: string;
-    error_message?: string;
-    started_at: string;
-    finished_at?: string;
-  }>;
-  registered_asset?: { id: string; filename: string; path: string; sha256: string; created_at: string };
-  can_retry_registration: boolean;
 };
 type RuntimeStatus = { Limit: number; Running: number; Queued: number };
 type ProjectDetail = Omit<
@@ -2130,7 +2093,7 @@ function App() {
       {selected && detail ? (
         <ProjectWorkbench
           detail={detail as WorkbenchProjectDetail}
-          tasks={tasks as WorkbenchProjectTask[]}
+          tasks={tasks}
           accountName={accountName(selected.account_id, accounts)}
           message={message}
           onBack={closeProject}

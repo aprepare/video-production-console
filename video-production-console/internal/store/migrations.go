@@ -785,6 +785,7 @@ ON task_phase_runs(task_id,attempt,phase_key,source,external_id)
 WHERE external_id IS NOT NULL;
 CREATE INDEX task_phase_task_attempt_idx
 ON task_phase_runs(task_id,attempt,started_at,id);`,
+	`ALTER TABLE montage_registration_attempts ADD COLUMN draft_id TEXT;`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup
