@@ -21,8 +21,12 @@ import (
 
 type registerer interface {
 	Register(context.Context, RegisterRequest) (RegisterResult, error)
+	Reconcile(context.Context, ReconcileRequest) (ReconcileResult, error)
 }
-type registrationJob struct{ Attempt domain.RegistrationAttempt }
+type registrationJob struct {
+	Attempt   domain.RegistrationAttempt
+	Reconcile *domain.DraftDisplayReconcileCandidate
+}
 
 type TrustedRuntime struct {
 	MachineProfilePath   string
@@ -185,7 +189,33 @@ func (c *Coordinator) Recover(ctx context.Context) (domain.RegistrationRecovery,
 	return recovery, nil
 }
 
+func (c *Coordinator) ReconcileDisplayNames(ctx context.Context) (int, error) {
+	if c == nil || c.repo == nil {
+		return 0, errors.New("montage registration coordinator is not configured")
+	}
+	candidates, err := c.repo.DraftsNeedingDisplayName(ctx, c.runtime.JianyingRoot)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for _, candidate := range candidates {
+		if err := c.enqueueReconciliation(ctx, candidate); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+	return queued, nil
+}
+
 func (c *Coordinator) enqueue(ctx context.Context, attempt domain.RegistrationAttempt) error {
+	return c.enqueueJob(ctx, registrationJob{Attempt: attempt})
+}
+
+func (c *Coordinator) enqueueReconciliation(ctx context.Context, candidate domain.DraftDisplayReconcileCandidate) error {
+	return c.enqueueJob(ctx, registrationJob{Reconcile: &candidate})
+}
+
+func (c *Coordinator) enqueueJob(ctx context.Context, job registrationJob) error {
 	c.lifecycle.Lock()
 	if c.stopped.Load() {
 		c.lifecycle.Unlock()
@@ -201,7 +231,7 @@ func (c *Coordinator) enqueue(ctx context.Context, attempt domain.RegistrationAt
 	timer := time.NewTimer(registrationEnqueueWait)
 	defer timer.Stop()
 	select {
-	case c.queue <- registrationJob{Attempt: attempt}:
+	case c.queue <- job:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -256,7 +286,33 @@ func (c *Coordinator) validateRetainedPaths(taskID, manifestPath, workspacePath 
 func (c *Coordinator) run() {
 	defer c.wg.Done()
 	for job := range c.queue {
-		c.process(job)
+		if job.Reconcile != nil {
+			c.processReconciliation(*job.Reconcile)
+		} else {
+			c.process(job)
+		}
+	}
+}
+
+func (c *Coordinator) processReconciliation(candidate domain.DraftDisplayReconcileCandidate) {
+	attempt := domain.RegistrationAttempt{TaskID: candidate.TaskID, ManifestPath: candidate.ManifestPath, WorkspacePath: candidate.WorkspacePath}
+	runtime, err := c.resolveRuntime(attempt)
+	if err != nil {
+		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_config_invalid", err)
+		return
+	}
+	result, err := c.registrar.Reconcile(c.ctx, ReconcileRequest{
+		TaskID: candidate.TaskID, DisplayName: candidate.DisplayName,
+		ManifestPath: runtime.ManifestPath, WorkspacePath: runtime.WorkspacePath,
+		RegisteredPath: candidate.RegisteredPath, SkillRoot: runtime.SkillRoot,
+		ScriptPath: runtime.ScriptPath, PythonBinary: runtime.PythonBinary, JianyingRoot: runtime.JianyingRoot,
+	})
+	if err != nil {
+		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_failed", err)
+		return
+	}
+	if err := c.repo.CompleteDraftDisplayReconcile(c.ctx, domain.DraftDisplayReconcileSuccess{Candidate: candidate, SHA256: result.DirectorySHA256}); err != nil {
+		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_commit_failed", err)
 	}
 }
 

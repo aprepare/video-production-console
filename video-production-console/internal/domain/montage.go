@@ -50,3 +50,13 @@ type MixDraftAudit struct {
 	Staled    int
 	Findings  []MixDraftAuditFinding
 }
+
+type DraftDisplayReconcileCandidate struct {
+	AssetVersionID, AssetID, TaskID, ManifestPath, WorkspacePath, RegisteredPath string
+	CurrentFilename, CurrentSHA256, DisplayName                                  string
+}
+
+type DraftDisplayReconcileSuccess struct {
+	Candidate DraftDisplayReconcileCandidate
+	SHA256    string
+}

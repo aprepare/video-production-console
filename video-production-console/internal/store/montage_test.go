@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,135 @@ import (
 	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 )
+
+func displayReconcileFixture(t *testing.T, displayName string) (*MontageRepository, *AssetRepository, domain.AssetVersion, string, string) {
+	t.Helper()
+	repo, assets, accountID, projectID, taskID := montageFixture(t)
+	root := t.TempDir()
+	target := filepath.Join(root, taskID)
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	taskRoot := t.TempDir()
+	output := filepath.Join(taskRoot, "output")
+	workspace := filepath.Join(output, "workspace", taskID)
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(taskRoot, "task_manifest.json")
+	data, err := json.Marshal(map[string]any{
+		"schema_version": "2.0",
+		"skill":          "jianying-montage-draft",
+		"action":         domain.ActionMontageExecute,
+		"task_id":        taskID,
+		"job_id":         taskID,
+		"output_dir":     output,
+		"non_secret_settings": map[string]any{
+			"draft_display_name": displayName,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.Exec(`UPDATE codex_tasks SET status=?,completion_phase=?,manifest_path=?,finished_at=? WHERE id=?`, domain.TaskCompleted, domain.CompletionRegistered, manifest, time.Now().UTC(), taskID); err != nil {
+		t.Fatal(err)
+	}
+	version, err := assets.AddVersion(context.Background(), AddAssetVersion{
+		ProjectID: &projectID, AccountID: accountID, Type: domain.AssetMixDraft,
+		StorageKind: domain.StorageDirectory, Path: target, Filename: taskID,
+		MIMEType: "inode/directory", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SourceTaskID: &taskID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, assets, version, root, manifest
+}
+
+func TestDraftsNeedingDisplayNameReturnsOnlyValidReadyCompletedUUIDDraft(t *testing.T) {
+	displayName := "财富觉醒02_存款大搬家_b66205"
+	repo, _, version, root, _ := displayReconcileFixture(t, displayName)
+	candidates, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates=%#v, want one", candidates)
+	}
+	got := candidates[0]
+	if got.AssetVersionID != version.ID || got.AssetID != version.AssetID || got.TaskID != *version.SourceTaskID || got.DisplayName != displayName || got.RegisteredPath != version.Path {
+		t.Fatalf("candidate=%#v", got)
+	}
+}
+
+func TestDraftsNeedingDisplayNameSkipsActiveInvalidAndUnknownDrafts(t *testing.T) {
+	displayName := "财富觉醒02_存款大搬家_b66205"
+	t.Run("active", func(t *testing.T) {
+		repo, _, version, root, manifest := displayReconcileFixture(t, displayName)
+		workspace := filepath.Join(t.TempDir(), "workspace")
+		if err := os.Mkdir(workspace, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.db.Exec(`INSERT INTO montage_registration_attempts(id,task_id,manifest_path,workspace_path,state,attempt,started_at) VALUES(?,?,?,?,?,?,?)`, uuid.NewString(), *version.SourceTaskID, manifest, workspace, domain.RegistrationQueued, 99, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("active candidates=%#v err=%v", got, err)
+		}
+	})
+	t.Run("invalid manifest", func(t *testing.T) {
+		repo, _, _, root, manifest := displayReconcileFixture(t, displayName)
+		if err := os.WriteFile(manifest, []byte(`{"task_id":"wrong"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("invalid candidates=%#v err=%v", got, err)
+		}
+	})
+	t.Run("unknown source", func(t *testing.T) {
+		repo, assets, version, root, _ := displayReconcileFixture(t, displayName)
+		if _, err := repo.db.Exec(`UPDATE asset_versions SET source_task_id=NULL WHERE id=?`, version.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := assets.Version(context.Background(), version.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("unknown candidates=%#v err=%v", got, err)
+		}
+	})
+}
+
+func TestCompleteDraftDisplayReconcileUpdatesOnlyFilenameAndHash(t *testing.T) {
+	displayName := "财富觉醒02_存款大搬家_b66205"
+	repo, assets, before, root, _ := displayReconcileFixture(t, displayName)
+	candidates, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+	afterHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := repo.CompleteDraftDisplayReconcile(context.Background(), domain.DraftDisplayReconcileSuccess{
+		Candidate: candidates[0], SHA256: afterHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := assets.Version(context.Background(), before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ID != before.ID || after.AssetID != before.AssetID || after.Path != before.Path || after.State != before.State || after.SourceTaskID == nil || *after.SourceTaskID != *before.SourceTaskID {
+		t.Fatalf("identity changed: before=%#v after=%#v", before, after)
+	}
+	if after.Filename != displayName || after.SHA256 != afterHash {
+		t.Fatalf("metadata not reconciled: %#v", after)
+	}
+}
 
 func TestCompleteAndBeginRollsBackPlaintextWhenAttemptCannotBeQueued(t *testing.T) {
 	repo, _, _, _, taskID := montageFixture(t)

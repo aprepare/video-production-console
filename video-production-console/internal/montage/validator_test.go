@@ -237,6 +237,46 @@ func TestValidateRegisteredDraftRejectsPresentInvalidLegacyReceiptIdentity(t *te
 	}
 }
 
+func TestValidateBackfillDisplayReconciliationPreservesTrustedIdentity(t *testing.T) {
+	fixture := newRegistrationFixture(t, true, false)
+	directoryHash, err := hashDirectory(fixture.registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(filepath.Dir(fixture.receiptPath), "reconciliation-result.json")
+	receipt := map[string]any{
+		"status":                    "completed",
+		"task_id":                   fixture.request.TaskID,
+		"draft_display_name":        fixture.request.DisplayName,
+		"registered_path":           fixture.registered,
+		"draft_id":                  fixture.registeredID,
+		"source_content_sha256":     fileDigestFixture(t, filepath.Join(fixture.workspace, "draft_content.json")),
+		"registered_content_sha256": fileDigestFixture(t, filepath.Join(fixture.registered, "draft_content.json")),
+		"directory_sha256":          directoryHash,
+	}
+	writeJSONFixture(t, receiptPath, receipt)
+	result, err := ValidateReconciledDraft(ReconcileValidationRequest{
+		TaskID: fixture.request.TaskID, DisplayName: fixture.request.DisplayName,
+		WorkspacePath: fixture.workspace, RegisteredPath: fixture.registered,
+		ReceiptPath: receiptPath, JianyingRoot: fixture.root,
+	})
+	if err != nil {
+		t.Fatalf("valid display reconciliation was rejected: %v", err)
+	}
+	if result.DraftID != fixture.registeredID || result.DirectorySHA256 != directoryHash || result.DisplayName != fixture.request.DisplayName {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func fileDigestFixture(t *testing.T, path string) string {
+	t.Helper()
+	digest, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
 func writeJSONFixture(t *testing.T, path string, value any) {
 	t.Helper()
 	data, err := json.Marshal(value)

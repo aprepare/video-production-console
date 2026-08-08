@@ -92,6 +92,18 @@ func TestCoordinatorRunStopsWhenQueueIsClosed(t *testing.T) {
 	}
 }
 
+func TestCoordinatorQueuesBackfillDisplayOnRegistrationSerialQueue(t *testing.T) {
+	coordinator := &Coordinator{queue: make(chan registrationJob, 1)}
+	candidate := domain.DraftDisplayReconcileCandidate{AssetVersionID: "version", TaskID: "task", DisplayName: "readable"}
+	if err := coordinator.enqueueReconciliation(context.Background(), candidate); err != nil {
+		t.Fatal(err)
+	}
+	job := <-coordinator.queue
+	if job.Reconcile == nil || job.Reconcile.AssetVersionID != candidate.AssetVersionID || job.Attempt.ID != "" {
+		t.Fatalf("job=%#v", job)
+	}
+}
+
 func TestCoordinatorCloseRejectsNewJobsAndDrainsAcceptedJobs(t *testing.T) {
 	coordinator := &Coordinator{queue: make(chan registrationJob, 8)}
 	var consumed atomic.Int32

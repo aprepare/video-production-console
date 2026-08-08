@@ -296,6 +296,25 @@ func TestRemixWorkflowStartupReconcileLogsAndContinues(t *testing.T) {
 	}
 }
 
+type montageDisplayReconcilerStub struct {
+	queued int
+	err    error
+}
+
+func (stub montageDisplayReconcilerStub) ReconcileDisplayNames(context.Context) (int, error) {
+	return stub.queued, stub.err
+}
+
+func TestBackfillDisplayStartupSchedulingLogsAndContinues(t *testing.T) {
+	var logged string
+	reconcileMontageDisplayNames(context.Background(), montageDisplayReconcilerStub{err: errors.New("queue failed")}, func(format string, args ...any) {
+		logged = fmt.Sprintf(format, args...)
+	})
+	if !strings.Contains(logged, "queue failed") {
+		t.Fatalf("log=%q", logged)
+	}
+}
+
 type completionObserverStubMain struct{}
 
 func (*completionObserverStubMain) AfterTerminal(context.Context, domain.CodexTask) error { return nil }

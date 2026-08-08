@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"video-production-console/internal/domain"
@@ -606,6 +608,130 @@ func canonicalMontageDirectory(path string) (string, error) {
 func montagePathWithin(root, target string) bool {
 	rel, err := filepath.Rel(root, target)
 	return err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (r *MontageRepository) DraftsNeedingDisplayName(ctx context.Context, trustedJianyingRoot string) ([]domain.DraftDisplayReconcileCandidate, error) {
+	root, err := canonicalMontageDirectory(trustedJianyingRoot)
+	if err != nil {
+		return nil, fmt.Errorf("canonical Jianying root: %w", err)
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT version.id,version.asset_id,version.path,version.filename,version.sha256,version.source_task_id,task.manifest_path FROM asset_versions version JOIN codex_tasks task ON task.id=version.source_task_id WHERE version.type=? AND version.storage_kind=? AND version.state=? AND task.action=? AND task.status=? AND task.completion_phase=? AND NOT EXISTS(SELECT 1 FROM montage_registration_attempts active WHERE active.task_id=task.id AND active.state IN (?,?)) ORDER BY version.created_at,version.id`, domain.AssetMixDraft, domain.StorageDirectory, domain.AssetReady, domain.ActionMontageExecute, domain.TaskCompleted, domain.CompletionRegistered, domain.RegistrationQueued, domain.RegistrationRunning)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []domain.DraftDisplayReconcileCandidate
+	for rows.Next() {
+		var item domain.DraftDisplayReconcileCandidate
+		if err := rows.Scan(&item.AssetVersionID, &item.AssetID, &item.RegisteredPath, &item.CurrentFilename, &item.CurrentSHA256, &item.TaskID, &item.ManifestPath); err != nil {
+			return nil, err
+		}
+		if _, err := uuid.Parse(item.TaskID); err != nil || item.CurrentFilename != item.TaskID {
+			continue
+		}
+		registered, err := canonicalMontageDirectory(item.RegisteredPath)
+		if err != nil || !sameStorePath(registered, filepath.Join(root, item.TaskID)) {
+			continue
+		}
+		manifest, err := canonicalRetainedPath(item.ManifestPath, false)
+		if err != nil || !sameStorePath(manifest, item.ManifestPath) {
+			continue
+		}
+		displayName, err := draftDisplayNameFromManifest(manifest, item.TaskID)
+		if err != nil || displayName == item.CurrentFilename {
+			continue
+		}
+		item.ManifestPath = manifest
+		item.RegisteredPath = registered
+		workspace, err := canonicalMontageDirectory(filepath.Join(filepath.Dir(manifest), "output", "workspace", item.TaskID))
+		if err != nil {
+			continue
+		}
+		item.WorkspacePath = workspace
+		item.DisplayName = displayName
+		candidates = append(candidates, item)
+	}
+	return candidates, rows.Err()
+}
+
+func draftDisplayNameFromManifest(path, taskID string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 4<<20 {
+		return "", os.ErrInvalid
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var manifest struct {
+		SchemaVersion string `json:"schema_version"`
+		Skill         string `json:"skill"`
+		Action        string `json:"action"`
+		TaskID        string `json:"task_id"`
+		JobID         string `json:"job_id"`
+		OutputDir     string `json:"output_dir"`
+		Settings      struct {
+			DraftDisplayName json.RawMessage `json:"draft_display_name"`
+		} `json:"non_secret_settings"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != "2.0" || manifest.Skill != "jianying-montage-draft" || manifest.Action != string(domain.ActionMontageExecute) || manifest.TaskID != taskID || manifest.JobID != taskID || !sameStorePath(manifest.OutputDir, filepath.Join(filepath.Dir(path), "output")) {
+		return "", os.ErrInvalid
+	}
+	if len(manifest.Settings.DraftDisplayName) == 0 {
+		return taskID, nil
+	}
+	var displayName string
+	if json.Unmarshal(manifest.Settings.DraftDisplayName, &displayName) != nil || !validDraftDisplayName(displayName) {
+		return "", os.ErrInvalid
+	}
+	return displayName, nil
+}
+
+func validDraftDisplayName(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || utf8.RuneCountInString(value) > 68 || strings.ContainsAny(value, `<>:"/\|?*`) || strings.HasSuffix(value, ".") {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *MontageRepository) CompleteDraftDisplayReconcile(ctx context.Context, success domain.DraftDisplayReconcileSuccess) error {
+	candidate := success.Candidate
+	if strings.TrimSpace(candidate.AssetVersionID) == "" || strings.TrimSpace(candidate.AssetID) == "" || strings.TrimSpace(candidate.TaskID) == "" || strings.TrimSpace(candidate.RegisteredPath) == "" || candidate.CurrentFilename != candidate.TaskID || !validStoredSHA256(candidate.CurrentSHA256) || !validStoredSHA256(success.SHA256) || !validDraftDisplayName(candidate.DisplayName) {
+		return ErrRegistrationInputInvalid
+	}
+	return r.immediate(ctx, "complete draft display reconciliation", func(q assetDBTX, _ time.Time) error {
+		var assetID, taskID, path, filename, sha256 string
+		var state domain.AssetState
+		if err := q.QueryRowContext(ctx, `SELECT asset_id,COALESCE(source_task_id,''),path,filename,sha256,state FROM asset_versions WHERE id=? AND type=?`, candidate.AssetVersionID, domain.AssetMixDraft).Scan(&assetID, &taskID, &path, &filename, &sha256, &state); err != nil {
+			return err
+		}
+		if assetID != candidate.AssetID || taskID != candidate.TaskID || !sameStorePath(path, candidate.RegisteredPath) || state != domain.AssetReady {
+			return ErrRegistrationInputInvalid
+		}
+		if filename == candidate.DisplayName && strings.EqualFold(sha256, success.SHA256) {
+			return nil
+		}
+		if filename != candidate.CurrentFilename || !strings.EqualFold(sha256, candidate.CurrentSHA256) {
+			return ErrRegistrationInputInvalid
+		}
+		result, err := q.ExecContext(ctx, `UPDATE asset_versions SET filename=?,sha256=? WHERE id=? AND asset_id=? AND source_task_id=? AND type=? AND state=? AND path=? AND filename=? AND LOWER(sha256)=?`, candidate.DisplayName, strings.ToLower(success.SHA256), candidate.AssetVersionID, candidate.AssetID, candidate.TaskID, domain.AssetMixDraft, domain.AssetReady, candidate.RegisteredPath, candidate.CurrentFilename, strings.ToLower(candidate.CurrentSHA256))
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return ErrRegistrationInputInvalid
+		}
+		return nil
+	})
 }
 
 func (r *MontageRepository) Fail(ctx context.Context, id, code, message string) error {

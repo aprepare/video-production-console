@@ -16,6 +16,14 @@ import (
 
 type ValidationRequest struct{ TaskID, DisplayName, WorkspacePath, ReceiptPath, JianyingRoot string }
 
+type ReconcileValidationRequest struct {
+	TaskID, DisplayName, WorkspacePath, RegisteredPath, ReceiptPath, JianyingRoot string
+}
+
+type ReconcileResult struct {
+	RegisteredPath, ReceiptPath, DraftID, DisplayName, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+}
+
 type registrationReceipt struct {
 	Status                  string          `json:"status"`
 	TaskID                  json.RawMessage `json:"task_id"`
@@ -134,6 +142,71 @@ func receiptIdentityMatches(receipt registrationReceipt, request ValidationReque
 		return false
 	}
 	return taskID == request.TaskID && displayName == request.DisplayName
+}
+
+func ValidateReconciledDraft(request ReconcileValidationRequest) (ReconcileResult, error) {
+	workspace, err := canonicalDirectory(request.WorkspacePath)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("workspace is unavailable")
+	}
+	root, err := canonicalDirectory(request.JianyingRoot)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("Jianying root is unavailable")
+	}
+	registered, err := canonicalDirectory(request.RegisteredPath)
+	if err != nil || !samePath(registered, filepath.Join(root, request.TaskID)) {
+		return ReconcileResult{}, invalidRegistration("reconciled draft path is not authoritative")
+	}
+	receiptPath, err := canonicalRegularFile(request.ReceiptPath)
+	if err != nil || !WithinJianyingRoot(filepath.Dir(filepath.Dir(workspace)), receiptPath) {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt is unavailable")
+	}
+	data, err := readBounded(receiptPath, 1<<20)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt could not be read")
+	}
+	var receipt struct {
+		Status, TaskID, DisplayName, RegisteredPath, DraftID          string
+		SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+	}
+	var raw struct {
+		Status                  string `json:"status"`
+		TaskID                  string `json:"task_id"`
+		DisplayName             string `json:"draft_display_name"`
+		RegisteredPath          string `json:"registered_path"`
+		DraftID                 string `json:"draft_id"`
+		SourceContentSHA256     string `json:"source_content_sha256"`
+		RegisteredContentSHA256 string `json:"registered_content_sha256"`
+		DirectorySHA256         string `json:"directory_sha256"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &raw) != nil {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt is invalid")
+	}
+	receipt.Status, receipt.TaskID, receipt.DisplayName, receipt.RegisteredPath, receipt.DraftID = raw.Status, raw.TaskID, raw.DisplayName, raw.RegisteredPath, raw.DraftID
+	receipt.SourceContentSHA256, receipt.RegisteredContentSHA256, receipt.DirectorySHA256 = raw.SourceContentSHA256, raw.RegisteredContentSHA256, raw.DirectorySHA256
+	if receipt.Status != "completed" || receipt.TaskID != request.TaskID || receipt.DisplayName != request.DisplayName || !samePath(receipt.RegisteredPath, registered) || receipt.DraftID == "" {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt identity is invalid")
+	}
+	sourceHash, err := hashFile(filepath.Join(workspace, "draft_content.json"))
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("source draft content is unavailable")
+	}
+	registeredHash, err := hashFile(filepath.Join(registered, "draft_content.json"))
+	if err != nil || sourceHash != registeredHash || !strings.EqualFold(sourceHash, receipt.SourceContentSHA256) || !strings.EqualFold(registeredHash, receipt.RegisteredContentSHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciled content fingerprint changed")
+	}
+	draftID, displayName, err := readDraftMeta(filepath.Join(registered, "draft_meta_info.json"))
+	if err != nil || draftID != receipt.DraftID || displayName != request.DisplayName {
+		return ReconcileResult{}, invalidRegistration("reconciled draft metadata is invalid")
+	}
+	if err := validateRootIndex(filepath.Join(root, "root_meta_info.json"), draftID, request.DisplayName, registered); err != nil {
+		return ReconcileResult{}, err
+	}
+	directoryHash, err := hashDirectory(registered)
+	if err != nil || !strings.EqualFold(directoryHash, receipt.DirectorySHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciled directory fingerprint is invalid")
+	}
+	return ReconcileResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: draftID, DisplayName: request.DisplayName, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash}, nil
 }
 
 func readDraftID(path string) (string, error) {

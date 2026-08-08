@@ -29,6 +29,9 @@ type RegisterResult struct {
 	RegisteredPath, ReceiptPath, DraftID, DisplayName, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
 	DurationUS                                                                                                       int64
 }
+type ReconcileRequest struct {
+	TaskID, DisplayName, ManifestPath, WorkspacePath, RegisteredPath, SkillRoot, ScriptPath, PythonBinary, JianyingRoot string
+}
 type Registrar struct{ runner CommandRunner }
 
 func NewRegistrar(runner CommandRunner) *Registrar { return &Registrar{runner: runner} }
@@ -97,6 +100,50 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 	// derived before execution instead; all receipt contents, fingerprints,
 	// registered paths, and Jianying index entries remain strictly verified.
 	return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
+}
+
+func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (ReconcileResult, error) {
+	if r == nil || r.runner == nil || request.TaskID == "" || request.DisplayName == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.RegisteredPath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" {
+		return ReconcileResult{}, fmt.Errorf("%w: missing reconciliation input", ErrInvalidRegistration)
+	}
+	manifest, manifestErr := canonicalNoFollow(request.ManifestPath, false)
+	workspace, workspaceErr := canonicalNoFollow(request.WorkspacePath, true)
+	registered, registeredErr := canonicalNoFollow(request.RegisteredPath, true)
+	skillRoot, skillErr := canonicalNoFollow(request.SkillRoot, true)
+	script, scriptErr := canonicalNoFollow(request.ScriptPath, false)
+	root, rootErr := canonicalNoFollow(request.JianyingRoot, true)
+	python, pythonErr := trustedPythonBinary(request.PythonBinary)
+	if manifestErr != nil || workspaceErr != nil || registeredErr != nil || skillErr != nil || scriptErr != nil || rootErr != nil || pythonErr != nil || !samePath(script, filepath.Join(skillRoot, "scripts", "run_montage_job.py")) || !samePath(registered, filepath.Join(root, request.TaskID)) {
+		return ReconcileResult{}, fmt.Errorf("%w: reconciliation runtime is unavailable", ErrInvalidRegistration)
+	}
+	receiptPath := filepath.Join(filepath.Dir(filepath.Dir(workspace)), "registration", "reconciliation-result.json")
+	validation := ReconcileValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, RegisteredPath: registered, ReceiptPath: receiptPath, JianyingRoot: root}
+	if exists, err := retainedPathExists(receiptPath); err != nil {
+		return ReconcileResult{}, err
+	} else if exists {
+		return ValidateReconciledDraft(validation)
+	}
+	command, err := r.runner.Run(ctx, CommandSpec{Program: python, Args: []string{script, "reconcile-name", "--manifest", manifest, "--draft", registered}, Dir: skillRoot}, 1<<20)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	envelope, err := parseRegistrationEnvelope(command.Stdout)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if command.ExitCode != 0 || envelope.Status != "completed" {
+		return ReconcileResult{}, fmt.Errorf("%w: %s", ErrInvalidRegistration, strings.TrimSpace(envelope.Summary))
+	}
+	reported := false
+	for _, artifact := range envelope.Artifacts {
+		if artifact.Type == "reconciliation_result" {
+			reported = true
+		}
+	}
+	if !reported {
+		return ReconcileResult{}, fmt.Errorf("%w: reconciliation receipt was not reported", ErrInvalidRegistration)
+	}
+	return ValidateReconciledDraft(validation)
 }
 
 func retainedPathExists(path string) (bool, error) {

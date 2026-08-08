@@ -142,6 +142,7 @@ func main() {
 		} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
 			log.Printf("recovered %d queued montage registration(s); marked %d interrupted", len(recovery.Queued), len(recovery.Interrupted))
 		}
+		reconcileMontageDisplayNames(context.Background(), montageCoordinator, log.Printf)
 		if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
 			log.Printf("audit registered montage drafts: %v", auditErr)
 		} else if audit.Staled > 0 {
@@ -204,9 +205,22 @@ type completionObserverSetter interface {
 
 type remixWorkflowReconciler interface{ ReconcileTerminalWorkflows(context.Context) error }
 
+type montageDisplayReconciler interface {
+	ReconcileDisplayNames(context.Context) (int, error)
+}
+
 func reconcileRemixWorkflows(ctx context.Context, reconciler remixWorkflowReconciler, logf func(string, ...any)) {
 	if err := reconciler.ReconcileTerminalWorkflows(ctx); err != nil {
 		logf("reconcile terminal remix workflows: %v", err)
+	}
+}
+
+func reconcileMontageDisplayNames(ctx context.Context, reconciler montageDisplayReconciler, logf func(string, ...any)) {
+	queued, err := reconciler.ReconcileDisplayNames(ctx)
+	if err != nil {
+		logf("queue Jianying draft display-name reconciliation: %v", err)
+	} else if queued > 0 {
+		logf("queued %d Jianying draft display-name reconciliation job(s)", queued)
 	}
 }
 
