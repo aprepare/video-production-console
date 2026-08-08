@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,7 +159,7 @@ func TestCompleteDraftDisplayReconcileUpdatesOnlyFilenameAndHash(t *testing.T) {
 	}
 	afterHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if err := repo.CompleteDraftDisplayReconcile(context.Background(), domain.DraftDisplayReconcileSuccess{
-		Candidate: candidates[0], SHA256: afterHash,
+		Candidate: candidates[0], SHA256: afterHash, DraftID: "verified-legacy-draft-id",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +172,32 @@ func TestCompleteDraftDisplayReconcileUpdatesOnlyFilenameAndHash(t *testing.T) {
 	}
 	if after.Filename != displayName || after.SHA256 != afterHash {
 		t.Fatalf("metadata not reconciled: %#v", after)
+	}
+	var draftID string
+	if err := repo.db.QueryRow(`SELECT draft_id FROM montage_registration_attempts WHERE task_id=? AND registered_path=?`, *before.SourceTaskID, before.Path).Scan(&draftID); err != nil || draftID != "verified-legacy-draft-id" {
+		t.Fatalf("persisted reconciled draft ID=%q err=%v", draftID, err)
+	}
+	if err := repo.CompleteDraftDisplayReconcile(context.Background(), domain.DraftDisplayReconcileSuccess{Candidate: candidates[0], SHA256: afterHash, DraftID: draftID}); err != nil {
+		t.Fatalf("idempotent reconcile: %v", err)
+	}
+}
+
+func TestCompleteDraftDisplayReconcileRejectsConflictingPersistedDraftID(t *testing.T) {
+	repo, assets, before, root, _ := displayReconcileFixture(t, "可信旧草稿")
+	candidates, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+	if _, err := repo.db.Exec(`UPDATE montage_registration_attempts SET draft_id='different-draft-id' WHERE task_id=?`, *before.SourceTaskID); err != nil {
+		t.Fatal(err)
+	}
+	err = repo.CompleteDraftDisplayReconcile(context.Background(), domain.DraftDisplayReconcileSuccess{Candidate: candidates[0], SHA256: strings.Repeat("b", 64), DraftID: "verified-legacy-draft-id"})
+	if !errors.Is(err, ErrRegistrationInputInvalid) {
+		t.Fatalf("conflicting draft ID error=%v", err)
+	}
+	after, readErr := assets.Version(context.Background(), before.ID)
+	if readErr != nil || after.Filename != before.Filename || after.SHA256 != before.SHA256 {
+		t.Fatalf("asset changed on conflict: %+v err=%v", after, readErr)
 	}
 }
 

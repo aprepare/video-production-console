@@ -59,4 +59,5 @@ type DraftDisplayReconcileCandidate struct {
 type DraftDisplayReconcileSuccess struct {
 	Candidate DraftDisplayReconcileCandidate
 	SHA256    string
+	DraftID   string
 }

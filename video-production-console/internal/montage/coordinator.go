@@ -433,7 +433,7 @@ func (c *Coordinator) executeReconciliation(candidate domain.DraftDisplayReconci
 	if err != nil {
 		return err
 	}
-	if err := c.repo.CompleteDraftDisplayReconcile(c.ctx, domain.DraftDisplayReconcileSuccess{Candidate: candidate, SHA256: result.DirectorySHA256}); err != nil {
+	if err := c.repo.CompleteDraftDisplayReconcile(c.ctx, domain.DraftDisplayReconcileSuccess{Candidate: candidate, SHA256: result.DirectorySHA256, DraftID: result.DraftID}); err != nil {
 		return fmt.Errorf("reconciliation commit failed: %w", err)
 	}
 	return nil

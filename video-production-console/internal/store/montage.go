@@ -701,7 +701,7 @@ func validDraftDisplayName(value string) bool {
 
 func (r *MontageRepository) CompleteDraftDisplayReconcile(ctx context.Context, success domain.DraftDisplayReconcileSuccess) error {
 	candidate := success.Candidate
-	if strings.TrimSpace(candidate.AssetVersionID) == "" || strings.TrimSpace(candidate.AssetID) == "" || strings.TrimSpace(candidate.TaskID) == "" || strings.TrimSpace(candidate.RegisteredPath) == "" || candidate.CurrentFilename != candidate.TaskID || !validStoredSHA256(candidate.CurrentSHA256) || !validStoredSHA256(success.SHA256) || !validDraftDisplayName(candidate.DisplayName) {
+	if strings.TrimSpace(candidate.AssetVersionID) == "" || strings.TrimSpace(candidate.AssetID) == "" || strings.TrimSpace(candidate.TaskID) == "" || strings.TrimSpace(candidate.RegisteredPath) == "" || strings.TrimSpace(success.DraftID) == "" || candidate.CurrentFilename != candidate.TaskID || !validStoredSHA256(candidate.CurrentSHA256) || !validStoredSHA256(success.SHA256) || !validDraftDisplayName(candidate.DisplayName) {
 		return ErrRegistrationInputInvalid
 	}
 	return r.immediate(ctx, "complete draft display reconciliation", func(q assetDBTX, _ time.Time) error {
@@ -712,6 +712,32 @@ func (r *MontageRepository) CompleteDraftDisplayReconcile(ctx context.Context, s
 		}
 		if assetID != candidate.AssetID || taskID != candidate.TaskID || !sameStorePath(path, candidate.RegisteredPath) || state != domain.AssetReady {
 			return ErrRegistrationInputInvalid
+		}
+		rows, err := q.QueryContext(ctx, `SELECT id,COALESCE(draft_id,'') FROM montage_registration_attempts WHERE task_id=? AND state=? AND LOWER(REPLACE(registered_path,'/','\'))=LOWER(REPLACE(?,'/','\')) ORDER BY attempt,id`, candidate.TaskID, domain.RegistrationSucceeded, candidate.RegisteredPath)
+		if err != nil {
+			return err
+		}
+		matchingAttempts := 0
+		for rows.Next() {
+			var attemptID, persistedDraftID string
+			if err := rows.Scan(&attemptID, &persistedDraftID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			matchingAttempts++
+			if strings.TrimSpace(persistedDraftID) != "" && persistedDraftID != success.DraftID {
+				_ = rows.Close()
+				return ErrRegistrationInputInvalid
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if matchingAttempts == 0 {
+			return ErrRegistrationInputInvalid
+		}
+		if _, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET draft_id=? WHERE task_id=? AND state=? AND LOWER(REPLACE(registered_path,'/','\'))=LOWER(REPLACE(?,'/','\')) AND (draft_id IS NULL OR TRIM(draft_id)='')`, success.DraftID, candidate.TaskID, domain.RegistrationSucceeded, candidate.RegisteredPath); err != nil {
+			return err
 		}
 		if filename == candidate.DisplayName && strings.EqualFold(sha256, success.SHA256) {
 			return nil
