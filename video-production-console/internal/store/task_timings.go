@@ -14,7 +14,11 @@ import (
 	"video-production-console/internal/domain"
 )
 
-type TaskTimingRepository struct{ db *sql.DB }
+type TaskTimingRepository struct {
+	db                 *sql.DB
+	now                func() time.Time
+	beforeFinishUpdate func()
+}
 
 type StartPhase struct {
 	TaskID      string
@@ -34,7 +38,9 @@ type FinishPhase struct {
 	At    time.Time
 }
 
-func NewTaskTimingRepository(db *sql.DB) *TaskTimingRepository { return &TaskTimingRepository{db: db} }
+func NewTaskTimingRepository(db *sql.DB) *TaskTimingRepository {
+	return &TaskTimingRepository{db: db, now: func() time.Time { return time.Now().UTC() }}
+}
 
 func (r *TaskTimingRepository) StartPhase(ctx context.Context, input StartPhase) (domain.TaskPhaseRun, error) {
 	input.TaskID, input.Key, input.DisplayName = strings.TrimSpace(input.TaskID), strings.TrimSpace(input.Key), strings.TrimSpace(input.DisplayName)
@@ -122,6 +128,9 @@ func (r *TaskTimingRepository) FinishPhase(ctx context.Context, input FinishPhas
 		return phase, nil
 	}
 	duration := input.At.Sub(phase.StartedAt).Milliseconds()
+	if r.beforeFinishUpdate != nil {
+		r.beforeFinishUpdate()
+	}
 	result, err := r.db.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE id=? AND finished_at IS NULL AND state IN ('queued','running')`, input.State, input.At, duration, input.ID)
 	if err != nil {
 		return domain.TaskPhaseRun{}, err
@@ -129,6 +138,13 @@ func (r *TaskTimingRepository) FinishPhase(ctx context.Context, input FinishPhas
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
 		if err != nil {
 			return domain.TaskPhaseRun{}, err
+		}
+		persisted, readErr := r.phase(ctx, input.ID)
+		if readErr != nil {
+			return domain.TaskPhaseRun{}, readErr
+		}
+		if persisted.FinishedAt != nil && isTerminalPhaseState(persisted.State) {
+			return persisted, nil
 		}
 		return domain.TaskPhaseRun{}, fmt.Errorf("phase %q is not active", input.ID)
 	}
@@ -139,12 +155,61 @@ func (r *TaskTimingRepository) InterruptRunning(ctx context.Context, at time.Tim
 	if at.IsZero() {
 		return 0, fmt.Errorf("interruption time is required")
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE task_phase_runs SET state='interrupted',finished_at=?,duration_ms=CAST((julianday(?) - julianday(started_at))*86400000 AS INTEGER) WHERE state='running' AND ?>=started_at`, at, at, at)
+	conn, err := r.db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
-	count, err := result.RowsAffected()
-	return int(count), err
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	rows, err := conn.QueryContext(ctx, `SELECT id,started_at FROM task_phase_runs WHERE state='running' ORDER BY id`)
+	if err != nil {
+		return 0, err
+	}
+	type runningPhase struct {
+		id      string
+		started time.Time
+	}
+	var phases []runningPhase
+	for rows.Next() {
+		var phase runningPhase
+		if err := rows.Scan(&phase.id, &phase.started); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		if at.Before(phase.started) {
+			_ = rows.Close()
+			return 0, fmt.Errorf("phase %q interruption precedes start", phase.id)
+		}
+		phases = append(phases, phase)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, phase := range phases {
+		result, err := conn.ExecContext(ctx, `UPDATE task_phase_runs SET state='interrupted',finished_at=?,duration_ms=? WHERE id=? AND state='running'`, at, at.Sub(phase.started).Milliseconds(), phase.id)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		count += int(affected)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return 0, err
+	}
+	committed = true
+	return count, nil
 }
 
 func (r *TaskTimingRepository) ForTask(ctx context.Context, taskID string) ([]domain.TaskPhaseRun, error) {
@@ -187,10 +252,18 @@ func (r *TaskTimingRepository) SummaryForTask(ctx context.Context, taskID string
 		queueBoundary = queued.Time
 	}
 	summary := domain.TaskTimingSummary{TaskID: taskID, Phases: phases, QueueEstimated: estimated, LegacyWithoutPhases: len(phases) == 0}
-	summary.TotalMS = nonNegativeMillis(created, terminal)
-	summary.PreparationMS = nonNegativeMillis(created, queueBoundary)
-	summary.QueueMS = nonNegativeMillis(queueBoundary, firstExecution)
-	summary.ExecutionMS = nonNegativeMillis(firstExecution, terminal)
+	if summary.TotalMS, err = checkedMillis("total", created, terminal); err != nil {
+		return domain.TaskTimingSummary{}, err
+	}
+	if summary.PreparationMS, err = checkedMillis("preparation", created, queueBoundary); err != nil {
+		return domain.TaskTimingSummary{}, err
+	}
+	if summary.QueueMS, err = checkedMillis("queue", queueBoundary, firstExecution); err != nil {
+		return domain.TaskTimingSummary{}, err
+	}
+	if summary.ExecutionMS, err = checkedMillis("execution", firstExecution, terminal); err != nil {
+		return domain.TaskTimingSummary{}, err
+	}
 	for i := range phases {
 		phase := &phases[i]
 		if started.Valid && !phase.StartedAt.Before(firstExecution) && phase.State == domain.PhaseCompleted && phase.DurationMS != nil && (summary.SlowestPhase == nil || *phase.DurationMS > *summary.SlowestPhase.DurationMS) {
@@ -248,8 +321,9 @@ func (r *TaskTimingRepository) ProjectSummary(ctx context.Context, projectID str
 		phases             map[string]*phaseValues
 	}
 	groups := map[domain.TaskAction]*values{}
+	snapshotNow := r.now()
 	for _, task := range tasks {
-		summary, err := r.SummaryForTask(ctx, task.id, time.Now().UTC())
+		summary, err := r.SummaryForTask(ctx, task.id, snapshotNow)
 		if err != nil {
 			return nil, err
 		}
@@ -260,16 +334,22 @@ func (r *TaskTimingRepository) ProjectSummary(ctx context.Context, projectID str
 		}
 		group.totals = append(group.totals, summary.TotalMS)
 		group.executions = append(group.executions, summary.ExecutionMS)
+		taskPhaseTotals := map[string]int64{}
+		taskPhaseNames := map[string]string{}
 		for _, phase := range summary.Phases {
 			if phase.State != domain.PhaseCompleted || phase.DurationMS == nil {
 				continue
 			}
-			values := group.phases[phase.PhaseKey]
+			taskPhaseTotals[phase.PhaseKey] += *phase.DurationMS
+			taskPhaseNames[phase.PhaseKey] = phase.DisplayName
+		}
+		for key, duration := range taskPhaseTotals {
+			values := group.phases[key]
 			if values == nil {
-				values = &phaseValues{displayName: phase.DisplayName}
-				group.phases[phase.PhaseKey] = values
+				values = &phaseValues{displayName: taskPhaseNames[key]}
+				group.phases[key] = values
 			}
-			values.durations = append(values.durations, *phase.DurationMS)
+			values.durations = append(values.durations, duration)
 		}
 	}
 	result := make([]domain.TaskTimingAggregate, 0, len(groups))
@@ -300,11 +380,15 @@ func scanPhase(scanner phaseScanner) (domain.TaskPhaseRun, error) {
 	return phase, err
 }
 
-func nonNegativeMillis(start, finish time.Time) int64 {
+func checkedMillis(label string, start, finish time.Time) (int64, error) {
 	if finish.Before(start) {
-		return 0
+		return 0, fmt.Errorf("invalid %s timing boundary: finish precedes start", label)
 	}
-	return finish.Sub(start).Milliseconds()
+	return finish.Sub(start).Milliseconds(), nil
+}
+
+func isTerminalPhaseState(state domain.TaskPhaseState) bool {
+	return state == domain.PhaseCompleted || state == domain.PhaseFailed || state == domain.PhaseCanceled || state == domain.PhaseInterrupted
 }
 
 func median(values []int64) int64 {

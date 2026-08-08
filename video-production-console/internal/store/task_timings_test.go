@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +81,49 @@ func TestTaskPhaseRejectsNegativeDurationAndInvalidTransitions(t *testing.T) {
 	}
 }
 
+func TestTaskPhaseConcurrentFinishReturnsFirstPersistedTerminalState(t *testing.T) {
+	repo, _, taskID, t0 := timingFixture(t)
+	phase, err := repo.StartPhase(context.Background(), StartPhase{TaskID: taskID, Attempt: 1, Key: "result_validation", DisplayName: "结果校验", Source: domain.PhaseSourceHost, At: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, release := sync.WaitGroup{}, make(chan struct{})
+	ready.Add(2)
+	repo.beforeFinishUpdate = func() { ready.Done(); <-release }
+	type outcome struct {
+		phase domain.TaskPhaseRun
+		err   error
+	}
+	results := make(chan outcome, 2)
+	for _, state := range []domain.TaskPhaseState{domain.PhaseCompleted, domain.PhaseFailed} {
+		go func(state domain.TaskPhaseState) {
+			got, finishErr := repo.FinishPhase(context.Background(), FinishPhase{ID: phase.ID, State: state, At: t0.Add(2 * time.Second)})
+			results <- outcome{got, finishErr}
+		}(state)
+	}
+	ready.Wait()
+	close(release)
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.phase.State != second.phase.State || first.phase.FinishedAt == nil || second.phase.FinishedAt == nil {
+		t.Fatalf("concurrent finishes=%+v / %+v", first, second)
+	}
+}
+
+func TestTaskPhaseInterruptDurationUsesExactTimestamps(t *testing.T) {
+	repo, _, taskID, t0 := timingFixture(t)
+	phase, err := repo.StartPhase(context.Background(), StartPhase{TaskID: taskID, Attempt: 1, Key: "asset_commit", DisplayName: "资产入库", Source: domain.PhaseSourceHost, At: t0.Add(123456789 * time.Nanosecond)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := repo.InterruptRunning(context.Background(), phase.StartedAt.Add(2*time.Second)); err != nil || count != 1 {
+		t.Fatalf("interrupt=%d err=%v", count, err)
+	}
+	got, err := repo.phase(context.Background(), phase.ID)
+	if err != nil || got.DurationMS == nil || *got.DurationMS != 2000 {
+		t.Fatalf("interrupted phase=%+v err=%v", got, err)
+	}
+}
+
 func TestTaskTimingSummaryRunningTerminalLegacyAndProjectAggregate(t *testing.T) {
 	repo, tasks, taskID, t0 := timingFixture(t)
 	ctx := context.Background()
@@ -131,3 +175,53 @@ func TestTaskTimingSummaryRunningTerminalLegacyAndProjectAggregate(t *testing.T)
 		t.Fatalf("aggregates=%+v err=%v", aggregates, err)
 	}
 }
+
+func TestTaskTimingSummaryRejectsCorruptNegativeBoundaries(t *testing.T) {
+	repo, _, taskID, t0 := timingFixture(t)
+	if _, err := repo.db.Exec(`UPDATE codex_tasks SET queued_at=? WHERE id=?`, t0.Add(-time.Second), taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SummaryForTask(context.Background(), taskID, t0.Add(time.Second)); err == nil {
+		t.Fatal("negative persisted boundary was silently clamped")
+	}
+}
+
+func TestProjectSummaryUsesOneNowAndAggregatesRunsPerTask(t *testing.T) {
+	repo, tasks, firstID, t0 := timingFixture(t)
+	ctx := context.Background()
+	secondID := "task-b"
+	if err := tasks.CreateV2(ctx, domain.CodexTask{ID: secondID, AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskRunning, PromptSnapshot: "p", CreatedAt: t0, StartedAt: timePtr(t0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.DB().Exec(`UPDATE codex_tasks SET status='running',started_at=? WHERE id=?`, t0, firstID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		phase, err := repo.StartPhase(ctx, StartPhase{TaskID: firstID, Attempt: i + 1, Key: "web_research", DisplayName: "网页检索", Source: domain.PhaseSourceHost, At: t0.Add(time.Duration(i) * 20 * time.Second)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.FinishPhase(ctx, FinishPhase{ID: phase.ID, State: domain.PhaseCompleted, At: phase.StartedAt.Add(10 * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	phase, err := repo.StartPhase(ctx, StartPhase{TaskID: secondID, Attempt: 1, Key: "web_research", DisplayName: "网页检索", Source: domain.PhaseSourceHost, At: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.FinishPhase(ctx, FinishPhase{ID: phase.ID, State: domain.PhaseCompleted, At: t0.Add(100 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	repo.now = func() time.Time { calls++; return t0.Add(time.Duration(calls) * time.Hour) }
+	aggregates, err := repo.ProjectSummary(ctx, "", 10)
+	if err != nil || calls != 1 || len(aggregates) != 1 || len(aggregates[0].Phases) != 1 {
+		t.Fatalf("aggregates=%+v calls=%d err=%v", aggregates, calls, err)
+	}
+	got := aggregates[0].Phases[0]
+	if got.Samples != 2 || got.MedianDurationMS != 60000 || got.MaxDurationMS != 100000 {
+		t.Fatalf("phase aggregate=%+v", got)
+	}
+}
+
+func timePtr(value time.Time) *time.Time { return &value }

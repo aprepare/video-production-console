@@ -85,6 +85,9 @@ func (r *TaskRepository) ExpectedAction(ctx context.Context, id string) (domain.
 }
 
 func (r *TaskRepository) Create(ctx context.Context, task domain.CodexTask) error {
+	if err := validateTaskTimingBoundaries(task); err != nil {
+		return err
+	}
 	selection, err := taskSelection(task)
 	if err != nil {
 		return err
@@ -93,13 +96,16 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CodexTask) erro
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt, task.StartedAt, task.FinishedAt)
 	return err
 }
 
 // CreateV2 persists the action required by the manifest/result protocol.
 // Create remains solely for reading and migrating pre-protocol task records.
 func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) error {
+	if err := validateTaskTimingBoundaries(task); err != nil {
+		return err
+	}
 	if strings.TrimSpace(string(task.Action)) == "" {
 		return fmt.Errorf("task action is required")
 	}
@@ -114,7 +120,7 @@ func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) er
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at,queued_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, completionPhase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt, task.QueuedAt, task.StartedAt, task.FinishedAt)
 	return err
 }
 
@@ -578,14 +584,39 @@ func (r *TaskRepository) MarkQueued(ctx context.Context, id string, at time.Time
 	if strings.TrimSpace(id) == "" || at.IsZero() {
 		return fmt.Errorf("task and queue time are required")
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=?`, at, id)
+	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=? AND ?>=created_at AND (started_at IS NULL OR ?<=started_at)`, at, id, at, at)
 	if err != nil {
 		return err
 	}
 	if affected, err := result.RowsAffected(); err != nil {
 		return err
 	} else if affected != 1 {
-		return fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
+		var exists int
+		if readErr := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codex_tasks WHERE id=?`, id).Scan(&exists); readErr != nil {
+			return readErr
+		}
+		if exists == 0 {
+			return fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
+		}
+		return fmt.Errorf("queue time is outside task timing boundaries")
+	}
+	return nil
+}
+
+func validateTaskTimingBoundaries(task domain.CodexTask) error {
+	if task.QueuedAt != nil && task.QueuedAt.Before(task.CreatedAt) {
+		return fmt.Errorf("queue time precedes task creation")
+	}
+	if task.StartedAt != nil {
+		if task.StartedAt.Before(task.CreatedAt) {
+			return fmt.Errorf("task start precedes creation")
+		}
+		if task.QueuedAt != nil && task.QueuedAt.After(*task.StartedAt) {
+			return fmt.Errorf("queue time follows task start")
+		}
+	}
+	if task.FinishedAt != nil && (task.FinishedAt.Before(task.CreatedAt) || task.StartedAt != nil && task.FinishedAt.Before(*task.StartedAt)) {
+		return fmt.Errorf("task finish precedes an earlier boundary")
 	}
 	return nil
 }
@@ -713,7 +744,7 @@ func (r *TaskRepository) CompleteWithResult(ctx context.Context, taskID string, 
 		if montagePlaintext {
 			status, phase, finishedAt = domain.TaskRunning, "plaintext_ready", nil
 		}
-		query, args := claimedResultUpdate(`UPDATE codex_tasks SET status=?,completion_phase=CASE WHEN ?='' THEN completion_phase ELSE ? END,result_summary=?,error_code=?,error_message=?,finished_at=? WHERE id=?`, []any{status, phase, phase, nullable(result.Summary), nullable(result.ErrorCode), nullable(result.ErrorMessage), finishedAt, taskID}, result.ExpectedTurnID)
+		query, args := claimedResultUpdate(`UPDATE codex_tasks SET status=?,completion_phase=CASE WHEN ?='' THEN completion_phase ELSE ? END,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(finished_at,?) END WHERE id=?`, []any{status, phase, phase, nullable(result.Summary), nullable(result.ErrorCode), nullable(result.ErrorMessage), finishedAt, finishedAt, taskID}, result.ExpectedTurnID)
 		updated, err := q.ExecContext(ctx, query, args...)
 		if err != nil {
 			return err
