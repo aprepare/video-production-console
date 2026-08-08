@@ -142,6 +142,70 @@ func TestTaskRepositoryRejectsInvalidQueuedBoundariesAtomically(t *testing.T) {
 	}
 }
 
+func TestTaskRepositoryMarkQueuedReplayReturnsFirstValueAfterStart(t *testing.T) {
+	db, err := Open(t.TempDir() + "/queued-replay.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	created := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	queued, started := created.Add(time.Second), created.Add(2*time.Second)
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, created, created); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	if err := repo.CreateV2(ctx, domain.CodexTask{ID: "replay", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskRunning, PromptSnapshot: "p", CreatedAt: created, QueuedAt: &queued, StartedAt: &started}); err != nil {
+		t.Fatal(err)
+	}
+	for _, replayAt := range []time.Time{created.Add(-time.Hour), started.Add(time.Hour)} {
+		if err := repo.MarkQueued(ctx, "replay", replayAt); err != nil {
+			t.Fatalf("replay at %v: %v", replayAt, err)
+		}
+	}
+	got, err := repo.Get(ctx, "replay")
+	if err != nil || got.QueuedAt == nil || !got.QueuedAt.Equal(queued) {
+		t.Fatalf("queued=%v err=%v", got.QueuedAt, err)
+	}
+}
+
+func TestTaskRepositoryValidatesTerminalWithoutStartBoundaries(t *testing.T) {
+	db, err := Open(t.TempDir() + "/terminal-bounds.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	created := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	finished := created.Add(2 * time.Second)
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, created, created); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	invalidQueued := finished.Add(time.Second)
+	if err := repo.CreateV2(ctx, domain.CodexTask{ID: "invalid-terminal", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskFailed, PromptSnapshot: "p", CreatedAt: created, QueuedAt: &invalidQueued, FinishedAt: &finished}); err == nil {
+		t.Fatal("CreateV2 accepted queue after finish without start")
+	}
+	startedAfterFinish := finished.Add(time.Second)
+	if err := repo.Create(ctx, domain.CodexTask{ID: "invalid-order", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Status: domain.TaskFailed, PromptSnapshot: "p", CreatedAt: created, StartedAt: &startedAfterFinish, FinishedAt: &finished}); err == nil {
+		t.Fatal("Create accepted start after finish")
+	}
+	if err := repo.CreateV2(ctx, domain.CodexTask{ID: "terminal", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskFailed, PromptSnapshot: "p", CreatedAt: created, FinishedAt: &finished}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkQueued(ctx, "terminal", finished.Add(time.Second)); err == nil {
+		t.Fatal("MarkQueued accepted first queue after terminal finish")
+	}
+	queued := created.Add(time.Second)
+	if err := repo.MarkQueued(ctx, "terminal", queued); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "terminal")
+	if err != nil || got.QueuedAt == nil || !got.QueuedAt.Equal(queued) {
+		t.Fatalf("terminal queued=%v err=%v", got.QueuedAt, err)
+	}
+}
+
 func TestCompleteWithResultKeepsFirstFinishedAtForLegacyReplay(t *testing.T) {
 	db, err := Open(t.TempDir() + "/completion-boundary.db")
 	if err != nil {

@@ -584,7 +584,7 @@ func (r *TaskRepository) MarkQueued(ctx context.Context, id string, at time.Time
 	if strings.TrimSpace(id) == "" || at.IsZero() {
 		return fmt.Errorf("task and queue time are required")
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=? AND ?>=created_at AND (started_at IS NULL OR ?<=started_at)`, at, id, at, at)
+	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=? AND (queued_at IS NOT NULL OR (?>=created_at AND (started_at IS NULL OR ?<=started_at) AND (started_at IS NOT NULL OR finished_at IS NULL OR ?<=finished_at)))`, at, id, at, at, at)
 	if err != nil {
 		return err
 	}
@@ -614,6 +614,8 @@ func validateTaskTimingBoundaries(task domain.CodexTask) error {
 		if task.QueuedAt != nil && task.QueuedAt.After(*task.StartedAt) {
 			return fmt.Errorf("queue time follows task start")
 		}
+	} else if task.QueuedAt != nil && task.FinishedAt != nil && task.QueuedAt.After(*task.FinishedAt) {
+		return fmt.Errorf("queue time follows task finish")
 	}
 	if task.FinishedAt != nil && (task.FinishedAt.Before(task.CreatedAt) || task.StartedAt != nil && task.FinishedAt.Before(*task.StartedAt)) {
 		return fmt.Errorf("task finish precedes an earlier boundary")
