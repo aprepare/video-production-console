@@ -173,6 +173,10 @@ func TestWorkflowTaskLauncherTopicCommitPreservesWorkflowModel(t *testing.T) {
 	if task.Action != domain.ActionTopicCommit || task.ModelName != "gpt-5.4" || task.ReasoningEffort != "high" || !task.CreatedAt.Equal(now) || len(preparer.requests) != 1 || preparer.requests[0].CandidateID == "" || len(scheduler.tasks) != 1 {
 		t.Fatalf("task=%+v requests=%+v scheduled=%d", task, preparer.requests, len(scheduler.tasks))
 	}
+	phases, err := store.NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "task_prepare" || phases[0].State != domain.PhaseCompleted {
+		t.Fatalf("topic preparation phases=%+v err=%v", phases, err)
+	}
 }
 
 func TestWorkflowTaskLauncherTreatsPreparedTaskAsDurableWhenSchedulerNotifyFails(t *testing.T) {

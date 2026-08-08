@@ -145,6 +145,7 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 			now = options[0].now
 		}
 	}
+	prepareStartedAt := now
 	model, err := resolveTaskModel(ctx, models, requested)
 	if err != nil {
 		return domain.CodexTask{}, err
@@ -163,18 +164,16 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 			} else if !errors.Is(manifestErr, sql.ErrNoRows) {
 				return domain.CodexTask{}, manifestErr
 			}
-			if err := preparer.Prepare(ctx, existing, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}); err != nil {
-				return domain.CodexTask{}, err
-			}
 			publish := scheduler.Enqueue
 			if options[0].publish != nil {
 				publish = options[0].publish
 			}
-			if err := publish(ctx, existing); err != nil {
+			prepared, err := prepareAndPublishTask(ctx, db, preparer, existing, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}, prepareStartedAt, publish, nil)
+			if err != nil {
 				return domain.CodexTask{}, err
 			}
 			_ = store.NewIdeaRepository(db).LinkProject(ctx, selection.SessionID, project.ID, project.AccountID)
-			return existing, nil
+			return prepared, nil
 		} else if !errors.Is(readErr, sql.ErrNoRows) {
 			return domain.CodexTask{}, readErr
 		}
@@ -203,17 +202,12 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 		Status: domain.TaskQueued, PromptSnapshot: "将已确认候选写入 Obsidian 正式选题卡。",
 		ModelName: model.Model, ReasoningEffort: model.ReasoningEffort, CreatedAt: now,
 	}
-	if err := preparer.Prepare(ctx, task, TaskManifestRequest{
-		SessionID: selection.SessionID, CandidateID: selection.Candidate.ID,
-		TopicCandidatesPath: selection.TopicCandidatesPath,
-	}); err != nil {
-		return domain.CodexTask{}, err
-	}
 	publish := scheduler.Enqueue
 	if len(options) > 0 && options[0].publish != nil {
 		publish = options[0].publish
 	}
-	if err := publish(ctx, task); err != nil {
+	prepared, err := prepareAndPublishTask(ctx, db, preparer, task, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}, prepareStartedAt, publish, nil)
+	if err != nil {
 		return domain.CodexTask{}, err
 	}
 	_ = store.NewIdeaRepository(db).LinkProject(ctx, selection.SessionID, project.ID, project.AccountID)
@@ -222,5 +216,5 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 		Role: "user", Content: "已确认候选并创建项目：" + selection.Candidate.Title, CreatedAt: now,
 	}
 	_ = store.NewIdeaRepository(db).AddMessage(ctx, message)
-	return task, nil
+	return prepared, nil
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"time"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
@@ -128,6 +129,7 @@ func (s *TaskScheduler) dispatch() {
 			cmd, root, err = s.makeCommand(t)
 		}
 		if err != nil {
+			_ = finishTimingPhase(context.Background(), s.tasks.DB(), t.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
 			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "command_build_failed", err.Error())
 			s.notifyTerminalObserver(context.Background(), t.ID)
 			s.mu.Lock()
@@ -136,6 +138,33 @@ func (s *TaskScheduler) dispatch() {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
+		startedAt := time.Now().UTC()
+		if err := finishTimingPhase(context.Background(), s.tasks.DB(), t.ID, "queue_wait", domain.PhaseCompleted, startedAt); err != nil {
+			cancel()
+			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "queue_timing_failed", err.Error())
+			s.mu.Lock()
+			delete(s.projectLocks, key)
+			s.mu.Unlock()
+			continue
+		}
+		execution, err := store.NewTaskTimingRepository(s.tasks.DB()).StartPhase(context.Background(), store.StartPhase{TaskID: t.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex 执行", Source: domain.PhaseSourceHost, ExternalID: "legacy-execution", At: startedAt})
+		if err != nil {
+			cancel()
+			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "execution_timing_failed", err.Error())
+			s.mu.Lock()
+			delete(s.projectLocks, key)
+			s.mu.Unlock()
+			continue
+		}
+		if err := s.tasks.MarkRunning(context.Background(), t.ID, startedAt); err != nil {
+			cancel()
+			_, _ = store.NewTaskTimingRepository(s.tasks.DB()).FinishPhase(context.Background(), store.FinishPhase{ID: execution.ID, State: domain.PhaseFailed, At: startedAt})
+			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "task_start_failed", err.Error())
+			s.mu.Lock()
+			delete(s.projectLocks, key)
+			s.mu.Unlock()
+			continue
+		}
 		s.mu.Lock()
 		s.running[t.ID] = &scheduled{cancel: cancel, cmd: cmd}
 		s.mu.Unlock()
@@ -210,6 +239,13 @@ func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 	if t.Status != domain.TaskQueued {
 		return fmt.Errorf("task is not queued")
 	}
+	acceptedAt := time.Now().UTC()
+	if err := s.tasks.MarkQueued(ctx, t.ID, acceptedAt); err != nil {
+		return err
+	}
+	if _, err := store.NewTaskTimingRepository(s.tasks.DB()).StartPhase(ctx, store.StartPhase{TaskID: t.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: acceptedAt}); err != nil {
+		return err
+	}
 	s.signal()
 	return nil
 }
@@ -260,6 +296,7 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 	}
 	s.mu.Unlock()
 	if t.Status == domain.TaskQueued || t.Status == domain.TaskAwaitingInput || t.Status == domain.TaskWaitingInput {
+		_ = finishTimingPhase(ctx, s.tasks.DB(), id, "queue_wait", domain.PhaseCanceled, time.Now().UTC())
 		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
 		if err := s.tasks.UpdateStatus(ctx, id, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
 			return err
@@ -267,6 +304,21 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 		return s.notifyTerminalObserver(ctx, id)
 	}
 	return fmt.Errorf("task cannot be cancelled in status %s", t.Status)
+}
+
+func finishTimingPhase(ctx context.Context, db *sql.DB, taskID, key string, state domain.TaskPhaseState, at time.Time) error {
+	timings := store.NewTaskTimingRepository(db)
+	phases, err := timings.ForTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	for i := len(phases) - 1; i >= 0; i-- {
+		if phases[i].PhaseKey == key && phases[i].FinishedAt == nil {
+			_, err := timings.FinishPhase(ctx, store.FinishPhase{ID: phases[i].ID, State: state, At: at})
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *TaskScheduler) notifyTerminalObserver(ctx context.Context, taskID string) error {

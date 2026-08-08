@@ -100,6 +100,7 @@ func viewTask(t domain.CodexTask) taskView {
 	return taskView{ID: t.ID, ProjectID: t.ProjectID, AccountID: t.AccountID, Type: t.Type, SkillName: t.SkillName, Action: t.Action, Status: t.Status, CodexSessionID: t.CodexSessionID, ModelName: t.ModelName, ReasoningEffort: t.ReasoningEffort, ResultSummary: t.ResultSummary, ErrorCode: t.ErrorCode, ErrorMessage: t.ErrorMessage, CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt}
 }
 func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
+	prepareStartedAt := time.Now().UTC()
 	pid := r.PathValue("id")
 	if _, e := uuid.Parse(pid); e != nil {
 		writeError(w, 400, "invalid_project_id", "Project ID must be a UUID.")
@@ -154,7 +155,7 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
 		return
 	}
-	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: resolved.Skill, Action: action, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, CreatedAt: time.Now().UTC()}
+	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: resolved.Skill, Action: action, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, CreatedAt: prepareStartedAt}
 	// chat_session_id is accepted for wire compatibility but is never routing
 	// authority. CompositeScheduler resolves the console-owned project session.
 	if h.preparer != nil {
@@ -162,14 +163,22 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		if action == domain.ActionTopicDeepen && strings.TrimSpace(manifestRequest.SessionID) == "" {
 			_ = h.repo.DB().QueryRowContext(r.Context(), `SELECT id FROM idea_sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT 1`, pid).Scan(&manifestRequest.SessionID)
 		}
-		if e := h.preparer.Prepare(r.Context(), t, manifestRequest); e != nil {
+		prepared, e := prepareAndPublishTask(r.Context(), h.repo.DB(), h.preparer, t, manifestRequest, prepareStartedAt, h.scheduler.Enqueue, nil)
+		if e != nil {
+			var publishErr taskPublishError
+			if errors.As(e, &publishErr) {
+				writeError(w, 500, "task_enqueue_failed", e.Error())
+				return
+			}
 			writeError(w, http.StatusConflict, "task_manifest_not_ready", e.Error())
 			return
 		}
-	}
-	if e := h.scheduler.Enqueue(r.Context(), t); e != nil {
-		writeError(w, 500, "task_enqueue_failed", e.Error())
-		return
+		t = prepared
+	} else {
+		if e := h.scheduler.Enqueue(r.Context(), t); e != nil {
+			writeError(w, 500, "task_enqueue_failed", e.Error())
+			return
+		}
 	}
 	writeJSON(w, 201, viewTask(t))
 }

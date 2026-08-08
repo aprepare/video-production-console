@@ -428,7 +428,7 @@ func (r *TaskRepository) BeginAppServerResume(ctx context.Context, taskID, expec
 		updated, err := q.ExecContext(ctx, `UPDATE codex_tasks
             SET status=?,codex_turn_id=NULL,completion_phase=?,result_summary=NULL,error_code=NULL,error_message=NULL,finished_at=NULL
             WHERE id=? AND transport='app_server' AND codex_turn_id=?
-              AND status IN (?,?)`, domain.TaskRunning, string(domain.CompletionAgentRunning), taskID, expectedTurnID, domain.TaskAwaitingInput, domain.TaskWaitingInput)
+			  AND status IN (?,?)`, domain.TaskResuming, string(domain.CompletionAgentRunning), taskID, expectedTurnID, domain.TaskAwaitingInput, domain.TaskWaitingInput)
 		if err != nil {
 			return err
 		}
@@ -437,6 +437,85 @@ func (r *TaskRepository) BeginAppServerResume(ctx context.Context, taskID, expec
 				return err
 			}
 			return fmt.Errorf("task %q is no longer awaiting the expected turn", taskID)
+		}
+		var attempt int
+		if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM task_phase_runs WHERE task_id=?`, taskID).Scan(&attempt); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, attempt, "queue_wait", "排队等待", domain.PhaseSourceHost, domain.PhaseRunning, now, now, "app-server-resume-accept", `{}`, now); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// StartAppServerTurn atomically binds a durable turn notification, closes the
+// matching queue wait, starts execution, and transitions the task to running.
+// Replaying the same notification after commit is a successful no-op.
+func (r *TaskRepository) StartAppServerTurn(ctx context.Context, taskID, sessionID, threadID, turnID string, at time.Time) error {
+	taskID, sessionID = strings.TrimSpace(taskID), strings.TrimSpace(sessionID)
+	threadID, turnID = strings.TrimSpace(threadID), strings.TrimSpace(turnID)
+	if taskID == "" || sessionID == "" || threadID == "" || turnID == "" || at.IsZero() {
+		return fmt.Errorf("task, session, thread, turn, and start time are required")
+	}
+	return r.immediate(ctx, "start App Server task turn", func(q assetDBTX, _ time.Time) error {
+		var status domain.TaskStatus
+		var persistedSession, persistedThread, persistedTurn sql.NullString
+		var persistedStarted sql.NullTime
+		if err := q.QueryRowContext(ctx, `SELECT status,chat_session_id,codex_thread_id,codex_turn_id,started_at FROM codex_tasks WHERE id=? AND transport='app_server'`, taskID).
+			Scan(&status, &persistedSession, &persistedThread, &persistedTurn, &persistedStarted); err != nil {
+			return err
+		}
+		if !persistedSession.Valid || persistedSession.String != sessionID {
+			return errors.New("formal task start identity mismatch")
+		}
+		if persistedStarted.Valid && persistedThread.Valid && persistedThread.String == threadID && persistedTurn.Valid && persistedTurn.String == turnID {
+			return nil
+		}
+		if status != domain.TaskQueued && status != domain.TaskResuming {
+			return fmt.Errorf("formal task cannot bind a turn in status %s", status)
+		}
+		var queueID string
+		var attempt int
+		var queueStarted time.Time
+		queueErr := q.QueryRowContext(ctx, `SELECT id,attempt,started_at FROM task_phase_runs
+			WHERE task_id=? AND phase_key='queue_wait' AND state='running' AND finished_at IS NULL
+			ORDER BY attempt DESC,started_at DESC,id DESC LIMIT 1`, taskID).Scan(&queueID, &attempt, &queueStarted)
+		if queueErr != nil && !errors.Is(queueErr, sql.ErrNoRows) {
+			return fmt.Errorf("active queue wait for task %q: %w", taskID, queueErr)
+		}
+		if queueErr == nil {
+			if at.Before(queueStarted) {
+				return errors.New("turn start precedes queue acceptance")
+			}
+			result, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE id=? AND state='running' AND finished_at IS NULL`, domain.PhaseCompleted, at, at.Sub(queueStarted).Milliseconds(), queueID)
+			if err != nil {
+				return err
+			}
+			if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+				if err != nil {
+					return err
+				}
+				return errors.New("queue wait changed before turn start")
+			}
+		} else if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM task_phase_runs WHERE task_id=?`, taskID).Scan(&attempt); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, attempt, "codex_execution", "Codex 执行", domain.PhaseSourceAppServer, domain.PhaseRunning, at, at, "app-server-execution", `{}`, at); err != nil {
+			return err
+		}
+		updated, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,codex_thread_id=?,codex_turn_id=?,completion_phase=?,started_at=COALESCE(started_at,?)
+			WHERE id=? AND status IN (?,?)`, domain.TaskRunning, threadID, turnID, string(domain.CompletionAgentRunning), at, taskID, domain.TaskQueued, domain.TaskResuming)
+		if err != nil {
+			return err
+		}
+		if affected, err := updated.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return errors.New("task changed before turn start")
 		}
 		return nil
 	})
@@ -599,6 +678,22 @@ func (r *TaskRepository) MarkQueued(ctx context.Context, id string, at time.Time
 			return fmt.Errorf("task %q: %w", id, sql.ErrNoRows)
 		}
 		return fmt.Errorf("queue time is outside task timing boundaries")
+	}
+	return nil
+}
+
+func (r *TaskRepository) MarkRunning(ctx context.Context, id string, at time.Time) error {
+	if strings.TrimSpace(id) == "" || at.IsZero() {
+		return fmt.Errorf("task and running time are required")
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,started_at=COALESCE(started_at,?) WHERE id=? AND status=?`, domain.TaskRunning, at, id, domain.TaskQueued)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("task %q is not queued", id)
 	}
 	return nil
 }

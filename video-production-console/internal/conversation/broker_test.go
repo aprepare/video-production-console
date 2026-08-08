@@ -124,7 +124,7 @@ func TestTaskTurnStartedRebindsTaskWhenSessionThreadWasReplaced(t *testing.T) {
 	}
 	tasks := store.NewTaskRepository(db)
 	oldThread := *session.CodexThreadID
-	task := domain.CodexTask{ID: "task-rebind", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskRunning, ChatSessionID: &session.ID, CodexThreadID: &oldThread, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	task := domain.CodexTask{ID: "task-rebind", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &session.ID, CodexThreadID: &oldThread, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
 	if err := tasks.CreateV2(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +141,135 @@ func TestTaskTurnStartedRebindsTaskWhenSessionThreadWasReplaced(t *testing.T) {
 	}
 	if updated.CodexThreadID == nil || *updated.CodexThreadID != "replacement-thread" || updated.CodexTurnID == nil || *updated.CodexTurnID != "turn-rebound" {
 		t.Fatalf("task binding=%+v", updated)
+	}
+}
+
+func TestTurnStartedTimingKeepsQueuedAppServerTaskUntilActualTurn(t *testing.T) {
+	ctx, db, conversations, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	createActiveTurn(t, ctx, conversations, session.ID, "turn-active")
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: "timed-app-task", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &fakeRPC{turnID: "turn-task"}
+	broker := NewBroker(conversations, rpc)
+	adapter := NewTaskAdapter(tasks, broker, rpc)
+	if err := adapter.Enqueue(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := tasks.Get(ctx, task.ID)
+	if err != nil || queued.Status != domain.TaskQueued || queued.StartedAt != nil || queued.QueuedAt == nil {
+		t.Fatalf("queued=%+v err=%v", queued, err)
+	}
+	phases, err := store.NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseRunning {
+		t.Fatalf("queued phases=%+v err=%v", phases, err)
+	}
+	if err := adapter.TaskTurnStarted(ctx, taskClientKeyPrefix+task.ID+":initial", session.ID, *session.CodexThreadID, "turn-task"); err != nil {
+		t.Fatal(err)
+	}
+	running, err := tasks.Get(ctx, task.ID)
+	if err != nil || running.Status != domain.TaskRunning || running.StartedAt == nil {
+		t.Fatalf("running=%+v err=%v", running, err)
+	}
+	phases, err = store.NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || len(phases) != 2 || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "codex_execution" || phases[1].State != domain.PhaseRunning {
+		t.Fatalf("running phases=%+v err=%v", phases, err)
+	}
+}
+
+func TestTurnStartedTimingReplayIsIdempotent(t *testing.T) {
+	ctx, db, _, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: "timed-replay-task", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.MarkQueued(ctx, task.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewTaskTimingRepository(db).StartPhase(ctx, store.StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &TaskAdapter{tasks: tasks}
+	clientKey := taskClientKeyPrefix + task.ID + ":initial"
+	for range 2 {
+		if err := adapter.TaskTurnStarted(ctx, clientKey, session.ID, *session.CodexThreadID, "turn-replayed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	persisted, err := tasks.Get(ctx, task.ID)
+	if err != nil || persisted.Status != domain.TaskRunning {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	phases, err := store.NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || len(phases) != 2 || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "codex_execution" || phases[1].State != domain.PhaseRunning {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+}
+
+func TestTurnStartedTimingDeliveryFailureClosesQueueWithoutExecution(t *testing.T) {
+	ctx, db, _, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: "delivery-fail-timing", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	queuedAt := now
+	if err := tasks.MarkQueued(ctx, task.ID, queuedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewTaskTimingRepository(db).StartPhase(ctx, store.StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: queuedAt}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &TaskAdapter{tasks: tasks}
+	if err := adapter.TaskDeliveryFailed(ctx, taskClientKeyPrefix+task.ID+":initial", session.ID, errors.New("delivery failed")); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := store.NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || len(phases) != 1 || phases[0].State != domain.PhaseFailed {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+}
+
+func TestTurnStartedTimingQueuedCancellationClosesQueueWithoutExecution(t *testing.T) {
+	ctx, db, _, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: "queued-cancel-timing", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.MarkQueued(ctx, task.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewTaskTimingRepository(db).StartPhase(ctx, store.StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &TaskAdapter{tasks: tasks}
+	if err := adapter.Cancel(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	persisted, _ := tasks.Get(ctx, task.ID)
+	phases, err := store.NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || persisted.Status != domain.TaskCanceled || len(phases) != 1 || phases[0].State != domain.PhaseCanceled {
+		t.Fatalf("task=%+v phases=%+v err=%v", persisted, phases, err)
 	}
 }
 

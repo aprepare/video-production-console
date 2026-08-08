@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -806,7 +807,7 @@ func TestBeginAppServerResumeRollsBackStateWhenAnswerWriteFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != domain.TaskRunning || got.CodexTurnID != nil {
+	if got.Status != domain.TaskResuming || got.CodexTurnID != nil {
 		t.Fatalf("resume did not atomically clear the old turn: %+v", got)
 	}
 	messages, err := repo.Messages(context.Background(), task.ID)
@@ -816,6 +817,45 @@ func TestBeginAppServerResumeRollsBackStateWhenAnswerWriteFails(t *testing.T) {
 	pending, err := NewConversationRepository(db).PendingOutbox(context.Background(), sessionID)
 	if err != nil || len(pending) != 1 || pending[0].ClientKey != clientKey {
 		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+}
+
+func TestStartAppServerTurnRollsBackAllTimingState(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "atomic-start.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	sessionID, threadID := "session", "thread"
+	if err := NewConversationRepository(db).CreateSession(ctx, domain.ChatSession{ID: sessionID, Title: "atomic start", Kind: domain.ChatProject, Status: domain.ChatIdle, CodexThreadID: &threadID}); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.CodexTask{ID: "atomic-start", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, ChatSessionID: &sessionID, CodexThreadID: &threadID, Transport: "app_server", PromptSnapshot: "prompt", CreatedAt: now}
+	if err := repo.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTaskTimingRepository(db).StartPhase(ctx, StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, At: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER reject_execution BEFORE INSERT ON task_phase_runs WHEN NEW.phase_key='codex_execution' BEGIN SELECT RAISE(ABORT, 'reject execution'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.StartAppServerTurn(ctx, task.ID, sessionID, threadID, "turn", now.Add(time.Second)); err == nil {
+		t.Fatal("StartAppServerTurn succeeded, want injected failure")
+	}
+	persisted, err := repo.Get(ctx, task.ID)
+	if err != nil || persisted.Status != domain.TaskQueued || persisted.CodexTurnID != nil || persisted.StartedAt != nil {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseRunning || phases[0].FinishedAt != nil {
+		t.Fatalf("phases=%+v err=%v", phases, err)
 	}
 }
 

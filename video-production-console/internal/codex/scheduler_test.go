@@ -3,8 +3,10 @@ package codex
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 	"video-production-console/internal/domain"
@@ -59,6 +61,72 @@ func TestSchedulerEnqueuePersistsQueuedTask(t *testing.T) {
 	_, err = repo.Get(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueueBoundaryStartsOnlyAfterLegacySlotAndProjectLock(t *testing.T) {
+	repo := schedulerDB(t)
+	_, _ = repo.DB().Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#000','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFactory := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseFactory()
+	s, err := NewScheduler(repo, 1, func(domain.CodexTask) (*exec.Cmd, string, error) {
+		close(entered)
+		<-release
+		cmd := exec.Command(os.Args[0], "-test.run=TestSchedulerBlockingProcess")
+		cmd.Env = append(os.Environ(), "VIDEO_CONSOLE_SCHEDULER_BLOCKING_PROCESS=1")
+		return cmd, t.TempDir(), nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	task := domain.CodexTask{ID: "queue-boundary", AccountID: "a", Type: "topic_select", SkillName: "finance-topic-selector", Status: domain.TaskQueued, PromptSnapshot: "x", CreatedAt: time.Now().UTC()}
+	if err := s.Enqueue(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler did not inspect queued task")
+	}
+	queued, err := repo.Get(context.Background(), task.ID)
+	if err != nil || queued.Status != domain.TaskQueued || queued.QueuedAt == nil || queued.StartedAt != nil {
+		t.Fatalf("queued task=%+v err=%v", queued, err)
+	}
+	phases, err := store.NewTaskTimingRepository(repo.DB()).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseRunning {
+		t.Fatalf("queued phases=%+v err=%v", phases, err)
+	}
+	releaseFactory()
+	waitForTaskStatus(t, repo, task.ID, domain.TaskRunning)
+	running, _ := repo.Get(context.Background(), task.ID)
+	if running.StartedAt == nil {
+		t.Fatal("legacy task has no actual start boundary")
+	}
+	phases, err = store.NewTaskTimingRepository(repo.DB()).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 2 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "codex_execution" || phases[1].State != domain.PhaseRunning {
+		t.Fatalf("running phases=%+v err=%v", phases, err)
+	}
+}
+
+func TestQueueBoundaryCommandBuildFailureDoesNotFabricateExecution(t *testing.T) {
+	repo := schedulerDB(t)
+	_, _ = repo.DB().Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#000','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
+	s, err := NewScheduler(repo, 1, func(domain.CodexTask) (*exec.Cmd, string, error) { return nil, "", errors.New("build failed") }, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	task := domain.CodexTask{ID: "queue-build-fail", AccountID: "a", Type: "topic_select", SkillName: "finance-topic-selector", Status: domain.TaskQueued, PromptSnapshot: "x", CreatedAt: time.Now().UTC()}
+	if err := s.Enqueue(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, repo, task.ID, domain.TaskFailed)
+	phases, err := store.NewTaskTimingRepository(repo.DB()).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseFailed {
+		t.Fatalf("phases=%+v err=%v", phases, err)
 	}
 }
 

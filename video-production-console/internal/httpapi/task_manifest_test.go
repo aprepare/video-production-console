@@ -381,6 +381,14 @@ func TestTaskHTTPRejectsMissingRemixAssetBeforeEnqueue(t *testing.T) {
 	if recorder.Code != http.StatusConflict || scheduler.enqueued != 0 {
 		t.Fatalf("status=%d enqueued=%d body=%s", recorder.Code, scheduler.enqueued, recorder.Body.String())
 	}
+	failed, err := store.NewTaskRepository(db.db).List(context.Background(), projectID, domain.TaskFailed)
+	if err != nil || len(failed) != 1 {
+		t.Fatalf("failed preparation tasks=%+v err=%v", failed, err)
+	}
+	phases, err := store.NewTaskTimingRepository(db.db).ForTask(context.Background(), failed[0].ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "task_prepare" || phases[0].State != domain.PhaseFailed {
+		t.Fatalf("failed preparation phases=%+v err=%v", phases, err)
+	}
 }
 
 func TestTaskManifestPreparerWritesProjectlessTopicManifest(t *testing.T) {

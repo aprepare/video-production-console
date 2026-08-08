@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
@@ -112,11 +113,16 @@ func (a *TaskAdapter) Enqueue(ctx context.Context, task domain.CodexTask) error 
 			return err
 		}
 	}
-	if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskRunning, "", "", ""); err != nil {
+	acceptedAt := time.Now().UTC()
+	if err := a.tasks.MarkQueued(ctx, task.ID, acceptedAt); err != nil {
+		return err
+	}
+	if _, err := store.NewTaskTimingRepository(a.tasks.DB()).StartPhase(ctx, store.StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: acceptedAt}); err != nil {
 		return err
 	}
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: taskClientKeyPrefix + task.ID + ":initial", Text: task.PromptSnapshot})
 	if err != nil {
+		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
 		_ = a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_enqueue_failed", err.Error())
 		return errors.Join(err, a.afterTerminal(ctx, task.ID))
 	}
@@ -155,6 +161,7 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 	}
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: resumeKey, Text: answer})
 	if err != nil {
+		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
 		persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_resume_failed", err.Error())
 		return errors.Join(err, persistErr, a.afterTerminal(ctx, task.ID))
 	}
@@ -278,6 +285,10 @@ func (a *TaskAdapter) TaskTurnStarted(ctx context.Context, clientKey, sessionID,
 		return err
 	}
 	fail := func(cause error) error {
+		if task.Status == domain.TaskCompleted || task.Status == domain.TaskFailed || task.Status == domain.TaskCanceled || task.Status == domain.TaskInterrupted || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput {
+			return cause
+		}
+		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
 		if persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_turn_bind_failed", cause.Error()); persistErr != nil {
 			return errors.Join(cause, persistErr)
 		}
@@ -286,10 +297,14 @@ func (a *TaskAdapter) TaskTurnStarted(ctx context.Context, clientKey, sessionID,
 	if task.ChatSessionID == nil || *task.ChatSessionID != sessionID {
 		return fail(errors.New("formal task start identity mismatch"))
 	}
-	if task.Status != domain.TaskRunning {
-		return fail(fmt.Errorf("formal task cannot bind a turn in status %s", task.Status))
+	isResumeReceipt := strings.Contains(clientKey, ":resume:")
+	if task.Status == domain.TaskResuming && !isResumeReceipt {
+		return errors.New("initial task receipt cannot bind a resume attempt")
 	}
-	if err := a.bindReceipt(ctx, task.ID, task.ChatSessionID, &threadID, turnID); err != nil {
+	if task.Status == domain.TaskQueued && isResumeReceipt {
+		return errors.New("resume receipt cannot bind an initial attempt")
+	}
+	if err := a.tasks.StartAppServerTurn(ctx, task.ID, sessionID, threadID, turnID, time.Now().UTC()); err != nil {
 		return fail(err)
 	}
 	return nil
@@ -314,10 +329,28 @@ func (a *TaskAdapter) TaskDeliveryFailed(ctx context.Context, clientKey, session
 	if cause != nil {
 		message = cause.Error()
 	}
+	if err := finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC()); err != nil {
+		return err
+	}
 	if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_delivery_failed", message); err != nil {
 		return err
 	}
 	return a.afterTerminal(ctx, task.ID)
+}
+
+func finishTaskTimingPhase(ctx context.Context, db *sql.DB, taskID, key string, state domain.TaskPhaseState, at time.Time) error {
+	timings := store.NewTaskTimingRepository(db)
+	phases, err := timings.ForTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	for i := len(phases) - 1; i >= 0; i-- {
+		if phases[i].PhaseKey == key && phases[i].FinishedAt == nil {
+			_, err := timings.FinishPhase(ctx, store.FinishPhase{ID: phases[i].ID, State: state, At: at})
+			return err
+		}
+	}
+	return nil
 }
 
 func formalTaskID(clientKey string) (string, error) {
@@ -348,7 +381,20 @@ func (a *TaskAdapter) TaskExecutionConfig(ctx context.Context, clientKey string)
 }
 
 func (a *TaskAdapter) Cancel(ctx context.Context, task domain.CodexTask) error {
-	if a == nil || a.tasks == nil || a.rpc == nil {
+	if a == nil || a.tasks == nil {
+		return errors.New("App Server task adapter is not configured")
+	}
+	if task.Status == domain.TaskQueued || task.Status == domain.TaskResuming {
+		at := time.Now().UTC()
+		if err := finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseCanceled, at); err != nil {
+			return err
+		}
+		if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
+			return err
+		}
+		return a.afterTerminal(ctx, task.ID)
+	}
+	if a.rpc == nil {
 		return errors.New("App Server task adapter is not configured")
 	}
 	if task.CodexThreadID == nil || strings.TrimSpace(*task.CodexThreadID) == "" || task.CodexTurnID == nil || strings.TrimSpace(*task.CodexTurnID) == "" {
