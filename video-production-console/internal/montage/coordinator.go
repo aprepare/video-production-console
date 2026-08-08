@@ -301,7 +301,7 @@ func (c *Coordinator) process(job registrationJob) {
 		}
 		return
 	}
-	if err := c.repo.Succeed(ctx, store.RegistrationSuccess{AttemptID: job.Attempt.ID, RegisteredPath: result.RegisteredPath, ReceiptPath: result.ReceiptPath, SHA256: result.DirectorySHA256, WorkspaceSHA256: workspaceDigest, Filename: filepath.Base(result.RegisteredPath)}); err != nil {
+	if err := c.repo.Succeed(ctx, store.RegistrationSuccess{AttemptID: job.Attempt.ID, RegisteredPath: result.RegisteredPath, ReceiptPath: result.ReceiptPath, SHA256: result.DirectorySHA256, WorkspaceSHA256: workspaceDigest, Filename: result.DisplayName}); err != nil {
 		if failErr := c.repo.FailCommit(context.Background(), job.Attempt.ID, err.Error()); failErr != nil {
 			c.reportFailure(job.Attempt.TaskID, "registration_commit_reconcile_failed", failErr)
 		}
@@ -341,8 +341,13 @@ func (c *Coordinator) recoverRegisteredDraft(attempt domain.RegistrationAttempt)
 	if !receiptExists || !targetExists {
 		return RegisterResult{}, false, invalidRegistration("existing registration is incomplete")
 	}
+	displayName, err := frozenDraftDisplayName(attempt.ManifestPath, attempt.TaskID)
+	if err != nil {
+		return RegisterResult{}, false, err
+	}
 	result, err := ValidateRegisteredDraft(ValidationRequest{
 		TaskID:        attempt.TaskID,
+		DisplayName:   displayName,
 		WorkspacePath: workspace,
 		ReceiptPath:   receiptPath,
 		JianyingRoot:  root,
@@ -426,9 +431,10 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 		JobID             string `json:"job_id"`
 		NonSecretSettings struct {
 			MachineProfilePath string `json:"machine_profile_path"`
+			DraftDisplayName   string `json:"draft_display_name"`
 		} `json:"non_secret_settings"`
 	}
-	if json.Unmarshal(manifestData, &manifest) != nil || manifest.TaskID != attempt.TaskID || manifest.JobID != attempt.TaskID || strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath) == "" {
+	if json.Unmarshal(manifestData, &manifest) != nil || manifest.TaskID != attempt.TaskID || manifest.JobID != attempt.TaskID || strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath) == "" || strings.TrimSpace(manifest.NonSecretSettings.DraftDisplayName) == "" {
 		return RegisterRequest{}, errors.New("manifest task identity or machine profile is invalid")
 	}
 	profilePath, err := canonicalNoFollow(manifest.NonSecretSettings.MachineProfilePath, false)
@@ -447,7 +453,29 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 	if err != nil || !samePath(jianyingRoot, c.runtime.JianyingRoot) {
 		return RegisterRequest{}, errors.New("trusted Jianying root identity changed")
 	}
-	return RegisterRequest{TaskID: attempt.TaskID, ManifestPath: manifestPath, WorkspacePath: workspacePath, SkillRoot: skillRoot, ScriptPath: scriptPath, PythonBinary: pythonBinary, JianyingRoot: jianyingRoot}, nil
+	return RegisterRequest{TaskID: attempt.TaskID, DisplayName: manifest.NonSecretSettings.DraftDisplayName, ManifestPath: manifestPath, WorkspacePath: workspacePath, SkillRoot: skillRoot, ScriptPath: scriptPath, PythonBinary: pythonBinary, JianyingRoot: jianyingRoot}, nil
+}
+
+func frozenDraftDisplayName(manifestPath, taskID string) (string, error) {
+	manifest, err := canonicalNoFollow(manifestPath, false)
+	if err != nil {
+		return "", invalidRegistration("task manifest is unavailable")
+	}
+	data, err := readBounded(manifest, 4<<20)
+	if err != nil {
+		return "", invalidRegistration("task manifest could not be read")
+	}
+	var identity struct {
+		TaskID            string `json:"task_id"`
+		JobID             string `json:"job_id"`
+		NonSecretSettings struct {
+			DraftDisplayName string `json:"draft_display_name"`
+		} `json:"non_secret_settings"`
+	}
+	if json.Unmarshal(data, &identity) != nil || identity.TaskID != taskID || identity.JobID != taskID || strings.TrimSpace(identity.NonSecretSettings.DraftDisplayName) == "" {
+		return "", invalidRegistration("task manifest display identity is invalid")
+	}
+	return identity.NonSecretSettings.DraftDisplayName, nil
 }
 
 func trustedPythonBinary(value string) (string, error) {

@@ -14,10 +14,12 @@ import (
 	"strings"
 )
 
-type ValidationRequest struct{ TaskID, WorkspacePath, ReceiptPath, JianyingRoot string }
+type ValidationRequest struct{ TaskID, DisplayName, WorkspacePath, ReceiptPath, JianyingRoot string }
 
 type registrationReceipt struct {
 	Status                  string `json:"status"`
+	TaskID                  string `json:"task_id"`
+	DraftDisplayName        string `json:"draft_display_name"`
 	RegisteredPath          string `json:"registered_path"`
 	DraftID                 string `json:"draft_id"`
 	SourceDraftID           string `json:"source_draft_id"`
@@ -28,6 +30,9 @@ type registrationReceipt struct {
 }
 
 func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) {
+	if strings.TrimSpace(request.TaskID) == "" || strings.TrimSpace(request.DisplayName) == "" {
+		return RegisterResult{}, invalidRegistration("task identity or display name is missing")
+	}
 	workspace, err := canonicalDirectory(request.WorkspacePath)
 	if err != nil {
 		return RegisterResult{}, invalidRegistration("workspace is unavailable")
@@ -49,7 +54,7 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 		return RegisterResult{}, invalidRegistration("registration receipt could not be read")
 	}
 	var receipt registrationReceipt
-	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil || receipt.Status != "completed" || receipt.DraftID == "" || receipt.DurationUS <= 0 {
+	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil || receipt.Status != "completed" || receipt.TaskID != request.TaskID || receipt.DraftDisplayName != request.DisplayName || receipt.DraftID == "" || receipt.DurationUS <= 0 {
 		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
 	}
 	registered, err := canonicalDirectory(receipt.RegisteredPath)
@@ -84,9 +89,12 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 	if err != nil {
 		return RegisterResult{}, invalidRegistration("source draft ID is unavailable")
 	}
-	registeredDraftID, err := readDraftID(filepath.Join(registered, "draft_meta_info.json"))
+	registeredDraftID, registeredDisplayName, err := readDraftMeta(filepath.Join(registered, "draft_meta_info.json"))
 	if err != nil || registeredDraftID != receipt.DraftID {
 		return RegisterResult{}, invalidRegistration("registered draft ID does not match registration receipt")
+	}
+	if registeredDisplayName != request.DisplayName {
+		return RegisterResult{}, invalidRegistration("registered draft display name does not match task manifest")
 	}
 	hasSourceDraftID := strings.TrimSpace(receipt.SourceDraftID) != ""
 	hasRekeyFlag := receipt.DraftIDRekeyed != nil
@@ -102,31 +110,37 @@ func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) 
 			return RegisterResult{}, invalidRegistration("draft ID rekey flag does not match registered draft")
 		}
 	}
-	if err := validateRootIndex(filepath.Join(root, "root_meta_info.json"), receipt.DraftID, registered); err != nil {
+	if err := validateRootIndex(filepath.Join(root, "root_meta_info.json"), receipt.DraftID, request.DisplayName, registered); err != nil {
 		return RegisterResult{}, err
 	}
 	directoryHash, err := hashDirectory(registered)
 	if err != nil {
 		return RegisterResult{}, invalidRegistration("registered directory could not be hashed")
 	}
-	return RegisterResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: receipt.DraftID, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash, DurationUS: receipt.DurationUS}, nil
+	return RegisterResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: receipt.DraftID, DisplayName: request.DisplayName, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash, DurationUS: receipt.DurationUS}, nil
 }
 
 func readDraftID(path string) (string, error) {
-	data, err := readBounded(path, 4<<20)
-	if err != nil {
-		return "", err
-	}
-	var meta struct {
-		DraftID string `json:"draft_id"`
-	}
-	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &meta); err != nil || strings.TrimSpace(meta.DraftID) == "" {
-		return "", errors.New("draft_meta_info.json has no draft_id")
-	}
-	return meta.DraftID, nil
+	draftID, _, err := readDraftMeta(path)
+	return draftID, err
 }
 
-func validateRootIndex(path, draftID, registered string) error {
+func readDraftMeta(path string) (string, string, error) {
+	data, err := readBounded(path, 4<<20)
+	if err != nil {
+		return "", "", err
+	}
+	var meta struct {
+		DraftID   string `json:"draft_id"`
+		DraftName string `json:"draft_name"`
+	}
+	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &meta); err != nil || strings.TrimSpace(meta.DraftID) == "" {
+		return "", "", errors.New("draft_meta_info.json has no draft_id")
+	}
+	return meta.DraftID, meta.DraftName, nil
+}
+
+func validateRootIndex(path, draftID, displayName, registered string) error {
 	data, err := readBounded(path, 16<<20)
 	if err != nil {
 		return invalidRegistration("Jianying root index is unavailable")
@@ -140,11 +154,12 @@ func validateRootIndex(path, draftID, registered string) error {
 	for _, entry := range raw.Entries {
 		id, _ := entry["draft_id"].(string)
 		pathValue, _ := entry["draft_fold_path"].(string)
+		name, _ := entry["draft_name"].(string)
 		// Jianying may persist draft paths with the Windows extended-length
 		// prefix while the validator has already canonicalized the target.
 		// Normalize both representations before comparing identities.
 		pathValue = stripWindowsExtendedPath(strings.TrimSpace(pathValue))
-		if id == draftID && samePath(filepath.Clean(pathValue), registered) {
+		if id == draftID && name == displayName && samePath(filepath.Clean(pathValue), registered) {
 			return nil
 		}
 	}

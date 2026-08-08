@@ -24,10 +24,10 @@ type CommandResult struct {
 type CommandRunner interface {
 	Run(context.Context, CommandSpec, int64) (CommandResult, error)
 }
-type RegisterRequest struct{ TaskID, ManifestPath, WorkspacePath, SkillRoot, ScriptPath, PythonBinary, JianyingRoot string }
+type RegisterRequest struct{ TaskID, DisplayName, ManifestPath, WorkspacePath, SkillRoot, ScriptPath, PythonBinary, JianyingRoot string }
 type RegisterResult struct {
-	RegisteredPath, ReceiptPath, DraftID, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
-	DurationUS                                                                                          int64
+	RegisteredPath, ReceiptPath, DraftID, DisplayName, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+	DurationUS                                                                                                       int64
 }
 type Registrar struct{ runner CommandRunner }
 
@@ -37,7 +37,7 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 	if r == nil || r.runner == nil {
 		return RegisterResult{}, errors.New("montage registrar is not configured")
 	}
-	if request.TaskID == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" {
+	if request.TaskID == "" || request.DisplayName == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" {
 		return RegisterResult{}, fmt.Errorf("%w: missing registration input", ErrInvalidRegistration)
 	}
 	manifest, manifestErr := canonicalNoFollow(request.ManifestPath, false)
@@ -63,7 +63,7 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 		if !receiptExists || !targetExists {
 			return RegisterResult{}, fmt.Errorf("%w: existing registration is incomplete", ErrInvalidRegistration)
 		}
-		return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
+		return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
 	}
 	command, err := r.runner.Run(ctx, CommandSpec{Program: python, Args: []string{script, "register", "--manifest", manifest, "--draft", workspace}, Dir: skillRoot}, 1<<20)
 	if err != nil {
@@ -96,7 +96,7 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 	// the receipt was written successfully. Validate the task-bound location
 	// derived before execution instead; all receipt contents, fingerprints,
 	// registered paths, and Jianying index entries remain strictly verified.
-	return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
+	return ValidateRegisteredDraft(ValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, ReceiptPath: receiptPath, JianyingRoot: root})
 }
 
 func retainedPathExists(path string) (bool, error) {

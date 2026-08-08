@@ -16,6 +16,7 @@ import (
 type registrationFixture struct {
 	request      ValidationRequest
 	receiptPath  string
+	manifestPath string
 	workspace    string
 	registered   string
 	root         string
@@ -26,7 +27,8 @@ type registrationFixture struct {
 func newRegistrationFixture(t *testing.T, explicitRekeyFields bool, rekeyed bool) registrationFixture {
 	t.Helper()
 	base := t.TempDir()
-	taskID := "task-registration-recovery"
+	taskID := "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"
+	displayName := "财富觉醒02_存款大搬家_b66205"
 	output := filepath.Join(base, "task-output")
 	workspace := filepath.Join(output, "workspace", taskID)
 	root := filepath.Join(base, "jianying")
@@ -48,16 +50,18 @@ func newRegistrationFixture(t *testing.T, explicitRekeyFields bool, rekeyed bool
 			t.Fatal(err)
 		}
 	}
-	writeJSONFixture(t, filepath.Join(workspace, "draft_meta_info.json"), map[string]any{"draft_id": sourceID})
-	writeJSONFixture(t, filepath.Join(registered, "draft_meta_info.json"), map[string]any{"draft_id": registeredID})
+	writeJSONFixture(t, filepath.Join(workspace, "draft_meta_info.json"), map[string]any{"draft_id": sourceID, "draft_name": displayName})
+	writeJSONFixture(t, filepath.Join(registered, "draft_meta_info.json"), map[string]any{"draft_id": registeredID, "draft_name": displayName})
 	writeJSONFixture(t, filepath.Join(root, "root_meta_info.json"), map[string]any{
-		"all_draft_store": []map[string]any{{"draft_id": registeredID, "draft_fold_path": registered}},
+		"all_draft_store": []map[string]any{{"draft_id": registeredID, "draft_fold_path": registered, "draft_name": displayName}},
 	})
 
 	digestBytes := sha256.Sum256(content)
 	digest := hex.EncodeToString(digestBytes[:])
 	receipt := map[string]any{
 		"status":                    "completed",
+		"task_id":                   taskID,
+		"draft_display_name":        displayName,
 		"registered_path":           registered,
 		"draft_id":                  registeredID,
 		"duration_us":               1000000,
@@ -70,20 +74,98 @@ func newRegistrationFixture(t *testing.T, explicitRekeyFields bool, rekeyed bool
 	}
 	receiptPath := filepath.Join(output, "registration", "registration-result.json")
 	writeJSONFixture(t, receiptPath, receipt)
+	manifestPath := filepath.Join(output, "task_manifest.json")
+	writeJSONFixture(t, manifestPath, map[string]any{
+		"task_id":             taskID,
+		"job_id":              taskID,
+		"non_secret_settings": map[string]any{"draft_display_name": displayName},
+	})
 
 	return registrationFixture{
 		request: ValidationRequest{
 			TaskID:        taskID,
+			DisplayName:   displayName,
 			WorkspacePath: workspace,
 			ReceiptPath:   receiptPath,
 			JianyingRoot:  root,
 		},
 		receiptPath:  receiptPath,
+		manifestPath: manifestPath,
 		workspace:    workspace,
 		registered:   registered,
 		root:         root,
 		sourceID:     sourceID,
 		registeredID: registeredID,
+	}
+}
+
+func rewriteJSONFixture(t *testing.T, path string, mutate func(map[string]any)) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	mutate(value)
+	writeJSONFixture(t, path, value)
+}
+
+func TestValidateRegisteredDraftAcceptsReadableNameWithUUIDDirectory(t *testing.T) {
+	fixture := newRegistrationFixture(t, true, false)
+	result, err := ValidateRegisteredDraft(fixture.request)
+	if err != nil {
+		t.Fatalf("readable display name with UUID storage was rejected: %v", err)
+	}
+	if result.DisplayName != fixture.request.DisplayName {
+		t.Fatalf("display name=%q, want %q", result.DisplayName, fixture.request.DisplayName)
+	}
+	if filepath.Base(result.RegisteredPath) != fixture.request.TaskID {
+		t.Fatalf("registered directory=%q, want UUID task ID", result.RegisteredPath)
+	}
+}
+
+func TestValidateRegisteredDraftRejectsDisplayNameMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, registrationFixture)
+	}{
+		{
+			name: "receipt",
+			mutate: func(t *testing.T, fixture registrationFixture) {
+				rewriteJSONFixture(t, fixture.receiptPath, func(value map[string]any) {
+					value["draft_display_name"] = "wrong receipt name"
+				})
+			},
+		},
+		{
+			name: "registered metadata",
+			mutate: func(t *testing.T, fixture registrationFixture) {
+				rewriteJSONFixture(t, filepath.Join(fixture.registered, "draft_meta_info.json"), func(value map[string]any) {
+					value["draft_name"] = "wrong metadata name"
+				})
+			},
+		},
+		{
+			name: "root index",
+			mutate: func(t *testing.T, fixture registrationFixture) {
+				rewriteJSONFixture(t, filepath.Join(fixture.root, "root_meta_info.json"), func(value map[string]any) {
+					entries := value["all_draft_store"].([]any)
+					entries[0].(map[string]any)["draft_name"] = "wrong index name"
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRegistrationFixture(t, true, false)
+			test.mutate(t, fixture)
+			if _, err := ValidateRegisteredDraft(fixture.request); !errors.Is(err, ErrInvalidRegistration) {
+				t.Fatalf("display-name mismatch error=%v, want ErrInvalidRegistration", err)
+			}
+		})
 	}
 }
 
@@ -203,6 +285,7 @@ func TestRegistrarValidatesAuthoritativeReceiptWhenReportedPathIsCorrupted(t *te
 
 	result, err := NewRegistrar(runner).Register(context.Background(), RegisterRequest{
 		TaskID:        fixture.request.TaskID,
+		DisplayName:   fixture.request.DisplayName,
 		ManifestPath:  manifest,
 		WorkspacePath: fixture.workspace,
 		SkillRoot:     skillRoot,
@@ -237,6 +320,7 @@ func TestRegistrarReusesExistingValidatedRegistrationWithoutRunningCommand(t *te
 	registrar := NewRegistrar(runner)
 	result, err := registrar.Register(context.Background(), RegisterRequest{
 		TaskID:        fixture.request.TaskID,
+		DisplayName:   fixture.request.DisplayName,
 		ManifestPath:  manifest,
 		WorkspacePath: fixture.workspace,
 		SkillRoot:     skillRoot,
@@ -260,6 +344,7 @@ func TestCoordinatorRecoversExistingRegistrationBeforeResolvingTaskBoundScript(t
 	coordinator := &Coordinator{runtime: TrustedRuntime{JianyingRoot: fixture.root}}
 	result, recovered, err := coordinator.recoverRegisteredDraft(domain.RegistrationAttempt{
 		TaskID:        fixture.request.TaskID,
+		ManifestPath:  fixture.manifestPath,
 		WorkspacePath: fixture.workspace,
 	})
 	if err != nil {

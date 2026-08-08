@@ -2,6 +2,7 @@ package montage
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -10,6 +11,32 @@ import (
 
 	"video-production-console/internal/domain"
 )
+
+func TestFrozenDraftDisplayNameReadsReadableName(t *testing.T) {
+	taskID := "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"
+	want := "财富觉醒02_存款大搬家_b66205"
+	manifest := filepath.Join(t.TempDir(), "task_manifest.json")
+	data, err := json.Marshal(map[string]any{
+		"task_id": taskID,
+		"job_id":  taskID,
+		"non_secret_settings": map[string]any{
+			"draft_display_name": want,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := frozenDraftDisplayName(manifest, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("display name=%q, want %q", got, want)
+	}
+}
 
 func TestCoordinatorRunStopsWhenQueueIsClosed(t *testing.T) {
 	queue := make(chan registrationJob)
