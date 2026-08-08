@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -613,6 +614,85 @@ func TestSuccessfulNotificationsProjectSessionSemanticEvents(t *testing.T) {
 		}
 	}
 	_ = broker
+}
+
+func TestTimingProjectionIsReplayIdempotentAndFinishesExecution(t *testing.T) {
+	ctx, db, conversations, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('timing-a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	turnID, taskID := "turn-timing", uuid.NewString()
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: taskID, AccountID: "timing-a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskRunning, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, CodexTurnID: &turnID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now, StartedAt: &now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	timings := store.NewTaskTimingRepository(db)
+	if _, err := timings.StartPhase(ctx, store.StartPhase{TaskID: taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, ExternalID: "app-server-execution", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	broker := NewBroker(conversations, nil)
+	search := codexapp.Notification{Method: "item/started", Params: []byte(`{"turnId":"turn-timing","item":{"id":"search-1","command":"python grok_search.py --query private"}}`)}
+	for range 2 {
+		if err := broker.projectTimingNotification(ctx, turnID, search); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search.Method = "item/completed"
+	for range 2 {
+		if err := broker.projectTimingNotification(ctx, turnID, search); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second := codexapp.Notification{Method: "item/started", Params: []byte(`{"turnId":"turn-timing","item":{"id":"search-2","command":"python grok_search.py --query another-private"}}`)}
+	if err := broker.projectTimingNotification(ctx, turnID, second); err != nil {
+		t.Fatal(err)
+	}
+	second.Method = "item/completed"
+	if err := broker.projectTimingNotification(ctx, turnID, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.projectTimingNotification(ctx, turnID, codexapp.Notification{Method: "turn/completed", Params: []byte(`{"turn":{"id":"turn-timing"}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := timings.ForTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 3 || phases[0].PhaseKey != "codex_execution" || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "web_research" || phases[1].State != domain.PhaseCompleted || phases[2].ExternalID != "search-2" || phases[2].State != domain.PhaseCompleted {
+		t.Fatalf("phases=%+v", phases)
+	}
+	if phases[1].DetailJSON != `{"classification":"observable_tool_event"}` || strings.Contains(phases[1].DetailJSON, "private") {
+		t.Fatalf("unsafe detail_json=%q", phases[1].DetailJSON)
+	}
+}
+
+func TestTimingProjectionInterruptsExecutionWhenTransportCloses(t *testing.T) {
+	ctx, db, conversations, session := brokerFixtureWithDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('interrupt-a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	turnID, taskID := "turn-interrupted", uuid.NewString()
+	tasks := store.NewTaskRepository(db)
+	task := domain.CodexTask{ID: taskID, AccountID: "interrupt-a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskRunning, ChatSessionID: &session.ID, CodexThreadID: session.CodexThreadID, CodexTurnID: &turnID, Transport: "app_server", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now, StartedAt: &now}
+	if err := tasks.CreateV2(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	timings := store.NewTaskTimingRepository(db)
+	if _, err := timings.StartPhase(ctx, store.StartPhase{TaskID: taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, ExternalID: "app-server-execution", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	broker := NewBroker(conversations, nil)
+	broker.rememberTurn(turnID, session.ID)
+	if err := broker.interruptActiveTimings(ctx); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := timings.ForTask(ctx, taskID)
+	if err != nil || len(phases) != 1 || phases[0].State != domain.PhaseInterrupted || phases[0].FinishedAt == nil {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
 }
 
 func brokerFixture(t *testing.T) (context.Context, *store.ConversationRepository, domain.ChatSession) {

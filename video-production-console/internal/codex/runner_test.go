@@ -39,6 +39,32 @@ func init() {
 
 func TestRunnerOversizedJSONLHelper(t *testing.T) {}
 
+func TestRunnerTimingProjectionUsesLegacyJSONLClassifier(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	ctx := context.Background()
+	now := time.Now().UTC()
+	timings := store.NewTaskTimingRepository(fixture.db)
+	if _, err := timings.StartPhase(ctx, store.StartPhase{TaskID: fixture.taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceHost, ExternalID: "legacy-execution", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	started := Event{Kind: "item_started", RawJSON: []byte(`{"type":"item.started","item":{"id":"legacy-search","command":"python grok_search.py --query private"}}`)}
+	if err := fixture.runner.projectTimingEvent(ctx, started); err != nil {
+		t.Fatal(err)
+	}
+	started.Kind = "item_completed"
+	started.RawJSON = []byte(`{"type":"item.completed","item":{"id":"legacy-search","command":"python grok_search.py --query private"}}`)
+	if err := fixture.runner.projectTimingEvent(ctx, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runner.finishExecutionTiming(ctx, domain.PhaseCompleted, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := timings.ForTask(ctx, fixture.taskID)
+	if err != nil || len(phases) != 2 || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "web_research" || phases[1].State != domain.PhaseCompleted {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+}
+
 func TestFriendlyCodexFailureExplainsUnavailableModelChannel(t *testing.T) {
 	got := friendlyCodexFailure("unexpected status 503: No available channel for model gpt-5.6-sol under group default")
 	if !strings.Contains(got, "gpt-5.6-sol") || !strings.Contains(got, "模型通道不可用") {

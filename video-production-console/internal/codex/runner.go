@@ -23,6 +23,7 @@ import (
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
+	phasetiming "video-production-console/internal/timing"
 )
 
 const (
@@ -96,6 +97,7 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		return err
 	}
 	if err := r.Command.Start(); err != nil {
+		_ = r.finishExecutionTiming(context.WithoutCancel(ctx), domain.PhaseFailed, time.Now().UTC())
 		return r.persistFailure(context.WithoutCancel(ctx), "start_failed", err)
 	}
 
@@ -166,22 +168,30 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 	// let the scheduler persist the cancelled state instead of misclassifying
 	// the closed pipe as a task failure.
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		_ = r.finishExecutionTiming(persistCtx, domain.PhaseCanceled, time.Now().UTC())
 		return ctxErr
 	}
 	if persistenceErr != nil {
+		_ = r.finishExecutionTiming(persistCtx, domain.PhaseFailed, time.Now().UTC())
 		return r.persistFailure(persistCtx, "event_persistence_failed", persistenceErr)
 	}
 	if streamErr != nil {
+		_ = r.finishExecutionTiming(persistCtx, domain.PhaseInterrupted, time.Now().UTC())
 		return r.persistFailure(persistCtx, "stream_failed", streamErr)
 	}
 	stopMu.Lock()
 	stoppedWith := stopErr
 	stopMu.Unlock()
 	if stoppedWith != nil && waitErr == nil {
+		_ = r.finishExecutionTiming(persistCtx, domain.PhaseInterrupted, time.Now().UTC())
 		return r.persistFailure(persistCtx, "stream_failed", stoppedWith)
 	}
 	if waitErr != nil {
+		_ = r.finishExecutionTiming(persistCtx, domain.PhaseFailed, time.Now().UTC())
 		return r.persistFailure(persistCtx, "process_failed", r.processFailureCause(persistCtx, waitErr))
+	}
+	if err := r.finishExecutionTiming(persistCtx, domain.PhaseCompleted, time.Now().UTC()); err != nil {
+		return r.persistFailure(persistCtx, "execution_timing_failed", err)
 	}
 
 	latestMu.Lock()
@@ -429,12 +439,43 @@ func (r *Runner) persistEvents(ctx context.Context, events <-chan persistedEvent
 			terminate(err)
 			continue
 		}
+		if err := r.projectTimingEvent(ctx, e); err != nil {
+			firstErr = err
+			terminate(err)
+			continue
+		}
 		r.persistSemanticEvent(ctx, e)
 		if r.Broadcast != nil {
 			r.Broadcast(e)
 		}
 	}
 	result <- firstErr
+}
+
+func (r *Runner) projectTimingEvent(ctx context.Context, event Event) error {
+	classification, ok := progress.ProjectTiming(progress.Input{TaskID: r.TaskID, Action: r.Action, Method: event.Kind, LegacyKind: event.Kind, RawJSON: string(event.RawJSON)})
+	if !ok {
+		return nil
+	}
+	return phasetiming.Record(ctx, store.NewTaskTimingRepository(r.Tasks.DB()), r.TaskID, domain.PhaseSourceHost, classification, time.Now().UTC())
+}
+
+func (r *Runner) finishExecutionTiming(ctx context.Context, state domain.TaskPhaseState, at time.Time) error {
+	if r == nil || r.Tasks == nil {
+		return nil
+	}
+	repo := store.NewTaskTimingRepository(r.Tasks.DB())
+	phases, err := repo.ForTask(ctx, r.TaskID)
+	if err != nil {
+		return err
+	}
+	for i := len(phases) - 1; i >= 0; i-- {
+		if phases[i].PhaseKey == "codex_execution" && phases[i].FinishedAt == nil {
+			_, err = repo.FinishPhase(ctx, store.FinishPhase{ID: phases[i].ID, State: state, At: at})
+			return err
+		}
+	}
+	return nil
 }
 
 // persistSemanticEvent keeps the UI-facing timeline separate from raw JSONL

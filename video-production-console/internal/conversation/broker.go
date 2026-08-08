@@ -18,6 +18,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/progress"
 	"video-production-console/internal/store"
+	phasetiming "video-production-console/internal/timing"
 )
 
 const (
@@ -597,6 +598,11 @@ func (b *Broker) consumeNotifications(notifications <-chan codexapp.Notification
 	for notification := range notifications {
 		turnID := notificationTurnID(notification.Params)
 		sessionID := b.sessionForTurn(turnID)
+		if turnID != "" {
+			if err := b.projectTimingNotification(context.Background(), turnID, notification); err != nil && sessionID != "" {
+				b.recordCompletionError(sessionID, turnID, "timing_projection_failed", err)
+			}
+		}
 		if sessionID != "" {
 			if err := b.persistAssistantNotification(context.Background(), sessionID, turnID, notification); err != nil {
 				b.recordCompletionError(sessionID, turnID, "assistant_persist_failed", err)
@@ -617,6 +623,51 @@ func (b *Broker) consumeNotifications(notifications <-chan codexapp.Notification
 			b.persistCompletion(sessionID, turnID)
 		}
 	}
+	_ = b.interruptActiveTimings(context.Background())
+}
+
+func (b *Broker) interruptActiveTimings(ctx context.Context) error {
+	if b == nil || b.repo == nil {
+		return nil
+	}
+	b.mu.Lock()
+	turnIDs := make([]string, 0, len(b.turns))
+	for turnID := range b.turns {
+		turnIDs = append(turnIDs, turnID)
+	}
+	b.mu.Unlock()
+	var result error
+	for _, turnID := range turnIDs {
+		task, err := store.NewTaskRepository(b.repo.DB()).GetByCodexTurn(ctx, turnID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		classification := phasetiming.Classification{PhaseKey: "codex_execution", DisplayName: "Codex 执行", Boundary: phasetiming.BoundaryInterrupt, ExternalItemID: turnID, DetailJSON: `{"classification":"turn_boundary"}`}
+		result = errors.Join(result, phasetiming.Record(ctx, store.NewTaskTimingRepository(b.repo.DB()), task.ID, domain.PhaseSourceAppServer, classification, time.Now().UTC()))
+	}
+	return result
+}
+
+func (b *Broker) projectTimingNotification(ctx context.Context, turnID string, notification codexapp.Notification) error {
+	if b == nil || b.repo == nil || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	classification, ok := progress.ProjectTiming(progress.Input{Method: notification.Method, RawJSON: string(notification.Params)})
+	if !ok {
+		return nil
+	}
+	task, err := store.NewTaskRepository(b.repo.DB()).GetByCodexTurn(ctx, turnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return phasetiming.Record(ctx, store.NewTaskTimingRepository(b.repo.DB()), task.ID, domain.PhaseSourceAppServer, classification, time.Now().UTC())
 }
 
 func turnCompletionFailure(raw json.RawMessage) error {

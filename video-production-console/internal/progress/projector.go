@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"video-production-console/internal/domain"
+	phasetiming "video-production-console/internal/timing"
 )
 
 // Input is the minimal, transport-neutral data used to turn low-level Codex
@@ -13,6 +14,20 @@ type Input struct {
 	TaskID                              string
 	Action                              domain.TaskAction
 	Method, RawJSON, LegacyKind, Status string
+}
+
+// ProjectTiming delegates both App Server notifications and legacy JSONL to
+// the same closed classifier. RawJSON is used transiently as evidence and is
+// never included in the returned safe timing detail.
+func ProjectTiming(in Input) (phasetiming.Classification, bool) {
+	method := in.Method
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(in.RawJSON), &envelope) == nil && strings.TrimSpace(envelope.Type) != "" {
+		method = envelope.Type
+	}
+	return phasetiming.Classify(phasetiming.Notification{Method: method, Params: json.RawMessage(in.RawJSON)})
 }
 
 type Event struct {

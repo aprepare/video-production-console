@@ -30,6 +30,10 @@ func NewConversationRepository(db *sql.DB) *ConversationRepository {
 	return &ConversationRepository{db: db}
 }
 
+// DB exposes the shared database to protocol adapters that must atomically
+// project durable task state derived from conversation notifications.
+func (r *ConversationRepository) DB() *sql.DB { return r.db }
+
 func (r *ConversationRepository) CreateSession(ctx context.Context, session domain.ChatSession) error {
 	if strings.TrimSpace(session.ID) == "" {
 		return fmt.Errorf("session id is required")
