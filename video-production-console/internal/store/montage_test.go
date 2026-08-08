@@ -58,6 +58,9 @@ func displayReconcileFixture(t *testing.T, displayName string) (*MontageReposito
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repo.db.Exec(`INSERT INTO montage_registration_attempts(id,task_id,manifest_path,workspace_path,state,attempt,registered_path,receipt_path,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, manifest, workspace, domain.RegistrationSucceeded, 1, target, filepath.Join(output, "registration", "registration-result.json"), time.Now().UTC(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	return repo, assets, version, root, manifest
 }
 
@@ -116,6 +119,34 @@ func TestDraftsNeedingDisplayNameSkipsActiveInvalidAndUnknownDrafts(t *testing.T
 			t.Fatalf("unknown candidates=%#v err=%v", got, err)
 		}
 	})
+}
+
+func TestDraftsNeedingDisplayNameRequiresMatchingSucceededRegistrationPath(t *testing.T) {
+	displayName := "财富觉醒02_存款大搬家_b66205"
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *MontageRepository, domain.AssetVersion)
+	}{
+		{"missing attempt", func(t *testing.T, repo *MontageRepository, version domain.AssetVersion) {
+			if _, err := repo.db.Exec(`DELETE FROM montage_registration_attempts WHERE task_id=?`, *version.SourceTaskID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"wrong registered path", func(t *testing.T, repo *MontageRepository, version domain.AssetVersion) {
+			if _, err := repo.db.Exec(`UPDATE montage_registration_attempts SET registered_path=? WHERE task_id=?`, filepath.Join(filepath.Dir(version.Path), "wrong"), *version.SourceTaskID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _, version, root, _ := displayReconcileFixture(t, displayName)
+			test.mutate(t, repo, version)
+			got, err := repo.DraftsNeedingDisplayName(context.Background(), root)
+			if err != nil || len(got) != 0 {
+				t.Fatalf("candidates=%#v err=%v", got, err)
+			}
+		})
+	}
 }
 
 func TestCompleteDraftDisplayReconcileUpdatesOnlyFilenameAndHash(t *testing.T) {

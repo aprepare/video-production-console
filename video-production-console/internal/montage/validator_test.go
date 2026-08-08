@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"video-production-console/internal/domain"
 )
@@ -252,19 +254,51 @@ func TestValidateBackfillDisplayReconciliationPreservesTrustedIdentity(t *testin
 		"draft_id":                  fixture.registeredID,
 		"source_content_sha256":     fileDigestFixture(t, filepath.Join(fixture.workspace, "draft_content.json")),
 		"registered_content_sha256": fileDigestFixture(t, filepath.Join(fixture.registered, "draft_content.json")),
+		"directory_sha256_before":   directoryHash,
 		"directory_sha256":          directoryHash,
 	}
 	writeJSONFixture(t, receiptPath, receipt)
 	result, err := ValidateReconciledDraft(ReconcileValidationRequest{
 		TaskID: fixture.request.TaskID, DisplayName: fixture.request.DisplayName,
 		WorkspacePath: fixture.workspace, RegisteredPath: fixture.registered,
-		ReceiptPath: receiptPath, JianyingRoot: fixture.root,
+		ReceiptPath: receiptPath, JianyingRoot: fixture.root, ExpectedDirectorySHA256: directoryHash,
 	})
 	if err != nil {
 		t.Fatalf("valid display reconciliation was rejected: %v", err)
 	}
 	if result.DraftID != fixture.registeredID || result.DirectorySHA256 != directoryHash || result.DisplayName != fixture.request.DisplayName {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestValidateBackfillDisplayRejectsTamperedAuxiliaryFileAgainstDBHash(t *testing.T) {
+	fixture := newRegistrationFixture(t, true, false)
+	expectedBefore, err := hashDirectory(fixture.registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.registered, "tampered.bin"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := hashDirectory(fixture.registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(filepath.Dir(fixture.receiptPath), "reconciliation-result.json")
+	writeJSONFixture(t, receiptPath, map[string]any{
+		"status": "completed", "task_id": fixture.request.TaskID,
+		"draft_display_name": fixture.request.DisplayName, "registered_path": fixture.registered,
+		"draft_id": fixture.registeredID, "source_content_sha256": fileDigestFixture(t, filepath.Join(fixture.workspace, "draft_content.json")),
+		"registered_content_sha256": fileDigestFixture(t, filepath.Join(fixture.registered, "draft_content.json")),
+		"directory_sha256_before":   after, "directory_sha256": after,
+	})
+	_, err = ValidateReconciledDraft(ReconcileValidationRequest{
+		TaskID: fixture.request.TaskID, DisplayName: fixture.request.DisplayName,
+		WorkspacePath: fixture.workspace, RegisteredPath: fixture.registered,
+		ReceiptPath: receiptPath, JianyingRoot: fixture.root, ExpectedDirectorySHA256: expectedBefore,
+	})
+	if !errors.Is(err, ErrInvalidRegistration) {
+		t.Fatalf("tampered auxiliary error=%v, want ErrInvalidRegistration", err)
 	}
 }
 
@@ -444,6 +478,43 @@ func TestRegistrarReusesExistingValidatedRegistrationWithoutRunningCommand(t *te
 	}
 	if result.RegisteredPath != fixture.registered {
 		t.Fatalf("registered path=%q, want %q", result.RegisteredPath, fixture.registered)
+	}
+}
+
+func TestRegistrarReturnsTypedBusyReconciliationResult(t *testing.T) {
+	base := t.TempDir()
+	taskID := "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"
+	workspace := filepath.Join(base, "output", "workspace", taskID)
+	root := filepath.Join(base, "jianying")
+	registered := filepath.Join(root, taskID)
+	skillRoot := filepath.Join(base, "skill")
+	script := filepath.Join(skillRoot, "scripts", "run_montage_job.py")
+	manifest := filepath.Join(base, "task_manifest.json")
+	python := filepath.Join(base, "python.exe")
+	for _, directory := range []string{workspace, registered, filepath.Dir(script)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{manifest, script, python} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := commandRunnerFunc(func(context.Context, CommandSpec, int64) (CommandResult, error) {
+		return CommandResult{Stdout: []byte(`{"status":"awaiting_input","summary":"lock busy","retry":{"after_seconds":30,"owner_job_id":"other-task"}}`)}, nil
+	})
+	_, err := NewRegistrar(runner).Reconcile(context.Background(), ReconcileRequest{
+		TaskID: taskID, DisplayName: "readable", ManifestPath: manifest, WorkspacePath: workspace,
+		RegisteredPath: registered, SkillRoot: skillRoot, ScriptPath: script, PythonBinary: python, JianyingRoot: root,
+		ExpectedDirectorySHA256: strings.Repeat("a", 64),
+	})
+	var busy *ReconcileBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("error=%v, want typed reconciliation busy", err)
+	}
+	if busy.RetryAfter != 30*time.Second || busy.OwnerJobID != "other-task" {
+		t.Fatalf("busy=%#v", busy)
 	}
 }
 

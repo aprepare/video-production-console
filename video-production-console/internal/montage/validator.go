@@ -18,6 +18,7 @@ type ValidationRequest struct{ TaskID, DisplayName, WorkspacePath, ReceiptPath, 
 
 type ReconcileValidationRequest struct {
 	TaskID, DisplayName, WorkspacePath, RegisteredPath, ReceiptPath, JianyingRoot string
+	ExpectedDirectorySHA256                                                       string
 }
 
 type ReconcileResult struct {
@@ -166,8 +167,8 @@ func ValidateReconciledDraft(request ReconcileValidationRequest) (ReconcileResul
 		return ReconcileResult{}, invalidRegistration("reconciliation receipt could not be read")
 	}
 	var receipt struct {
-		Status, TaskID, DisplayName, RegisteredPath, DraftID          string
-		SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+		Status, TaskID, DisplayName, RegisteredPath, DraftID                                 string
+		SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256Before, DirectorySHA256 string
 	}
 	var raw struct {
 		Status                  string `json:"status"`
@@ -177,15 +178,19 @@ func ValidateReconciledDraft(request ReconcileValidationRequest) (ReconcileResul
 		DraftID                 string `json:"draft_id"`
 		SourceContentSHA256     string `json:"source_content_sha256"`
 		RegisteredContentSHA256 string `json:"registered_content_sha256"`
+		DirectorySHA256Before   string `json:"directory_sha256_before"`
 		DirectorySHA256         string `json:"directory_sha256"`
 	}
 	if json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &raw) != nil {
 		return ReconcileResult{}, invalidRegistration("reconciliation receipt is invalid")
 	}
 	receipt.Status, receipt.TaskID, receipt.DisplayName, receipt.RegisteredPath, receipt.DraftID = raw.Status, raw.TaskID, raw.DisplayName, raw.RegisteredPath, raw.DraftID
-	receipt.SourceContentSHA256, receipt.RegisteredContentSHA256, receipt.DirectorySHA256 = raw.SourceContentSHA256, raw.RegisteredContentSHA256, raw.DirectorySHA256
+	receipt.SourceContentSHA256, receipt.RegisteredContentSHA256, receipt.DirectorySHA256Before, receipt.DirectorySHA256 = raw.SourceContentSHA256, raw.RegisteredContentSHA256, raw.DirectorySHA256Before, raw.DirectorySHA256
 	if receipt.Status != "completed" || receipt.TaskID != request.TaskID || receipt.DisplayName != request.DisplayName || !samePath(receipt.RegisteredPath, registered) || receipt.DraftID == "" {
 		return ReconcileResult{}, invalidRegistration("reconciliation receipt identity is invalid")
+	}
+	if !validHash(request.ExpectedDirectorySHA256) || !validHash(receipt.DirectorySHA256Before) || !strings.EqualFold(receipt.DirectorySHA256Before, request.ExpectedDirectorySHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciliation source directory fingerprint is invalid")
 	}
 	sourceHash, err := hashFile(filepath.Join(workspace, "draft_content.json"))
 	if err != nil {

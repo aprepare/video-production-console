@@ -135,6 +135,14 @@ func main() {
 		if runtimeErr != nil {
 			log.Fatalf("resolve trusted montage runtime: %v", runtimeErr)
 		}
+		currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft")
+		if skillErr != nil {
+			log.Fatalf("resolve current Jianying montage Skill: %v", skillErr)
+		}
+		trustedMontageRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(trustedMontageRuntime, currentMontageSkill)
+		if runtimeErr != nil {
+			log.Fatalf("resolve trusted Jianying reconciliation runtime: %v", runtimeErr)
+		}
 		montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
 		defer montageCoordinator.Close()
 		if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {

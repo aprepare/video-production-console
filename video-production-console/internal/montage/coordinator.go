@@ -24,40 +24,48 @@ type registerer interface {
 	Reconcile(context.Context, ReconcileRequest) (ReconcileResult, error)
 }
 type registrationJob struct {
-	Attempt   domain.RegistrationAttempt
-	Reconcile *domain.DraftDisplayReconcileCandidate
+	Attempt          domain.RegistrationAttempt
+	Reconcile        *domain.DraftDisplayReconcileCandidate
+	ReconcileRetries int
 }
 
 type TrustedRuntime struct {
-	MachineProfilePath   string
-	MachineProfileSHA256 string
-	JianyingRoot         string
-	PythonBinary         string
+	MachineProfilePath         string
+	MachineProfileSHA256       string
+	JianyingRoot               string
+	PythonBinary               string
+	ReconciliationSkillRoot    string
+	ReconciliationScriptPath   string
+	ReconciliationScriptSHA256 string
 }
 
 var ErrCoordinatorStopped = errors.New("montage registration coordinator is stopped")
 var ErrRegistrationBackpressure = errors.New("montage registration queue is full")
 
 const registrationEnqueueWait = 30 * time.Second
+const maxReconcileRetries = 3
 
 type Coordinator struct {
-	tasks     *store.TaskRepository
-	repo      *store.MontageRepository
-	registrar registerer
-	queue     chan registrationJob
-	wg        sync.WaitGroup
-	once      sync.Once
-	lifecycle sync.Mutex
-	stopped   atomic.Bool
-	sends     sync.WaitGroup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	runtime   TrustedRuntime
+	tasks        *store.TaskRepository
+	repo         *store.MontageRepository
+	registrar    registerer
+	queue        chan registrationJob
+	wg           sync.WaitGroup
+	once         sync.Once
+	lifecycle    sync.Mutex
+	stopped      atomic.Bool
+	sends        sync.WaitGroup
+	retryWG      sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	runtime      TrustedRuntime
+	retryAfter   func(time.Duration) <-chan time.Time
+	reconcileJob func(context.Context, domain.DraftDisplayReconcileCandidate) error
 }
 
 func NewCoordinator(tasks *store.TaskRepository, registrar registerer, runtime TrustedRuntime) *Coordinator {
 	workerCtx, cancel := context.WithCancel(context.Background())
-	coordinator := &Coordinator{tasks: tasks, repo: store.NewMontageRepository(tasks.DB()), registrar: registrar, queue: make(chan registrationJob, 32), ctx: workerCtx, cancel: cancel, runtime: runtime}
+	coordinator := &Coordinator{tasks: tasks, repo: store.NewMontageRepository(tasks.DB()), registrar: registrar, queue: make(chan registrationJob, 32), ctx: workerCtx, cancel: cancel, runtime: runtime, retryAfter: time.After}
 	coordinator.wg.Add(1)
 	go coordinator.run()
 	return coordinator
@@ -108,6 +116,51 @@ func ResolveTrustedRuntime(machineProfilePath, configuredJianyingRoot string) (T
 		return TrustedRuntime{}, err
 	}
 	return TrustedRuntime{MachineProfilePath: profilePath, MachineProfileSHA256: profileHash, JianyingRoot: jianyingRoot, PythonBinary: pythonBinary}, nil
+}
+
+// WithTrustedReconciliationSkill binds display-name reconciliation to the
+// current installed Skill snapshot. Historical task snapshots remain the
+// executable authority for normal registration only.
+func WithTrustedReconciliationSkill(runtime TrustedRuntime, snapshot domain.SkillSnapshot) (TrustedRuntime, error) {
+	if snapshot.Name != "jianying-montage-draft" {
+		return TrustedRuntime{}, errors.New("current Jianying montage Skill snapshot is unavailable")
+	}
+	root, err := canonicalNoFollow(snapshot.Path, true)
+	if err != nil || !samePath(root, snapshot.Path) {
+		return TrustedRuntime{}, errors.New("current Jianying montage Skill root is not canonical")
+	}
+	script, err := canonicalNoFollow(filepath.Join(root, "scripts", "run_montage_job.py"), false)
+	if err != nil || !WithinJianyingRoot(root, script) {
+		return TrustedRuntime{}, errors.New("current Jianying montage reconciliation script is unavailable")
+	}
+	expected := ""
+	for _, file := range snapshot.Files {
+		if filepath.ToSlash(file.Path) == "scripts/run_montage_job.py" {
+			expected = strings.ToLower(file.SHA256)
+			break
+		}
+	}
+	actual, err := hashFile(script)
+	if err != nil || !validHash(expected) || !strings.EqualFold(actual, expected) {
+		return TrustedRuntime{}, errors.New("current Jianying montage reconciliation script fingerprint changed")
+	}
+	runtime.ReconciliationSkillRoot = root
+	runtime.ReconciliationScriptPath = script
+	runtime.ReconciliationScriptSHA256 = expected
+	return runtime, nil
+}
+
+func trustedReconciliationSkill(runtime TrustedRuntime) (string, string, error) {
+	root, rootErr := canonicalNoFollow(runtime.ReconciliationSkillRoot, true)
+	script, scriptErr := canonicalNoFollow(runtime.ReconciliationScriptPath, false)
+	if rootErr != nil || scriptErr != nil || !samePath(root, runtime.ReconciliationSkillRoot) || !samePath(script, runtime.ReconciliationScriptPath) || !samePath(script, filepath.Join(root, "scripts", "run_montage_job.py")) || !WithinJianyingRoot(root, script) {
+		return "", "", errors.New("trusted current reconciliation Skill runtime is unavailable")
+	}
+	actual, err := hashFile(script)
+	if err != nil || !validHash(runtime.ReconciliationScriptSHA256) || !strings.EqualFold(actual, runtime.ReconciliationScriptSHA256) {
+		return "", "", errors.New("trusted current reconciliation script fingerprint changed")
+	}
+	return root, script, nil
 }
 
 func (c *Coordinator) HandleCompleted(ctx context.Context, input taskcompletion.CompletedInput) (bool, error) {
@@ -287,33 +340,124 @@ func (c *Coordinator) run() {
 	defer c.wg.Done()
 	for job := range c.queue {
 		if job.Reconcile != nil {
-			c.processReconciliation(*job.Reconcile)
+			c.processReconciliation(job)
 		} else {
 			c.process(job)
 		}
 	}
 }
 
-func (c *Coordinator) processReconciliation(candidate domain.DraftDisplayReconcileCandidate) {
-	attempt := domain.RegistrationAttempt{TaskID: candidate.TaskID, ManifestPath: candidate.ManifestPath, WorkspacePath: candidate.WorkspacePath}
-	runtime, err := c.resolveRuntime(attempt)
-	if err != nil {
-		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_config_invalid", err)
+func (c *Coordinator) processReconciliation(job registrationJob) {
+	candidate := *job.Reconcile
+	var err error
+	if c.reconcileJob != nil {
+		err = c.reconcileJob(c.ctx, candidate)
+	} else {
+		err = c.executeReconciliation(candidate)
+	}
+	if err == nil {
 		return
 	}
-	result, err := c.registrar.Reconcile(c.ctx, ReconcileRequest{
-		TaskID: candidate.TaskID, DisplayName: candidate.DisplayName,
-		ManifestPath: runtime.ManifestPath, WorkspacePath: runtime.WorkspacePath,
-		RegisteredPath: candidate.RegisteredPath, SkillRoot: runtime.SkillRoot,
-		ScriptPath: runtime.ScriptPath, PythonBinary: runtime.PythonBinary, JianyingRoot: runtime.JianyingRoot,
-	})
-	if err != nil {
-		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_failed", err)
+	var busy *ReconcileBusyError
+	if errors.As(err, &busy) && job.ReconcileRetries < maxReconcileRetries {
+		job.ReconcileRetries++
+		c.scheduleReconciliationRetry(job, busy.RetryAfter)
 		return
+	}
+	c.reportFailure(candidate.TaskID, "draft_display_reconciliation_failed", err)
+}
+
+func (c *Coordinator) executeReconciliation(candidate domain.DraftDisplayReconcileCandidate) error {
+	runtime, err := c.resolveReconciliationRuntime(candidate)
+	if err != nil {
+		return fmt.Errorf("reconciliation config invalid: %w", err)
+	}
+	result, err := c.registrar.Reconcile(c.ctx, runtime)
+	if err != nil {
+		return err
 	}
 	if err := c.repo.CompleteDraftDisplayReconcile(c.ctx, domain.DraftDisplayReconcileSuccess{Candidate: candidate, SHA256: result.DirectorySHA256}); err != nil {
-		c.reportFailure(candidate.TaskID, "draft_display_reconciliation_commit_failed", err)
+		return fmt.Errorf("reconciliation commit failed: %w", err)
 	}
+	return nil
+}
+
+func (c *Coordinator) scheduleReconciliationRetry(job registrationJob, delay time.Duration) {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	c.lifecycle.Lock()
+	if c.stopped.Load() {
+		c.lifecycle.Unlock()
+		return
+	}
+	c.retryWG.Add(1)
+	c.lifecycle.Unlock()
+	go func() {
+		defer c.retryWG.Done()
+		retryAfter := c.retryAfter
+		if retryAfter == nil {
+			retryAfter = time.After
+		}
+		select {
+		case <-retryAfter(delay):
+			if err := c.enqueueJob(c.ctx, job); err != nil && !errors.Is(err, ErrCoordinatorStopped) && !errors.Is(err, context.Canceled) {
+				c.reportFailure(job.Reconcile.TaskID, "draft_display_reconciliation_retry_enqueue_failed", err)
+			}
+		case <-c.ctx.Done():
+		}
+	}()
+}
+
+func (c *Coordinator) resolveReconciliationRuntime(candidate domain.DraftDisplayReconcileCandidate) (ReconcileRequest, error) {
+	manifestPath, workspacePath, err := c.validateRetainedPaths(candidate.TaskID, candidate.ManifestPath, candidate.WorkspacePath)
+	if err != nil {
+		return ReconcileRequest{}, err
+	}
+	displayName, err := frozenDraftDisplayName(manifestPath, candidate.TaskID)
+	if err != nil || displayName != candidate.DisplayName {
+		return ReconcileRequest{}, errors.New("reconciliation display identity does not match task manifest")
+	}
+	skillRoot, scriptPath, err := trustedReconciliationSkill(c.runtime)
+	if err != nil {
+		return ReconcileRequest{}, err
+	}
+	manifestData, err := readBounded(manifestPath, 4<<20)
+	if err != nil {
+		return ReconcileRequest{}, err
+	}
+	var manifest struct {
+		TaskID            string `json:"task_id"`
+		JobID             string `json:"job_id"`
+		NonSecretSettings struct {
+			MachineProfilePath string `json:"machine_profile_path"`
+		} `json:"non_secret_settings"`
+	}
+	if json.Unmarshal(manifestData, &manifest) != nil || manifest.TaskID != candidate.TaskID || manifest.JobID != candidate.TaskID || strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath) == "" {
+		return ReconcileRequest{}, errors.New("manifest task identity or machine profile is invalid")
+	}
+	profilePath, err := canonicalNoFollow(manifest.NonSecretSettings.MachineProfilePath, false)
+	if err != nil || !samePath(profilePath, c.runtime.MachineProfilePath) {
+		return ReconcileRequest{}, errors.New("manifest machine profile does not match trusted runtime configuration")
+	}
+	profileHash, err := hashFile(profilePath)
+	if err != nil || !strings.EqualFold(profileHash, c.runtime.MachineProfileSHA256) {
+		return ReconcileRequest{}, errors.New("trusted machine profile fingerprint changed")
+	}
+	pythonBinary, err := canonicalNoFollow(c.runtime.PythonBinary, false)
+	if err != nil || !samePath(pythonBinary, c.runtime.PythonBinary) {
+		return ReconcileRequest{}, errors.New("trusted Python executable identity changed")
+	}
+	jianyingRoot, err := canonicalNoFollow(c.runtime.JianyingRoot, true)
+	if err != nil || !samePath(jianyingRoot, c.runtime.JianyingRoot) {
+		return ReconcileRequest{}, errors.New("trusted Jianying root identity changed")
+	}
+	return ReconcileRequest{
+		TaskID: candidate.TaskID, DisplayName: candidate.DisplayName,
+		ManifestPath: manifestPath, WorkspacePath: workspacePath, RegisteredPath: candidate.RegisteredPath,
+		SkillRoot: skillRoot, ScriptPath: scriptPath, PythonBinary: pythonBinary, JianyingRoot: jianyingRoot,
+		ExpectedDirectorySHA256: candidate.CurrentSHA256,
+	}, nil
 }
 
 func (c *Coordinator) process(job registrationJob) {
@@ -585,6 +729,7 @@ func (c *Coordinator) Close() {
 			c.cancel()
 		}
 		c.lifecycle.Unlock()
+		c.retryWG.Wait()
 		c.sends.Wait()
 		close(c.queue)
 		c.wg.Wait()

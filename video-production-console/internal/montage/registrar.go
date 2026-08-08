@@ -8,9 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var ErrInvalidRegistration = errors.New("invalid montage registration")
+
+type ReconcileBusyError struct {
+	RetryAfter time.Duration
+	OwnerJobID string
+}
+
+func (err *ReconcileBusyError) Error() string {
+	if err == nil {
+		return "Jianying reconciliation lock is busy"
+	}
+	return fmt.Sprintf("Jianying reconciliation lock is busy; retry after %s (owner %s)", err.RetryAfter, err.OwnerJobID)
+}
 
 type CommandSpec struct {
 	Program string
@@ -31,6 +44,7 @@ type RegisterResult struct {
 }
 type ReconcileRequest struct {
 	TaskID, DisplayName, ManifestPath, WorkspacePath, RegisteredPath, SkillRoot, ScriptPath, PythonBinary, JianyingRoot string
+	ExpectedDirectorySHA256                                                                                             string
 }
 type Registrar struct{ runner CommandRunner }
 
@@ -103,7 +117,7 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 }
 
 func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (ReconcileResult, error) {
-	if r == nil || r.runner == nil || request.TaskID == "" || request.DisplayName == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.RegisteredPath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" {
+	if r == nil || r.runner == nil || request.TaskID == "" || request.DisplayName == "" || request.ManifestPath == "" || request.WorkspacePath == "" || request.RegisteredPath == "" || request.SkillRoot == "" || request.ScriptPath == "" || request.PythonBinary == "" || request.JianyingRoot == "" || !validHash(request.ExpectedDirectorySHA256) {
 		return ReconcileResult{}, fmt.Errorf("%w: missing reconciliation input", ErrInvalidRegistration)
 	}
 	manifest, manifestErr := canonicalNoFollow(request.ManifestPath, false)
@@ -117,7 +131,7 @@ func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (Re
 		return ReconcileResult{}, fmt.Errorf("%w: reconciliation runtime is unavailable", ErrInvalidRegistration)
 	}
 	receiptPath := filepath.Join(filepath.Dir(filepath.Dir(workspace)), "registration", "reconciliation-result.json")
-	validation := ReconcileValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, RegisteredPath: registered, ReceiptPath: receiptPath, JianyingRoot: root}
+	validation := ReconcileValidationRequest{TaskID: request.TaskID, DisplayName: request.DisplayName, WorkspacePath: workspace, RegisteredPath: registered, ReceiptPath: receiptPath, JianyingRoot: root, ExpectedDirectorySHA256: request.ExpectedDirectorySHA256}
 	if exists, err := retainedPathExists(receiptPath); err != nil {
 		return ReconcileResult{}, err
 	} else if exists {
@@ -130,6 +144,9 @@ func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (Re
 	envelope, err := parseRegistrationEnvelope(command.Stdout)
 	if err != nil {
 		return ReconcileResult{}, err
+	}
+	if envelope.Status == "awaiting_input" && envelope.Retry.AfterSeconds > 0 {
+		return ReconcileResult{}, &ReconcileBusyError{RetryAfter: time.Duration(envelope.Retry.AfterSeconds) * time.Second, OwnerJobID: strings.TrimSpace(envelope.Retry.OwnerJobID)}
 	}
 	if command.ExitCode != 0 || envelope.Status != "completed" {
 		return ReconcileResult{}, fmt.Errorf("%w: %s", ErrInvalidRegistration, strings.TrimSpace(envelope.Summary))
@@ -164,6 +181,10 @@ type registrationEnvelope struct {
 		Type string `json:"type"`
 		Path string `json:"path"`
 	} `json:"artifacts"`
+	Retry struct {
+		AfterSeconds int    `json:"after_seconds"`
+		OwnerJobID   string `json:"owner_job_id"`
+	} `json:"retry"`
 }
 
 func parseRegistrationEnvelope(raw []byte) (registrationEnvelope, error) {
