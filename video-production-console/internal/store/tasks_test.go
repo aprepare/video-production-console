@@ -13,6 +13,37 @@ import (
 	"video-production-console/internal/domain"
 )
 
+func TestTaskRepositoryCompletedByProjectUsesStableIDTieBreaker(t *testing.T) {
+	db, err := Open(t.TempDir() + "/completed-order.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, accountID, "A", "#fff", "active", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,?,?,?)`, projectID, accountID, "P", domain.StageScript, now, now); err != nil {
+		t.Fatal(err)
+	}
+	lowID := "00000000-0000-4000-8000-000000000001"
+	highID := "00000000-0000-4000-8000-000000000002"
+	for _, id := range []string{lowID, highID} {
+		if _, err := db.Exec(`INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,completion_phase,transport,prompt_snapshot,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, id, projectID, accountID, "remix", "finance-viral-remix", domain.ActionRemixEnhanced, domain.TaskCompleted, domain.CompletionRegistered, "legacy_exec", "prompt", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	completed, err := NewTaskRepository(db).CompletedByProject(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed) != 2 || completed[0].ID != highID || completed[1].ID != lowID {
+		t.Fatalf("completed order=%v", []string{completed[0].ID, completed[1].ID})
+	}
+}
+
 func TestTaskRepositoryEnsurePreparedTaskPublishesTaskAndManifestAtomically(t *testing.T) {
 	db, err := Open(t.TempDir() + "/prepared.db")
 	if err != nil {

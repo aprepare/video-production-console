@@ -119,16 +119,17 @@ func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTas
 	}
 	var registeredAsset any
 	if task.ProjectID != nil {
-		assets, assetErr := store.NewAssetRepository(h.repo.DB()).CurrentByProject(r.Context(), *task.ProjectID)
+		assets, assetErr := store.NewAssetRepository(h.repo.DB()).ReadyMixDraftsByProject(r.Context(), *task.ProjectID)
 		if assetErr != nil {
 			return nil, assetErr
 		}
-		for _, asset := range assets {
-			if asset.Type == domain.AssetMixDraft && asset.State == domain.AssetReady {
-				storageName = filepath.Base(filepath.Clean(asset.Path))
-				registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "display_name": displayName, "storage_name": storageName, "created_at": asset.CreatedAt}
-				break
-			}
+		asset, found, selectErr := h.registeredDraftForTask(r, task, assets)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		if found {
+			storageName = filepath.Base(filepath.Clean(asset.Path))
+			registeredAsset = map[string]any{"id": asset.ID, "filename": asset.Filename, "path": asset.Path, "sha256": asset.SHA256, "display_name": displayName, "storage_name": storageName, "created_at": asset.CreatedAt}
 		}
 	}
 	canRetry := false
@@ -136,6 +137,38 @@ func (h *taskResultsHandler) montageResult(r *http.Request, task domain.CodexTas
 		canRetry = attempts[0].State == domain.RegistrationFailed || attempts[0].State == domain.RegistrationInterrupted
 	}
 	return map[string]any{"phase": task.CompletionPhase, "workspace": workspace, "registration_attempts": registrationViews, "registered_asset": registeredAsset, "display_name": displayName, "storage_name": storageName, "can_retry_registration": canRetry}, nil
+}
+
+func (h *taskResultsHandler) registeredDraftForTask(r *http.Request, task domain.CodexTask, ready []domain.AssetVersion) (domain.AssetVersion, bool, error) {
+	for _, asset := range ready {
+		if asset.SourceTaskID != nil && strings.TrimSpace(*asset.SourceTaskID) == task.ID {
+			return asset, true, nil
+		}
+	}
+	if len(ready) != 1 || task.ProjectID == nil {
+		return domain.AssetVersion{}, false, nil
+	}
+	legacySource := ready[0].SourceTaskID == nil || strings.TrimSpace(*ready[0].SourceTaskID) == ""
+	if !legacySource {
+		return domain.AssetVersion{}, false, nil
+	}
+	projectTasks, err := h.repo.List(r.Context(), *task.ProjectID, "")
+	if err != nil {
+		return domain.AssetVersion{}, false, err
+	}
+	montageTasks := 0
+	for _, projectTask := range projectTasks {
+		if projectTask.Action == domain.ActionMontageExecute {
+			montageTasks++
+			if projectTask.ID != task.ID {
+				return domain.AssetVersion{}, false, nil
+			}
+		}
+	}
+	if montageTasks != 1 {
+		return domain.AssetVersion{}, false, nil
+	}
+	return ready[0], true, nil
 }
 
 func (h *taskResultsHandler) draftDisplayName(r *http.Request, taskID string) string {

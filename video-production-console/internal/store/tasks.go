@@ -446,7 +446,7 @@ func (r *TaskRepository) List(ctx context.Context, projectID string, status doma
 		q += " AND status=?"
 		args = append(args, status)
 	}
-	q += " ORDER BY created_at DESC"
+	q += " ORDER BY created_at DESC,id DESC"
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -465,6 +465,10 @@ func (r *TaskRepository) List(ctx context.Context, projectID string, status doma
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func (r *TaskRepository) CompletedByProject(ctx context.Context, projectID string) ([]domain.CodexTask, error) {
+	return r.List(ctx, projectID, domain.TaskCompleted)
 }
 func (r *TaskRepository) AddMessage(ctx context.Context, message domain.TaskMessage) error {
 	if message.ID == "" {

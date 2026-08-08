@@ -221,7 +221,7 @@ func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task
 	}
 	shortTitle := ""
 	tasks := store.NewTaskRepository(p.db)
-	completed, err := tasks.List(ctx, project.ID, domain.TaskCompleted)
+	completed, err := tasks.CompletedByProject(ctx, project.ID)
 	if err != nil {
 		return "", fmt.Errorf("list completed project tasks: %w", err)
 	}

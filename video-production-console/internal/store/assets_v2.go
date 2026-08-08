@@ -232,6 +232,14 @@ func (r *AssetRepository) CurrentByProject(ctx context.Context, projectID string
 	return r.queryVersions(ctx, `SELECT v.id,v.asset_id,v.project_id,v.account_id,v.type,v.version,v.storage_kind,v.path,v.filename,v.mime_type,v.size,v.sha256,v.parent_version_id,v.source_task_id,v.state,v.stale_reason,v.created_at FROM asset_items i JOIN asset_versions v ON v.id=i.current_version_id WHERE i.project_id=? ORDER BY i.type`, projectID)
 }
 
+func (r *AssetRepository) ReadyMixDraftsByProject(ctx context.Context, projectID string) ([]domain.AssetVersion, error) {
+	if _, err := uuid.Parse(projectID); err != nil {
+		return nil, ErrInvalidAssetInput
+	}
+	return r.queryVersions(ctx, `SELECT id,asset_id,project_id,account_id,type,version,storage_kind,path,filename,mime_type,size,sha256,parent_version_id,source_task_id,state,stale_reason,created_at
+		FROM asset_versions WHERE project_id=? AND type=? AND state=? ORDER BY created_at DESC,id DESC`, projectID, domain.AssetMixDraft, domain.AssetReady)
+}
+
 func (r *AssetRepository) History(ctx context.Context, logicalAssetID string) ([]domain.AssetVersion, error) {
 	if _, err := uuid.Parse(logicalAssetID); err != nil {
 		return nil, ErrInvalidAssetInput
