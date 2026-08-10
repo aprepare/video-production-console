@@ -598,7 +598,16 @@ func validStage(s domain.ProjectStage) bool {
 }
 func uploadableType(t domain.AssetType) bool {
 	switch t {
-	case domain.AssetSourceScript, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetAudio, domain.AssetSubtitle, domain.AssetMixDraft, domain.AssetFinalVideo:
+	case domain.AssetSourceScript,
+		domain.AssetContinuousScript,
+		domain.AssetSpokenScript,
+		domain.AssetNarration,
+		domain.AssetSubtitleSRT,
+		domain.AssetMixDraft,
+		domain.AssetFinalVideo,
+		// Legacy aliases retained for older clients/tests.
+		domain.AssetAudio,
+		domain.AssetSubtitle:
 		return true
 	}
 	return false

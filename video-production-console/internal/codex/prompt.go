@@ -158,6 +158,15 @@ func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error
 	if manifestPath == taskManifestEnvironmentKey {
 		manifestInstruction = fmt.Sprintf("Execute action=%s using the task manifest path from environment variable %s. Read the variable at runtime; do not retype or reconstruct the absolute path.", wireAction, taskManifestEnvironmentKey)
 	}
+	extra := ""
+	if skill == "jianying-montage-draft" && wireAction == "execute" {
+		extra = `
+Console montage.execute only:
+1) Read console-contract.md only. No web/Grok search. Do not open run_montage_job.py source.
+2) Run scripts/run_montage_job.py validate-inputs --manifest %VIDEO_CONSOLE_TASK_MANIFEST% via cmd.exe.
+3) Write production_plan.json from narration duration + selective media-index queries (never dump whole indexes/scripts).
+4) Run validate-plan then execute --plan. One thread; no subagents.`
+	}
 	prompt := fmt.Sprintf(`Use the $%s skill.
 %s
 Treat manifest inputs as authoritative and do not ask for paths already present.
@@ -165,7 +174,7 @@ Write declared artifacts only under output_dir.
 Return exactly one JSON object matching the configured result schema.
 On Windows, never pipe non-ASCII text or JSON through PowerShell into another process; use a UTF-8 file or the Skill's UTF-8 writer.
 Do not open WeChat Channels.
-Do not launch Jianying; this manifest protocol contains no UI authorization.`, skill, manifestInstruction)
+Do not launch Jianying; this manifest protocol contains no UI authorization.%s`, skill, manifestInstruction, extra)
 	if len(prompt) > 1200 {
 		return "", fmt.Errorf("prompt exceeds bounded length")
 	}

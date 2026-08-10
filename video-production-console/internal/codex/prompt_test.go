@@ -33,6 +33,40 @@ func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
 	}
 }
 
+func TestMontageExecutePromptKeepsPlanFirstAndNoDelegation(t *testing.T) {
+	taskID := uuid.NewString()
+	manifest := TaskManifest{
+		SchemaVersion: ProtocolSchemaVersion,
+		TaskID:        taskID,
+		JobID:         taskID,
+		Skill:         "jianying-montage-draft",
+		Action:        domain.ActionMontageExecute,
+		OutputDir:     filepath.Join(`C:\managed`, "tasks", taskID, "output"),
+	}
+	prompt, err := BuildManifestPrompt(manifest, filepath.Join(`C:\managed`, "tasks", taskID, "task_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"$jianying-montage-draft",
+		"action=execute",
+		"console-contract.md",
+		"validate-inputs",
+		"production_plan.json",
+		"validate-plan",
+		"execute --plan",
+		"No web/Grok search",
+		"no subagents",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("montage prompt missing %q: %s", want, prompt)
+		}
+	}
+	if len(prompt) > 1200 {
+		t.Fatalf("montage prompt is unbounded: %d", len(prompt))
+	}
+}
+
 func TestPromptRejectsMismatchedSkillActionAndSecretPath(t *testing.T) {
 	manifest := TaskManifest{SchemaVersion: ProtocolSchemaVersion, TaskID: uuid.NewString(), Skill: "finance-topic-selector", Action: domain.ActionMontagePlan}
 	if _, err := BuildManifestPrompt(manifest, `C:\tasks\task_manifest.json`); err == nil {

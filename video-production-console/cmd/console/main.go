@@ -488,7 +488,28 @@ func taskCommandConfig(base codex.Config, task domain.CodexTask, projectRoot, ta
 	base.OutputLastMessage = filepath.Join(taskRoot, "output-last-message.json")
 	base.ModelName = task.ModelName
 	base.ReasoningEffort = task.ReasoningEffort
+	if task.Action == domain.ActionMontageExecute || task.Action == domain.ActionMontagePlan {
+		// Montage jobs are deterministic local workflows; Grok search only inflates context.
+		base.SecretEnvironment = copyStringMapWithoutPrefix(base.SecretEnvironment, "GROK_")
+	}
 	return base
+}
+
+func copyStringMapWithoutPrefix(in map[string]string, prefix string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		if strings.HasPrefix(key, prefix) {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func projectIDForTask(task domain.CodexTask) string {

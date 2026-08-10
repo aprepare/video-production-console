@@ -35,8 +35,8 @@ const assetDefinitions: Array<{
   {
     type: "narration",
     label: "配音",
-    description: "与连续文案对应的最终旁白音频。",
-    accept: "audio/*",
+    description: "与连续文案对应的最终旁白音频（仅 mp3 / wav / m4a）。",
+    accept: ".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a",
     icon: AudioLines,
     manualUpload: true,
   },

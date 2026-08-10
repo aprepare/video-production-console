@@ -1588,6 +1588,19 @@ function App() {
     const projectID = project.id;
     const lockKey = lockProjectAction(projectID, `upload:${type}`);
     if (!lockKey) return;
+    if (type === "narration") {
+      const name = file.name.toLowerCase();
+      if (!(name.endsWith(".mp3") || name.endsWith(".wav") || name.endsWith(".m4a"))) {
+        setMessage("配音仅支持 mp3、wav、m4a 文件。");
+        unlockProjectAction(lockKey);
+        return;
+      }
+    }
+    if (type === "subtitle_srt" && !file.name.toLowerCase().endsWith(".srt")) {
+      setMessage("字幕仅支持 .srt 文件。");
+      unlockProjectAction(lockKey);
+      return;
+    }
     const body = new FormData();
     body.set("file", file);
     try {
@@ -1596,8 +1609,23 @@ function App() {
         body,
       });
       if (!response.ok) {
-        if (selectedIDRef.current === projectID)
-          setMessage("素材上传失败，请检查文件格式后重试。");
+        if (selectedIDRef.current !== projectID) return;
+        let code = "";
+        try {
+          const payload = (await response.json()) as { code?: string };
+          code = payload.code || "";
+        } catch {
+          /* ignore non-JSON bodies */
+        }
+        if (response.status === 413 || code === "payload_too_large")
+          setMessage("素材过大，配音请控制在 200MB 以内。");
+        else if (response.status === 403 || code === "csrf_invalid")
+          setMessage("登录状态已失效，请刷新页面后重新登录再上传。");
+        else if (response.status === 401 || code === "authentication_required")
+          setMessage("未登录或会话过期，请重新登录后再上传。");
+        else if (code === "invalid_asset_type")
+          setMessage("当前服务不支持该素材类型，请重启控制台到最新版本后重试。");
+        else setMessage("素材上传失败，请检查文件格式后重试。");
         return;
       }
       if (selectedIDRef.current === projectID) await loadDetail(project);

@@ -416,6 +416,20 @@ func testCodexCommandConfig(t *testing.T, schema string) codex.Config {
 	}
 }
 
+func TestTaskCommandConfigStripsGrokSecretsForMontage(t *testing.T) {
+	base := codex.Config{SecretEnvironment: map[string]string{
+		"GROK_SEARCH_API_KEY": "secret",
+		"PEXELS_API_KEY":      "pexels",
+	}}
+	got := taskCommandConfig(base, domain.CodexTask{Action: domain.ActionMontageExecute, ModelName: "gpt-5.6-sol", ReasoningEffort: "medium"}, t.TempDir(), t.TempDir())
+	if _, ok := got.SecretEnvironment["GROK_SEARCH_API_KEY"]; ok {
+		t.Fatal("montage tasks must not receive Grok secrets")
+	}
+	if got.SecretEnvironment["PEXELS_API_KEY"] != "pexels" {
+		t.Fatalf("pexels secret = %q", got.SecretEnvironment["PEXELS_API_KEY"])
+	}
+}
+
 func TestLoadCodexSecretEnvironmentReadsOnlyExplicitAllowlist(t *testing.T) {
 	wantLookups := []string{
 		"GROK_SEARCH_BASE_URL", "GROK_SEARCH_MODEL", "GROK_SEARCH_API_KEY", "PEXELS_API_KEY",

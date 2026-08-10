@@ -738,6 +738,26 @@ func performJSON(t *testing.T, h http.Handler, method, target string, value any)
 	h.ServeHTTP(w, req)
 	return w.Result()
 }
+func TestUploadAcceptsCurrentNarrationAndSubtitleTypes(t *testing.T) {
+	handler, _, root, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "current-upload-types"}))
+	for _, file := range []struct {
+		typ, name string
+		data      []byte
+	}{
+		{"narration", "voice.mp3", validProjectMP3()},
+		{"subtitle_srt", "captions.srt", []byte("1\n00:00:00,000 --> 00:00:01,000\n字幕\n")},
+	} {
+		response := uploadProjectFile(t, handler, created.ID, file.typ, file.name, file.data)
+		if response.StatusCode != http.StatusCreated {
+			t.Fatalf("upload %s status=%d", file.typ, response.StatusCode)
+		}
+		if _, err := os.Stat(filepath.Join(root, "projects", created.ID, file.typ)); err != nil {
+			t.Fatalf("missing %s directory: %v", file.typ, err)
+		}
+	}
+}
+
 func uploadProjectFile(t *testing.T, h http.Handler, id, typ, name string, data []byte) *http.Response {
 	t.Helper()
 	var body bytes.Buffer

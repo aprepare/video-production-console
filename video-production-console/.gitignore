@@ -3,8 +3,12 @@ node_modules/
 web/node_modules/
 video-console-data/
 video-console.db
-dist/
+/dist/
+web/dist/
 release/
+# Embedded production frontend must stay versioned.
+!internal/webui/dist/
+!internal/webui/dist/**
 .kun-canvas/
 .playwright-cli/
 .superpowers/
