@@ -169,6 +169,17 @@ func newTestRunner(t *testing.T, mode string) *runnerFixture {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	manifestPath := filepath.Join(root, "tasks", taskID, "task_manifest.json")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := json.Marshal(TaskManifest{TaskID: taskID, Action: domain.ActionRemixStandard, Inputs: []ManifestInput{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	lastPath := filepath.Join(root, "output-last-message.json")
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-File", fake, mode, "--output-last-message", lastPath, "--task-id", taskID, "--action", string(domain.ActionRemixStandard), "--output-dir", root)
 	return &runnerFixture{db: db, repo: repo, runner: NewRunner(cmd, repo, taskID, root, nil), taskID: taskID, projectID: projectID, root: root, lastPath: lastPath}
@@ -276,6 +287,117 @@ func TestRunnerUsesValidatedOutputResultFileForAppServerCompletion(t *testing.T)
 	}
 	if !usedFile || result.Status != "completed" || string(received) != string(raw) {
 		t.Fatalf("result=%+v usedFile=%t received=%q", result, usedFile, received)
+	}
+}
+
+func TestRunnerRegistersContinuousScriptWithSourceDependency(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	assets := store.NewAssetRepository(fixture.db)
+	sourcePath := filepath.Join(fixture.root, "source.txt")
+	if err := os.WriteFile(sourcePath, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := assets.AddVersion(context.Background(), store.AddAssetVersion{
+		ProjectID: &fixture.projectID, Type: domain.AssetSourceScript, StorageKind: domain.StorageFile,
+		Path: sourcePath, Filename: "source.txt", MIMEType: "text/plain", Size: 6, SHA256: sha256HexForTest(t, sourcePath),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRunnerManifestInput(t, fixture, source)
+	output := filepath.Join(fixture.root, "continuous.txt")
+	if err := os.WriteFile(output, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runner.Action = domain.ActionRemixStandard
+	result := ResultEnvelope{
+		SchemaVersion: ProtocolSchemaVersion, TaskID: fixture.taskID, Action: domain.ActionRemixStandard, Status: "completed",
+		Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{},
+		AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: output, StorageKind: domain.StorageFile, Filename: "continuous.txt", MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, output)}},
+	}
+	if err := fixture.runner.persistValidatedResult(context.Background(), result, []byte(`{}`), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	var continuousID string
+	if err := fixture.db.QueryRow(`SELECT id FROM asset_versions WHERE source_task_id=? AND type=?`, fixture.taskID, domain.AssetContinuousScript).Scan(&continuousID); err != nil {
+		t.Fatal(err)
+	}
+	var dependency string
+	if err := fixture.db.QueryRow(`SELECT depends_on_version_id FROM asset_dependencies WHERE asset_version_id=?`, continuousID).Scan(&dependency); err != nil || dependency != source.ID {
+		t.Fatalf("dependency=%q err=%v", dependency, err)
+	}
+	replacementPath := filepath.Join(fixture.root, "replacement.txt")
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assets.AddVersion(context.Background(), store.AddAssetVersion{
+		LogicalAssetID: source.AssetID, ProjectID: &fixture.projectID, Type: domain.AssetSourceScript, StorageKind: domain.StorageFile,
+		Path: replacementPath, Filename: "replacement.txt", MIMEType: "text/plain", Size: 11, SHA256: sha256HexForTest(t, replacementPath),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	continuous, err := assets.Version(context.Background(), continuousID)
+	if err != nil || continuous.State != domain.AssetStale {
+		t.Fatalf("continuous=%+v err=%v", continuous, err)
+	}
+}
+
+func TestRunnerRejectsCompletionWhenManifestInputWasSuperseded(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	assets := store.NewAssetRepository(fixture.db)
+	sourcePath := filepath.Join(fixture.root, "source.txt")
+	if err := os.WriteFile(sourcePath, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := assets.AddVersion(context.Background(), store.AddAssetVersion{
+		ProjectID: &fixture.projectID, Type: domain.AssetSourceScript, StorageKind: domain.StorageFile,
+		Path: sourcePath, Filename: "source.txt", MIMEType: "text/plain", Size: 6, SHA256: sha256HexForTest(t, sourcePath),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRunnerManifestInput(t, fixture, source)
+	replacementPath := filepath.Join(fixture.root, "replacement.txt")
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assets.AddVersion(context.Background(), store.AddAssetVersion{
+		LogicalAssetID: source.AssetID, ProjectID: &fixture.projectID, Type: domain.AssetSourceScript, StorageKind: domain.StorageFile,
+		Path: replacementPath, Filename: "replacement.txt", MIMEType: "text/plain", Size: 11, SHA256: sha256HexForTest(t, replacementPath),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(fixture.root, "continuous.txt")
+	if err := os.WriteFile(output, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runner.Action = domain.ActionRemixStandard
+	result := ResultEnvelope{
+		SchemaVersion: ProtocolSchemaVersion, TaskID: fixture.taskID, Action: domain.ActionRemixStandard, Status: "completed",
+		Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, Warnings: []string{},
+		AssetOutputs: []AssetOutput{{Type: domain.AssetContinuousScript, Path: output, StorageKind: domain.StorageFile, Filename: "continuous.txt", MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, output)}},
+	}
+	if err := fixture.runner.persistValidatedResult(context.Background(), result, []byte(`{}`), "", nil); err == nil {
+		t.Fatal("expected superseded input failure")
+	}
+	task, err := fixture.repo.Get(context.Background(), fixture.taskID)
+	if err != nil || task.Status != domain.TaskFailed || task.ErrorCode == nil || *task.ErrorCode != "input_superseded" {
+		t.Fatalf("task=%+v err=%v", task, err)
+	}
+}
+
+func writeRunnerManifestInput(t *testing.T, fixture *runnerFixture, source domain.AssetVersion) {
+	t.Helper()
+	data, err := json.Marshal(TaskManifest{
+		TaskID: fixture.taskID, Action: domain.ActionRemixStandard,
+		Inputs: []ManifestInput{{AssetID: source.AssetID, VersionID: source.ID, Type: source.Type}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(fixture.root, "tasks", fixture.taskID, "task_manifest.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -493,6 +615,59 @@ func TestRunnerRejectsFormalAssetWhoseDigestDoesNotMatchFile(t *testing.T) {
 	var formalAssets int
 	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, fixture.taskID).Scan(&formalAssets); err != nil || formalAssets != 0 {
 		t.Fatalf("formal assets=%d err=%v", formalAssets, err)
+	}
+}
+
+func TestRunnerRecordsResultValidationAndAssetCommitLifecycle(t *testing.T) {
+	fixture := newTestRunner(t, "completed")
+	ctx := context.Background()
+	startedAt := time.Now().UTC().Add(-time.Second)
+	if _, err := store.NewTaskTimingRepository(fixture.db).StartPhase(ctx, store.StartPhase{TaskID: fixture.taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceHost, At: startedAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runner.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := store.NewTaskTimingRepository(fixture.db).ForTask(ctx, fixture.taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]domain.TaskPhaseState{}
+	for _, phase := range phases {
+		states[phase.PhaseKey] = phase.State
+		if phase.PhaseKey == "codex_execution" || phase.PhaseKey == "result_validation" || phase.PhaseKey == "asset_commit" {
+			if phase.FinishedAt == nil || phase.DurationMS == nil {
+				t.Fatalf("phase did not finish: %+v", phase)
+			}
+		}
+	}
+	for _, key := range []string{"codex_execution", "result_validation", "asset_commit"} {
+		if states[key] != domain.PhaseCompleted {
+			t.Fatalf("phase states=%+v", states)
+		}
+	}
+}
+
+func TestRunnerValidationFailureNeverStartsAssetCommit(t *testing.T) {
+	fixture := newTestRunner(t, "invalid_schema")
+	ctx := context.Background()
+	if _, err := store.NewTaskTimingRepository(fixture.db).StartPhase(ctx, store.StartPhase{TaskID: fixture.taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceHost, At: time.Now().UTC().Add(-time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runner.Run(ctx); err == nil {
+		t.Fatal("expected output validation failure")
+	}
+	phases, err := store.NewTaskTimingRepository(fixture.db).ForTask(ctx, fixture.taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range phases {
+		if phase.PhaseKey == "asset_commit" {
+			t.Fatalf("validation failure created asset commit: %+v", phases)
+		}
+		if phase.PhaseKey == "result_validation" && phase.State != domain.PhaseFailed {
+			t.Fatalf("validation phase=%+v", phase)
+		}
 	}
 }
 

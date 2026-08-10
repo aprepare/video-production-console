@@ -1,16 +1,27 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render as testingRender, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
 import appSource from "./App.tsx?raw";
 import { parseLocation } from "./project-workbench/routes";
+import { createAppQueryClient } from "./query/client";
+
+function render(ui: ReactElement) {
+  return testingRender(
+    <QueryClientProvider client={createAppQueryClient()}>{ui}</QueryClientProvider>,
+  );
+}
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.removeItem("video-production-console-theme");
+  delete document.documentElement.dataset.theme;
   window.history.replaceState({}, "", "/");
 });
 
@@ -63,7 +74,33 @@ test("an invalid direct path falls back to the projects board", async () => {
   await waitFor(() => expect(window.location.pathname).toBe("/projects"));
 });
 
-function routedProjectFetch(taskID = "") {
+test("keeps the add-account action directly inside the account navigation", async () => {
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/accounts")
+        return json([
+          { id: "account-1", name: "天中观局" },
+          { id: "account-2", name: "居中观" },
+          { id: "account-3", name: "认知漫步" },
+          { id: "account-4", name: "观局思考" },
+        ]);
+      if (path === "/api/projects") return json([]);
+    }),
+  );
+
+  render(<App />);
+
+  const navigation = await screen.findByRole("navigation", { name: /账号/ });
+  const addAccount = within(navigation).getByRole("button", { name: "新增账号" });
+  expect(addAccount.previousElementSibling?.classList.contains("account-list")).toBe(true);
+
+  fireEvent.click(addAccount);
+  expect(within(navigation).getByLabelText("账号名称")).toBeTruthy();
+  expect(addAccount.getAttribute("aria-expanded")).toBe("true");
+});
+
+function routedProjectFetch(taskID = "", topicReady = false) {
   const project = {
     id: routedProjectID,
     account_id: "account-1",
@@ -75,7 +112,7 @@ function routedProjectFetch(taskID = "") {
     fetch: baseFetch((path) => {
       if (path === "/api/projects") return json([project]);
       if (path === `/api/projects/${routedProjectID}`)
-        return json({ project, assets: {}, missing_assets: [], active_workflow: null });
+        return json({ project, assets: {}, missing_assets: [], active_workflow: null, topic_context: topicReady ? {} : null });
       if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
       if (path === `/api/projects/${routedProjectID}/remix`) return json({ id: "workflow-1" }, 201);
       if (taskID && path === `/api/tasks/${taskID}`)
@@ -118,7 +155,7 @@ test("a direct project path restores the same project", async () => {
   expect(screen.getByRole("button", { name: "返回项目看板" })).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "开始二创文案" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "先粘贴同行原文" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
   for (const phrase of ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"]) {
@@ -128,7 +165,7 @@ test("a direct project path restores the same project", async () => {
 
 test("the project workbench connects remix to the automatic workflow endpoint", async () => {
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
-  const fixture = routedProjectFetch();
+  const fixture = routedProjectFetch("", true);
   vi.stubGlobal("fetch", fixture.fetch);
   render(<App />);
 
@@ -221,7 +258,7 @@ test("locks a pending remix against double click and unlocks after completion", 
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([project]);
-    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [], topic_context: {} });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
     if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
       remixRequests += 1;
@@ -250,8 +287,8 @@ test("serializes every mutation for one project while allowing another project t
   vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([projectA, projectB]);
-    if (path === `/api/projects/${projectA.id}`) return json({ project: projectA, assets: {}, missing_assets: [] });
-    if (path === `/api/projects/${projectB.id}`) return json({ project: projectB, assets: {}, missing_assets: [] });
+    if (path === `/api/projects/${projectA.id}`) return json({ project: projectA, assets: {}, missing_assets: [], topic_context: {} });
+    if (path === `/api/projects/${projectB.id}`) return json({ project: projectB, assets: {}, missing_assets: [], topic_context: {} });
     if (path === `/api/tasks?project_id=${projectA.id}` || path === `/api/tasks?project_id=${projectB.id}`) return json([]);
     if (path === `/api/projects/${projectA.id}/remix` && method === "POST") {
       mutations.push("remix-a");
@@ -294,7 +331,7 @@ test("turns a rejected remix request into an actionable error and allows retry",
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([project]);
-    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [], topic_context: {} });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
     if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
       attempts += 1;
@@ -432,6 +469,134 @@ test("replaces the selected project's account background through the existing ac
   expect(uploads[0].path).toBe("/api/accounts/account-from-project/background");
   expect(uploads[0].body.get("background")).toBe(file);
   await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+});
+
+test("saves a source script before starting remix.standard with its version id", async () => {
+  const project = { id: routedProjectID, account_id: "account-source", title: "同行原文项目", stage: "script" };
+  const calls: Array<{ path: string; body?: RequestInit["body"] }> = [];
+  let detailReads = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) {
+      detailReads += 1;
+      return json({ project, assets: {}, missing_assets: [] });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/source_script` && method === "POST") {
+      calls.push({ path, body: init?.body });
+      return json({ ...testAsset("source_script"), id: "source-version-1" }, 201);
+    }
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      calls.push({ path, body: init?.body });
+      return json({ id: "remix-task" }, 201);
+    }
+  }));
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "同行原文正文" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
+
+  await waitFor(() => expect(calls).toHaveLength(2));
+  expect(calls[0].path).toContain("/assets/source_script");
+  expect(calls[0].body).toBeInstanceOf(FormData);
+  expect((calls[0].body as FormData).get("file")).toBeInstanceOf(File);
+  expect(JSON.parse(String(calls[1].body))).toMatchObject({
+    type: "remix",
+    action: "remix.standard",
+    source_version_id: "source-version-1",
+  });
+  await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+});
+
+test("locks source save and remix against double clicks", async () => {
+  const project = { id: routedProjectID, account_id: "account-source", title: "同行原文锁", stage: "script" };
+  const upload = deferredResponse();
+  let uploads = 0;
+  let tasks = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/source_script` && method === "POST") {
+      uploads += 1;
+      return upload.promise;
+    }
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      tasks += 1;
+      return json({ id: "remix-task" }, 201);
+    }
+  }));
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "正文" } });
+  const save = screen.getByRole("button", { name: "保存原文并开始二创" });
+  fireEvent.click(save);
+  fireEvent.click(save);
+  await waitFor(() => expect(uploads).toBe(1));
+  upload.resolve(json({ ...testAsset("source_script"), id: "source-version-1" }, 201));
+  await waitFor(() => expect(tasks).toBe(1));
+});
+
+test("does not create a remix task when source script upload fails", async () => {
+  const project = { id: routedProjectID, account_id: "account-source", title: "失败同行原文", stage: "script" };
+  let tasks = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/source_script` && method === "POST")
+      return json({ error: "upload failed" }, 500);
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      tasks += 1;
+      return json({});
+    }
+  }));
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "正文" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
+
+  await screen.findByText("同行原文保存失败，请稍后重试。");
+  expect(tasks).toBe(0);
+});
+
+test("retries only remix after a saved matching source script task failure", async () => {
+  const project = { id: routedProjectID, account_id: "account-source", title: "重试同行原文", stage: "script" };
+  let detailReads = 0;
+  let uploads = 0;
+  let taskAttempts = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) {
+      detailReads += 1;
+      return json({
+        project,
+        assets: detailReads > 1 ? { source_script: { ...testAsset("source_script"), id: "source-version-1" } } : {},
+        missing_assets: [],
+      });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/assets/source-version-1/content`) return new Response("正文", { status: 200 });
+    if (path === `/api/projects/${routedProjectID}/assets/source_script` && method === "POST") {
+      uploads += 1;
+      return json({ ...testAsset("source_script"), id: "source-version-1" }, 201);
+    }
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      taskAttempts += 1;
+      return taskAttempts === 1 ? json({ error: "task failed" }, 500) : json({ id: "remix-task" }, 200);
+    }
+  }));
+  render(<App />);
+  const source = await screen.findByLabelText("同行原文");
+  fireEvent.change(source, { target: { value: "正文" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
+  await screen.findByText("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
+  await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+  fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
+
+  await waitFor(() => expect(taskAttempts).toBe(2));
+  expect(uploads).toBe(1);
 });
 
 test.each([false, true])("deletes only after confirmation=%s and returns to the board on success", async (confirmed) => {
@@ -586,6 +751,71 @@ test("an unknown UUID project path clears project and task state", async () => {
   expect(screen.queryByRole("button", { name: "关闭任务详情" })).toBeNull();
 });
 
+test("uses the light theme by default and restores the selected theme", async () => {
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json([]);
+  }));
+
+  const firstRender = render(<App />);
+  await screen.findByRole("heading", { name: "视频项目" });
+  expect(document.documentElement.dataset.theme).toBe("light");
+
+  fireEvent.change(screen.getByRole("combobox", { name: "选择界面主题" }), {
+    target: { value: "dark" },
+  });
+  await waitFor(() => {
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("video-production-console-theme")).toBe("dark");
+  });
+
+  firstRender.unmount();
+  cleanup();
+  render(<App />);
+  await screen.findByRole("heading", { name: "视频项目" });
+  expect(document.documentElement.dataset.theme).toBe("dark");
+});
+
+test("collapses a stage after four projects and toggles the remaining projects", async () => {
+  const projects = Array.from({ length: 5 }, (_, index) => ({
+    id: `814ebfde-7470-418a-a703-a33596f7e8${index}`,
+    account_id: "account-1",
+    title: `折叠项目 ${index + 1}`,
+    stage: "script",
+  }));
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json(projects);
+  }));
+
+  render(<App />);
+  await screen.findByText("折叠项目 1");
+  expect(screen.getByText("折叠项目 4")).toBeTruthy();
+  expect(screen.queryByText("折叠项目 5")).toBeNull();
+
+  const expand = screen.getByRole("button", { name: "展开剩余 1 个项目" });
+  fireEvent.click(expand);
+  expect(screen.getByText("折叠项目 5")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "收起项目" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "收起项目" }));
+  expect(screen.queryByText("折叠项目 5")).toBeNull();
+});
+
+test("does not show a collapse control for empty or short stages", async () => {
+  const projects = Array.from({ length: 4 }, (_, index) => ({
+    id: `94a1ddc8-7972-464e-b485-a849c7886be${index}`,
+    account_id: "account-1",
+    title: `少量项目 ${index + 1}`,
+    stage: "script",
+  }));
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json(projects);
+  }));
+
+  render(<App />);
+  await screen.findByText("少量项目 1");
+  expect(screen.queryByRole("button", { name: /展开剩余|收起项目/ })).toBeNull();
+});
+
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
@@ -690,7 +920,7 @@ test("a project workflow uses the automatic remix endpoint without legacy task c
     baseFetch((path, method, init) => {
       if (path === "/api/projects") return json([project]);
       if (path === "/api/projects/project-1")
-        return json({ project, assets: {}, missing_assets: [] });
+        return json({ project, assets: {}, missing_assets: [], topic_context: {} });
       if (path === "/api/tasks?project_id=project-1") return json([]);
       if (path === "/api/projects/project-1/remix" && method === "POST") {
         workflowBodies.push(JSON.parse(String(init?.body)));
@@ -985,6 +1215,119 @@ test("a running task exposes a stop action and sends the cancellation request", 
       method: "POST",
     }),
   );
+});
+
+test("a running task exposes a live phase duration instead of an empty persisted duration", async () => {
+  const project = {
+    id: "project-1",
+    account_id: "account-1",
+    title: "实时耗时项目",
+    stage: "script",
+  };
+  const startedAt = new Date(Date.now() - 5000).toISOString();
+  const task = {
+    id: "task-timing-running",
+    project_id: "project-1",
+    type: "remix",
+    skill_name: "finance-viral-remix",
+    status: "running",
+    created_at: startedAt,
+    timing_summary: {
+      TaskID: "task-timing-running",
+      TotalMS: 5000,
+      PreparationMS: 0,
+      QueueMS: 0,
+      ExecutionMS: 5000,
+      Phases: [],
+      LegacyWithoutPhases: false,
+    },
+    timing_runs: [
+      {
+        ID: "phase-running",
+        PhaseKey: "codex_execution",
+        DisplayName: "Codex 执行",
+        State: "running",
+        StartedAt: startedAt,
+        DurationMS: null,
+      },
+    ],
+  };
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/projects") return json([project]);
+      if (path === "/api/projects/project-1")
+        return json({ project, assets: {}, missing_assets: [] });
+      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === "/api/tasks/task-timing-running") return json(task);
+      if (path === "/api/tasks/task-timing-running/semantic-events?limit=20")
+        return json({ events: [] });
+    }),
+  );
+
+  render(<App />);
+  fireEvent.click(await screen.findByText("实时耗时项目"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /finance-viral-remix.*处理中/ }),
+  );
+
+  expect(await screen.findByText("Codex 执行")).toBeTruthy();
+  const timingRegion = screen.getByRole("region", { name: "任务阶段耗时" });
+  expect(within(timingRegion).getByText("运行中")).toBeTruthy();
+  expect(within(timingRegion).getByLabelText("运行时长").textContent).toMatch(/^\d+\.\d s$/);
+});
+
+test("a timing summary with no phases preserves the legacy empty-phase meaning", async () => {
+  const project = {
+    id: "project-1",
+    account_id: "account-1",
+    title: "旧任务项目",
+    stage: "script",
+  };
+  const task = {
+    id: "task-timing-legacy",
+    project_id: "project-1",
+    type: "remix",
+    skill_name: "finance-viral-remix",
+    status: "completed",
+    created_at: "2026-08-07T00:00:00Z",
+    timing_summary: {
+      TaskID: "task-timing-legacy",
+      TotalMS: 3000,
+      PreparationMS: 0,
+      QueueMS: 1000,
+      ExecutionMS: 2000,
+      Phases: [],
+      LegacyWithoutPhases: true,
+    },
+    timing_runs: [],
+  };
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/projects") return json([project]);
+      if (path === "/api/projects/project-1")
+        return json({ project, assets: {}, missing_assets: [] });
+      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === "/api/tasks/task-timing-legacy") return json(task);
+      if (path === "/api/tasks/task-timing-legacy/semantic-events?limit=20")
+        return json({ events: [] });
+      if (path === "/api/tasks/task-timing-legacy/result") return json({});
+    }),
+  );
+
+  render(<App />);
+  fireEvent.click(await screen.findByText("旧任务项目"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /finance-viral-remix.*已完成/ }),
+  );
+
+  expect(
+    await screen.findByText(
+      "该任务没有已持久化的阶段运行记录，不能据此判定阶段是否开始。",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText("未命名阶段")).toBeNull();
 });
 
 test("an existing continuous script advances to asset preparation without a second remix control", async () => {

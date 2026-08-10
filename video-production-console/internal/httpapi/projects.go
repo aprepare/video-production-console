@@ -147,8 +147,8 @@ func (h *projectsHandler) create(w http.ResponseWriter, r *http.Request) {
 		AccountID string `json:"account_id"`
 		Title     string `json:"title"`
 	}
-	if decodeJSON(r, &in) != nil {
-		writeError(w, 400, "invalid_json", "A JSON project is required.")
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_json", "A JSON project is required.")
 		return
 	}
 	accountID, err := uuid.Parse(in.AccountID)
@@ -221,8 +221,12 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 	for _, a := range all {
 		v := toAssetView(a)
 		history[string(a.Type)] = append(history[string(a.Type)], v)
-		if previous, ok := latest[a.ID]; !ok || a.Version > previous.Version {
-			latest[a.ID] = a
+		key := string(a.Type)
+		if previous, ok := latest[key]; !ok ||
+			a.Version > previous.Version ||
+			a.Version == previous.Version && (a.CreatedAt.After(previous.CreatedAt) ||
+				a.CreatedAt.Equal(previous.CreatedAt) && a.ID > previous.ID) {
+			latest[key] = a
 		}
 	}
 	for _, a := range latest {
@@ -290,8 +294,7 @@ func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in taskModelRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil && !errors.Is(err, io.EOF) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
@@ -462,8 +465,7 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Stage domain.ProjectStage `json:"stage"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-	decodeErr := decodeJSON(r, &in)
+	decodeErr := decodeJSON(w, r, maxNormalJSONRequest, &in)
 	var tooLarge *http.MaxBytesError
 	if errors.As(decodeErr, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
@@ -534,17 +536,50 @@ func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, toProjectView(p))
 }
 
-func decodeJSON(r *http.Request, out any) error {
-	d := json.NewDecoder(r.Body)
+const (
+	maxSmallJSONRequest   int64 = 16 << 10
+	maxNormalJSONRequest  int64 = 64 << 10
+	maxMessageJSONRequest int64 = 256 << 10
+	maxTaskJSONRequest    int64 = 2 << 20
+	maxBundleJSONRequest  int64 = 1 << 20
+)
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, out any) error {
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(out); err != nil {
 		return err
 	}
+	return ensureJSONEOF(d)
+}
+
+func ensureJSONEOF(d *json.Decoder) error {
 	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
-		return errors.New("request must contain one JSON value")
+	if err := d.Decode(&extra); errors.Is(err, io.EOF) {
+		return nil
+	} else if err != nil {
+		return err
 	}
-	return nil
+	return errors.New("request must contain one JSON value")
+}
+
+func writeDecodeError(w http.ResponseWriter, err error, code, message string) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "The request body is too large.")
+		return
+	}
+	writeError(w, http.StatusBadRequest, code, message)
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "message": message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 func projectID(w http.ResponseWriter, value string) (string, bool) {
 	id, err := uuid.Parse(value)
@@ -563,7 +598,7 @@ func validStage(s domain.ProjectStage) bool {
 }
 func uploadableType(t domain.AssetType) bool {
 	switch t {
-	case domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetAudio, domain.AssetSubtitle, domain.AssetMixDraft, domain.AssetFinalVideo:
+	case domain.AssetSourceScript, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetAudio, domain.AssetSubtitle, domain.AssetMixDraft, domain.AssetFinalVideo:
 		return true
 	}
 	return false

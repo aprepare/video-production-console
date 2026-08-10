@@ -195,7 +195,7 @@ func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
 	aid := uuid.NewString()
 	pid := uuid.NewString()
 	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, aid, "a", now, now)
-	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, pid, aid, now, now)
+	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, pid, aid, now, now)
 	dir := filepath.Join(root, "projects", pid, "audio")
 	_ = os.MkdirAll(dir, 0755)
 	keep1 := filepath.Join(dir, "v1.mp3")
@@ -283,7 +283,7 @@ func TestReconcileProjectAssetsProtectsOnlyRegisteredDirectorySubtree(t *testing
 		t.Fatal(err)
 	}
 	for _, id := range []string{projectID, otherProjectID} {
-		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, id, accountID, now, now); err != nil {
+		if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, id, accountID, now, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -343,7 +343,7 @@ func TestReconcileProjectAssetsDoesNotProtectRegisteredSymlinkDirectory(t *testi
 	accountID, projectID, otherProjectID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
 	for _, id := range []string{projectID, otherProjectID} {
-		_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','topic',?,?)`, id, accountID, now, now)
+		_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,'p','script',?,?)`, id, accountID, now, now)
 	}
 	target := filepath.Join(t.TempDir(), "outside-target")
 	file := filepath.Join(target, "remove.dat")
@@ -388,6 +388,24 @@ func TestSaveProjectAssetValidatesContentAndUsesControlledPath(t *testing.T) {
 	wantDir := filepath.Join(root, "projects", projectID, string(domain.AssetContinuousScript))
 	if filepath.Dir(text.Path) != wantDir {
 		t.Fatalf("path = %q, want directory %q", text.Path, wantDir)
+	}
+	for _, filename := range []string{"source.txt", "source.md"} {
+		source, err := svc.SaveProjectAsset(projectID, domain.AssetSourceScript, filename, bytes.NewReader([]byte("同行原文\n")))
+		if err != nil {
+			t.Fatalf("source script %q upload: %v", filename, err)
+		}
+		if filepath.Ext(source.Path) != filepath.Ext(filename) {
+			t.Fatalf("source script path=%q, want extension %q", source.Path, filepath.Ext(filename))
+		}
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetSourceScript, "source.srt", bytes.NewReader([]byte("同行原文\n"))); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("source script wrong extension error = %v", err)
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetSourceScript, "source.txt", bytes.NewReader([]byte(" \n\t"))); !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("source script blank content error = %v", err)
+	}
+	if _, err := svc.SaveProjectAsset(projectID, domain.AssetSourceScript, "source.txt", bytes.NewReader(bytes.Repeat([]byte("x"), int(MaxTextAssetSize+1)))); !errors.Is(err, ErrProjectAssetTooBig) {
+		t.Fatalf("source script oversized error = %v", err)
 	}
 	if _, err := svc.SaveProjectAsset(projectID, domain.AssetSubtitle, "bad.srt", bytes.NewReader([]byte{0xff, 0xfe})); !errors.Is(err, ErrInvalidProjectAsset) {
 		t.Fatalf("invalid UTF-8 error = %v", err)
@@ -441,7 +459,7 @@ func TestProjectAssetSizeLimitsByType(t *testing.T) {
 	for _, tt := range []struct {
 		typ  domain.AssetType
 		want int64
-	}{{domain.AssetContinuousScript, 5 << 20}, {domain.AssetSubtitle, 5 << 20}, {domain.AssetAudio, 200 << 20}, {domain.AssetFinalVideo, 500 << 20}} {
+	}{{domain.AssetSourceScript, 5 << 20}, {domain.AssetContinuousScript, 5 << 20}, {domain.AssetSubtitle, 5 << 20}, {domain.AssetAudio, 200 << 20}, {domain.AssetFinalVideo, 500 << 20}} {
 		if got := MaxSizeForType(tt.typ); got != tt.want {
 			t.Errorf("MaxSizeForType(%s)=%d want %d", tt.typ, got, tt.want)
 		}

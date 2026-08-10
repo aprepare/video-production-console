@@ -25,17 +25,20 @@ type TaskRepository struct {
 var ErrOutputRetryNotEligible = errors.New("task output is not eligible for completion retry")
 
 type TaskResultWrite struct {
-	Status           domain.TaskStatus
-	Summary          string
-	AssistantContent string
-	QuestionSchema   *string
-	EventKind        string
-	RawJSON          string
-	ErrorCode        string
-	ErrorMessage     string
-	ExpectedTurnID   *string
-	IdeaSessionID    string
-	IdeaCandidates   []domain.IdeaCandidate
+	Status             domain.TaskStatus
+	Summary            string
+	AssistantContent   string
+	QuestionSchema     *string
+	EventKind          string
+	RawJSON            string
+	ErrorCode          string
+	ErrorMessage       string
+	ExpectedTurnID     *string
+	IdeaSessionID      string
+	IdeaCandidates     []domain.IdeaCandidate
+	ValidationPhaseID  string
+	AssetCommitPhaseID string
+	SkillTimings       []domain.SkillTimingRun
 }
 
 type TaskArtifact struct {
@@ -48,6 +51,12 @@ type TaskArtifact struct {
 	Size      int64
 	SHA256    string
 	CreatedAt time.Time
+}
+
+type LegacyStartClaim struct {
+	Task        domain.CodexTask
+	Attempt     int
+	ExecutionID string
 }
 
 func NewTaskRepository(db *sql.DB) *TaskRepository { return &TaskRepository{db: db} }
@@ -127,8 +136,20 @@ func (r *TaskRepository) CreateV2(ctx context.Context, task domain.CodexTask) er
 // EnsurePreparedTask atomically publishes a formal task and its prepared
 // manifest identity. A dispatcher can never observe the task without both.
 func (r *TaskRepository) EnsurePreparedTask(ctx context.Context, task domain.CodexTask, skillSnapshotID, manifestPath string) (domain.CodexTask, error) {
+	return r.EnsurePreparedTaskAt(ctx, task, skillSnapshotID, manifestPath, task.CreatedAt)
+}
+
+// EnsurePreparedTaskAt uses the current preparation request boundary rather
+// than an existing task's historical creation time when recording preparation.
+func (r *TaskRepository) EnsurePreparedTaskAt(ctx context.Context, task domain.CodexTask, skillSnapshotID, manifestPath string, preparationStartedAt time.Time) (domain.CodexTask, error) {
 	if strings.TrimSpace(string(task.Action)) == "" || strings.TrimSpace(task.SkillName) == "" || strings.TrimSpace(skillSnapshotID) == "" || strings.TrimSpace(manifestPath) == "" || task.Status != domain.TaskQueued {
 		return domain.CodexTask{}, fmt.Errorf("queued task action, skill, snapshot, and manifest are required")
+	}
+	if preparationStartedAt.IsZero() {
+		preparationStartedAt = task.CreatedAt
+	}
+	if preparationStartedAt.IsZero() {
+		return domain.CodexTask{}, fmt.Errorf("task preparation start time is required")
 	}
 	selection, err := taskSelection(task)
 	if err != nil {
@@ -173,7 +194,12 @@ func (r *TaskRepository) EnsurePreparedTask(ctx context.Context, task domain.Cod
 			}
 		}
 		if r.beforePreparedCommit != nil {
-			return r.beforePreparedCommit()
+			if err := r.beforePreparedCommit(); err != nil {
+				return err
+			}
+		}
+		if err := recordTaskPreparationTimingTx(ctx, q, task.ID, preparationStartedAt, now); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -181,6 +207,85 @@ func (r *TaskRepository) EnsurePreparedTask(ctx context.Context, task domain.Cod
 		return domain.CodexTask{}, err
 	}
 	return r.Get(ctx, task.ID)
+}
+
+// AdmitQueuedTask atomically makes a queued task visible together with its
+// queue boundary. Replays are idempotent and preserve the first acceptance.
+func (r *TaskRepository) AdmitQueuedTask(ctx context.Context, task domain.CodexTask, at time.Time) (domain.CodexTask, error) {
+	if task.ID == "" || task.Status != domain.TaskQueued || at.IsZero() {
+		return domain.CodexTask{}, fmt.Errorf("queued task identity and acceptance time are required")
+	}
+	if err := validateTaskTimingBoundaries(task); err != nil {
+		return domain.CodexTask{}, err
+	}
+	selection, err := taskSelection(task)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	phase, transport, err := normalizeTaskTransport(task.CompletionPhase, task.Transport, true)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	err = r.immediate(ctx, "admit queued task", func(q assetDBTX, _ time.Time) error {
+		var status domain.TaskStatus
+		readErr := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks WHERE id=?`, task.ID).Scan(&status)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			_, readErr = q.ExecContext(ctx, `INSERT INTO codex_tasks(id,project_id,account_id,type,skill_name,action,status,codex_session_id,chat_session_id,codex_thread_id,codex_turn_id,completion_phase,transport,prompt_snapshot,model_name,reasoning_effort,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.ProjectID, task.AccountID, task.Type, task.SkillName, task.Action, task.Status, task.CodexSessionID, task.ChatSessionID, task.CodexThreadID, task.CodexTurnID, phase, transport, task.PromptSnapshot, selection.Model, selection.ReasoningEffort, task.CreatedAt)
+		} else if readErr == nil && status != domain.TaskQueued {
+			return fmt.Errorf("task %q is not queued", task.ID)
+		}
+		if readErr != nil {
+			return readErr
+		}
+		return admitQueueTx(ctx, q, task.ID, at)
+	})
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	return r.Get(ctx, task.ID)
+}
+
+func recordTaskPreparationTimingTx(ctx context.Context, q assetDBTX, taskID string, startedAt, at time.Time) error {
+	var exists int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_phase_runs WHERE task_id=? AND attempt=1 AND phase_key='task_prepare' AND source=? AND external_id='task_prepare'`, taskID, domain.PhaseSourceHost).Scan(&exists); err != nil {
+		return err
+	}
+	if exists != 0 {
+		return nil
+	}
+	if at.Before(startedAt) {
+		return errors.New("task preparation finish precedes start")
+	}
+	_, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,finished_at,duration_ms,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, 1, "task_prepare", "任务准备", domain.PhaseSourceHost, domain.PhaseCompleted, startedAt, startedAt, at, at.Sub(startedAt).Milliseconds(), "task_prepare", `{}`, startedAt)
+	return err
+}
+
+func admitQueueTx(ctx context.Context, q assetDBTX, taskID string, at time.Time) error {
+	var existing string
+	err := q.QueryRowContext(ctx, `SELECT id FROM task_phase_runs WHERE task_id=? AND phase_key='queue_wait' AND state='running' AND finished_at IS NULL ORDER BY attempt DESC LIMIT 1`, taskID).Scan(&existing)
+	if err == nil {
+		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=? AND status=?`, at, taskID, domain.TaskQueued)
+		return err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var attempt int
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(CASE WHEN phase_key IN ('queue_wait','codex_execution') THEN attempt ELSE 0 END),0)+1 FROM task_phase_runs WHERE task_id=?`, taskID).Scan(&attempt); err != nil {
+		return err
+	}
+	result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET queued_at=COALESCE(queued_at,?) WHERE id=? AND status=?`, at, taskID, domain.TaskQueued)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("task %q is not queued", taskID)
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, attempt, "queue_wait", "排队等待", domain.PhaseSourceHost, domain.PhaseRunning, at, at, fmt.Sprintf("queue-accept:%d", attempt), `{}`, at)
+	return err
 }
 
 func (r *TaskRepository) PreparedManifest(ctx context.Context, id string) (string, string, error) {
@@ -287,6 +392,9 @@ func (r *TaskRepository) InterruptInFlight(ctx context.Context) (int, error) {
 			if affected != 1 {
 				return fmt.Errorf("task %q changed while recovering", id)
 			}
+			if err := finishActiveLifecyclePhasesTx(ctx, q, id, domain.PhaseInterrupted, now); err != nil {
+				return err
+			}
 			if err := insertEvent(ctx, q, id, domain.TaskEvent{Kind: "interrupted_on_restart", Level: "warning", DisplayText: "Task interrupted because the console restarted.", CreatedAt: now}); err != nil {
 				return err
 			}
@@ -307,6 +415,30 @@ func (r *TaskRepository) Get(ctx context.Context, id string) (domain.CodexTask, 
 		t.Action = domain.TaskAction(action.String)
 	}
 	return t, err
+}
+
+// ActiveByProjectAction returns the newest task that can still consume or
+// produce project inputs for an action. Callers use it to make remix starts
+// idempotent without treating terminal history as a conflict.
+func (r *TaskRepository) ActiveByProjectAction(ctx context.Context, projectID string, action domain.TaskAction) (domain.CodexTask, error) {
+	var task domain.CodexTask
+	var storedAction sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM codex_tasks
+		WHERE project_id=? AND action=? AND status IN ('queued','running','awaiting_input')
+		ORDER BY created_at DESC,id DESC LIMIT 1`, projectID, action).Scan(
+		&task.ID, &task.ProjectID, &task.AccountID, &task.Type, &task.SkillName, &storedAction, &task.Status,
+		&task.CodexSessionID, &task.ChatSessionID, &task.CodexThreadID, &task.CodexTurnID,
+		&task.CompletionPhase, &task.Transport, &task.PromptSnapshot, &task.ModelName,
+		&task.ReasoningEffort, &task.ResultSummary, &task.ErrorCode, &task.ErrorMessage,
+		&task.CreatedAt, &task.QueuedAt, &task.StartedAt, &task.FinishedAt,
+	)
+	if err != nil {
+		return domain.CodexTask{}, err
+	}
+	if storedAction.Valid {
+		task.Action = domain.TaskAction(storedAction.String)
+	}
+	return task, nil
 }
 
 // GetByCodexTurn resolves the formal App Server task bound to a transport
@@ -337,67 +469,261 @@ func (r *TaskRepository) GetByCodexTurn(ctx context.Context, turnID string) (dom
 // ClaimAppServerResult atomically grants one completion notification ownership
 // of all formal result writes for the currently bound turn.
 func (r *TaskRepository) ClaimAppServerResult(ctx context.Context, taskID, turnID string) (bool, error) {
+	_, claimed, err := r.ClaimAppServerResultValidation(ctx, taskID, turnID, time.Now().UTC())
+	return claimed, err
+}
+
+// ClaimAppServerResultValidation closes the observable Codex execution and
+// starts result validation in the same transaction that claims completion.
+func (r *TaskRepository) ClaimAppServerResultValidation(ctx context.Context, taskID, turnID string, at time.Time) (string, bool, error) {
 	taskID, turnID = strings.TrimSpace(taskID), strings.TrimSpace(turnID)
-	if taskID == "" || turnID == "" {
-		return false, fmt.Errorf("task and Codex turn ids are required")
+	if taskID == "" || turnID == "" || at.IsZero() {
+		return "", false, fmt.Errorf("task, Codex turn id, and validation time are required")
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?
-        WHERE id=? AND transport='app_server' AND codex_turn_id=?
-		  AND status=? AND completion_phase=?`, domain.TaskResuming, taskID, turnID, domain.TaskRunning, string(domain.CompletionAgentRunning))
+	validationID := ""
+	claimed := false
+	err := r.immediate(ctx, "claim App Server task result", func(q assetDBTX, _ time.Time) error {
+		var status domain.TaskStatus
+		err := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks
+			WHERE id=? AND transport='app_server' AND codex_turn_id=? AND completion_phase=?`, taskID, turnID, string(domain.CompletionAgentRunning)).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) || status != domain.TaskRunning {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var startErr error
+		validationID, _, startErr = beginResultValidationTx(ctx, q, taskID, domain.PhaseSourceHost, at)
+		if startErr != nil {
+			return startErr
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?
+			WHERE id=? AND transport='app_server' AND codex_turn_id=?
+			  AND status=? AND completion_phase=?`, domain.TaskResuming, taskID, turnID, domain.TaskRunning, string(domain.CompletionAgentRunning))
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return errors.New("task changed before result validation claim")
+		}
+		claimed = true
+		return nil
+	})
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	affected, err := result.RowsAffected()
-	return affected == 1, err
+	return validationID, claimed, nil
+}
+
+// BeginResultValidation closes the active execution phase and starts a new
+// host validation attempt without changing task status.
+func (r *TaskRepository) BeginResultValidation(ctx context.Context, taskID string, source domain.TaskPhaseSource, at time.Time) (string, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || at.IsZero() {
+		return "", fmt.Errorf("task and validation time are required")
+	}
+	if source != domain.PhaseSourceHost && source != domain.PhaseSourceAppServer {
+		return "", fmt.Errorf("invalid result validation source %q", source)
+	}
+	phaseID := ""
+	err := r.immediate(ctx, "begin task result validation", func(q assetDBTX, _ time.Time) error {
+		var err error
+		phaseID, _, err = beginResultValidationTx(ctx, q, taskID, source, at)
+		return err
+	})
+	return phaseID, err
+}
+
+func beginResultValidationTx(ctx context.Context, q assetDBTX, taskID string, source domain.TaskPhaseSource, at time.Time) (string, int, error) {
+	attempt := 0
+	var executionID string
+	var executionStarted time.Time
+	err := q.QueryRowContext(ctx, `SELECT id,attempt,started_at FROM task_phase_runs
+		WHERE task_id=? AND phase_key='codex_execution' AND state='running' AND finished_at IS NULL
+		ORDER BY attempt DESC,started_at DESC,id DESC LIMIT 1`, taskID).Scan(&executionID, &attempt, &executionStarted)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", 0, err
+	}
+	if err == nil {
+		if at.Before(executionStarted) {
+			return "", 0, errors.New("result validation precedes Codex execution")
+		}
+		result, updateErr := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=?
+			WHERE id=? AND state='running' AND finished_at IS NULL`, domain.PhaseCompleted, at, at.Sub(executionStarted).Milliseconds(), executionID)
+		if updateErr != nil {
+			return "", 0, updateErr
+		}
+		if affected, updateErr := result.RowsAffected(); updateErr != nil || affected != 1 {
+			if updateErr != nil {
+				return "", 0, updateErr
+			}
+			return "", 0, errors.New("Codex execution changed before result validation")
+		}
+	} else if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM task_phase_runs WHERE task_id=? AND phase_key='result_validation'`, taskID).Scan(&attempt); err != nil {
+		return "", 0, err
+	}
+	if attempt <= 0 {
+		attempt = 1
+	}
+	phaseID := uuid.NewString()
+	_, err = q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, phaseID, taskID, attempt, "result_validation", "结果校验", source, domain.PhaseRunning, at, at, fmt.Sprintf("result-validation:%d", attempt), `{}`, at)
+	return phaseID, attempt, err
+}
+
+// BeginAssetCommit closes one validated result attempt and starts the durable
+// task/artifact/asset transaction timer in the same transaction.
+func (r *TaskRepository) BeginAssetCommit(ctx context.Context, taskID, validationPhaseID string, at time.Time) (string, error) {
+	taskID, validationPhaseID = strings.TrimSpace(taskID), strings.TrimSpace(validationPhaseID)
+	if taskID == "" || validationPhaseID == "" || at.IsZero() {
+		return "", fmt.Errorf("task, validation phase, and asset commit time are required")
+	}
+	assetCommitID := ""
+	err := r.immediate(ctx, "begin task asset commit", func(q assetDBTX, _ time.Time) error {
+		var attempt int
+		if _, err := finishPhaseByIDTx(ctx, q, taskID, validationPhaseID, "result_validation", domain.PhaseCompleted, at, &attempt); err != nil {
+			return err
+		}
+		err := q.QueryRowContext(ctx, `SELECT id FROM task_phase_runs WHERE task_id=? AND attempt=? AND phase_key='asset_commit' ORDER BY created_at DESC,id DESC LIMIT 1`, taskID, attempt).Scan(&assetCommitID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		assetCommitID = uuid.NewString()
+		_, err = q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, assetCommitID, taskID, attempt, "asset_commit", "资产入库", domain.PhaseSourceHost, domain.PhaseRunning, at, at, fmt.Sprintf("asset-commit:%d", attempt), `{}`, at)
+		return err
+	})
+	return assetCommitID, err
 }
 
 // ClaimOutputInvalidRetry reclaims retained output for strict result
 // revalidation. App Server tasks keep their bound turn identity; legacy CLI
 // tasks have no turn identity. This method never starts or resumes a model.
 func (r *TaskRepository) ClaimOutputInvalidRetry(ctx context.Context, taskID string) (*string, error) {
-	var transport string
-	var nullableTurnID sql.NullString
-	err := r.db.QueryRowContext(ctx, `UPDATE codex_tasks
-		SET status=CASE WHEN transport='app_server' THEN ? ELSE ? END,
-		    result_summary=NULL,error_code=NULL,error_message=NULL,finished_at=NULL
-		WHERE id=?
-		  AND ((transport='app_server' AND codex_turn_id IS NOT NULL) OR transport='legacy_exec')
-		  AND status=? AND completion_phase=? AND error_code='output_invalid'
-		RETURNING transport,codex_turn_id`, domain.TaskResuming, domain.TaskRunning, strings.TrimSpace(taskID), domain.TaskFailed, string(domain.CompletionAgentRunning)).Scan(&transport, &nullableTurnID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrOutputRetryNotEligible
+	turnID, _, err := r.ClaimOutputInvalidRetryValidation(ctx, taskID, time.Now().UTC())
+	return turnID, err
+}
+
+// ClaimOutputInvalidRetryValidation atomically reopens the task and creates a
+// fresh validation attempt for the retained result without a Codex phase.
+func (r *TaskRepository) ClaimOutputInvalidRetryValidation(ctx context.Context, taskID string, at time.Time) (*string, string, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || at.IsZero() {
+		return nil, "", ErrOutputRetryNotEligible
 	}
+	var turnID *string
+	validationID := ""
+	err := r.immediate(ctx, "claim output-invalid retry", func(q assetDBTX, _ time.Time) error {
+		var transport string
+		var nullableTurnID sql.NullString
+		if err := q.QueryRowContext(ctx, `SELECT transport,codex_turn_id FROM codex_tasks
+			WHERE id=? AND ((transport='app_server' AND codex_turn_id IS NOT NULL) OR transport='legacy_exec')
+			  AND status=? AND completion_phase=? AND error_code='output_invalid'`, taskID, domain.TaskFailed, string(domain.CompletionAgentRunning)).Scan(&transport, &nullableTurnID); errors.Is(err, sql.ErrNoRows) {
+			return ErrOutputRetryNotEligible
+		} else if err != nil {
+			return err
+		}
+		status := domain.TaskRunning
+		if transport == "app_server" {
+			status = domain.TaskResuming
+			value := strings.TrimSpace(nullableTurnID.String)
+			if !nullableTurnID.Valid || value == "" {
+				return ErrOutputRetryNotEligible
+			}
+			turnID = &value
+		} else if transport != "legacy_exec" {
+			return ErrOutputRetryNotEligible
+		}
+		var err error
+		validationID, _, err = beginResultValidationTx(ctx, q, taskID, domain.PhaseSourceHost, at)
+		if err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=NULL,error_code=NULL,error_message=NULL,finished_at=NULL WHERE id=? AND status=? AND completion_phase=? AND error_code='output_invalid'`, status, taskID, domain.TaskFailed, string(domain.CompletionAgentRunning))
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return ErrOutputRetryNotEligible
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if transport == "legacy_exec" {
-		return nil, nil
-	}
-	turnID := strings.TrimSpace(nullableTurnID.String)
-	if transport != "app_server" || !nullableTurnID.Valid || turnID == "" {
-		return nil, ErrOutputRetryNotEligible
-	}
-	return &turnID, nil
+	return turnID, validationID, nil
 }
 
 func (r *TaskRepository) CancelAppServerTurn(ctx context.Context, taskID, turnID string) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code='cancelled',error_message='task cancelled',finished_at=?
-        WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status IN (?,?)`, domain.TaskCanceled, time.Now().UTC(), taskID, turnID, domain.TaskRunning, domain.TaskResuming)
-	if err != nil {
-		return false, err
+	taskID, turnID = strings.TrimSpace(taskID), strings.TrimSpace(turnID)
+	if taskID == "" || turnID == "" {
+		return false, fmt.Errorf("task and Codex turn ids are required")
 	}
-	affected, err := result.RowsAffected()
-	return affected == 1, err
+	changed := false
+	err := r.immediate(ctx, "cancel App Server task turn", func(q assetDBTX, now time.Time) error {
+		var status domain.TaskStatus
+		err := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks
+			WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status IN (?,?)`, taskID, turnID, domain.TaskRunning, domain.TaskResuming).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := finishActiveLifecyclePhasesTx(ctx, q, taskID, domain.PhaseCanceled, now); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code='canceled',error_message='task canceled',finished_at=?
+			WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status=?`, domain.TaskCanceled, now, taskID, turnID, status)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		changed = affected == 1
+		return err
+	})
+	return changed, err
 }
 
 func (r *TaskRepository) FailAppServerTurn(ctx context.Context, taskID, turnID, code, message string) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code=?,error_message=?,finished_at=?
-        WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status IN (?,?)`, domain.TaskFailed, nullable(code), nullable(message), time.Now().UTC(), taskID, turnID, domain.TaskRunning, domain.TaskResuming)
-	if err != nil {
-		return false, err
+	taskID, turnID = strings.TrimSpace(taskID), strings.TrimSpace(turnID)
+	if taskID == "" || turnID == "" {
+		return false, fmt.Errorf("task and Codex turn ids are required")
 	}
-	affected, err := result.RowsAffected()
-	return affected == 1, err
+	changed := false
+	err := r.immediate(ctx, "fail App Server task turn", func(q assetDBTX, now time.Time) error {
+		var status domain.TaskStatus
+		err := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks
+			WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status IN (?,?)`, taskID, turnID, domain.TaskRunning, domain.TaskResuming).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := finishActiveLifecyclePhasesTx(ctx, q, taskID, domain.PhaseFailed, now); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code=?,error_message=?,finished_at=?
+			WHERE id=? AND transport='app_server' AND codex_turn_id=? AND status=?`, domain.TaskFailed, nullable(code), nullable(message), now, taskID, turnID, status)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		changed = affected == 1
+		return err
+	})
+	return changed, err
 }
 
 // BeginAppServerResume records the answer and claims the awaiting task for a
@@ -698,6 +1024,262 @@ func (r *TaskRepository) MarkRunning(ctx context.Context, id string, at time.Tim
 	return nil
 }
 
+func (r *TaskRepository) ClaimLegacyStart(ctx context.Context, id string, at time.Time) (LegacyStartClaim, error) {
+	var claim LegacyStartClaim
+	if strings.TrimSpace(id) == "" || at.IsZero() {
+		return claim, fmt.Errorf("task and start time are required")
+	}
+	err := r.immediate(ctx, "claim legacy task start", func(q assetDBTX, _ time.Time) error {
+		var transport string
+		if err := q.QueryRowContext(ctx, `SELECT transport FROM codex_tasks WHERE id=? AND status=?`, id, domain.TaskQueued).Scan(&transport); err != nil {
+			return fmt.Errorf("task %q is not queued: %w", id, err)
+		}
+		if transport != "legacy_exec" {
+			return fmt.Errorf("task %q is not legacy exec", id)
+		}
+		var queueID string
+		var queueStarted time.Time
+		queueErr := q.QueryRowContext(ctx, `SELECT id,attempt,started_at FROM task_phase_runs WHERE task_id=? AND phase_key='queue_wait' AND state='running' AND finished_at IS NULL ORDER BY attempt DESC,started_at DESC,id DESC LIMIT 1`, id).Scan(&queueID, &claim.Attempt, &queueStarted)
+		if errors.Is(queueErr, sql.ErrNoRows) {
+			if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM task_phase_runs WHERE task_id=?`, id).Scan(&claim.Attempt); err != nil {
+				return err
+			}
+		} else if queueErr != nil {
+			return queueErr
+		} else {
+			if at.Before(queueStarted) {
+				return errors.New("task start precedes queue acceptance")
+			}
+			if _, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE id=? AND state='running' AND finished_at IS NULL`, domain.PhaseCompleted, at, at.Sub(queueStarted).Milliseconds(), queueID); err != nil {
+				return err
+			}
+		}
+		claim.ExecutionID = uuid.NewString()
+		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, claim.ExecutionID, id, claim.Attempt, "codex_execution", "Codex 执行", domain.PhaseSourceHost, domain.PhaseRunning, at, at, fmt.Sprintf("legacy-execution:%d", claim.Attempt), `{}`, at); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,started_at=COALESCE(started_at,?),finished_at=NULL,error_code=NULL,error_message=NULL WHERE id=? AND status=?`, domain.TaskRunning, at, id, domain.TaskQueued)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("task %q changed before start", id)
+		}
+		return nil
+	})
+	if err != nil {
+		return LegacyStartClaim{}, err
+	}
+	claim.Task, err = r.Get(ctx, id)
+	return claim, err
+}
+
+func (r *TaskRepository) BeginLegacyResume(ctx context.Context, id, answer string, at time.Time) error {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(answer) == "" || at.IsZero() {
+		return errors.New("task, answer, and resume time are required")
+	}
+	return r.immediate(ctx, "begin legacy task resume", func(q assetDBTX, _ time.Time) error {
+		var session sql.NullString
+		if err := q.QueryRowContext(ctx, `SELECT codex_session_id FROM codex_tasks WHERE id=? AND transport='legacy_exec' AND status IN (?,?)`, id, domain.TaskAwaitingInput, domain.TaskWaitingInput).Scan(&session); err != nil {
+			return err
+		}
+		if !session.Valid || strings.TrimSpace(session.String) == "" {
+			return errors.New("task has no codex session")
+		}
+		if err := insertMessage(ctx, q, domain.TaskMessage{TaskID: id, Role: "user", Content: answer, CreatedAt: at}); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,result_summary=NULL,error_code=NULL,error_message=NULL,finished_at=NULL WHERE id=? AND status IN (?,?)`, domain.TaskQueued, id, domain.TaskAwaitingInput, domain.TaskWaitingInput)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return errors.New("task is no longer awaiting input")
+		}
+		return admitQueueTx(ctx, q, id, at)
+	})
+}
+
+func finishPhaseByIDTx(ctx context.Context, q assetDBTX, taskID, phaseID, key string, state domain.TaskPhaseState, at time.Time, attempt *int) (bool, error) {
+	var phaseAttempt int
+	var started time.Time
+	var persistedState domain.TaskPhaseState
+	var finished sql.NullTime
+	err := q.QueryRowContext(ctx, `SELECT attempt,started_at,state,finished_at FROM task_phase_runs WHERE id=? AND task_id=? AND phase_key=?`, phaseID, taskID, key).Scan(&phaseAttempt, &started, &persistedState, &finished)
+	if err != nil {
+		return false, err
+	}
+	if attempt != nil {
+		*attempt = phaseAttempt
+	}
+	if finished.Valid {
+		if persistedState != state {
+			return false, fmt.Errorf("phase %q already finished as %s", phaseID, persistedState)
+		}
+		return false, nil
+	}
+	if persistedState != domain.PhaseQueued && persistedState != domain.PhaseRunning {
+		return false, fmt.Errorf("phase %q is not active", phaseID)
+	}
+	if at.Before(started) {
+		return false, errors.New("phase finish precedes start")
+	}
+	result, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE id=? AND finished_at IS NULL AND state IN ('queued','running')`, state, at, at.Sub(started).Milliseconds(), phaseID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected != 1 {
+		return false, fmt.Errorf("phase %q changed before finish", phaseID)
+	}
+	return true, nil
+}
+
+func finishResultWritePhasesTx(ctx context.Context, q assetDBTX, taskID string, result TaskResultWrite, at time.Time) error {
+	validationID := strings.TrimSpace(result.ValidationPhaseID)
+	assetCommitID := strings.TrimSpace(result.AssetCommitPhaseID)
+	if validationID == "" && assetCommitID == "" {
+		return nil
+	}
+	if validationID == "" {
+		return errors.New("asset commit timing requires its validation phase")
+	}
+	if assetCommitID == "" {
+		if result.Status != domain.TaskFailed {
+			return errors.New("validated successful result persistence requires an asset commit phase")
+		}
+		_, err := finishPhaseByIDTx(ctx, q, taskID, validationID, "result_validation", domain.PhaseFailed, at, nil)
+		return err
+	}
+	var validationAttempt int
+	var validationState domain.TaskPhaseState
+	var validationFinished sql.NullTime
+	if err := q.QueryRowContext(ctx, `SELECT attempt,state,finished_at FROM task_phase_runs WHERE id=? AND task_id=? AND phase_key='result_validation'`, validationID, taskID).Scan(&validationAttempt, &validationState, &validationFinished); err != nil {
+		return err
+	}
+	if validationState != domain.PhaseCompleted || !validationFinished.Valid {
+		return errors.New("asset commit timing requires completed result validation")
+	}
+	var assetAttempt int
+	if _, err := finishPhaseByIDTx(ctx, q, taskID, assetCommitID, "asset_commit", domain.PhaseCompleted, at, &assetAttempt); err != nil {
+		return err
+	}
+	if assetAttempt != validationAttempt {
+		return errors.New("asset commit timing attempt does not match result validation")
+	}
+	return nil
+}
+
+func finishActivePhaseTx(ctx context.Context, q assetDBTX, taskID, key string, state domain.TaskPhaseState, at time.Time) (bool, error) {
+	var id string
+	var started time.Time
+	err := q.QueryRowContext(ctx, `SELECT id,started_at FROM task_phase_runs WHERE task_id=? AND phase_key=? AND state IN ('queued','running') AND finished_at IS NULL ORDER BY attempt DESC,started_at DESC,id DESC LIMIT 1`, taskID, key).Scan(&id, &started)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if at.Before(started) {
+		return false, errors.New("phase finish precedes start")
+	}
+	result, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE id=? AND state IN ('queued','running') AND finished_at IS NULL`, state, at, at.Sub(started).Milliseconds(), id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func finishActiveLifecyclePhasesTx(ctx context.Context, q assetDBTX, taskID string, state domain.TaskPhaseState, at time.Time) error {
+	for _, key := range []string{"queue_wait", "codex_execution", "result_validation", "asset_commit", "jianying_registration"} {
+		if _, err := finishActivePhaseTx(ctx, q, taskID, key, state, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TaskRepository) FailTask(ctx context.Context, id, code, message string, at time.Time) error {
+	return r.immediate(ctx, "fail task", func(q assetDBTX, _ time.Time) error {
+		if err := finishActiveLifecyclePhasesTx(ctx, q, id, domain.PhaseFailed, at); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code=?,error_message=?,finished_at=COALESCE(finished_at,?) WHERE id=? AND status NOT IN (?,?,?,?,?)`, domain.TaskFailed, nullable(code), nullable(message), at, id, domain.TaskCompleted, domain.TaskFailed, domain.TaskCanceled, domain.TaskCancelled, domain.TaskInterrupted)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("task %q is terminal", id)
+		}
+		return nil
+	})
+}
+
+func (r *TaskRepository) FailQueuedTask(ctx context.Context, id, code, message string, at time.Time) (bool, error) {
+	changed := false
+	err := r.immediate(ctx, "fail queued task", func(q assetDBTX, _ time.Time) error {
+		var status domain.TaskStatus
+		if err := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks WHERE id=?`, id).Scan(&status); err != nil {
+			return err
+		}
+		if status != domain.TaskQueued {
+			return nil
+		}
+		if _, err := finishActivePhaseTx(ctx, q, id, "queue_wait", domain.PhaseFailed, at); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status=?`, domain.TaskFailed, nullable(code), nullable(message), at, id, domain.TaskQueued)
+		if err != nil {
+			return err
+		}
+		n, e := result.RowsAffected()
+		changed = n == 1
+		return e
+	})
+	return changed, err
+}
+
+func (r *TaskRepository) CancelTask(ctx context.Context, id string, at time.Time) (bool, error) {
+	changed := false
+	err := r.immediate(ctx, "cancel task", func(q assetDBTX, _ time.Time) error {
+		var status domain.TaskStatus
+		if err := q.QueryRowContext(ctx, `SELECT status FROM codex_tasks WHERE id=?`, id).Scan(&status); err != nil {
+			return err
+		}
+		if status == domain.TaskCompleted || status == domain.TaskFailed || status == domain.TaskCanceled || status == domain.TaskCancelled || status == domain.TaskInterrupted {
+			return nil
+		}
+		if err := finishActiveLifecyclePhasesTx(ctx, q, id, domain.PhaseCanceled, at); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,error_code='registration_canceled',error_message='registration canceled with task',finished_at=? WHERE task_id=? AND state IN ('queued','running')`, domain.RegistrationInterrupted, at, id); err != nil {
+			return err
+		}
+		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,error_code='canceled',error_message='task canceled',finished_at=? WHERE id=? AND status=?`, domain.TaskCanceled, at, id, status)
+		if err != nil {
+			return err
+		}
+		n, e := result.RowsAffected()
+		changed = n == 1
+		return e
+	})
+	return changed, err
+}
+
 func validateTaskTimingBoundaries(task domain.CodexTask) error {
 	if task.QueuedAt != nil && task.QueuedAt.Before(task.CreatedAt) {
 		return fmt.Errorf("queue time precedes task creation")
@@ -761,6 +1343,13 @@ func (r *TaskRepository) AwaitInput(ctx context.Context, taskID string, result T
 		if err := insertEvent(ctx, q, taskID, domain.TaskEvent{Kind: result.EventKind, Level: "info", DisplayText: result.Summary, RawJSON: result.RawJSON, CreatedAt: now}); err != nil {
 			return err
 		}
+		if result.ValidationPhaseID == "" && result.AssetCommitPhaseID == "" {
+			if _, err := finishActivePhaseTx(ctx, q, taskID, "codex_execution", domain.PhaseCompleted, now); err != nil {
+				return err
+			}
+		} else if err := finishResultWritePhasesTx(ctx, q, taskID, result, now); err != nil {
+			return err
+		}
 		query, args := claimedResultUpdate(`UPDATE codex_tasks SET status=?,result_summary=?,error_code=NULL,error_message=NULL,finished_at=NULL WHERE id=?`, []any{domain.TaskAwaitingInput, nullable(result.Summary), taskID}, result.ExpectedTurnID)
 		updated, err := q.ExecContext(ctx, query, args...)
 		if err != nil {
@@ -811,6 +1400,9 @@ func (r *TaskRepository) CompleteWithResult(ctx context.Context, taskID string, 
 				return err
 			}
 		}
+		if err := importSkillTimingsTx(ctx, q, taskID, result.SkillTimings, now); err != nil {
+			return err
+		}
 		assetsRepo := NewAssetRepository(r.db)
 		if montagePlaintext && len(assets) != 0 {
 			return fmt.Errorf("montage.execute cannot create formal assets before host registration")
@@ -840,6 +1432,17 @@ func (r *TaskRepository) CompleteWithResult(ctx context.Context, taskID string, 
 		status, phase, finishedAt := result.Status, "", any(now)
 		if montagePlaintext {
 			status, phase, finishedAt = domain.TaskRunning, "plaintext_ready", nil
+		}
+		executionState := domain.PhaseCompleted
+		if result.Status == domain.TaskFailed {
+			executionState = domain.PhaseFailed
+		}
+		if result.ValidationPhaseID == "" && result.AssetCommitPhaseID == "" {
+			if _, err := finishActivePhaseTx(ctx, q, taskID, "codex_execution", executionState, now); err != nil {
+				return err
+			}
+		} else if err := finishResultWritePhasesTx(ctx, q, taskID, result, now); err != nil {
+			return err
 		}
 		query, args := claimedResultUpdate(`UPDATE codex_tasks SET status=?,completion_phase=CASE WHEN ?='' THEN completion_phase ELSE ? END,result_summary=?,error_code=?,error_message=?,finished_at=CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(finished_at,?) END WHERE id=?`, []any{status, phase, phase, nullable(result.Summary), nullable(result.ErrorCode), nullable(result.ErrorMessage), finishedAt, finishedAt, taskID}, result.ExpectedTurnID)
 		updated, err := q.ExecContext(ctx, query, args...)
@@ -907,6 +1510,40 @@ func replaceIdeaCandidates(ctx context.Context, q assetDBTX, sessionID, taskID s
 	}
 	_, err := q.ExecContext(ctx, `UPDATE idea_sessions SET status='planning',updated_at=? WHERE id=?`, now, sessionID)
 	return err
+}
+
+func importSkillTimingsTx(ctx context.Context, q assetDBTX, taskID string, runs []domain.SkillTimingRun, createdAt time.Time) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	var snapshot sql.NullString
+	if err := q.QueryRowContext(ctx, `SELECT skill_snapshot_id FROM codex_tasks WHERE id=?`, taskID).Scan(&snapshot); err != nil {
+		return err
+	}
+	if !snapshot.Valid || strings.TrimSpace(snapshot.String) == "" {
+		return errors.New("skill timing import requires a task-bound skill snapshot")
+	}
+	for _, run := range runs {
+		if run.TaskID != taskID || run.SkillSnapshotID != snapshot.String || run.Attempt <= 0 || run.StartedAt.IsZero() || run.FinishedAt.Before(run.StartedAt) || run.DurationMS != run.FinishedAt.Sub(run.StartedAt).Milliseconds() || (run.State != domain.PhaseCompleted && run.State != domain.PhaseFailed) || !json.Valid([]byte(run.DetailJSON)) {
+			return errors.New("invalid skill timing run")
+		}
+		var existing domain.TaskPhaseRun
+		err := q.QueryRowContext(ctx, `SELECT id,state,started_at,finished_at,duration_ms,detail_json FROM task_phase_runs WHERE task_id=? AND attempt=? AND phase_key=? AND source=? AND external_id=?`, taskID, run.Attempt, run.PhaseKey, domain.PhaseSourceSkill, run.ExternalID).Scan(&existing.ID, &existing.State, &existing.StartedAt, &existing.FinishedAt, &existing.DurationMS, &existing.DetailJSON)
+		if err == nil {
+			if existing.State != run.State || !existing.StartedAt.Equal(run.StartedAt) || existing.FinishedAt == nil || !existing.FinishedAt.Equal(run.FinishedAt) || existing.DurationMS == nil || *existing.DurationMS != run.DurationMS || existing.DetailJSON != run.DetailJSON {
+				return errors.New("conflicting replayed skill timing run")
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,finished_at,duration_ms,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, run.Attempt, run.PhaseKey, run.DisplayName, domain.PhaseSourceSkill, run.State, run.StartedAt, run.StartedAt, run.FinishedAt, run.DurationMS, run.ExternalID, run.DetailJSON, createdAt)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func insertTaskArtifact(ctx context.Context, q assetDBTX, artifact TaskArtifact) error {

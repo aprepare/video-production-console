@@ -261,11 +261,6 @@ func TestProjectPublishResponsesAndNoRemixSideEffect(t *testing.T) {
 	notReview := performJSON(t, handler, http.MethodPost, "/api/projects/"+create(domain.StageScript)+"/publish", nil)
 	assertErrorCode(t, notReview, http.StatusConflict, "project_not_in_review")
 	reviewID := create(domain.StageReview)
-	missing := performJSON(t, handler, http.MethodPost, "/api/projects/"+reviewID+"/publish", nil)
-	assertErrorCode(t, missing, http.StatusConflict, "final_video_missing")
-	if _, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &reviewID, Type: domain.AssetFinalVideo, StorageKind: domain.StorageFile, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", Size: 1, SHA256: "sha"}); err != nil {
-		t.Fatal(err)
-	}
 	published := performJSON(t, handler, http.MethodPost, "/api/projects/"+reviewID+"/publish", nil)
 	if published.StatusCode != http.StatusOK {
 		t.Fatalf("publish status=%d body=%s", published.StatusCode, readResponseBody(t, published))
@@ -286,7 +281,7 @@ func TestProjectPublishResponsesAndNoRemixSideEffect(t *testing.T) {
 	}
 }
 
-func TestProjectDetailReviewReportsFinalVideoMissing(t *testing.T) {
+func TestProjectDetailReviewDoesNotRequireFinalVideo(t *testing.T) {
 	id := uuid.NewString()
 	handler := newProjectsHandler(&failingProjectStore{stage: domain.StageReview}, assets.NewService(t.TempDir()))
 	response := performJSON(t, handler, http.MethodGet, "/api/projects/"+id, nil)
@@ -299,7 +294,7 @@ func TestProjectDetailReviewReportsFinalVideoMissing(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Missing) != 1 || body.Missing[0] != string(domain.AssetFinalVideo) {
+	if len(body.Missing) != 0 {
 		t.Fatalf("missing=%v", body.Missing)
 	}
 }
@@ -363,6 +358,42 @@ func TestProjectDetailIncludesCurrentAssetAndBackgroundStates(t *testing.T) {
 	}
 	if body = readDetail(); body.BackgroundReference.State != "stale" {
 		t.Fatalf("stale background state=%q", body.BackgroundReference.State)
+	}
+}
+
+func TestProjectDetailUsesNewestSourceScriptVersion(t *testing.T) {
+	handler, _, _, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "source history"}))
+	for _, upload := range []struct {
+		filename string
+		data     []byte
+	}{
+		{filename: "source-v1.txt", data: []byte("第一版同行原文")},
+		{filename: "source-v2.md", data: []byte("# 第二版同行原文")},
+	} {
+		response := uploadProjectFile(t, handler, created.ID, "source_script", upload.filename, upload.data)
+		if response.StatusCode != http.StatusCreated {
+			t.Fatalf("upload %q status=%d body=%s", upload.filename, response.StatusCode, readResponseBody(t, response))
+		}
+	}
+
+	response := performJSON(t, handler, http.MethodGet, "/api/projects/"+created.ID, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", response.StatusCode, readResponseBody(t, response))
+	}
+	var body struct {
+		Assets       map[string]assetView   `json:"assets"`
+		AssetHistory map[string][]assetView `json:"asset_history"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	current, ok := body.Assets["source_script"]
+	if !ok || current.Version != 2 || current.Filename != "source-v2.md" {
+		t.Fatalf("current source script=%+v", current)
+	}
+	if got := len(body.AssetHistory["source_script"]); got != 2 {
+		t.Fatalf("source script history length=%d, want 2", got)
 	}
 }
 

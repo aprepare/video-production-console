@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -34,7 +35,7 @@ const MaxAudioAssetSize int64 = 200 << 20
 
 func MaxSizeForType(assetType domain.AssetType) int64 {
 	switch assetType {
-	case domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitleSRT, domain.AssetSubtitle:
+	case domain.AssetSourceScript, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitleSRT, domain.AssetSubtitle:
 		return MaxTextAssetSize
 	case domain.AssetNarration, domain.AssetAudio:
 		return MaxAudioAssetSize
@@ -66,7 +67,11 @@ type SavedAsset struct {
 }
 
 func (s *Service) SaveProjectAsset(projectID string, assetType domain.AssetType, filename string, reader io.Reader) (saved SavedAsset, err error) {
-	return s.saveProjectAsset(projectID, assetType, assetType, filename, reader)
+	validationType := assetType
+	if assetType == domain.AssetSourceScript || assetType == domain.AssetTopicCard {
+		validationType = domain.AssetContinuousScript
+	}
+	return s.saveProjectAsset(projectID, assetType, validationType, filename, reader)
 }
 
 // DeleteProjectData removes only the managed directory for one validated
@@ -99,7 +104,7 @@ func (s *Service) saveProjectAsset(projectID string, targetType, validationType 
 	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	allowed := map[domain.AssetType]map[string]bool{
-		domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true},
+		domain.AssetSourceScript: {".txt": true, ".md": true}, domain.AssetTopicCard: {".txt": true, ".md": true}, domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true},
 		domain.AssetSubtitleSRT: {".srt": true}, domain.AssetSubtitle: {".srt": true}, domain.AssetNarration: {".mp3": true, ".wav": true, ".m4a": true}, domain.AssetAudio: {".mp3": true, ".wav": true, ".m4a": true},
 		domain.AssetMixDraft: {".mp4": true}, domain.AssetFinalVideo: {".mp4": true},
 	}
@@ -325,8 +330,9 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		return "", err
 	}
 	defer file.Close()
-	if assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitleSRT || assetType == domain.AssetSubtitle {
+	if assetType == domain.AssetSourceScript || assetType == domain.AssetTopicCard || assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitleSRT || assetType == domain.AssetSubtitle {
 		reader := bufio.NewReader(file)
+		hasContent := false
 		for {
 			r, size, readErr := reader.ReadRune()
 			if readErr == io.EOF {
@@ -335,6 +341,12 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 			if readErr != nil || r == '\x00' || r == utf8.RuneError && size == 1 {
 				return "", nil
 			}
+			if !unicode.IsSpace(r) {
+				hasContent = true
+			}
+		}
+		if !hasContent {
+			return "", nil
 		}
 		if ext == ".md" {
 			return "text/markdown; charset=utf-8", nil

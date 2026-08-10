@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { ProjectWorkbench } from "./ProjectWorkbench";
+import type { ProjectWorkbenchProps } from "./ProjectWorkbench";
 import type { ProjectDetail, ProjectTask } from "./types";
 
 afterEach(cleanup);
@@ -63,17 +64,20 @@ const task: ProjectTask = {
   ],
 };
 
-function workbenchProps(detail = fixture()) {
+function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
   return {
     detail,
     tasks: [task],
     accountName: "稳健养老号",
+    theme: "light" as const,
+    onThemeChange: vi.fn(),
     onBack: vi.fn(),
     onDelete: vi.fn(),
     onRemix: vi.fn(),
     onMix: vi.fn(),
     onPublish: vi.fn(),
     onUpload: vi.fn(),
+    onSaveSourceScript: vi.fn(),
     onReplaceBackground: vi.fn(),
     onViewAsset: vi.fn(),
     onOpenConversation: vi.fn(),
@@ -109,6 +113,21 @@ test("renders the desktop project production contract without drawer semantics o
 
   const forbidden = ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"];
   for (const phrase of forbidden) expect(screen.queryByText(phrase, { exact: false })).toBeNull();
+});
+
+test("presents project identity, production stage, asset readiness, and task state as one cockpit hierarchy", () => {
+  const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
+
+  expect(screen.getByText("资产、任务与对话均锁定在当前项目")).toBeTruthy();
+  expect(container.querySelector(".workbench-stage-badge--assets")?.textContent).toContain("制作素材");
+  const currentStep = container.querySelector('[aria-current="step"]');
+  expect(currentStep?.textContent).toContain("素材");
+  expect(currentStep?.textContent).toContain("正在制作");
+  expect(screen.getByLabelText("2 个资产已就绪，共 6 个")).toBeTruthy();
+  expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
+  expect(container.querySelector(".project-asset--missing")).toBeTruthy();
+  expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
+  expect(container.querySelector(".conversation-status--attention")?.textContent).toContain("需要回复");
 });
 
 test("shows every project-scoped production asset with state, meaning, and accessible actions", () => {
@@ -275,6 +294,52 @@ test("disables the single primary action while the automatic remix workflow is a
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "正在生成选题卡" }).disabled).toBe(true);
 });
 
+test("accepts a non-empty source script and starts source remix once", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  const props = renderWorkbench(detail);
+  const source = screen.getByLabelText<HTMLTextAreaElement>("同行原文");
+  const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存原文并开始二创" });
+
+  expect(save.disabled).toBe(true);
+  fireEvent.change(source, { target: { value: "同行原文正文" } });
+  expect(save.disabled).toBe(false);
+  fireEvent.click(save);
+
+  expect(props.onSaveSourceScript).toHaveBeenCalledOnce();
+  expect(props.onSaveSourceScript).toHaveBeenCalledWith("同行原文正文");
+});
+
+test("backfills a ready source script without leaking it across projects", async () => {
+  const first = fixture();
+  first.project.stage = "script";
+  first.assets = { source_script: { ...asset("source_script"), id: "source-v1" } };
+  const second = fixture();
+  second.project = { ...second.project, id: "other-project", title: "第二个项目" };
+  second.project.stage = "script";
+  second.assets = {};
+  const props = workbenchProps(first);
+  props.loadSourceScriptContent = vi.fn().mockResolvedValue("已保存的同行原文");
+  const rendered = render(<ProjectWorkbench {...props} />);
+
+  expect(await screen.findByDisplayValue("已保存的同行原文")).toBeTruthy();
+  rendered.rerender(<ProjectWorkbench {...workbenchProps(second)} loadSourceScriptContent={props.loadSourceScriptContent} />);
+
+  expect(screen.getByLabelText<HTMLTextAreaElement>("同行原文").value).toBe("");
+});
+
+test("disables source entry while source remix is pending", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  const props = workbenchProps(detail);
+  props.pendingActions = ["source-remix"];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "正在保存/启动…" }).disabled).toBe(true);
+});
+
 test("runs mixing from the single primary action when all formal inputs are ready", () => {
   const detail = fixture();
   detail.assets.narration = asset("narration");
@@ -347,7 +412,7 @@ test("routes an invalid inherited background to the replacement control", () => 
   expect(click).toHaveBeenCalledOnce();
 });
 
-test("restarts the automatic remix workflow when the generated continuous script is invalid", () => {
+test("requires a fresh source script when the generated continuous script is invalid", () => {
   const detail = fixture();
   detail.project.stage = "assets";
   detail.assets = {
@@ -356,11 +421,9 @@ test("restarts the automatic remix workflow when the generated continuous script
     subtitle_srt: asset("subtitle_srt"),
   };
   detail.missing_assets = ["continuous_script"];
-  const props = renderWorkbench(detail);
+  renderWorkbench(detail);
 
-  fireEvent.click(screen.getByRole("button", { name: "开始二创文案" }));
-
-  expect(props.onRemix).toHaveBeenCalledOnce();
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "先粘贴同行原文" }).disabled).toBe(true);
 });
 
 test("does not expose manual upload controls for generated continuous scripts or montage drafts", () => {
@@ -453,6 +516,20 @@ test("keeps three workbench columns through 760 pixels and switches to one below
   expect(css).not.toContain("@media (max-width: 1023px)");
 });
 
+test("defines the restrained cockpit palette, distinct desktop panels, and visible focus treatment", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
+
+  expect(css).toContain("--workbench-canvas: var(--ds-canvas)");
+  expect(css).toContain("--workbench-navy: var(--ds-surface-muted)");
+  expect(css).toContain("--workbench-teal: var(--ds-accent)");
+  expect(css).toContain("--workbench-amber: var(--ds-warning)");
+  expect(css).toContain("grid-template-columns: minmax(250px, 0.82fr) minmax(440px, 1.5fr) minmax(285px, 0.96fr)");
+  expect(css).toContain(".workbench-grid > *");
+  expect(css).toContain("button:focus-visible");
+  expect(css).toContain("summary:focus-visible");
+  expect(css).not.toContain("backdrop-filter");
+});
+
 test("provides native mobile accordions for project assets and conversation", () => {
   const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
   const assetToggle = screen.getByLabelText("收起或展开项目资产");
@@ -474,6 +551,7 @@ test("renders the mobile primary action bar as a direct workbench child with a s
   detail.project.stage = "script";
   detail.assets = {};
   detail.missing_assets = [];
+  detail.topic_context = {};
   const props = workbenchProps(detail);
   const { container } = render(<ProjectWorkbench {...props} />);
   const workbench = container.querySelector(".project-workbench");

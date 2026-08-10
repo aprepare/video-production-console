@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
@@ -23,12 +24,14 @@ import (
 // Public settings are read from the settings service and are never accepted
 // wholesale from the browser.
 type TaskManifestRequest struct {
-	SessionID           string `json:"session_id,omitempty"`
-	CandidateID         string `json:"candidate_id,omitempty"`
-	TopicCandidatesPath string `json:"topic_candidates_path,omitempty"`
-	TopicCardPath       string `json:"topic_card_path,omitempty"`
-	MachineProfilePath  string `json:"machine_profile_path,omitempty"`
-	ApprovalMode        string `json:"approval_mode,omitempty"`
+	SessionID            string    `json:"session_id,omitempty"`
+	CandidateID          string    `json:"candidate_id,omitempty"`
+	SourceVersionID      string    `json:"source_version_id,omitempty"`
+	TopicCandidatesPath  string    `json:"topic_candidates_path,omitempty"`
+	TopicCardPath        string    `json:"topic_card_path,omitempty"`
+	MachineProfilePath   string    `json:"machine_profile_path,omitempty"`
+	ApprovalMode         string    `json:"approval_mode,omitempty"`
+	PreparationStartedAt time.Time `json:"-"`
 }
 
 // TaskManifestPreparer is called before a task is handed to the scheduler.
@@ -111,7 +114,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 			version.Path = resolveStoredAssetPath(runtime.DataRoot, version.Path)
 			byType[version.Type] = version
 		}
-		inputs, err = manifestInputs(task.Action, byType, p, ctx, project.ID)
+		inputs, err = manifestInputs(task.Action, byType, p, ctx, project.ID, req.SourceVersionID)
 		if err != nil {
 			return err
 		}
@@ -204,7 +207,14 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		tasks := store.NewTaskRepository(p.db)
 		task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
 		task.Transport, task.CompletionPhase = codex.TransportLegacyExec, ""
-		if _, err := tasks.EnsurePreparedTask(ctx, task, snapshot.ID, manifestPath); err != nil {
+		preparationStartedAt := req.PreparationStartedAt
+		if preparationStartedAt.IsZero() {
+			preparationStartedAt = task.CreatedAt
+		}
+		if preparationStartedAt.IsZero() {
+			preparationStartedAt = time.Now().UTC()
+		}
+		if _, err := tasks.EnsurePreparedTaskAt(ctx, task, snapshot.ID, manifestPath, preparationStartedAt); err != nil {
 			return fmt.Errorf("persist prepared task: %w", err)
 		}
 	}
@@ -353,7 +363,7 @@ func snapshotTopicCandidatesInput(dataRoot, projectRoot, taskID, sourcePath stri
 	return destination, nil
 }
 
-func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain.AssetVersion, repo *taskManifestPreparer, ctx context.Context, projectID string) ([]domain.AssetVersion, error) {
+func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain.AssetVersion, repo *taskManifestPreparer, ctx context.Context, projectID, sourceVersionID string) ([]domain.AssetVersion, error) {
 	types := map[domain.TaskAction][]domain.AssetType{
 		domain.ActionRemixStandard: {domain.AssetSourceScript}, domain.ActionRemixEnhanced: {domain.AssetSourceScript},
 		domain.ActionRemixFromTopic: {domain.AssetTopicCard},
@@ -361,6 +371,26 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 		domain.ActionMontagePlan:    {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
 		domain.ActionMontageExecute: {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
 		domain.ActionTopicDeepen:    {domain.AssetTopicCard},
+	}
+	if (action == domain.ActionRemixStandard || action == domain.ActionRemixEnhanced) && strings.TrimSpace(sourceVersionID) != "" {
+		version, err := repo.assets.Version(ctx, strings.TrimSpace(sourceVersionID))
+		if err != nil {
+			return nil, fmt.Errorf("requested source version is unavailable: %w", err)
+		}
+		if version.ProjectID == nil || *version.ProjectID != projectID {
+			return nil, fmt.Errorf("requested source version does not belong to this project")
+		}
+		if version.Type != domain.AssetSourceScript {
+			return nil, fmt.Errorf("requested source version is not a source script")
+		}
+		if version.State != domain.AssetReady {
+			return nil, fmt.Errorf("requested source version is not ready")
+		}
+		current, ok := byType[domain.AssetSourceScript]
+		if !ok || current.ID != version.ID {
+			return nil, fmt.Errorf("requested source version is no longer current")
+		}
+		byType[domain.AssetSourceScript] = version
 	}
 	want := types[action]
 	inputs := make([]domain.AssetVersion, 0, len(want)+1)

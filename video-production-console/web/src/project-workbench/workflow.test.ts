@@ -157,9 +157,7 @@ describe("production workflow view model", () => {
         ),
       ),
     ).toEqual(["mix_draft"]);
-    expect(missingProductionInputs(detail("review", { mix_draft: "ready" }))).toEqual([
-      "final_video",
-    ]);
+    expect(missingProductionInputs(detail("review", { mix_draft: "ready" }))).toEqual([]);
   });
 
   test("merges backend missing assets and rejects stale production inputs", () => {
@@ -206,11 +204,20 @@ describe("production workflow view model", () => {
   });
 
   test("selects the next primary action from durable state", () => {
-    expect(nextPrimaryAction(detail())).toMatchObject({ id: "start-remix", disabled: false });
-    expect(nextPrimaryAction(detail("assets", { continuous_script: "stale" }))).toMatchObject({
-      id: "start-remix",
-      label: "开始二创文案",
+    expect(nextPrimaryAction(detail())).toMatchObject({
+      id: "start-source-remix",
+      label: "先粘贴同行原文",
+      disabled: true,
+    });
+    expect(nextPrimaryAction(detail("script", { source_script: "ready" }))).toMatchObject({
+      id: "start-source-remix",
+      label: "开始正式二创",
       disabled: false,
+    });
+    expect(nextPrimaryAction(detail("assets", { continuous_script: "stale" }))).toMatchObject({
+      id: "start-source-remix",
+      label: "先粘贴同行原文",
+      disabled: true,
     });
     expect(nextPrimaryAction(detail("script", { continuous_script: "ready" }))).toMatchObject({
       id: "prepare-assets",
@@ -232,22 +239,22 @@ describe("production workflow view model", () => {
     ).toMatchObject({ id: "start-mixing", disabled: false });
     expect(nextPrimaryAction(detail("review", { final_video: "ready" }))).toMatchObject({
       id: "publish",
-      label: "已发布",
+      label: "确认已发布",
       disabled: false,
     });
     expect(nextPrimaryAction(detail("published"))).toBeNull();
   });
 
-  test("asks for a final video before publishing a review draft", () => {
+  test("allows publishing a review draft without requiring a final video upload", () => {
     expect(nextPrimaryAction(detail("review", { mix_draft: "ready" }))).toMatchObject({
-      id: "upload-final-video",
-      label: "上传成片",
+      id: "publish",
+      label: "确认已发布",
       disabled: false,
     });
     expect(
       nextPrimaryAction(
         detail("review", { mix_draft: "ready", final_video: "failed" }),
       ),
-    ).toMatchObject({ id: "upload-final-video" });
+    ).toMatchObject({ id: "publish" });
   });
 });

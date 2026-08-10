@@ -45,6 +45,39 @@ func TestTaskRepositoryCompletedByProjectUsesStableIDTieBreaker(t *testing.T) {
 	}
 }
 
+func TestTaskRepositoryActiveByProjectActionReturnsNewestActiveTask(t *testing.T) {
+	db, err := Open(t.TempDir() + "/active-action.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC()
+	accountID, projectID := uuid.NewString(), uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, accountID, "A", "#fff", "active", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,?,?,?)`, projectID, accountID, "P", domain.StageScript, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	for i, task := range []domain.CodexTask{
+		{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskCompleted, PromptSnapshot: "p", CreatedAt: now},
+		{ID: "00000000-0000-4000-8000-000000000001", ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now.Add(time.Second)},
+		{ID: "00000000-0000-4000-8000-000000000002", ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskAwaitingInput, PromptSnapshot: "p", CreatedAt: now.Add(time.Second)},
+	} {
+		if err := repo.CreateV2(context.Background(), task); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	got, err := repo.ActiveByProjectAction(context.Background(), projectID, domain.ActionRemixStandard)
+	if err != nil || got.ID != "00000000-0000-4000-8000-000000000002" {
+		t.Fatalf("active=%+v err=%v", got, err)
+	}
+	if _, err := repo.ActiveByProjectAction(context.Background(), projectID, domain.ActionRemixEnhanced); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing action error=%v", err)
+	}
+}
+
 func TestTaskRepositoryQueuedAtPersistenceAndStableBoundaries(t *testing.T) {
 	db, err := Open(t.TempDir() + "/queued-at.db")
 	if err != nil {
@@ -299,6 +332,11 @@ func TestTaskRepositoryEnsurePreparedTaskPublishesTaskAndManifestAtomically(t *t
 	if err != nil || snapshot != "s" || path != "manifest.json" {
 		t.Fatalf("snapshot=%q path=%q err=%v", snapshot, path, err)
 	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	phases, phaseErr := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil || persisted.QueuedAt != nil || phaseErr != nil || len(phases) != 1 || phases[0].PhaseKey != "task_prepare" || phases[0].Attempt != 1 || phases[0].State != domain.PhaseCompleted {
+		t.Fatalf("prepared task=%+v phases=%+v readErr=%v phaseErr=%v", persisted, phases, err, phaseErr)
+	}
 }
 
 func TestTaskRepositoryEnsurePreparedTaskFailureRollsBackTaskRow(t *testing.T) {
@@ -318,6 +356,38 @@ func TestTaskRepositoryEnsurePreparedTaskFailureRollsBackTaskRow(t *testing.T) {
 	}
 	if _, err := repo.Get(context.Background(), task.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("task err=%v", err)
+	}
+	var phaseCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_runs WHERE task_id=?`, task.ID).Scan(&phaseCount); err != nil || phaseCount != 0 {
+		t.Fatalf("phase count=%d err=%v", phaseCount, err)
+	}
+}
+
+func TestTaskRepositoryEnsurePreparedTaskAtUsesCurrentRequestBoundary(t *testing.T) {
+	db, err := Open(t.TempDir() + "/prepared-boundary.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	created := time.Now().UTC().Add(-24 * time.Hour)
+	prepareStartedAt := time.Now().UTC().Add(-time.Second)
+	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, created, created)
+	_, _ = db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('s','finance-viral-remix','skill','abc','[]',?,?)`, created, created)
+	repo := NewTaskRepository(db)
+	task := domain.CodexTask{ID: "prepared-boundary", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixEnhanced, Status: domain.TaskQueued, PromptSnapshot: "p", ModelName: "m", ReasoningEffort: "high", CreatedAt: created}
+	if err := repo.CreateV2(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnsurePreparedTaskAt(context.Background(), task, "s", "manifest.json", prepareStartedAt); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "task_prepare" || !phases[0].StartedAt.Equal(prepareStartedAt) || phases[0].DurationMS == nil || *phases[0].DurationMS >= int64((24*time.Hour).Milliseconds()) {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	if err != nil || persisted.QueuedAt != nil {
+		t.Fatalf("prepared task queue boundary=%+v err=%v", persisted.QueuedAt, err)
 	}
 }
 
@@ -771,6 +841,36 @@ func TestClaimAppServerResultAllowsOneConcurrentOwner(t *testing.T) {
 	}
 }
 
+func TestClaimAppServerResultValidationRollsBackExecutionFinish(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	threadID, turnID := "thread-claim-rollback", "turn-claim-rollback"
+	if err := repo.SetTransportMetadata(context.Background(), task.ID, nil, &threadID, &turnID, string(domain.CompletionAgentRunning), "app_server"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-time.Second)
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, At: started}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER reject_validation_claim BEFORE UPDATE ON codex_tasks WHEN NEW.status='resuming' BEGIN SELECT RAISE(ABORT,'reject claim'); END`); err != nil {
+		t.Fatal(err)
+	}
+	validationID, claimed, err := repo.ClaimAppServerResultValidation(context.Background(), task.ID, turnID, time.Now().UTC())
+	if err == nil || claimed || validationID != "" {
+		t.Fatalf("validation=%q claimed=%v err=%v", validationID, claimed, err)
+	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	if err != nil || persisted.Status != domain.TaskRunning {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "codex_execution" || phases[0].State != domain.PhaseRunning || phases[0].FinishedAt != nil {
+		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+}
+
 func TestBeginAppServerResumeRollsBackStateWhenAnswerWriteFails(t *testing.T) {
 	db, repo, task := newTaskResultRepository(t)
 	threadID, turnID, sessionID := "thread-resume", "turn-resume", uuid.NewString()
@@ -856,6 +956,79 @@ func TestStartAppServerTurnRollsBackAllTimingState(t *testing.T) {
 	phases, err := NewTaskTimingRepository(db).ForTask(ctx, task.ID)
 	if err != nil || len(phases) != 1 || phases[0].PhaseKey != "queue_wait" || phases[0].State != domain.PhaseRunning || phases[0].FinishedAt != nil {
 		t.Fatalf("phases=%+v err=%v", phases, err)
+	}
+}
+
+func TestLegacyAdmissionResumeAndExecutionPhasesAreAtomic(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "legacy-timing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	sessionID := "legacy-session"
+	task := domain.CodexTask{ID: "legacy-atomic", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, Transport: "legacy_exec", CompletionPhase: string(domain.CompletionAgentRunning), CodexSessionID: &sessionID, PromptSnapshot: "prompt", CreatedAt: now}
+	if _, err := repo.AdmitQueuedTask(ctx, task, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := repo.ClaimLegacyStart(ctx, task.ID, now.Add(2*time.Second))
+	if err != nil || claim.Attempt != 1 {
+		t.Fatalf("claim=%+v err=%v", claim, err)
+	}
+	question := `[{"text":"continue?","options":["yes"]}]`
+	if err := repo.AwaitInput(ctx, task.ID, TaskResultWrite{Status: domain.TaskAwaitingInput, Summary: "question", AssistantContent: "question", QuestionSchema: &question, EventKind: "result_awaiting_input", RawJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.BeginLegacyResume(ctx, task.ID, "yes", now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claim, err = repo.ClaimLegacyStart(ctx, task.ID, now.Add(4*time.Second))
+	if err != nil || claim.Attempt != 2 {
+		t.Fatalf("resume claim=%+v err=%v", claim, err)
+	}
+	if err := repo.FailTask(ctx, task.ID, "failed", "boom", now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 4 || phases[0].PhaseKey != "queue_wait" || phases[0].Attempt != 1 || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "codex_execution" || phases[1].Attempt != 1 || phases[1].State != domain.PhaseCompleted || phases[2].PhaseKey != "queue_wait" || phases[2].Attempt != 2 || phases[2].State != domain.PhaseCompleted || phases[3].PhaseKey != "codex_execution" || phases[3].Attempt != 2 || phases[3].State != domain.PhaseFailed {
+		t.Fatalf("phases=%+v", phases)
+	}
+}
+
+func TestCancelQueuedTaskWinsBeforeLegacyClaim(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "cancel-claim.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewTaskRepository(db)
+	task := domain.CodexTask{ID: "cancel-before-claim", AccountID: "a", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, Transport: "legacy_exec", CompletionPhase: string(domain.CompletionAgentRunning), PromptSnapshot: "prompt", CreatedAt: now}
+	if _, err := repo.AdmitQueuedTask(ctx, task, now); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := repo.CancelTask(ctx, task.ID, now.Add(time.Second)); err != nil || !changed {
+		t.Fatalf("cancel changed=%v err=%v", changed, err)
+	}
+	if _, err := repo.ClaimLegacyStart(ctx, task.ID, now.Add(2*time.Second)); err == nil {
+		t.Fatal("claim succeeded after durable cancellation")
+	}
+	persisted, _ := repo.Get(ctx, task.ID)
+	phases, _ := NewTaskTimingRepository(db).ForTask(ctx, task.ID)
+	if persisted.Status != domain.TaskCanceled || len(phases) != 1 || phases[0].State != domain.PhaseCanceled {
+		t.Fatalf("task=%+v phases=%+v", persisted, phases)
 	}
 }
 
@@ -946,6 +1119,331 @@ func TestTaskRepositoryCompleteRollsBackAllResultWritesWhenAssetFails(t *testing
 	}
 }
 
+func TestTaskResultValidationAndAssetCommitDirectLifecycle(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	validationID, assetCommitID := beginTestResultPhases(t, db, repo, task.ID, domain.PhaseSourceHost)
+	write := TaskResultWrite{
+		Status: domain.TaskCompleted, Summary: "success", AssistantContent: "success", EventKind: "result_success",
+		RawJSON: `{}`, ValidationPhaseID: validationID, AssetCommitPhaseID: assetCommitID,
+	}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, write, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	if err != nil || persisted.Status != domain.TaskCompleted {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	assertResultPhaseStates(t, db, task.ID, map[string]domain.TaskPhaseState{
+		"codex_execution":   domain.PhaseCompleted,
+		"result_validation": domain.PhaseCompleted,
+		"asset_commit":      domain.PhaseCompleted,
+	})
+}
+
+func TestTaskResultFailureEndsValidationWithoutAssetCommit(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-2 * time.Second)
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceHost, At: started}); err != nil {
+		t.Fatal(err)
+	}
+	validationID, err := repo.BeginResultValidation(context.Background(), task.ID, domain.PhaseSourceHost, started.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := TaskResultWrite{
+		Status: domain.TaskFailed, Summary: "failed", AssistantContent: "failed", EventKind: "result_failed",
+		RawJSON: `{}`, ErrorCode: "result_failed", ErrorMessage: "failed", ValidationPhaseID: validationID,
+	}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, write, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	if err != nil || persisted.Status != domain.TaskFailed {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	assertResultPhaseStates(t, db, task.ID, map[string]domain.TaskPhaseState{
+		"codex_execution":   domain.PhaseCompleted,
+		"result_validation": domain.PhaseFailed,
+	})
+	var assetCommits int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_runs WHERE task_id=? AND phase_key='asset_commit'`, task.ID).Scan(&assetCommits); err != nil || assetCommits != 0 {
+		t.Fatalf("asset commits=%d err=%v", assetCommits, err)
+	}
+}
+
+func TestTaskOutputInvalidFailsValidationWithoutAssetCommit(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-3 * time.Second)
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceHost, At: started}); err != nil {
+		t.Fatal(err)
+	}
+	validationID, err := repo.BeginResultValidation(context.Background(), task.ID, domain.PhaseSourceHost, started.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := TaskResultWrite{Status: domain.TaskFailed, Summary: "invalid", EventKind: "result_invalid", RawJSON: `{}`, ErrorCode: "output_invalid", ErrorMessage: "invalid", ValidationPhaseID: validationID}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, write, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertResultPhaseStates(t, db, task.ID, map[string]domain.TaskPhaseState{
+		"codex_execution":   domain.PhaseCompleted,
+		"result_validation": domain.PhaseFailed,
+	})
+	var assetCommits int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_runs WHERE task_id=? AND phase_key='asset_commit'`, task.ID).Scan(&assetCommits); err != nil || assetCommits != 0 {
+		t.Fatalf("asset commits=%d err=%v", assetCommits, err)
+	}
+}
+
+func TestTaskResultValidationAndAssetCommitTerminalTransitionsCloseActivePhase(t *testing.T) {
+	for _, transport := range []string{"legacy_exec", "app_server"} {
+		for _, operation := range []string{"fail", "cancel"} {
+			for _, startAsset := range []bool{false, true} {
+				phaseName := "validation"
+				if startAsset {
+					phaseName = "asset_commit"
+				}
+				name := transport + "/" + operation + "/" + phaseName
+				t.Run(name, func(t *testing.T) {
+					db, repo, task := newTaskResultRepository(t)
+					threadID, turnID := "thread-terminal", "turn-terminal"
+					if transport == "app_server" {
+						if err := repo.SetTransportMetadata(context.Background(), task.ID, nil, &threadID, &turnID, string(domain.CompletionAgentRunning), transport); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+						t.Fatal(err)
+					}
+					started := time.Now().UTC().Add(-3 * time.Second)
+					source := domain.PhaseSourceHost
+					if transport == "app_server" {
+						source = domain.PhaseSourceAppServer
+					}
+					if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: source, At: started}); err != nil {
+						t.Fatal(err)
+					}
+					validationID, err := repo.BeginResultValidation(context.Background(), task.ID, source, started.Add(time.Second))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if startAsset {
+						if _, err := repo.BeginAssetCommit(context.Background(), task.ID, validationID, started.Add(2*time.Second)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					wantStatus, wantState := domain.TaskFailed, domain.PhaseFailed
+					if operation == "cancel" {
+						wantStatus, wantState = domain.TaskCanceled, domain.PhaseCanceled
+					}
+					if transport == "app_server" {
+						var changed bool
+						if operation == "fail" {
+							changed, err = repo.FailAppServerTurn(context.Background(), task.ID, turnID, "failed", "boom")
+						} else {
+							changed, err = repo.CancelAppServerTurn(context.Background(), task.ID, turnID)
+						}
+						if err != nil || !changed {
+							t.Fatalf("changed=%v err=%v", changed, err)
+						}
+					} else if operation == "fail" {
+						if err = repo.FailTask(context.Background(), task.ID, "failed", "boom", time.Now().UTC()); err != nil {
+							t.Fatal(err)
+						}
+					} else if changed, cancelErr := repo.CancelTask(context.Background(), task.ID, time.Now().UTC()); cancelErr != nil || !changed {
+						t.Fatalf("changed=%v err=%v", changed, cancelErr)
+					}
+					persisted, err := repo.Get(context.Background(), task.ID)
+					if err != nil || persisted.Status != wantStatus {
+						t.Fatalf("task=%+v err=%v", persisted, err)
+					}
+					want := map[string]domain.TaskPhaseState{"codex_execution": domain.PhaseCompleted}
+					if startAsset {
+						want["result_validation"] = domain.PhaseCompleted
+						want["asset_commit"] = wantState
+					} else {
+						want["result_validation"] = wantState
+					}
+					assertResultPhaseStates(t, db, task.ID, want)
+
+					var runsBefore int
+					if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_runs WHERE task_id=?`, task.ID).Scan(&runsBefore); err != nil {
+						t.Fatal(err)
+					}
+					if transport == "app_server" {
+						var duplicateChanged bool
+						if operation == "fail" {
+							duplicateChanged, err = repo.FailAppServerTurn(context.Background(), task.ID, turnID, "failed", "boom")
+						} else {
+							duplicateChanged, err = repo.CancelAppServerTurn(context.Background(), task.ID, turnID)
+						}
+						if err != nil || duplicateChanged {
+							t.Fatalf("duplicate changed=%v err=%v", duplicateChanged, err)
+						}
+					} else if operation == "fail" {
+						if duplicateErr := repo.FailTask(context.Background(), task.ID, "failed", "boom", time.Now().UTC()); duplicateErr == nil {
+							t.Fatal("duplicate failure unexpectedly changed terminal task")
+						}
+					} else if duplicateChanged, duplicateErr := repo.CancelTask(context.Background(), task.ID, time.Now().UTC()); duplicateErr != nil || duplicateChanged {
+						t.Fatalf("duplicate changed=%v err=%v", duplicateChanged, duplicateErr)
+					}
+					var runsAfter int
+					if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_runs WHERE task_id=?`, task.ID).Scan(&runsAfter); err != nil || runsAfter != runsBefore {
+						t.Fatalf("phase runs before=%d after=%d err=%v", runsBefore, runsAfter, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestAppServerResultValidationRetryAndDuplicateCompletionKeepDistinctAttempts(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	threadID, turnID := "thread-validation", "turn-validation"
+	if err := repo.SetTransportMetadata(context.Background(), task.ID, nil, &threadID, &turnID, string(domain.CompletionAgentRunning), "app_server"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-4 * time.Second)
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, At: started}); err != nil {
+		t.Fatal(err)
+	}
+	validationID, claimed, err := repo.ClaimAppServerResultValidation(context.Background(), task.ID, turnID, started.Add(time.Second))
+	if err != nil || !claimed {
+		t.Fatalf("validation=%q claimed=%v err=%v", validationID, claimed, err)
+	}
+	invalid := TaskResultWrite{Status: domain.TaskFailed, Summary: "invalid", EventKind: "result_invalid", RawJSON: `{}`, ErrorCode: "output_invalid", ErrorMessage: "invalid", ExpectedTurnID: &turnID, ValidationPhaseID: validationID}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, invalid, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	retryTurn, retryValidationID, err := repo.ClaimOutputInvalidRetryValidation(context.Background(), task.ID, started.Add(2*time.Second))
+	if err != nil || retryTurn == nil || *retryTurn != turnID || retryValidationID == validationID {
+		t.Fatalf("turn=%v validation=%q first=%q err=%v", retryTurn, retryValidationID, validationID, err)
+	}
+	assetCommitID, err := repo.BeginAssetCommit(context.Background(), task.ID, retryValidationID, started.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := TaskResultWrite{Status: domain.TaskCompleted, Summary: "done", AssistantContent: "done", EventKind: "result_completed", RawJSON: `{}`, ExpectedTurnID: &turnID, ValidationPhaseID: retryValidationID, AssetCommitPhaseID: assetCommitID}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, completed, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateID, duplicateClaimed, err := repo.ClaimAppServerResultValidation(context.Background(), task.ID, turnID, time.Now().UTC()); err != nil || duplicateClaimed || duplicateID != "" {
+		t.Fatalf("duplicate validation=%q claimed=%v err=%v", duplicateID, duplicateClaimed, err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validations, commits := 0, 0
+	for _, phase := range phases {
+		switch phase.PhaseKey {
+		case "result_validation":
+			validations++
+			want := domain.PhaseFailed
+			if phase.Attempt == 2 {
+				want = domain.PhaseCompleted
+			}
+			if phase.State != want {
+				t.Fatalf("validation phase=%+v want=%s", phase, want)
+			}
+		case "asset_commit":
+			commits++
+			if phase.Attempt != 2 || phase.State != domain.PhaseCompleted {
+				t.Fatalf("asset phase=%+v", phase)
+			}
+		}
+	}
+	if validations != 2 || commits != 1 {
+		t.Fatalf("phases=%+v", phases)
+	}
+	assertTaskResultCounts(t, db, task.ID, domain.TaskCompleted, 1, 2, 0, 0)
+}
+
+func TestTaskResultWriteRollbackPreservesActiveAssetCommitForFailureRecovery(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	validationID, assetCommitID := beginTestResultPhases(t, db, repo, task.ID, domain.PhaseSourceHost)
+	if _, err := db.Exec(`CREATE TRIGGER reject_result_status BEFORE UPDATE ON codex_tasks WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'reject completion'); END`); err != nil {
+		t.Fatal(err)
+	}
+	write := TaskResultWrite{Status: domain.TaskCompleted, Summary: "done", AssistantContent: "done", EventKind: "result_completed", RawJSON: `{}`, ValidationPhaseID: validationID, AssetCommitPhaseID: assetCommitID}
+	if err := repo.CompleteWithResult(context.Background(), task.ID, write, nil, nil); err == nil {
+		t.Fatal("expected completion rollback")
+	}
+	assertTaskResultCounts(t, db, task.ID, domain.TaskRunning, 0, 0, 0, 0)
+	assertResultPhaseStates(t, db, task.ID, map[string]domain.TaskPhaseState{
+		"codex_execution":   domain.PhaseCompleted,
+		"result_validation": domain.PhaseCompleted,
+		"asset_commit":      domain.PhaseRunning,
+	})
+	if err := repo.FailTask(context.Background(), task.ID, "result_persistence_failed", "reject completion", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	assertResultPhaseStates(t, db, task.ID, map[string]domain.TaskPhaseState{
+		"codex_execution":   domain.PhaseCompleted,
+		"result_validation": domain.PhaseCompleted,
+		"asset_commit":      domain.PhaseFailed,
+	})
+}
+
+func beginTestResultPhases(t *testing.T, db *sql.DB, repo *TaskRepository, taskID string, source domain.TaskPhaseSource) (string, string) {
+	t.Helper()
+	started := time.Now().UTC().Add(-3 * time.Second)
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: taskID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: source, At: started}); err != nil {
+		t.Fatal(err)
+	}
+	validationID, err := repo.BeginResultValidation(context.Background(), taskID, source, started.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetCommitID, err := repo.BeginAssetCommit(context.Background(), taskID, validationID, started.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return validationID, assetCommitID
+}
+
+func assertResultPhaseStates(t *testing.T, db *sql.DB, taskID string, want map[string]domain.TaskPhaseState) {
+	t.Helper()
+	phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, phase := range phases {
+		state, ok := want[phase.PhaseKey]
+		if !ok {
+			continue
+		}
+		seen[phase.PhaseKey] = true
+		if phase.State != state {
+			t.Fatalf("phase %s=%s want=%s; phases=%+v", phase.PhaseKey, phase.State, state, phases)
+		}
+		if state != domain.PhaseRunning && phase.FinishedAt == nil {
+			t.Fatalf("phase %s has no finish time: %+v", phase.PhaseKey, phase)
+		}
+	}
+	for key := range want {
+		if !seen[key] {
+			t.Fatalf("missing phase %s; phases=%+v", key, phases)
+		}
+	}
+}
+
 func TestClaimedAppServerResultCannotWriteAfterCancellation(t *testing.T) {
 	db, repo, task := newTaskResultRepository(t)
 	threadID, turnID := "thread-cancel-race", "turn-cancel-race"
@@ -995,6 +1493,78 @@ func TestFailAppServerTurnDoesNotOverwriteTerminalTask(t *testing.T) {
 				t.Fatalf("task=%+v err=%v", got, err)
 			}
 		})
+	}
+}
+
+func TestAppServerTerminalTransitionsCloseExecutionAtomically(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state domain.TaskPhaseState
+		want  domain.TaskStatus
+		run   func(*TaskRepository, string, string) (bool, error)
+	}{
+		{name: "fail", state: domain.PhaseFailed, want: domain.TaskFailed, run: func(repo *TaskRepository, taskID, turnID string) (bool, error) {
+			return repo.FailAppServerTurn(context.Background(), taskID, turnID, "transport_failed", "lost")
+		}},
+		{name: "cancel", state: domain.PhaseCanceled, want: domain.TaskCanceled, run: func(repo *TaskRepository, taskID, turnID string) (bool, error) {
+			return repo.CancelAppServerTurn(context.Background(), taskID, turnID)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, repo, task := newTaskResultRepository(t)
+			now := time.Now().UTC().Add(-time.Second)
+			threadID, turnID := "thread-atomic-"+test.name, "turn-atomic-"+test.name
+			if err := repo.SetTransportMetadata(context.Background(), task.ID, nil, &threadID, &turnID, string(domain.CompletionAgentRunning), "app_server"); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, At: now}); err != nil {
+				t.Fatal(err)
+			}
+			changed, err := test.run(repo, task.ID, turnID)
+			if err != nil || !changed {
+				t.Fatalf("changed=%v err=%v", changed, err)
+			}
+			persisted, err := repo.Get(context.Background(), task.ID)
+			if err != nil || persisted.Status != test.want {
+				t.Fatalf("task=%+v err=%v", persisted, err)
+			}
+			phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+			if err != nil || len(phases) != 1 || phases[0].State != test.state || phases[0].FinishedAt == nil {
+				t.Fatalf("phases=%+v err=%v", phases, err)
+			}
+		})
+	}
+}
+
+func TestFailAppServerTurnRollsBackExecutionTiming(t *testing.T) {
+	db, repo, task := newTaskResultRepository(t)
+	now := time.Now().UTC().Add(-time.Second)
+	threadID, turnID := "thread-fail-rollback", "turn-fail-rollback"
+	if err := repo.SetTransportMetadata(context.Background(), task.ID, nil, &threadID, &turnID, string(domain.CompletionAgentRunning), "app_server"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(context.Background(), task.ID, domain.TaskRunning, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTaskTimingRepository(db).StartPhase(context.Background(), StartPhase{TaskID: task.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex execution", Source: domain.PhaseSourceAppServer, At: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER reject_app_server_failure BEFORE UPDATE ON codex_tasks WHEN NEW.status='failed' BEGIN SELECT RAISE(ABORT,'reject failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := repo.FailAppServerTurn(context.Background(), task.ID, turnID, "transport_failed", "lost"); err == nil || changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	persisted, err := repo.Get(context.Background(), task.ID)
+	if err != nil || persisted.Status != domain.TaskRunning {
+		t.Fatalf("task=%+v err=%v", persisted, err)
+	}
+	phases, err := NewTaskTimingRepository(db).ForTask(context.Background(), task.ID)
+	if err != nil || len(phases) != 1 || phases[0].State != domain.PhaseRunning || phases[0].FinishedAt != nil {
+		t.Fatalf("phases=%+v err=%v", phases, err)
 	}
 }
 

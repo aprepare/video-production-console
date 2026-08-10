@@ -324,6 +324,141 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 }
 
+func TestTaskManifestPreparerBindsRequestedCurrentSourceVersion(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	assets := store.NewAssetRepository(db.db)
+	current, err := assets.CurrentByProject(context.Background(), projectID)
+	if err != nil || len(current) != 1 {
+		t.Fatalf("current=%+v err=%v", current, err)
+	}
+	source := current[0]
+	preparer := &taskManifestPreparer{
+		projects: store.NewProjectRepository(db.db), assets: assets,
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root}}},
+		skills:   manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}},
+	}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{SourceVersionID: source.ID}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil || len(manifest.Inputs) != 1 || manifest.Inputs[0].VersionID != source.ID {
+		t.Fatalf("manifest=%+v err=%v", manifest, err)
+	}
+
+	otherProject := uuid.NewString()
+	now := time.Now().UTC()
+	if _, err := db.db.Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at) VALUES(?,?,?,?,?,?)`, otherProject, accountID, "other", domain.StageScript, now, now); err != nil {
+		t.Fatal(err)
+	}
+	other := source
+	other.ProjectID = &otherProject
+	other.Path = filepath.Join(root, "projects", otherProject, "source.txt")
+	if err := os.MkdirAll(filepath.Dir(other.Path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other.Path, []byte("other source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("other source"))
+	other, err = assets.AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &otherProject, AccountID: accountID, Type: domain.AssetSourceScript, Path: other.Path, Filename: "source.txt", MIMEType: "text/plain", Size: 12, SHA256: hex.EncodeToString(digest[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, sourceVersion := range map[string]string{
+		"unknown":       uuid.NewString(),
+		"cross project": other.ID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+			if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{SourceVersionID: sourceVersion}); err == nil {
+				t.Fatal("expected requested version to be rejected")
+			}
+		})
+	}
+	if _, err := db.db.Exec(`UPDATE asset_versions SET state=? WHERE id=?`, domain.AssetStale, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	task = domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{SourceVersionID: source.ID}); err == nil {
+		t.Fatal("expected non-ready source version to be rejected")
+	}
+	if _, err := db.db.Exec(`UPDATE asset_versions SET state=? WHERE id=?`, domain.AssetReady, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := filepath.Join(root, "projects", projectID, "source_script", "replacement.txt")
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacementDigest := sha256.Sum256([]byte("replacement"))
+	if _, err := assets.AddVersion(context.Background(), store.AddAssetVersion{LogicalAssetID: source.AssetID, ProjectID: &projectID, AccountID: accountID, Type: domain.AssetSourceScript, Path: replacementPath, Filename: "replacement.txt", MIMEType: "text/plain", Size: 11, SHA256: hex.EncodeToString(replacementDigest[:])}); err != nil {
+		t.Fatal(err)
+	}
+	task = domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{SourceVersionID: source.ID}); err == nil {
+		t.Fatal("expected non-current source version to be rejected")
+	}
+}
+
+func TestTaskHTTPReusesActiveStandardRemixOnlyForSameSourceVersion(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	assets, err := store.NewAssetRepository(db.db).CurrentByProject(context.Background(), projectID)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("assets=%+v err=%v", assets, err)
+	}
+	source := assets[0]
+	active := domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix",
+		Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "active", CreatedAt: time.Now().UTC(),
+	}
+	repo := store.NewTaskRepository(db.db)
+	if err := repo.CreateV2(context.Background(), active); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "active-manifest.json")
+	manifest, err := json.Marshal(codex.TaskManifest{Inputs: []codex.ManifestInput{{Type: domain.AssetSourceScript, VersionID: source.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix", Path: filepath.Join(root, "SKILL.md"), SHA256: strings.Repeat("a", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC()}
+	if err := store.NewSkillRepository(db.db).Save(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetPreparedManifest(context.Background(), active.ID, snapshot.ID, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &manifestTestScheduler{}
+	handler := NewTasksHandler(db.db, scheduler, nil, nil)
+	for name, request := range map[string]struct {
+		source string
+		status int
+	}{
+		"same source":      {source.ID, http.StatusOK},
+		"different source": {uuid.NewString(), http.StatusConflict},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"account_id":"` + accountID + `","type":"remix","action":"remix.standard","prompt":"go","source_version_id":"` + request.source + `"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != request.status || scheduler.enqueued != 0 {
+				t.Fatalf("status=%d enqueued=%d body=%s", recorder.Code, scheduler.enqueued, recorder.Body.String())
+			}
+			if request.status == http.StatusConflict && !strings.Contains(recorder.Body.String(), "active_remix_conflict") {
+				t.Fatalf("body=%s", recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestTaskManifestPreparerPersistsFormalTaskForLegacyExecWhenAppServerIsEnabled(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, true)
 	snapshot := domain.SkillSnapshot{

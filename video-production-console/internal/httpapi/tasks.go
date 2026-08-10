@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"video-production-console/internal/codex"
@@ -17,6 +19,7 @@ import (
 
 type taskAPI struct {
 	repo      *store.TaskRepository
+	timings   *store.TaskTimingRepository
 	projects  *store.ProjectRepository
 	accounts  *store.AccountRepository
 	scheduler codex.Scheduler
@@ -25,11 +28,13 @@ type taskAPI struct {
 }
 
 func NewTasksHandler(db *sql.DB, s codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver) http.Handler {
-	h := &taskAPI{repo: store.NewTaskRepository(db), projects: store.NewProjectRepository(db), accounts: store.NewAccountRepository(db), scheduler: s, preparer: preparer, models: models}
+	h := &taskAPI{repo: store.NewTaskRepository(db), timings: store.NewTaskTimingRepository(db), projects: store.NewProjectRepository(db), accounts: store.NewAccountRepository(db), scheduler: s, preparer: preparer, models: models}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects/{id}/tasks", h.create)
 	mux.HandleFunc("POST /api/projects/{id}/topic-card", h.commitTopicCard)
 	mux.HandleFunc("GET /api/tasks", h.list)
+	mux.HandleFunc("GET /api/tasks/{id}/timing/summary", h.timingSummary)
+	mux.HandleFunc("GET /api/tasks/{id}/timing/runs", h.timingRuns)
 	mux.HandleFunc("GET /api/tasks/{id}", h.get)
 	mux.HandleFunc("POST /api/tasks/{id}/answer", h.answer)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancel)
@@ -76,24 +81,26 @@ func (h *taskAPI) commitTopicCard(w http.ResponseWriter, r *http.Request) {
 }
 
 type taskView struct {
-	ID              string               `json:"id"`
-	ProjectID       *string              `json:"project_id,omitempty"`
-	AccountID       string               `json:"account_id"`
-	Type            string               `json:"type"`
-	SkillName       string               `json:"skill_name"`
-	Action          domain.TaskAction    `json:"action"`
-	Status          domain.TaskStatus    `json:"status"`
-	CodexSessionID  *string              `json:"codex_session_id,omitempty"`
-	ModelName       string               `json:"model"`
-	ReasoningEffort string               `json:"reasoning_effort"`
-	ResultSummary   *string              `json:"result_summary,omitempty"`
-	ErrorCode       *string              `json:"error_code,omitempty"`
-	ErrorMessage    *string              `json:"error_message,omitempty"`
-	CreatedAt       time.Time            `json:"created_at"`
-	StartedAt       *time.Time           `json:"started_at,omitempty"`
-	FinishedAt      *time.Time           `json:"finished_at,omitempty"`
-	Events          []domain.TaskEvent   `json:"events,omitempty"`
-	Messages        []domain.TaskMessage `json:"messages,omitempty"`
+	ID              string                    `json:"id"`
+	ProjectID       *string                   `json:"project_id,omitempty"`
+	AccountID       string                    `json:"account_id"`
+	Type            string                    `json:"type"`
+	SkillName       string                    `json:"skill_name"`
+	Action          domain.TaskAction         `json:"action"`
+	Status          domain.TaskStatus         `json:"status"`
+	CodexSessionID  *string                   `json:"codex_session_id,omitempty"`
+	ModelName       string                    `json:"model"`
+	ReasoningEffort string                    `json:"reasoning_effort"`
+	ResultSummary   *string                   `json:"result_summary,omitempty"`
+	ErrorCode       *string                   `json:"error_code,omitempty"`
+	ErrorMessage    *string                   `json:"error_message,omitempty"`
+	CreatedAt       time.Time                 `json:"created_at"`
+	StartedAt       *time.Time                `json:"started_at,omitempty"`
+	FinishedAt      *time.Time                `json:"finished_at,omitempty"`
+	Events          []domain.TaskEvent        `json:"events,omitempty"`
+	Messages        []domain.TaskMessage      `json:"messages,omitempty"`
+	TimingSummary   *domain.TaskTimingSummary `json:"timing_summary,omitempty"`
+	TimingRuns      []domain.TaskPhaseRun     `json:"timing_runs,omitempty"`
 }
 
 func viewTask(t domain.CodexTask) taskView {
@@ -115,7 +122,11 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		TaskManifestRequest
 		taskModelRequest
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Type) == "" || strings.TrimSpace(in.Prompt) == "" {
+	if err := decodeJSON(w, r, maxTaskJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_task", "Task type and prompt are required.")
+		return
+	}
+	if strings.TrimSpace(in.Type) == "" || strings.TrimSpace(in.Prompt) == "" {
 		writeError(w, 400, "invalid_task", "Task type and prompt are required.")
 		return
 	}
@@ -147,6 +158,27 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	} else if e != nil {
 		writeError(w, http.StatusInternalServerError, "account_read_failed", "Account could not be read.")
 		return
+	}
+	if action == domain.ActionRemixStandard {
+		active, activeErr := h.repo.ActiveByProjectAction(r.Context(), pid, action)
+		if activeErr == nil {
+			requestedSource := strings.TrimSpace(in.SourceVersionID)
+			if requestedSource == "" {
+				writeJSON(w, http.StatusOK, viewTask(active))
+				return
+			}
+			activeSource, sourceErr := h.activeTaskSourceVersion(r.Context(), active.ID)
+			if sourceErr == nil && activeSource == requestedSource {
+				writeJSON(w, http.StatusOK, viewTask(active))
+				return
+			}
+			writeError(w, http.StatusConflict, "active_remix_conflict", "A remix task is already active with a different source version; wait for it to finish before starting another remix.")
+			return
+		}
+		if !errors.Is(activeErr, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "active_task_read_failed", "Active remix task could not be read.")
+			return
+		}
 	}
 	id := uuid.NewString()
 	p := pid
@@ -182,6 +214,28 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 201, viewTask(t))
 }
+
+func (h *taskAPI) activeTaskSourceVersion(ctx context.Context, taskID string) (string, error) {
+	_, manifestPath, err := h.repo.PreparedManifest(ctx, taskID)
+	if err != nil {
+		return "", fmt.Errorf("read active task manifest: %w", err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("read active task manifest: %w", err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("parse active task manifest: %w", err)
+	}
+	for _, input := range manifest.Inputs {
+		if input.Type == domain.AssetSourceScript && strings.TrimSpace(input.VersionID) != "" {
+			return input.VersionID, nil
+		}
+	}
+	return "", errors.New("active task manifest has no source script input")
+}
+
 func (h *taskAPI) list(w http.ResponseWriter, r *http.Request) {
 	ts, e := h.repo.List(r.Context(), r.URL.Query().Get("project_id"), domain.TaskStatus(r.URL.Query().Get("status")))
 	if e != nil {
@@ -207,13 +261,58 @@ func (h *taskAPI) get(w http.ResponseWriter, r *http.Request) {
 	v := viewTask(t)
 	v.Events, _ = h.repo.Events(r.Context(), t.ID)
 	v.Messages, _ = h.repo.Messages(r.Context(), t.ID)
+	if h.timings != nil {
+		if summary, timingErr := h.timings.SummaryForTask(r.Context(), t.ID, time.Now().UTC()); timingErr == nil {
+			v.TimingSummary = &summary
+			v.TimingRuns = summary.Phases
+		}
+	}
 	writeJSON(w, 200, v)
+}
+
+func (h *taskAPI) timingSummary(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.repo.Get(r.Context(), r.PathValue("id")); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "task_not_found", "Task was not found.")
+		return
+	} else if err != nil {
+		writeError(w, 500, "task_read_failed", err.Error())
+		return
+	}
+	summary, err := h.timings.SummaryForTask(r.Context(), r.PathValue("id"), time.Now().UTC())
+	if err != nil {
+		writeError(w, 500, "task_timing_read_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (h *taskAPI) timingRuns(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.repo.Get(r.Context(), r.PathValue("id")); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "task_not_found", "Task was not found.")
+		return
+	} else if err != nil {
+		writeError(w, 500, "task_read_failed", err.Error())
+		return
+	}
+	runs, err := h.timings.ForTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, 500, "task_timing_read_failed", err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []domain.TaskPhaseRun{}
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 func (h *taskAPI) answer(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Answer string `json:"answer"`
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Answer) == "" {
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "answer_required", "Answer is required.")
+		return
+	}
+	if strings.TrimSpace(in.Answer) == "" {
 		writeError(w, 400, "answer_required", "Answer is required.")
 		return
 	}
@@ -250,5 +349,3 @@ func (h *taskAPI) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, viewTask(t))
 }
-
-var _ = json.Valid

@@ -1,5 +1,15 @@
-import { ArrowLeft, CircleCheck, MessageSquare, Trash2 } from "lucide-react";
-import { useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CircleCheck,
+  Clapperboard,
+  Info,
+  Send,
+  Trash2,
+  UploadCloud,
+  WandSparkles,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import type { ProjectAsset, ProjectDetail, ProjectTask } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
@@ -15,12 +25,16 @@ export type ProjectWorkbenchProps = {
   tasks: ProjectTask[];
   accountName: string;
   message?: string;
+  theme: "light" | "dark";
+  onThemeChange: (theme: "light" | "dark") => void;
   onBack: () => void;
   onDelete: () => void;
   onRemix: () => void;
   onMix: () => void;
   onPublish: () => void;
   onUpload: (type: UploadAssetType, file: File) => void;
+  onSaveSourceScript: (content: string) => void;
+  loadSourceScriptContent?: (assetID: string) => Promise<string>;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onOpenConversation: () => void;
@@ -37,8 +51,31 @@ const missingLabels: Record<string, string> = {
   final_video: "成片",
 };
 
+const stageLabels = {
+  script: "文案生成",
+  assets: "制作素材",
+  mixing: "智能混剪",
+  review: "成片审核",
+  published: "发布完成",
+} as const;
+
+const stagePositions = {
+  script: 1,
+  assets: 2,
+  mixing: 3,
+  review: 4,
+  published: 5,
+} as const;
+
+function primaryActionIcon(actionId: string) {
+  if (actionId === "publish") return <Send size={19} aria-hidden="true" />;
+  if (actionId === "start-mixing") return <Clapperboard size={19} aria-hidden="true" />;
+  if (actionId === "prepare-assets" || actionId === "upload-final-video") return <UploadCloud size={19} aria-hidden="true" />;
+  return <WandSparkles size={19} aria-hidden="true" />;
+}
+
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
-  const { detail } = props;
+  const { detail, loadSourceScriptContent } = props;
   const stage = deriveProductionStage(detail);
   const action = nextPrimaryAction(detail);
   const missing = missingProductionInputs(detail);
@@ -58,8 +95,44 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       const timeOrder = Date.parse(right.created_at) - Date.parse(left.created_at);
       return timeOrder || right.id.localeCompare(left.id);
     })[0];
+  const publishingTask = [...props.tasks]
+    .filter((task) => task.project_id === detail.project.id && task.publishing_package)
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+  const publishingPackage = publishingTask?.publishing_package;
+  const recommendedTitles = publishingPackage?.top_titles?.length
+    ? [...publishingPackage.top_titles].sort((left, right) => left.rank - right.rank).map((item) => item.title)
+    : publishingPackage?.titles || [];
+  const description = publishingPackage?.description || publishingPackage?.descriptions?.[0] || "";
+  const shortTitles = publishingPackage?.short_titles || [];
+  const topics = publishingPackage?.topics || [];
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
+  const [sourceScript, setSourceScript] = useState("");
   const projectPending = props.pendingActions.length > 0;
+  const sourceReady = detail.assets.source_script?.state === "ready";
+  const sourceAssetID = sourceReady ? detail.assets.source_script?.id : "";
+  const sourceRemixLive = props.tasks.some((task) =>
+    task.action === "remix.standard"
+    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  const sourceRemixPending = props.pendingActions.includes("source-remix") || sourceRemixLive;
+
+  useEffect(() => {
+    setSourceScript("");
+  }, [detail.project.id]);
+
+  useEffect(() => {
+    if (!sourceAssetID || !loadSourceScriptContent) return;
+    let active = true;
+    void loadSourceScriptContent(sourceAssetID)
+      .then((content) => {
+        if (active) setSourceScript(content);
+      })
+      .catch(() => {
+        // The save action remains available if historical source content cannot be read.
+      });
+    return () => {
+      active = false;
+    };
+  }, [loadSourceScriptContent, sourceAssetID]);
 
   const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]);
   const unknownMissing = missing.find((type) => !knownMissing.has(type));
@@ -72,7 +145,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         : action?.id === "upload-final-video"
           ? "upload:final_video"
           : "";
-  const actionPending = projectPending || (action?.id === "prepare-assets"
+  const actionPending = projectPending || (action?.id === "start-source-remix" && sourceRemixLive) || (action?.id === "prepare-assets"
     ? missing.some((type) => props.pendingActions.includes(`upload:${type}`))
     : pendingForAction ? props.pendingActions.includes(pendingForAction) : false);
 
@@ -83,6 +156,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const runPrimaryAction = () => {
     if (!action || action.disabled) return;
     if (action.id === "start-remix") props.onRemix();
+    else if (action.id === "start-source-remix") {
+      if (sourceScript.trim()) props.onSaveSourceScript(sourceScript.trim());
+    }
     else if (action.id === "start-mixing") props.onMix();
     else if (action.id === "publish") props.onPublish();
     else {
@@ -90,6 +166,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       if (["narration", "subtitle_srt", "account_background", "final_video"].includes(target))
         requestUpload(target as ProjectAssetUploadType);
     }
+  };
+
+  const saveSourceScriptAndRemix = () => {
+    if (sourceScript.trim()) props.onSaveSourceScript(sourceScript.trim());
   };
 
   const primaryActionButton = (className: string, mobile = false) => action ? (
@@ -100,8 +180,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       onClick={runPrimaryAction}
       aria-label={`${mobile ? "移动端：" : ""}${unknownMissing ? "暂无法继续" : action.id === "publish" ? "将当前项目标记为已发布" : action.label}`}
     >
-      {action.id === "publish" ? <CircleCheck size={19} aria-hidden="true" /> : <MessageSquare size={19} aria-hidden="true" />}
-      {unknownMissing ? "暂无法继续" : action.label}
+      <span className="primary-action__icon" aria-hidden="true">
+        {unknownMissing ? <Info size={19} /> : primaryActionIcon(action.id)}
+      </span>
+      <span className="primary-action__copy">
+        <small>{actionPending ? "正在执行" : action.disabled ? "流程处理中" : "建议下一步"}</small>
+        <strong>{unknownMissing ? "暂无法继续" : action.label}</strong>
+      </span>
+      <span className="primary-action__arrow" aria-hidden="true"><ArrowRight size={17} /></span>
     </button>
   ) : null;
 
@@ -112,23 +198,75 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <ArrowLeft size={19} aria-hidden="true" />
         </button>
         <div className="workbench-title">
-          <span>{props.accountName}</span>
+          <div className="workbench-title__meta">
+            <span className="workbench-account">{props.accountName}</span>
+            <span className={`workbench-stage-badge workbench-stage-badge--${stage}`}>
+              <span aria-hidden="true" />
+              {stageLabels[stage]}
+            </span>
+          </div>
           <h1>{detail.project.title}</h1>
-          <p>项目 #{detail.project.id.slice(0, 8)} · 所有资产与任务均限定在当前项目</p>
+          <div className="workbench-title__details">
+            <p>项目 #{detail.project.id.slice(0, 8)}</p>
+            <span>资产、任务与对话均锁定在当前项目</span>
+          </div>
         </div>
-        <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={projectPending}>
-          <Trash2 size={16} aria-hidden="true" />
-          删除项目
-        </button>
+        <div className="workbench-masthead__actions">
+          <label className="workbench-theme-control">
+            主题
+            <select
+              aria-label="选择项目工作台主题"
+              value={props.theme}
+              onChange={(event) => props.onThemeChange(event.target.value as "light" | "dark")}
+            >
+              <option value="light">日间</option>
+              <option value="dark">夜间</option>
+            </select>
+          </label>
+          <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={projectPending}>
+            <Trash2 size={16} aria-hidden="true" />
+            <span>删除项目</span>
+          </button>
+        </div>
       </header>
 
-      {props.message ? <div className="workbench-notice" role="status">{props.message}</div> : null}
+      {props.message ? <div className="workbench-notice" role="alert">{props.message}</div> : null}
       <ProductionRail currentStage={stage} />
 
-      <div className="workbench-grid">
+      {stage === "script" && (
+        <section className="source-script-entry" aria-label="同行原文输入">
+          <h2>先粘贴同行原文，再开始二创</h2>
+          <textarea
+            aria-label="同行原文"
+            value={sourceScript}
+            onChange={(event) => setSourceScript(event.target.value)}
+            placeholder="把同行文章全文粘贴到这里…"
+          />
+          <button
+            type="button"
+            onClick={saveSourceScriptAndRemix}
+            disabled={!sourceScript.trim() || sourceRemixPending}
+            aria-busy={sourceRemixPending}
+          >
+            {sourceRemixPending ? "正在保存/启动…" : "保存原文并开始二创"}
+          </button>
+          <small>普通对话不会写入项目或解锁下一步。</small>
+        </section>
+      )}
+
+      <div className={`workbench-grid${stage === "review" ? " workbench-grid--review" : ""}`}>
         <section className="primary-action-panel" aria-label="下一主动作">
-          <span className="panel-kicker">NEXT MOVE</span>
-          <p className="primary-action-panel__stage">当前阶段 · {stage === "script" ? "文案" : stage === "assets" ? "素材" : stage === "mixing" ? "混剪" : stage === "review" ? "审核" : "已发布"}</p>
+          <div className="primary-action-panel__head">
+            <div>
+              <span className="panel-kicker">PRODUCTION CONTROL</span>
+              <p className="primary-action-panel__stage">当前阶段 · {stageLabels[stage]}</p>
+            </div>
+            <span className="primary-action-panel__stage-index" aria-label={`五个阶段中的第 ${stagePositions[stage]} 阶段`}>
+              {String(stagePositions[stage]).padStart(2, "0")}
+              <small>/ 05</small>
+            </span>
+          </div>
+          <h2 className="primary-action-panel__title">{stage === "review" ? "确认发布信息" : "继续当前制作"}</h2>
           {action ? (
             <>
               {primaryActionButton("desktop-primary-action")}
@@ -142,7 +280,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                     : action.id === "start-mixing"
                       ? "仅使用连续文案、配音、SRT 与账号背景图。"
                       : action.id === "publish"
-                        ? "确认已发布后，项目会移入已发布阶段。"
+                        ? "成片文件为可选项。检查发布文案后，可直接确认项目已发布。"
                         : "先补齐当前阶段所需文件。"}
               </p>
             </>
@@ -150,24 +288,78 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
             <div className="primary-action-panel__complete"><CircleCheck size={20} aria-hidden="true" /> 项目流程已完成</div>
           )}
 
-          <div className="input-track" aria-label="后续耗时轨">
-            <span>当前输入</span>
-            <div className="input-track__line" aria-hidden="true" />
-            <strong>{missing.length ? missing.map((item) => missingLabels[item] || item).join(" · ") : "已齐备"}</strong>
+          <div className="input-track" aria-label="制作输入检查">
+            <div className="input-track__head">
+              <span>INPUT CHECK</span>
+              <strong className={missing.length ? "is-pending" : "is-ready"}>
+                {missing.length ? `${missing.length} 项待补齐` : "输入已齐备"}
+              </strong>
+            </div>
+            <div className="input-track__line" aria-hidden="true"><span /></div>
+            <p>{missing.length ? missing.map((item) => missingLabels[item] || item).join(" · ") : "所有制作输入已通过检查"}</p>
           </div>
 
           <div className="active-task-summary">
-            <span>{currentTaskIsLive ? "ACTIVE TASK" : "RECENT TASK"}</span>
+            <div className="active-task-summary__head">
+              <span>{currentTaskIsLive ? "ACTIVE TASK" : "RECENT TASK"}</span>
+              <span className={`task-presence ${currentTaskIsLive ? "task-presence--live" : "task-presence--idle"}`}>
+                <span aria-hidden="true" />
+                {currentTaskIsLive ? "运行中" : currentTask ? "最近记录" : "空闲"}
+              </span>
+            </div>
             {currentTask ? (
               <button type="button" onClick={() => props.onOpenTask(currentTask)}>
                 <strong>{currentTaskIsLive
                   ? currentTask.action === "montage.execute" ? "混剪草稿处理中" : "Codex 正在处理"
                   : "最近任务"}</strong>
                 <small>{currentTask.result_summary || "查看进度与问题"}</small>
+                <span className="active-task-summary__link">查看任务 <ArrowRight size={13} aria-hidden="true" /></span>
               </button>
-            ) : <p>当前没有运行中的任务。</p>}
+            ) : <p>当前没有运行中的任务，执行主动作后会在此同步进展。</p>}
           </div>
         </section>
+
+        {stage === "review" ? (
+          <section className="publishing-review" aria-label="发布文案审核">
+            <div className="workbench-section-heading publishing-review__heading">
+              <div>
+                <span>PUBLISHING COPY</span>
+                <h2>发布文案</h2>
+                <p>成片文件不是必填项；发布前重点检查标题、简介和话题。</p>
+              </div>
+              {publishingTask ? <span className="publishing-review__source">来自最近二创结果</span> : null}
+            </div>
+            {publishingPackage ? (
+              <div className="publishing-review__content">
+                <section className="publishing-copy-block publishing-copy-block--title">
+                  <span>推荐标题</span>
+                  <h3>{recommendedTitles[0] || detail.project.title}</h3>
+                  {recommendedTitles.length > 1 ? (
+                    <ol>{recommendedTitles.slice(1, 4).map((title) => <li key={title}>{title}</li>)}</ol>
+                  ) : null}
+                </section>
+                <section className="publishing-copy-block">
+                  <span>短标题</span>
+                  <p>{shortTitles[0] || "暂未生成短标题"}</p>
+                </section>
+                <section className="publishing-copy-block publishing-copy-block--description">
+                  <span>内容简介</span>
+                  <p>{description || "暂未生成内容简介"}</p>
+                  {publishingPackage.cta ? <small>{publishingPackage.cta}</small> : null}
+                </section>
+                <section className="publishing-copy-block publishing-copy-block--topics">
+                  <span>话题</span>
+                  <div>{topics.length ? topics.map((topic) => <b key={topic}>#{topic.replace(/^#/, "")}</b>) : <p>暂未生成话题</p>}</div>
+                </section>
+              </div>
+            ) : (
+              <div className="publishing-review__empty">
+                <strong>暂未找到发布文案</strong>
+                <p>完成二创文案任务后，这里会自动显示推荐标题、短标题、内容简介和话题。</p>
+              </div>
+            )}
+          </section>
+        ) : null}
 
         <ProjectAssets
           detail={detail}

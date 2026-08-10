@@ -51,7 +51,7 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
         : ["mix_draft"];
       break;
     case "review":
-      computed = isReady(detail, "final_video") ? [] : ["final_video"];
+      computed = [];
       break;
     case "published":
       computed = [];
@@ -66,15 +66,18 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
   const stage = deriveProductionStage(detail);
   if (stage === "published") return null;
+  const canStartTopicRemix = Boolean(detail.topic_context || detail.active_workflow);
   const base: PrimaryAction = stage === "script"
-    ? { id: "start-remix", label: "开始二创文案", disabled: false }
+    ? isReady(detail, "source_script")
+      ? { id: "start-source-remix", label: "开始正式二创", disabled: false }
+      : canStartTopicRemix
+        ? { id: "start-remix", label: "开始二创文案", disabled: false }
+        : { id: "start-source-remix", label: "先粘贴同行原文", disabled: true }
     : stage === "assets"
       ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
       : stage === "mixing"
         ? { id: "start-mixing", label: "开始混剪", disabled: false }
-        : isReady(detail, "final_video")
-          ? { id: "publish", label: "已发布", disabled: false }
-          : { id: "upload-final-video", label: "上传成片", disabled: false };
+        : { id: "publish", label: "确认已发布", disabled: false };
   const workflow = detail.active_workflow;
   const activeLabel = workflow?.state === "running" ? activeStepLabels[workflow.current_step] : undefined;
   return activeLabel

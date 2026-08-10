@@ -46,6 +46,7 @@ type Runner struct {
 	CompletionGate        taskcompletion.Gate
 	CompletionObserver    taskcompletion.Observer
 	ExpectedTurnID        *string
+	ValidationPhaseID     string
 
 	maxJSONLBytes             int
 	maxOutputLastMessageBytes int64
@@ -190,8 +191,8 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 		_ = r.finishExecutionTiming(persistCtx, domain.PhaseFailed, time.Now().UTC())
 		return r.persistFailure(persistCtx, "process_failed", r.processFailureCause(persistCtx, waitErr))
 	}
-	if err := r.finishExecutionTiming(persistCtx, domain.PhaseCompleted, time.Now().UTC()); err != nil {
-		return r.persistFailure(persistCtx, "execution_timing_failed", err)
+	if err := r.ensureResultValidation(persistCtx); err != nil {
+		return r.persistFailure(persistCtx, "validation_timing_failed", err)
 	}
 
 	latestMu.Lock()
@@ -217,6 +218,18 @@ func (r *Runner) Run(ctx context.Context) (returnErr error) {
 
 func (r *Runner) persistValidatedResult(persistCtx context.Context, result ResultEnvelope, rawResult []byte, lastPath string, rawLast []byte) error {
 	rawJSON := r.redact(string(rawResult))
+	var skillTimings []domain.SkillTimingRun
+	if result.Action == domain.ActionMontageExecute {
+		task, taskErr := r.Tasks.Get(persistCtx, r.TaskID)
+		if taskErr != nil {
+			return r.persistFailure(persistCtx, "result_persistence_failed", taskErr)
+		}
+		var timingErr error
+		skillTimings, timingErr = r.loadSkillTimings(persistCtx, result, task)
+		if timingErr != nil {
+			return r.persistOutputInvalid(persistCtx, lastPath, rawLast, timingErr)
+		}
+	}
 	switch result.Status {
 	case "awaiting_input":
 		questionJSON, marshalErr := json.Marshal(result.Questions)
@@ -229,10 +242,15 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 		for _, question := range result.Questions {
 			assistantContent += "\n\nQuestion: " + r.redact(question.Text)
 		}
+		assetCommitID, timingErr := r.beginAssetCommit(persistCtx)
+		if timingErr != nil {
+			return r.persistFailure(persistCtx, "asset_commit_timing_failed", timingErr)
+		}
 		write := store.TaskResultWrite{
 			Status: domain.TaskAwaitingInput, Summary: summary, AssistantContent: assistantContent,
 			QuestionSchema: &questionSchema, EventKind: "result_awaiting_input", RawJSON: rawJSON,
-			ExpectedTurnID: r.ExpectedTurnID,
+			ExpectedTurnID: r.ExpectedTurnID, ValidationPhaseID: r.ValidationPhaseID, AssetCommitPhaseID: assetCommitID,
+			SkillTimings: skillTimings,
 		}
 		if err := r.Tasks.AwaitInput(persistCtx, r.TaskID, write); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
@@ -246,7 +264,8 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 		write := store.TaskResultWrite{
 			Status: domain.TaskFailed, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
 			EventKind: "result_failed", RawJSON: rawJSON, ErrorCode: "result_failed", ErrorMessage: r.redact(result.Summary),
-			ExpectedTurnID: r.ExpectedTurnID,
+			ExpectedTurnID: r.ExpectedTurnID, ValidationPhaseID: r.ValidationPhaseID,
+			SkillTimings: skillTimings,
 		}
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, nil); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
@@ -281,6 +300,17 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 		if taskErr != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", taskErr)
 		}
+		manifest, manifestErr := r.taskManifest()
+		if manifestErr != nil {
+			return r.persistFailure(persistCtx, "result_persistence_failed", manifestErr)
+		}
+		if inputErr := r.ensureManifestInputsCurrent(persistCtx, task, manifest); inputErr != nil {
+			return r.persistFailure(persistCtx, "input_superseded", inputErr)
+		}
+		assetCommitID, timingErr := r.beginAssetCommit(persistCtx)
+		if timingErr != nil {
+			return r.persistFailure(persistCtx, "asset_commit_timing_failed", timingErr)
+		}
 		if result.Action == domain.ActionMontageExecute {
 			if r.CompletionGate == nil {
 				return r.persistFailure(persistCtx, "registration_coordinator_unavailable", errors.New("montage registration coordinator is unavailable"))
@@ -288,6 +318,7 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 			handled, gateErr := r.CompletionGate.HandleCompleted(persistCtx, taskcompletion.CompletedInput{
 				Task: task, ManifestPath: filepath.Join(r.AssetRoot, "tasks", r.TaskID, "task_manifest.json"),
 				Action: result.Action, Summary: r.redact(result.Summary), RawJSON: rawJSON, Artifacts: artifacts, ExpectedTurnID: r.ExpectedTurnID,
+				ValidationPhaseID: r.ValidationPhaseID, AssetCommitPhaseID: assetCommitID, SkillTimings: skillTimings,
 			})
 			if gateErr != nil {
 				return r.persistFailure(persistCtx, "completion_gate_failed", gateErr)
@@ -301,7 +332,7 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 			assets = append(assets, store.AddAssetVersion{
 				ProjectID: task.ProjectID, AccountID: task.AccountID, Type: output.Type, StorageKind: output.StorageKind,
 				Path: output.Path, Filename: output.Filename, MIMEType: output.MIME, Size: output.Size, SHA256: output.SHA256,
-				SourceTaskID: &r.TaskID,
+				SourceTaskID: &r.TaskID, Dependencies: manifestDependencies(manifest, output.Type),
 			})
 		}
 		// The topic Skill is required to return the Obsidian card as an
@@ -317,7 +348,7 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 					ProjectID: task.ProjectID, AccountID: task.AccountID, Type: domain.AssetTopicCard,
 					StorageKind: domain.StorageFile, Path: artifact.Path, Filename: artifact.Filename,
 					MIMEType: artifact.MIMEType, Size: artifact.Size, SHA256: artifact.SHA256,
-					SourceTaskID: &r.TaskID,
+					SourceTaskID: &r.TaskID, Dependencies: manifestDependencies(manifest, domain.AssetTopicCard),
 				})
 				break
 			}
@@ -326,6 +357,8 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 			Status: domain.TaskCompleted, Summary: r.redact(result.Summary), AssistantContent: r.redact(result.Summary),
 			EventKind: "result_completed", RawJSON: rawJSON,
 			ExpectedTurnID: r.ExpectedTurnID, IdeaSessionID: ideaSessionID, IdeaCandidates: ideaCandidates,
+			ValidationPhaseID: r.ValidationPhaseID, AssetCommitPhaseID: assetCommitID,
+			SkillTimings: skillTimings,
 		}
 		if err := r.Tasks.CompleteWithResult(persistCtx, r.TaskID, write, artifacts, assets); err != nil {
 			return r.persistFailure(persistCtx, "result_persistence_failed", err)
@@ -337,6 +370,74 @@ func (r *Runner) persistValidatedResult(persistCtx context.Context, result Resul
 	default:
 		return fmt.Errorf("unsupported validated result status %q", result.Status)
 	}
+}
+
+func (r *Runner) taskManifest() (TaskManifest, error) {
+	path := filepath.Join(r.AssetRoot, "tasks", r.TaskID, "task_manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return TaskManifest{}, fmt.Errorf("read task manifest: %w", err)
+	}
+	var manifest TaskManifest
+	if err := decodeStrictJSON(data, &manifest); err != nil {
+		return TaskManifest{}, fmt.Errorf("decode task manifest: %w", err)
+	}
+	if manifest.TaskID != r.TaskID || manifest.Action != r.Action {
+		return TaskManifest{}, errors.New("task manifest identity mismatch")
+	}
+	return manifest, nil
+}
+
+func (r *Runner) ensureManifestInputsCurrent(ctx context.Context, task domain.CodexTask, manifest TaskManifest) error {
+	if task.ProjectID == nil {
+		return nil
+	}
+	current, err := store.NewAssetRepository(r.Tasks.DB()).CurrentByProject(ctx, *task.ProjectID)
+	if err != nil {
+		return fmt.Errorf("read current task inputs: %w", err)
+	}
+	byType := make(map[domain.AssetType]domain.AssetVersion, len(current))
+	for _, version := range current {
+		byType[version.Type] = version
+	}
+	for _, input := range manifest.Inputs {
+		if input.VersionID == "" || input.Type == domain.AssetAccountBackground {
+			continue
+		}
+		version, ok := byType[input.Type]
+		if !ok || version.ID != input.VersionID {
+			return fmt.Errorf("input %q version %q was superseded", input.Type, input.VersionID)
+		}
+	}
+	return nil
+}
+
+func manifestDependencies(manifest TaskManifest, outputType domain.AssetType) []string {
+	dependencies := make([]string, 0, len(manifest.Inputs))
+	seen := make(map[string]struct{}, len(manifest.Inputs))
+	for _, input := range manifest.Inputs {
+		if input.VersionID == "" || input.Type == domain.AssetAccountBackground {
+			continue
+		}
+		if !containsAssetType(domain.InvalidatedAssetTypes(input.Type), outputType) {
+			continue
+		}
+		if _, ok := seen[input.VersionID]; ok {
+			continue
+		}
+		seen[input.VersionID] = struct{}{}
+		dependencies = append(dependencies, input.VersionID)
+	}
+	return dependencies
+}
+
+func containsAssetType(types []domain.AssetType, want domain.AssetType) bool {
+	for _, typ := range types {
+		if typ == want {
+			return true
+		}
+	}
+	return false
 }
 
 // CompleteAgentResult applies the same V2 envelope validation, artifact
@@ -351,6 +452,9 @@ func (r *Runner) CompleteAgentResult(ctx context.Context, agentText string) erro
 		return err
 	}
 	r.Action = action
+	if err := r.ensureResultValidation(ctx); err != nil {
+		return r.persistFailure(ctx, "validation_timing_failed", err)
+	}
 	roots, err := r.resultManifestRoots(action)
 	if err != nil {
 		return r.persistOutputInvalid(ctx, "", []byte(agentText), err)
@@ -454,10 +558,32 @@ func (r *Runner) persistEvents(ctx context.Context, events <-chan persistedEvent
 
 func (r *Runner) projectTimingEvent(ctx context.Context, event Event) error {
 	classification, ok := progress.ProjectTiming(progress.Input{TaskID: r.TaskID, Action: r.Action, Method: event.Kind, LegacyKind: event.Kind, RawJSON: string(event.RawJSON)})
-	if !ok {
+	if !ok || classification.PhaseKey == "codex_execution" {
 		return nil
 	}
 	return phasetiming.Record(ctx, store.NewTaskTimingRepository(r.Tasks.DB()), r.TaskID, domain.PhaseSourceHost, classification, time.Now().UTC())
+}
+
+func (r *Runner) ensureResultValidation(ctx context.Context) error {
+	if r == nil || r.Tasks == nil {
+		return errors.New("result validation timing requires a task repository")
+	}
+	if strings.TrimSpace(r.ValidationPhaseID) != "" {
+		return nil
+	}
+	phaseID, err := r.Tasks.BeginResultValidation(ctx, r.TaskID, domain.PhaseSourceHost, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	r.ValidationPhaseID = phaseID
+	return nil
+}
+
+func (r *Runner) beginAssetCommit(ctx context.Context) (string, error) {
+	if err := r.ensureResultValidation(ctx); err != nil {
+		return "", err
+	}
+	return r.Tasks.BeginAssetCommit(ctx, r.TaskID, r.ValidationPhaseID, time.Now().UTC())
 }
 
 func (r *Runner) finishExecutionTiming(ctx context.Context, state domain.TaskPhaseState, at time.Time) error {
@@ -687,6 +813,47 @@ func (r *Runner) outputDir() string {
 	return r.AssetRoot
 }
 
+func (r *Runner) loadSkillTimings(ctx context.Context, result ResultEnvelope, task domain.CodexTask) ([]domain.SkillTimingRun, error) {
+	var receipt *ArtifactOutput
+	for i := range result.Artifacts {
+		if result.Artifacts[i].Type != "execution_timings" {
+			continue
+		}
+		if receipt != nil {
+			return nil, errors.New("result contains duplicate execution_timings artifacts")
+		}
+		receipt = &result.Artifacts[i]
+	}
+	if receipt == nil {
+		return nil, nil
+	}
+	var snapshotID string
+	var attempt int
+	if err := r.Tasks.DB().QueryRowContext(ctx, `SELECT COALESCE(skill_snapshot_id,''),COALESCE((SELECT MAX(attempt) FROM task_phase_runs WHERE task_id=codex_tasks.id AND phase_key='codex_execution'),1) FROM codex_tasks WHERE id=?`, r.TaskID).Scan(&snapshotID, &attempt); err != nil {
+		return nil, fmt.Errorf("resolve skill timing identity: %w", err)
+	}
+	manifestPath := filepath.Join(r.AssetRoot, "tasks", r.TaskID, "task_manifest.json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("read skill timing manifest: %w", err)
+	}
+	var manifest TaskManifest
+	if err := decodeStrictJSON(manifestData, &manifest); err != nil {
+		return nil, fmt.Errorf("decode skill timing manifest: %w", err)
+	}
+	if manifest.TaskID != r.TaskID || manifest.SkillSnapshotID == "" || manifest.SkillSnapshotID != snapshotID {
+		return nil, errors.New("execution timings skill snapshot does not match the task-bound manifest")
+	}
+	notBefore := task.CreatedAt.UTC()
+	if task.StartedAt != nil {
+		notBefore = task.StartedAt.UTC()
+	}
+	return phasetiming.LoadSkillTimings(receipt.Path, receipt.SHA256, phasetiming.ImportExpectation{
+		TaskID: r.TaskID, SkillSnapshotID: snapshotID, Attempt: attempt,
+		NotBefore: notBefore, NotAfter: time.Now().UTC(),
+	})
+}
+
 func (r *Runner) engineeringArtifacts(action domain.TaskAction, outputs []ArtifactOutput) ([]store.TaskArtifact, error) {
 	roots := ManifestRoots{}
 	if len(outputs) > 0 && outputs[0].Type == "topic_card" {
@@ -888,7 +1055,7 @@ func (r *Runner) persistOutputInvalid(ctx context.Context, lastPath string, rawL
 	write := store.TaskResultWrite{
 		Status: domain.TaskFailed, Summary: "Codex output did not match the result contract", EventKind: "result_invalid",
 		RawJSON: r.redact(string(rawLast)), ErrorCode: "output_invalid", ErrorMessage: r.redact(cause.Error()),
-		ExpectedTurnID: r.ExpectedTurnID,
+		ExpectedTurnID: r.ExpectedTurnID, ValidationPhaseID: r.ValidationPhaseID,
 	}
 	if err := r.Tasks.CompleteWithResult(ctx, r.TaskID, write, artifacts, nil); err != nil {
 		return r.persistFailure(ctx, "result_persistence_failed", err)
@@ -902,7 +1069,7 @@ func (r *Runner) persistFailure(ctx context.Context, code string, cause error) e
 	if r.ExpectedTurnID != nil {
 		_, statusErr = r.Tasks.FailAppServerTurn(ctx, r.TaskID, *r.ExpectedTurnID, code, message)
 	} else {
-		statusErr = r.Tasks.UpdateStatus(ctx, r.TaskID, domain.TaskFailed, "", code, message)
+		statusErr = r.Tasks.FailTask(ctx, r.TaskID, code, message, time.Now().UTC())
 	}
 	if statusErr != nil {
 		return errors.Join(cause, fmt.Errorf("persist failure status: %w", statusErr))
@@ -926,7 +1093,7 @@ func (r *Runner) notifyTerminalObserver(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !isTerminalTaskStatus(task.Status) {
+	if !task.Status.IsTerminal() {
 		return nil
 	}
 	if err := r.CompletionObserver.AfterTerminal(ctx, task); err != nil {
@@ -934,15 +1101,6 @@ func (r *Runner) notifyTerminalObserver(ctx context.Context) error {
 		return errors.Join(err, warningErr)
 	}
 	return nil
-}
-
-func isTerminalTaskStatus(status domain.TaskStatus) bool {
-	switch status {
-	case domain.TaskCompleted, domain.TaskFailed, domain.TaskCanceled, domain.TaskCancelled, domain.TaskInterrupted:
-		return true
-	default:
-		return false
-	}
 }
 
 // processFailureCause preserves the useful terminal Codex error instead of

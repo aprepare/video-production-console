@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowLeft, Circle, X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
+import { apiRequest } from "./api/client";
+import { LoginPage } from "./auth/LoginPage";
+import { useConsoleData } from "./console/useConsoleData";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
+import { ProjectCreateForm } from "./projects/ProjectCreateForm";
+import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
+import type { SemanticEvent, TaskEvent } from "./tasks/event-types";
 import type {
   ProjectAsset,
   ProjectDetail as WorkbenchProjectDetail,
@@ -20,37 +26,47 @@ type Project = Omit<ProjectSummary, "stage"> & {
   missing_assets?: string[];
 };
 type Asset = ProjectAsset;
-type TaskEvent = {
+type TaskPhaseRun = {
   id?: string;
-  sequence?: number;
-  kind?: string;
-  level?: string;
-  display_text?: string;
-  raw_json?: string;
-  created_at?: string;
-  // The task API currently serializes persisted events with Go field names.
-  Kind?: string;
-  Level?: string;
-  DisplayText?: string;
-  RawJSON?: string;
-};
-type SemanticEvent = {
-  id?: string;
-  sequence?: number;
-  kind?: string;
-  phase?: string;
-  level?: string;
-  title?: string;
-  detail?: string;
-  created_at?: string;
+  task_id?: string;
+  phase_key?: string;
+  display_name?: string;
+  attempt?: number;
+  source?: string;
+  state?: string;
+  started_at?: string;
+  running_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
   ID?: string;
-  Sequence?: number;
-  Kind?: string;
-  Phase?: string;
-  Level?: string;
-  Title?: string;
-  Detail?: string;
-  CreatedAt?: string;
+  TaskID?: string;
+  PhaseKey?: string;
+  DisplayName?: string;
+  Attempt?: number;
+  Source?: string;
+  State?: string;
+  StartedAt?: string;
+  RunningAt?: string;
+  FinishedAt?: string;
+  DurationMS?: number;
+};
+type TaskTimingSummary = {
+  task_id?: string;
+  total_ms?: number;
+  preparation_ms?: number;
+  queue_ms?: number;
+  execution_ms?: number;
+  queue_estimated?: boolean;
+  legacy_without_phases?: boolean;
+  phases?: TaskPhaseRun[];
+  TaskID?: string;
+  TotalMS?: number;
+  PreparationMS?: number;
+  QueueMS?: number;
+  ExecutionMS?: number;
+  QueueEstimated?: boolean;
+  LegacyWithoutPhases?: boolean;
+  Phases?: TaskPhaseRun[];
 };
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 type TaskModelOverride = { model: string; reasoningEffort: ReasoningEffort | "" };
@@ -58,6 +74,8 @@ type Task = WorkbenchProjectTask & {
   model?: string;
   reasoning_effort?: ReasoningEffort;
   events?: TaskEvent[];
+  timing_summary?: TaskTimingSummary;
+  timing_runs?: TaskPhaseRun[];
   publishing_package?: PublishingPackage;
 };
 type PublishingPackage = {
@@ -69,7 +87,6 @@ type PublishingPackage = {
   topics?: string[];
   cta?: string;
 };
-type RuntimeStatus = { Limit: number; Running: number; Queued: number };
 type ProjectDetail = Omit<
   WorkbenchProjectDetail,
   "project" | "topic_context"
@@ -267,13 +284,22 @@ function montageHeadline(montage: MontageResult, phase: string) {
   }
 }
 
+type Theme = "light" | "dark";
+
+const THEME_STORAGE_KEY = "video-production-console-theme";
+const PROJECT_COLLAPSE_LIMIT = 4;
+
+function readStoredTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+}
+
 const stages: Array<Project["stage"]> = [
   "topic",
   "script",
   "assets",
   "mixing",
   "review",
-  "ready",
   "published",
 ];
 const assetLabels: Record<string, string> = {
@@ -307,6 +333,15 @@ const cancellableTaskStatuses = new Set([
   "awaiting_input",
   "waiting_input",
 ]);
+const taskPhaseStateLabels: Record<string, string> = {
+  queued: "排队中",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  canceled: "已取消",
+  cancelled: "已取消",
+  interrupted: "已中断",
+};
 const taskActionLabels: Record<string, string> = {
   "topic.brainstorm": "选题分析",
   "topic.commit": "保存选题卡",
@@ -539,14 +574,22 @@ function TaskModelFields({
   );
 }
 
+function messageTone(message: string) {
+  if (/失败|错误|不正确|无法|不可用|离线|中断|不能/.test(message)) return "danger";
+  if (/已保存|已创建|已删除|已停止|已发布|已重新/.test(message)) return "success";
+  if (/等待|排队|重启|稍候|确认/.test(message)) return "warning";
+  return "info";
+}
+
 function App() {
   const [csrf, setCsrf] = useState("");
+  const [theme, setTheme] = useState<Theme>(readStoredTheme);
+  const [expandedStages, setExpandedStages] = useState<Set<Project["stage"]>>(
+    () => new Set(),
+  );
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [account, setAccount] = useState("");
-  const [loading, setLoading] = useState(true);
   const [newAccount, setNewAccount] = useState("");
   const [accountBackground, setAccountBackground] = useState<File | null>(null);
   const [newProject, setNewProject] = useState("");
@@ -561,6 +604,8 @@ function App() {
     text?: string;
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFeedback, setSettingsFeedback] = useState("");
+  const [accountFormOpen, setAccountFormOpen] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<PublicSettings | null>(
     null,
@@ -586,8 +631,8 @@ function App() {
     reasoningEffort: "",
   });
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
+  const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
-  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [chatCreating, setChatCreating] = useState(false);
@@ -670,44 +715,36 @@ function App() {
       .map((key) => restartFieldLabels[key] || String(key));
   }, [settings]);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
   const api = useCallback(
-    async (path: string, init: RequestInit = {}) => {
-      const method = (init.method || "GET").toUpperCase();
-      const headers = new Headers(init.headers);
-      if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrf)
-        headers.set("X-CSRF-Token", csrf);
-      const response = await fetch(path, {
-        ...init,
-        headers,
-        credentials: "same-origin",
-      });
-      if (response.status === 401) {
-        setAuthenticated(false);
-        setCsrf("");
-      }
-      return response;
-    },
+    (path: string, init: RequestInit = {}) =>
+      apiRequest(path, init, {
+        csrfToken: csrf,
+        onUnauthorized: () => {
+          setAuthenticated(false);
+          setCsrf("");
+        },
+      }),
     [csrf],
   );
+  const { accounts, projects, setProjects, loading, reload: reloadConsoleData } =
+    useConsoleData<Account, Project>(api);
+  const { data: runtime = null } = useRuntimeQuery(api, authenticated === true);
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      const [a, p, s] = await Promise.all([
-        api("/api/accounts"),
-        api("/api/projects"),
-        api("/api/settings"),
-      ]);
-      if (!a.ok || !p.ok) throw new Error("读取控制台数据失败");
-      setAccounts(await a.json());
-      setProjects(await p.json());
-      if (s.ok) setSettings((await s.json()) as Settings);
+      const settingsResponse = await api("/api/settings");
+      await reloadConsoleData();
+      if (settingsResponse.ok) setSettings((await settingsResponse.json()) as Settings);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "控制台服务尚未连接");
-    } finally {
-      setLoading(false);
     }
-  }, [api]);
+  }, [api, reloadConsoleData]);
 
   const loadDetail = useCallback(
     async (project: Project) => {
@@ -787,6 +824,15 @@ function App() {
           projectDetail.project.id !== projectID
         ) return;
         setDetail(projectDetail);
+        const refreshedProject = projectDetail.project;
+        setProjects((current) =>
+          current.map((item) => item.id === projectID
+            ? { ...item, stage: refreshedProject.stage }
+            : item),
+        );
+        setSelected((current) => current?.id === projectID
+          ? { ...current, stage: refreshedProject.stage }
+          : current);
         setDetailError("");
         setTasks(fullTasks);
       } catch (error) {
@@ -805,7 +851,7 @@ function App() {
         }
       }
     },
-    [api],
+    [api, setProjects],
   );
 
   const scheduleDetailRefresh = useCallback(
@@ -893,31 +939,6 @@ function App() {
     };
   }, [api, ideaOpen, activeIdeaSessionID, ideaRefreshRevision]);
   useEffect(() => {
-    if (!authenticated) return;
-    let stopped = false;
-    let timer: number | undefined;
-    let controller: AbortController | null = null;
-    const refresh = async () => {
-      controller = new AbortController();
-      try {
-        const response = await api("/api/runtime", { signal: controller.signal });
-        if (response.ok && !stopped) setRuntime((await response.json()) as RuntimeStatus);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          // Runtime badge keeps its last stable value while offline.
-        }
-      } finally {
-        if (!stopped) timer = window.setTimeout(() => void refresh(), 7000);
-      }
-    };
-    void refresh();
-    return () => {
-      stopped = true;
-      controller?.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [authenticated, api]);
-  useEffect(() => {
     if (!chatOpen || !chatDetail?.session.id) return;
     const sessionID = chatDetail.session.id;
     chatSessionIDRef.current = sessionID;
@@ -965,14 +986,33 @@ function App() {
   useEffect(() => {
     if (!selected || !activeTaskIDs) return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const sockets = activeTaskIDs.split(",").map((taskID) => {
+    const sockets = new Map<string, WebSocket>();
+    const retryTimers = new Map<string, number>();
+    let stopped = false;
+    const connect = (taskID: string) => {
+      if (stopped) return;
       const socket = new WebSocket(
         `${protocol}//${location.host}/api/tasks/${taskID}/events?after=0`,
       );
+      sockets.set(taskID, socket);
       socket.onmessage = () => scheduleDetailRefresh(selected);
-      return socket;
-    });
-    return () => sockets.forEach((socket) => socket.close());
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (sockets.get(taskID) === socket) sockets.delete(taskID);
+        if (stopped) return;
+        const timer = window.setTimeout(() => {
+          retryTimers.delete(taskID);
+          connect(taskID);
+        }, 2000);
+        retryTimers.set(taskID, timer);
+      };
+    };
+    activeTaskIDs.split(",").forEach(connect);
+    return () => {
+      stopped = true;
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      sockets.forEach((socket) => socket.close());
+    };
   }, [selected, activeTaskIDs, scheduleDetailRefresh]);
   useEffect(() => {
     taskOpenIDRef.current = taskOpen?.id || "";
@@ -989,6 +1029,12 @@ function App() {
   useEffect(() => {
     setTaskAnswerInput("");
   }, [taskOpen?.id]);
+  useEffect(() => {
+    setTimingNow(Date.now());
+    if (!taskOpen || !taskTimingPhases(taskOpen).some(isRunningPhase)) return;
+    const timer = window.setInterval(() => setTimingNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [taskOpen]);
   useEffect(() => {
     const assetID = taskOpen?.montage?.registered_asset?.id;
     setDirectoryManifest(null);
@@ -1337,6 +1383,8 @@ function App() {
     }
     setNewAccount("");
     setAccountBackground(null);
+    setAccountFormOpen(false);
+    setMessage("账号已创建。");
     await load();
   };
   const createProject = async (event: FormEvent) => {
@@ -1354,6 +1402,73 @@ function App() {
     setNewProject("");
     await load();
   };
+  const loadSourceScriptContent = async (assetID: string): Promise<string> => {
+    const response = await api(`/api/assets/${assetID}/content`);
+    if (!response.ok) throw new Error("同行原文读取失败");
+    return response.text();
+  };
+  const saveSourceScriptAndStartRemix = async (content: string) => {
+    if (!selected) return;
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "source-remix");
+    if (!lockKey) return;
+    try {
+      let sourceVersionID = "";
+      const savedSource = detail?.project.id === projectID ? detail.assets.source_script : undefined;
+      if (savedSource?.state === "ready") {
+        try {
+          const existingContent = await loadSourceScriptContent(savedSource.id);
+          if (selectedIDRef.current !== projectID) return;
+          if (existingContent === content) sourceVersionID = savedSource.id;
+        } catch {
+          if (selectedIDRef.current !== projectID) return;
+        }
+      }
+      if (!sourceVersionID) {
+        const body = new FormData();
+        body.set("file", new File([content], "source-script.txt", { type: "text/plain" }));
+        const response = await api(`/api/projects/${projectID}/assets/source_script`, {
+          method: "POST",
+          body,
+        });
+        if (selectedIDRef.current !== projectID) return;
+        if (!response.ok) {
+          setMessage("同行原文保存失败，请稍后重试。");
+          await loadDetail(project);
+          return;
+        }
+        const asset = (await response.json()) as Asset;
+        if (selectedIDRef.current !== projectID) return;
+        sourceVersionID = asset.id;
+      }
+      const task = await api(`/api/projects/${projectID}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: project.account_id,
+          type: "remix",
+          action: "remix.standard",
+          prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
+          source_version_id: sourceVersionID,
+        }),
+      });
+      if (selectedIDRef.current !== projectID) return;
+      if (!task.ok) {
+        setMessage("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
+        await loadDetail(project);
+        return;
+      }
+      setMessage("同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。");
+      await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("原文保存或二创任务启动失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
+    }
+  };
+
   const startMontageTask = async (prompt: string) => {
     if (!selected) return;
     const project = selected;
@@ -1444,7 +1559,7 @@ function App() {
       const response = await api(`/api/projects/${projectID}/publish`, { method: "POST" });
       if (!response.ok) {
         if (selectedIDRef.current === projectID)
-          setMessage("发布状态更新失败，请确认成片已上传后重试。");
+          setMessage("发布状态更新失败，请稍后重试。");
         return;
       }
       const published = { ...project, stage: "published" as const };
@@ -1633,6 +1748,7 @@ function App() {
     setSettings(next);
     setSettingsDraft({ ...next.public });
     setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
+    setSettingsFeedback("");
     setSettingsOpen(true);
   };
   const saveSettings = async (event: FormEvent) => {
@@ -1644,39 +1760,26 @@ function App() {
       body: JSON.stringify({ public: settingsDraft, secrets: secretDraft }),
     });
     if (!response.ok) {
-      setMessage("设置保存失败，请检查填写内容。");
+      setSettingsFeedback("设置保存失败，请检查填写内容。");
       return;
     }
     const next = (await response.json()) as Settings;
     setSettings(next);
     setSettingsDraft({ ...next.public });
     setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
-    setMessage("设置已保存。");
+    setSettingsFeedback("设置已保存。");
   };
 
   if (authenticated === null)
     return <div className="splash">正在验证访问权限…</div>;
   if (!authenticated)
     return (
-      <main className="login-page">
-        <form className="login-card" onSubmit={login}>
-          <span className="eyebrow">本机视频工作台</span>
-          <h1>视频生产控制台</h1>
-          <p>请输入管理口令后继续。</p>
-          {message && <div className="notice">{message}</div>}
-          <label>
-            管理口令
-            <input
-              autoFocus
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-            />
-          </label>
-          <button type="submit">进入控制台</button>
-        </form>
-      </main>
+      <LoginPage
+        password={password}
+        message={message}
+        setPassword={setPassword}
+        submit={login}
+      />
     );
 
   const createIdeaConversation = () => {
@@ -2096,12 +2199,16 @@ function App() {
           tasks={tasks}
           accountName={accountName(selected.account_id, accounts)}
           message={message}
+          theme={theme}
+          onThemeChange={setTheme}
           onBack={closeProject}
           onDelete={() => void deleteProject()}
           onRemix={() => void startRemixWorkflow()}
           onMix={() => void startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
           onPublish={() => void publishProject()}
           onUpload={(type, file) => void uploadProjectAsset(type, file)}
+          onSaveSourceScript={(content) => void saveSourceScriptAndStartRemix(content)}
+          loadSourceScriptContent={loadSourceScriptContent}
           onReplaceBackground={(file) => void replaceProjectBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenConversation={() => void openGeneralChat()}
@@ -2127,8 +2234,17 @@ function App() {
           <h1>视频生产控制台</h1>
         </div>
         <div className="status">
-          <span className="dot" />
-          本地服务 · 共用爆款库
+          <label className="theme-control">
+            主题
+            <select
+              aria-label="选择界面主题"
+              value={theme}
+              onChange={(event) => setTheme(event.target.value as Theme)}
+            >
+              <option value="light">日间</option>
+              <option value="dark">夜间</option>
+            </select>
+          </label>
           {runtime && (
             <span
               className={
@@ -2160,26 +2276,46 @@ function App() {
       </header>
       <div className="layout" aria-hidden={modalLayerOpen || undefined}>
         <aside>
-          <div className="aside-title">
-            账号 <span>{accounts.length}</span>
-          </div>
+          <nav className="account-nav" aria-labelledby="account-nav-title">
+            <div className="aside-title" id="account-nav-title">
+              账号 <span>{accounts.length}</span>
+            </div>
+            <div className="account-list">
+              <button
+                className={!account ? "selected" : ""}
+                aria-current={!account ? "page" : undefined}
+                onClick={() => setAccount("")}
+              >
+                全部账号
+              </button>
+              {accounts.map((item) => (
+                <button
+                  key={item.id}
+                  className={account === item.id ? "selected" : ""}
+                  aria-current={account === item.id ? "page" : undefined}
+                  onClick={() => setAccount(item.id)}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
           <button
-            className={!account ? "selected" : ""}
-            onClick={() => setAccount("")}
+            type="button"
+            className="account-manage-toggle"
+            aria-expanded={accountFormOpen}
+            aria-controls="account-create-form"
+            onClick={() => setAccountFormOpen((open) => !open)}
           >
-            全部账号
+            {accountFormOpen ? "收起账号管理" : "新增账号"}
           </button>
-          {accounts.map((item) => (
-            <button
-              key={item.id}
-              className={account === item.id ? "selected" : ""}
-              onClick={() => setAccount(item.id)}
-            >
-              {item.name}
-            </button>
-          ))}
-          <form onSubmit={createAccount} className="add-account">
+          <form
+            id="account-create-form"
+            onSubmit={createAccount}
+            className={`add-account${accountFormOpen ? " add-account--open" : ""}`}
+          >
+            <label htmlFor="new-account-name">账号名称</label>
             <input
+              id="new-account-name"
               value={newAccount}
               onChange={(event) => setNewAccount(event.target.value)}
               placeholder="添加账号名称"
@@ -2196,6 +2332,7 @@ function App() {
             </label>
             <button type="submit">添加账号</button>
           </form>
+          </nav>
           <div className="aside-foot">
             每个账号使用一张固定背景图；每个项目独立管理文案、配音、字幕和成片。
           </div>
@@ -2210,34 +2347,42 @@ function App() {
               </div>
               <h2>视频项目</h2>
             </div>
-            <form onSubmit={createProject} className="new-project">
-              <input
-                value={newProject}
-                onChange={(event) => setNewProject(event.target.value)}
-                placeholder={account ? "新建项目标题" : "先选择账号"}
-              />
-              <button disabled={!account}>新建项目</button>
-            </form>
+            <ProjectCreateForm
+              accountSelected={Boolean(account)}
+              title={newProject}
+              onTitleChange={setNewProject}
+              onSubmit={createProject}
+            />
           </div>
-          {message && (
-            <div className="notice">
-              {message}
-              <button onClick={() => setMessage("")}>关闭</button>
-            </div>
-          )}
+          {message && (() => {
+            const tone = messageTone(message);
+            const urgent = tone === "danger";
+            return (
+              <div
+                className={`notice notice--${tone}`}
+                role={urgent ? "alert" : "status"}
+                aria-live={urgent ? "assertive" : "polite"}
+                aria-atomic="true"
+              >
+                {message}
+                <button onClick={() => setMessage("")}>关闭</button>
+              </div>
+            );
+          })()}
           {loading ? (
             <div className="empty">正在读取项目…</div>
           ) : (
             <>
-              <div className="board-help">
-                <strong>每张卡片 = 一个完整视频项目</strong>
-                <span>每一列 = 项目当前制作阶段；文案、配音、SRT、草稿和成片都保存在对应项目详情内，不会串到其他项目。</span>
-              </div>
-              <div className="board">
+              <section className="project-board" aria-labelledby="project-board-title">
+                <div className="board-help">
+                  <strong id="project-board-title">项目看板</strong>
+                  <span>按生产阶段查看项目；点击项目卡片进入制作工作台。</span>
+                </div>
+                <div className="board">
                 {stages.map((stage) => (
-                  <section className="column" key={stage}>
+                  <section className={`column column--${stage}`} key={stage}>
                     <div className="column-head">
-                      <span>{stageLabel(stage)}</span>
+                      <h3>{stageLabel(stage)}</h3>
                       <b>
                         {
                           visible.filter((project) => project.stage === stage)
@@ -2245,29 +2390,57 @@ function App() {
                         }
                       </b>
                     </div>
-                    {visible
-                      .filter((project) => project.stage === stage)
-                      .map((project) => (
-                        <button
-                          className="project"
-                          key={project.id}
-                          onClick={() => openProject(project)}
-                        >
-                          <strong>{project.title}</strong>
-                          <small>
-                            项目 #{project.id.slice(0, 8)} · {projectStageHint(project.stage)}
-                          </small>
-                          <div className="project-foot">
-                            <span>
-                              {accountName(project.account_id, accounts)}
-                            </span>
-                            <Circle className="pulse" size={8} fill="currentColor" aria-hidden="true" />
-                          </div>
-                        </button>
-                      ))}
+                    {(() => {
+                      const stageProjects = visible.filter((project) => project.stage === stage);
+                      const expanded = expandedStages.has(stage);
+                      const shownProjects = expanded
+                        ? stageProjects
+                        : stageProjects.slice(0, PROJECT_COLLAPSE_LIMIT);
+                      return (
+                        <>
+                          {shownProjects.map((project) => (
+                            <button
+                              className="project"
+                              key={project.id}
+                              onClick={() => openProject(project)}
+                            >
+                              <strong>{project.title}</strong>
+                              <small>
+                                {projectStageHint(project.stage)}
+                              </small>
+                              <div className="project-foot">
+                                <span>{accountName(project.account_id, accounts)}</span>
+                                <span>{formatDate(project.updated_at)}</span>
+                              </div>
+                            </button>
+                          ))}
+                          {stageProjects.length > PROJECT_COLLAPSE_LIMIT ? (
+                            <button
+                              type="button"
+                              className="column-toggle"
+                              aria-expanded={expanded}
+                              onClick={() =>
+                                setExpandedStages((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(stage)) next.delete(stage);
+                                  else next.add(stage);
+                                  return next;
+                                })
+                              }
+                            >
+                              {expanded
+                                ? "收起项目"
+                                : `展开剩余 ${stageProjects.length - PROJECT_COLLAPSE_LIMIT} 个项目`}
+                            </button>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+
                   </section>
                 ))}
-              </div>
+                </div>
+              </section>
             </>
           )}
         </main>
@@ -2319,7 +2492,10 @@ function App() {
                 type="button"
                 className="close"
                 aria-label="关闭设置"
-                onClick={() => setSettingsOpen(false)}
+                onClick={() => {
+                  setSettingsFeedback("");
+                  setSettingsOpen(false);
+                }}
               >
                 <X size={20} aria-hidden="true" />
               </button>
@@ -2330,6 +2506,14 @@ function App() {
             <p className="settings-note">
               默认值只影响之后新建的任务，不会修改运行中任务，也不会改写本机 Codex 全局配置。
             </p>
+            {settingsFeedback ? (
+              <div
+                className={`settings-feedback settings-feedback--${messageTone(settingsFeedback)}`}
+                role={messageTone(settingsFeedback) === "danger" ? "alert" : "status"}
+              >
+                {settingsFeedback}
+              </div>
+            ) : null}
             {settings?.restart_required ? (
               <div className="restart-required" role="status">
                 <strong>配置已保存，重启控制台后生效</strong>
@@ -2634,7 +2818,9 @@ function App() {
                     defaults={settings?.public}
                     labelPrefix="选题"
                   />
+                  <label htmlFor="idea-message-input">发送选题消息</label>
                   <input
+                    id="idea-message-input"
                     autoFocus
                     value={ideaInput}
                     onChange={(event) => setIdeaInput(event.target.value)}
@@ -2659,87 +2845,102 @@ function App() {
           >
             <aside className="chat-session-rail">
               <div className="chat-rail-head">
-                <strong>Codex 对话</strong>
-                <button disabled={chatCreating} onClick={() => { setChatCreationSource("console"); void createGeneralChat("console"); }}>
-                  {chatCreating && chatCreationSource === "console" ? "创建中…" : "新建控制台对话"}
-                </button>
-                <button disabled={chatCreating} onClick={() => { setChatCreationSource("desktop"); void createGeneralChat("desktop"); }}>
-                  {chatCreating && chatCreationSource === "desktop" ? "创建中…" : "新建桌面版对话"}
-                </button>
-              </div>
-              <div className="chat-session-list">
-                {chatSessions.map((session) => (
-                  <div className="chat-session-item" key={session.id}>
-                    <button
-                      className={chatDetail?.session.id === session.id ? "selected" : ""}
-                      onClick={() => void loadChatSession(session)}
-                    >
-                      <strong>{session.title}</strong>
-                        <small>{session.source === "desktop" ? "桌面版会话" : "控制台会话"} · {session.status === "running" ? "Codex 正在处理" : "可以继续对话"}</small>
-                    </button>
-                    <button
-                      className="chat-session-delete"
-                      aria-label={`删除对话 ${session.title}`}
-                      onClick={() => void deleteChatSession(session)}
-                    >
-                      <X size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <div className="history-rail-head">
                 <div>
-                  <strong>本机历史</strong>
-                  <small>最近 {settings?.public.codex_history_limit || 10} 条</small>
+                  <strong>Codex 对话</strong>
+                  <small>项目内沟通与本机历史</small>
                 </div>
-                <select
-                  aria-label="筛选本机历史来源"
-                  value={historySource}
-                  onChange={(event) => {
-                    const source = event.target.value;
-                    setHistorySource(source);
-                    void refreshHistory(source);
-                  }}
-                >
-                  <option value="">全部</option>
-                  <option value="desktop">桌面版</option>
-                  <option value="cli">CLI</option>
-                  <option value="task">任务</option>
-                </select>
+                <button className="chat-create-primary" disabled={chatCreating} onClick={() => { setChatCreationSource("console"); void createGeneralChat("console"); }}>
+                  {chatCreating && chatCreationSource === "console" ? "创建中…" : "新建对话"}
+                </button>
+                <button className="chat-create-secondary" disabled={chatCreating} onClick={() => { setChatCreationSource("desktop"); void createGeneralChat("desktop"); }}>
+                  {chatCreating && chatCreationSource === "desktop" ? "创建中…" : "在桌面版新建"}
+                </button>
               </div>
-              <div className="history-thread-list">
-                {historyThreads.map((thread) => (
-                  <article key={`${thread.source}-${thread.id}`}>
-                    <strong>{thread.title || "未命名会话"}</strong>
-                    <small>{historySourceLabels[thread.source] || "本机任务"} · {formatDate(thread.recency)}</small>
-                    {thread.preview ? <p>{thread.preview}</p> : null}
-                    <div>
+              <section className="chat-rail-section chat-current-sessions" aria-label="当前对话">
+                <div className="chat-rail-section__head">
+                  <strong>当前对话</strong>
+                  <small>{chatSessions.length} 个</small>
+                </div>
+                <div className="chat-session-list">
+                  {chatSessions.map((session) => (
+                    <div className="chat-session-item" key={session.id}>
                       <button
-                        disabled={thread.active}
-                        title={thread.active ? "该会话正在别处运行" : "恢复原来的 Codex 会话"}
-                        onClick={() => void applyHistoryThread(thread, "resume")}
+                        className={chatDetail?.session.id === session.id ? "selected" : ""}
+                        onClick={() => void loadChatSession(session)}
                       >
-                        继续原会话
+                        <strong>{session.title}</strong>
+                        <small>{session.source === "desktop" ? "桌面版" : "控制台"} · {session.status === "running" ? "处理中" : "可继续"}</small>
                       </button>
-                      <button onClick={() => void applyHistoryThread(thread, "fork")}>
-                        复制到控制台
+                      <button
+                        className="chat-session-delete"
+                        aria-label={`删除对话 ${session.title}`}
+                        onClick={() => void deleteChatSession(session)}
+                      >
+                        <X size={16} aria-hidden="true" />
                       </button>
                     </div>
-                  </article>
-                ))}
-                {!historyThreads.length && <p>暂无可接入的本机历史</p>}
-              </div>
-              <details className="history-help">
-                <summary>两个入口有什么区别？</summary>
-                <p><b>继续原会话</b>会接回桌面版或 CLI 中的同一个会话；正在别处运行时不能接管。</p>
-                <p><b>复制到控制台</b>会保留上下文并新建一份，不影响原会话。</p>
-              </details>
+                  ))}
+                  {!chatSessions.length ? <p className="chat-rail-empty">还没有当前对话</p> : null}
+                </div>
+              </section>
+              <section className="chat-rail-section chat-history-section" aria-label="本机历史">
+                <div className="history-rail-head">
+                  <div>
+                    <strong>本机历史</strong>
+                    <small>最近 {settings?.public.codex_history_limit || 10} 条</small>
+                  </div>
+                  <select
+                    aria-label="筛选本机历史来源"
+                    value={historySource}
+                    onChange={(event) => {
+                      const source = event.target.value;
+                      setHistorySource(source);
+                      void refreshHistory(source);
+                    }}
+                  >
+                    <option value="">全部</option>
+                    <option value="desktop">桌面版</option>
+                    <option value="cli">CLI</option>
+                    <option value="task">任务</option>
+                  </select>
+                </div>
+                <div className="history-thread-list">
+                  {historyThreads.map((thread) => (
+                    <article key={`${thread.source}-${thread.id}`}>
+                      <strong>{thread.title || "未命名会话"}</strong>
+                      <small>{historySourceLabels[thread.source] || "本机任务"} · {formatDate(thread.recency)}</small>
+                      {thread.preview ? <p>{thread.preview}</p> : null}
+                      <div>
+                        <button
+                          disabled={thread.active}
+                          title={thread.active ? "该会话正在别处运行" : "恢复原来的 Codex 会话"}
+                          onClick={() => void applyHistoryThread(thread, "resume")}
+                        >
+                          继续
+                        </button>
+                        <button className="history-fork" onClick={() => void applyHistoryThread(thread, "fork")}>
+                          复制
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                  {!historyThreads.length && <p className="chat-rail-empty">暂无可接入的本机历史</p>}
+                </div>
+                <p className="history-inline-help">“继续”接回原会话；“复制”会新建副本，不影响原会话。</p>
+              </section>
             </aside>
             <div className="chat-main">
               <div className="chat-main-head">
                 <div>
-                  <span className="eyebrow">实时对话</span>
+                  <span className="eyebrow">{chatDetail?.session.source === "desktop" ? "桌面版会话" : "控制台会话"}</span>
                   <h2 id="chat-dialog-title">{chatDetail?.session.title || "新建一个 Codex 对话"}</h2>
+                  {chatDetail?.session ? (
+                    <p className="chat-session-meta">
+                      {chatDetail.session.status === "running" ? "Codex 正在处理" : "可以继续对话"}
+                      {chatDetail.session.model ? ` · ${chatDetail.session.model}` : ""}
+                      {chatDetail.session.reasoning_effort ? ` · ${chatDetail.session.reasoning_effort}` : ""}
+                    </p>
+                  ) : null}
                 </div>
                 <button className="close" aria-label="关闭 Codex 对话" onClick={() => setChatOpen(false)}>
                   <X size={20} aria-hidden="true" />
@@ -2753,7 +2954,7 @@ function App() {
                     {item.role === "user" && item.delivery_status === "queued" ? <small>已排队</small> : null}
                   </article>
                 ))}
-                {!visibleChatMessages.length && (
+                {!visibleChatMessages.length && !technicalChatMessages.length && (
                   <div className="chat-empty">
                     <strong>直接告诉 Codex 你要处理什么</strong>
                     <p>任务运行中也可以继续发送补充要求；系统会自动引导当前任务或排入下一轮。</p>
@@ -2769,18 +2970,22 @@ function App() {
                 ) : null}
               </div>
               <form className="chat-compose" onSubmit={sendChatMessage}>
-                {chatDetail?.session.status === "running" ? (
-                  <p className="chat-compose-note">Codex 正在处理。现在发送会作为补充要求送入当前任务。</p>
-                ) : null}
-                <textarea
-                  value={chatInput}
-                  onChange={(event) => setChatInput(event.target.value)}
-                  placeholder="输入消息，支持在运行中继续补充要求……"
-                  rows={3}
-                />
-                <button disabled={!chatInput.trim() || chatSending || !chatDetail}>
-                  {chatSending ? "发送中" : "发送"}
-                </button>
+                <div className="chat-compose__inner">
+                  {chatDetail?.session.status === "running" ? (
+                    <p className="chat-compose-note">Codex 正在处理。现在发送会作为补充要求送入当前任务。</p>
+                  ) : null}
+                  <label htmlFor="chat-compose-input">发送消息</label>
+                  <textarea
+                    id="chat-compose-input"
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder="描述你要调整的内容或补充要求"
+                    rows={3}
+                  />
+                  <button disabled={!chatInput.trim() || chatSending || !chatDetail}>
+                    {chatSending ? "发送中" : "发送"}
+                  </button>
+                </div>
               </form>
             </div>
           </section>
@@ -2890,6 +3095,34 @@ function App() {
                 ) : null}
               </section>
             ) : null}
+            {taskOpen.timing_summary || taskOpen.timing_runs?.length ? (
+              <section className="task-timing" aria-label="任务阶段耗时">
+                <h3>阶段耗时</h3>
+                {taskOpen.timing_summary ? (
+                  <p className="task-timing-summary">
+                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms", "TotalMS"))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms", "PreparationMS"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms", "QueueMS"))}{(taskOpen.timing_summary.queue_estimated ?? taskOpen.timing_summary.QueueEstimated) ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms", "ExecutionMS"))}
+                  </p>
+                ) : null}
+                <ul className="task-timing-list">
+                  {taskTimingPhases(taskOpen).map((phase, index) => {
+                    const phaseID = phaseStringValue(phase, "id", "ID");
+                    const phaseKey = phaseStringValue(phase, "phase_key", "PhaseKey");
+                    const state = phaseStringValue(phase, "state", "State");
+                    const duration = phaseDurationMS(phase, timingNow);
+                    return (
+                      <li key={phaseID || `${phaseKey}-${index}`}>
+                        <strong>{phaseStringValue(phase, "display_name", "DisplayName") || phaseKey || "未命名阶段"}</strong>
+                        <span>{taskPhaseStateLabels[state] || state || "暂无状态"}</span>
+                        <time aria-label={state === "running" ? "运行时长" : "阶段耗时"}>
+                          {formatDuration(duration)}
+                        </time>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {(taskOpen.timing_summary?.legacy_without_phases ?? taskOpen.timing_summary?.LegacyWithoutPhases) ? <p className="muted">该任务没有已持久化的阶段运行记录，不能据此判定阶段是否开始。</p> : null}
+              </section>
+            ) : null}
             {taskOpen.prompt_snapshot && (
               <details className="technical-diagnostics">
                 <summary>任务原始说明</summary>
@@ -2950,7 +3183,9 @@ function App() {
                     if (taskAnswerInput.trim()) void answerTask(taskOpen, taskAnswerInput.trim());
                   }}
                 >
+                  <label htmlFor="task-answer-input">回答 Codex</label>
                   <textarea
+                    id="task-answer-input"
                     rows={3}
                     value={taskAnswerInput}
                     onChange={(event) => setTaskAnswerInput(event.target.value)}
@@ -2967,6 +3202,47 @@ function App() {
   );
 }
 
+type TimingNumberKey = "total_ms" | "preparation_ms" | "queue_ms" | "execution_ms";
+type TimingLegacyNumberKey = "TotalMS" | "PreparationMS" | "QueueMS" | "ExecutionMS";
+type PhaseStringKey = "id" | "phase_key" | "display_name" | "state" | "started_at";
+type PhaseLegacyStringKey = "ID" | "PhaseKey" | "DisplayName" | "State" | "StartedAt";
+
+function timingValue(
+  summary: TaskTimingSummary | undefined,
+  key: TimingNumberKey,
+  legacy: TimingLegacyNumberKey,
+) {
+  const value = summary?.[key] ?? summary?.[legacy];
+  return typeof value === "number" ? value : 0;
+}
+function phaseStringValue(
+  phase: TaskPhaseRun,
+  key: PhaseStringKey,
+  legacy: PhaseLegacyStringKey,
+) {
+  const value = phase[key] ?? phase[legacy];
+  return typeof value === "string" ? value : "";
+}
+function taskTimingPhases(task: Task) {
+  if (task.timing_runs?.length) return task.timing_runs;
+  return task.timing_summary?.phases || task.timing_summary?.Phases || [];
+}
+function isRunningPhase(phase: TaskPhaseRun) {
+  return phaseStringValue(phase, "state", "State") === "running";
+}
+function phaseDurationMS(phase: TaskPhaseRun, now: number) {
+  const persisted = phase.duration_ms ?? phase.DurationMS;
+  if (typeof persisted === "number") return persisted;
+  if (!isRunningPhase(phase)) return undefined;
+  const startedAt = Date.parse(phaseStringValue(phase, "started_at", "StartedAt"));
+  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined;
+}
+function formatDuration(ms?: number) {
+  if (typeof ms !== "number") return "暂无";
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
 function stageLabel(stage: Project["stage"]) {
   return (
     (
@@ -2976,7 +3252,6 @@ function stageLabel(stage: Project["stage"]) {
         assets: "配音字幕",
         mixing: "混剪制作",
         review: "成片审核",
-        ready: "待发布",
         published: "已发布",
       } as Record<string, string>
     )[stage] || stage
@@ -2990,8 +3265,7 @@ function projectStageHint(stage: Project["stage"]) {
         script: "选题卡已就绪，正在制作文案",
         assets: "文案已登记，正在准备配音和 SRT",
         mixing: "配音和 SRT 已齐，正在制作混剪",
-        review: "混剪草稿已登记，等待审核",
-        ready: "成片已登记，等待发布",
+        review: "检查发布文案并确认发布状态",
         published: "已经发布",
       } as Record<string, string>
     )[stage] || stage
