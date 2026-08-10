@@ -116,26 +116,45 @@ func (d *CompositeDispatcher) Enqueue(ctx context.Context, task domain.CodexTask
 }
 
 // bindPreparedProjectTask keeps manifest-backed project work on the process
-// runner. A shared App Server cannot receive a distinct per-turn environment,
-// while the Skills contract requires VIDEO_CONSOLE_TASK_MANIFEST to be injected
-// for every formal task. Project chat remains App Server-owned; formal Skill
-// execution remains legacy_exec-owned.
+// runner. Non-manifest App Server tasks bind to the console-owned project main
+// session before dispatch; the persisted binding is refreshed when a stale
+// session/thread is replaced by the resolver.
 func (d *CompositeDispatcher) bindPreparedProjectTask(ctx context.Context, task *domain.CodexTask) error {
-	if task == nil || task.ProjectID == nil || strings.TrimSpace(*task.ProjectID) == "" {
+	if task == nil || task.ProjectID == nil || strings.TrimSpace(*task.ProjectID) == "" || task.Status != domain.TaskQueued {
 		return nil
 	}
-	if task.Status != domain.TaskQueued {
+	_, _, manifestErr := d.tasks.PreparedManifest(ctx, task.ID)
+	if manifestErr == nil {
+		task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
+		task.Transport, task.CompletionPhase = TransportLegacyExec, string(domain.CompletionAgentRunning)
+		if err := d.tasks.SetTransportMetadata(ctx, task.ID, nil, nil, nil, task.CompletionPhase, task.Transport); err != nil {
+			return fmt.Errorf("bind prepared project task transport: %w", err)
+		}
 		return nil
 	}
-	task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = nil, nil, nil
-	task.Transport, task.CompletionPhase = TransportLegacyExec, string(domain.CompletionAgentRunning)
-	if _, err := d.tasks.Get(ctx, task.ID); errors.Is(err, sql.ErrNoRows) {
-		return nil
-	} else if err != nil {
-		return err
+	if !errors.Is(manifestErr, sql.ErrNoRows) {
+		return fmt.Errorf("resolve prepared project task manifest: %w", manifestErr)
 	}
-	if err := d.tasks.SetTransportMetadata(ctx, task.ID, nil, nil, nil, task.CompletionPhase, task.Transport); err != nil {
-		return fmt.Errorf("bind prepared project task transport: %w", err)
+	if taskTransport(task.Transport) != TransportAppServer {
+		return nil
+	}
+	if d.projects == nil {
+		return errors.New("project session resolver is not configured")
+	}
+	session, err := d.projects.ResolveProjectMainSession(ctx, *task.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve project main session: %w", err)
+	}
+	if session.Kind != domain.ChatProject || session.Source != "console" || session.ProjectID == nil || strings.TrimSpace(*session.ProjectID) != strings.TrimSpace(*task.ProjectID) {
+		return errors.New("resolved project main session does not belong to task project")
+	}
+	if session.CodexThreadID == nil || strings.TrimSpace(*session.CodexThreadID) == "" {
+		return errors.New("resolved project main session has no Codex thread")
+	}
+	sessionID, threadID := session.ID, strings.TrimSpace(*session.CodexThreadID)
+	task.ChatSessionID, task.CodexThreadID, task.CodexTurnID = &sessionID, &threadID, nil
+	if err := d.tasks.SetTransportMetadata(ctx, task.ID, task.ChatSessionID, task.CodexThreadID, nil, task.CompletionPhase, TransportAppServer); err != nil {
+		return fmt.Errorf("bind project App Server session: %w", err)
 	}
 	return nil
 }

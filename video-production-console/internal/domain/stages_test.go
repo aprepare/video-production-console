@@ -46,12 +46,12 @@ func TestCanMoveAssetsToMixingUsesCanonicalAssets(t *testing.T) {
 	}
 }
 
-func TestReviewPublishesOnlyWithFinalVideo(t *testing.T) {
-	if err := CanMove(StageReview, StagePublished, nil); err == nil || !strings.Contains(err.Error(), string(AssetFinalVideo)) {
-		t.Fatalf("review -> published error = %v", err)
+func TestReviewCanPublishWithoutUploadedFinalVideo(t *testing.T) {
+	if err := CanMove(StageReview, StagePublished, nil); err != nil {
+		t.Fatalf("review -> published without final video: %v", err)
 	}
 	if err := CanMove(StageReview, StagePublished, map[AssetType]bool{AssetFinalVideo: true}); err != nil {
-		t.Fatalf("review -> published with final video: %v", err)
+		t.Fatalf("review -> published with optional final video: %v", err)
 	}
 }
 

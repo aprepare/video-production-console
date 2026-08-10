@@ -23,11 +23,14 @@ type Hub struct {
 	repo   *store.TaskRepository
 	mu     sync.Mutex
 	byTask map[string]map[*client]struct{}
+	closed bool
 }
 
 type client struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn         *websocket.Conn
+	mu           sync.Mutex
+	lastSequence int64
+	writeEvent   func(context.Context, domain.TaskEvent) error
 }
 
 func NewHub(repo *store.TaskRepository) *Hub {
@@ -40,6 +43,10 @@ func (h *Hub) Publish(ctx context.Context, taskID string, event domain.TaskEvent
 		return
 	}
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
 	clients := make([]*client, 0, len(h.byTask[taskID]))
 	for c := range h.byTask[taskID] {
 		clients = append(clients, c)
@@ -50,13 +57,17 @@ func (h *Hub) Publish(ctx context.Context, taskID string, event domain.TaskEvent
 	}
 }
 
-func (h *Hub) add(taskID string, c *client) {
+func (h *Hub) add(taskID string, c *client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return false
+	}
 	if h.byTask[taskID] == nil {
 		h.byTask[taskID] = make(map[*client]struct{})
 	}
 	h.byTask[taskID][c] = struct{}{}
+	return true
 }
 func (h *Hub) remove(taskID string, c *client) {
 	h.mu.Lock()
@@ -69,12 +80,59 @@ func (h *Hub) remove(taskID string, c *client) {
 	}
 }
 
+func (h *Hub) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	clients := make([]*client, 0)
+	for _, taskClients := range h.byTask {
+		for c := range taskClients {
+			clients = append(clients, c)
+		}
+	}
+	h.byTask = make(map[string]map[*client]struct{})
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.close(websocket.StatusGoingAway, "server shutting down")
+	}
+}
+
+func (c *client) close(status websocket.StatusCode, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		_ = c.conn.Close(status, reason)
+	}
+}
+
 func (c *client) write(ctx context.Context, event domain.TaskEvent) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.writeLocked(ctx, event)
+}
+
+func (c *client) writeLocked(ctx context.Context, event domain.TaskEvent) error {
+	if event.Sequence <= c.lastSequence {
+		return nil
+	}
+	if c.writeEvent != nil {
+		if err := c.writeEvent(ctx, event); err != nil {
+			return err
+		}
+		c.lastSequence = event.Sequence
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return c.conn.Write(ctx, websocket.MessageText, mustJSON(event))
+	if err := c.conn.Write(ctx, websocket.MessageText, mustJSON(event)); err != nil {
+		return err
+	}
+	c.lastSequence = event.Sequence
+	return nil
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
@@ -98,27 +156,37 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request, taskID string) {
 		http.Error(w, "invalid after", http.StatusBadRequest)
 		return
 	}
-	events, err := h.repo.Events(r.Context(), taskID)
-	if err != nil {
-		http.Error(w, "task not found", http.StatusNotFound)
-		return
-	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
-	c := &client{conn: conn}
-	// Replay is sent before registration, so a new event cannot overtake the
-	// cursor snapshot. The runner persists events before publishing them.
+	c := &client{conn: conn, lastSequence: after}
+	// Register while holding the per-client write lock. Concurrent publishes
+	// then wait until the persisted replay snapshot has been delivered. The
+	// sequence cursor suppresses the duplicate publish for an event that was
+	// persisted after registration but was already included in the snapshot.
+	c.mu.Lock()
+	if !h.add(taskID, c) {
+		c.mu.Unlock()
+		c.close(websocket.StatusGoingAway, "server shutting down")
+		return
+	}
+	events, err := h.repo.Events(r.Context(), taskID)
+	if err != nil {
+		h.remove(taskID, c)
+		c.mu.Unlock()
+		c.close(websocket.StatusInternalError, "event replay failed")
+		return
+	}
 	for _, event := range events {
-		if event.Sequence > after {
-			if err := c.write(r.Context(), event); err != nil {
-				return
-			}
+		if err := c.writeLocked(r.Context(), event); err != nil {
+			h.remove(taskID, c)
+			c.mu.Unlock()
+			return
 		}
 	}
-	h.add(taskID, c)
+	c.mu.Unlock()
 	defer h.remove(taskID, c)
 	for {
 		_, _, err := conn.Read(r.Context())

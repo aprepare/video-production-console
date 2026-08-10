@@ -62,8 +62,13 @@ type TurnCompletedHandler interface {
 	TaskDeliveryFailed(context.Context, string, string, error) error
 }
 
+type FormalTaskExecutionConfig struct {
+	Model, Effort string
+	WritableRoots []string
+}
+
 type FormalTaskExecutionConfigProvider interface {
-	TaskExecutionConfig(context.Context, string) (string, string, error)
+	TaskExecutionConfig(context.Context, string) (FormalTaskExecutionConfig, error)
 }
 
 // Broker serializes local writes per session and supplements that mutex with a
@@ -81,6 +86,10 @@ type Broker struct {
 	completed TurnCompletedHandler
 
 	completionWake chan struct{}
+	workerCtx      context.Context
+	cancelWorkers  context.CancelFunc
+	workerWG       sync.WaitGroup
+	closeOnce      sync.Once
 }
 
 func (b *Broker) SetTurnCompletedHandler(handler TurnCompletedHandler) {
@@ -97,6 +106,7 @@ func (b *Broker) SetTurnCompletedHandler(handler TurnCompletedHandler) {
 }
 
 func NewBroker(repo *store.ConversationRepository, rpc RPC) *Broker {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	b := &Broker{
 		repo:           repo,
 		rpc:            rpc,
@@ -105,14 +115,32 @@ func NewBroker(repo *store.ConversationRepository, rpc RPC) *Broker {
 		sessions:       make(map[string]*sync.Mutex),
 		turns:          make(map[string]string),
 		completionWake: make(chan struct{}, completionQueueSize),
+		workerCtx:      workerCtx,
+		cancelWorkers:  cancelWorkers,
 	}
 	if rpc != nil {
+		b.workerWG.Add(completionWorkers + 1)
 		for range completionWorkers {
-			go b.consumeCompletions()
+			go func() {
+				defer b.workerWG.Done()
+				b.consumeCompletions()
+			}()
 		}
-		go b.consumeNotifications(rpc.Notifications())
+		notifications := rpc.Notifications()
+		go func() {
+			defer b.workerWG.Done()
+			b.consumeNotifications(notifications)
+		}()
 	}
 	return b
+}
+
+func (b *Broker) Close() {
+	if b == nil {
+		return
+	}
+	b.closeOnce.Do(b.cancelWorkers)
+	b.workerWG.Wait()
 }
 
 // Recover restores durable Broker ownership after process startup. An outbox
@@ -468,15 +496,16 @@ func (b *Broker) startWithReplacement(ctx context.Context, session domain.ChatSe
 	b.mu.Unlock()
 	if strings.HasPrefix(outbox.ClientKey, taskClientKeyPrefix) {
 		if provider, ok := completed.(FormalTaskExecutionConfigProvider); ok {
-			model, effort, configErr := provider.TaskExecutionConfig(ctx, outbox.ClientKey)
+			config, configErr := provider.TaskExecutionConfig(ctx, outbox.ClientKey)
 			if configErr != nil {
-				return b.failSending(ctx, outbox, fmt.Errorf("resolve formal task model: %w", configErr))
+				return b.failSending(ctx, outbox, fmt.Errorf("resolve formal task configuration: %w", configErr))
 			}
-			if strings.TrimSpace(model) != "" {
-				params["model"] = strings.TrimSpace(model)
+			params["sandboxPolicy"] = managedTurnSandboxPolicy(append([]string{session.WorkingDirectory}, config.WritableRoots...)...)
+			if strings.TrimSpace(config.Model) != "" {
+				params["model"] = strings.TrimSpace(config.Model)
 			}
-			if strings.TrimSpace(effort) != "" {
-				params["effort"] = strings.TrimSpace(effort)
+			if strings.TrimSpace(config.Effort) != "" {
+				params["effort"] = strings.TrimSpace(config.Effort)
 			}
 		}
 	}
@@ -536,11 +565,33 @@ func (b *Broker) replaceMissingThread(ctx context.Context, session domain.ChatSe
 	if threadID == "" {
 		return domain.ChatSession{}, errors.New("Codex did not return a replacement thread ID")
 	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			b.cleanupReplacementThread(ctx, threadID)
+		}
+	}()
+	if session.ProjectID != nil {
+		accountName, projectTitle, err := b.repo.ProjectThreadLabel(ctx, *session.ProjectID)
+		if err != nil {
+			return domain.ChatSession{}, fmt.Errorf("resolve replacement thread label: %w", err)
+		}
+		if err := b.rpc.Call(ctx, "thread/name/set", map[string]any{"threadId": threadID, "name": projectThreadName(accountName, projectTitle)}, &struct{}{}); err != nil {
+			return domain.ChatSession{}, fmt.Errorf("name replacement Codex thread: %w", err)
+		}
+	}
 	if err := b.repo.SetSessionThread(ctx, session.ID, threadID); err != nil {
 		return domain.ChatSession{}, err
 	}
+	cleanup = false
 	session.CodexThreadID = &threadID
 	return session, nil
+}
+
+func (b *Broker) cleanupReplacementThread(ctx context.Context, threadID string) {
+	if err := b.rpc.Call(ctx, "thread/archive", map[string]any{"threadId": threadID}, &struct{}{}); err != nil {
+		_ = b.repo.RecordThreadCleanup(ctx, threadID, "replacement_not_bound", err)
+	}
 }
 
 func (b *Broker) failWithoutSending(ctx context.Context, outbox domain.ChatOutbox, cause error) (SendReceipt, error) {
@@ -595,7 +646,18 @@ func (b *Broker) rememberTurn(turnID, sessionID string) {
 }
 
 func (b *Broker) consumeNotifications(notifications <-chan codexapp.Notification) {
-	for notification := range notifications {
+	defer func() { _ = b.interruptActiveTimings(context.Background()) }()
+	for {
+		var notification codexapp.Notification
+		var ok bool
+		select {
+		case <-b.workerCtx.Done():
+			return
+		case notification, ok = <-notifications:
+			if !ok {
+				return
+			}
+		}
 		turnID := notificationTurnID(notification.Params)
 		sessionID := b.sessionForTurn(turnID)
 		if turnID != "" {
@@ -623,7 +685,6 @@ func (b *Broker) consumeNotifications(notifications <-chan codexapp.Notification
 			b.persistCompletion(sessionID, turnID)
 		}
 	}
-	_ = b.interruptActiveTimings(context.Background())
 }
 
 func (b *Broker) interruptActiveTimings(ctx context.Context) error {
@@ -658,6 +719,14 @@ func (b *Broker) projectTimingNotification(ctx context.Context, turnID string, n
 	}
 	classification, ok := progress.ProjectTiming(progress.Input{Method: notification.Method, RawJSON: string(notification.Params)})
 	if !ok {
+		return nil
+	}
+	// Formal task execution is a transactional lifecycle boundary, not a raw
+	// notification boundary. Success is closed together with the validation
+	// claim, while failures and cancellation are closed with their durable task
+	// transition. Projecting turn/completed here would make those transactions
+	// unable to roll back the execution finish atomically.
+	if classification.PhaseKey == "codex_execution" {
 		return nil
 	}
 	task, err := store.NewTaskRepository(b.repo.DB()).GetByCodexTurn(ctx, turnID)
@@ -713,18 +782,26 @@ func (b *Broker) consumeCompletions() {
 	defer ticker.Stop()
 	for {
 		select {
+		case <-b.workerCtx.Done():
+			return
 		case <-b.completionWake:
 		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), completionTimeout)
+		ctx, cancel := context.WithTimeout(b.workerCtx, completionTimeout)
 		_ = b.drainCompletions(ctx)
 		cancel()
+		if b.workerCtx.Err() != nil {
+			return
+		}
 	}
 }
 
 func (b *Broker) persistCompletion(sessionID, turnID string) {
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if b.workerCtx.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(b.workerCtx, 5*time.Second)
 		err := b.repo.EnqueueCompletion(ctx, sessionID, turnID)
 		cancel()
 		if err == nil {
@@ -735,7 +812,15 @@ func (b *Broker) persistCompletion(sessionID, turnID string) {
 			return
 		}
 		b.recordCompletionError(sessionID, turnID, "completion_inbox_persist_failed", err)
-		time.Sleep(completionRetry)
+		timer := time.NewTimer(completionRetry)
+		select {
+		case <-b.workerCtx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
 	}
 }
 

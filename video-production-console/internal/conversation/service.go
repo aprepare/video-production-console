@@ -36,13 +36,14 @@ type Service struct {
 	rpc                     ThreadRPC
 	roots                   []string
 	knownSkills             map[string]struct{}
-	dataRoot                string
+	taskProjectRoot         string
 	desktopWorkingDirectory string
 	ensureMu                sync.Mutex
 }
 
 type ServiceOptions struct {
 	DataRoot                string
+	TaskProjectRoot         string
 	DesktopWorkingDirectory string
 }
 
@@ -57,7 +58,7 @@ func NewService(repo *store.ConversationRepository, broker *Broker, rpc ThreadRP
 	if len(optionValues) > 0 {
 		options = optionValues[0]
 	}
-	service := &Service{repo: repo, broker: broker, rpc: rpc, roots: canonicalRoots(roots), knownSkills: known, dataRoot: strings.TrimSpace(options.DataRoot), desktopWorkingDirectory: strings.TrimSpace(options.DesktopWorkingDirectory)}
+	service := &Service{repo: repo, broker: broker, rpc: rpc, roots: canonicalRoots(roots), knownSkills: known, taskProjectRoot: strings.TrimSpace(options.TaskProjectRoot), desktopWorkingDirectory: strings.TrimSpace(options.DesktopWorkingDirectory)}
 	if repo != nil && rpc != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		service.retryThreadCleanup(cleanupCtx)
@@ -92,6 +93,13 @@ func (s *Service) EnsureProjectMainSession(ctx context.Context, projectID string
 				return session, nil
 			}
 		}
+		active, activeErr := s.repo.SessionHasActiveWork(ctx, session.ID)
+		if activeErr != nil {
+			return domain.ChatSession{}, fmt.Errorf("check project conversation activity: %w", activeErr)
+		}
+		if active {
+			return domain.ChatSession{}, store.ErrConversationActive
+		}
 		if err := s.repo.DemoteProjectMainSession(ctx, session.ID); err != nil {
 			return domain.ChatSession{}, fmt.Errorf("demote unusable project main session: %w", err)
 		}
@@ -118,14 +126,43 @@ func (s *Service) ResolveProjectMainSession(ctx context.Context, projectID strin
 	return s.EnsureProjectMainSession(ctx, projectID)
 }
 
-func (s *Service) projectWorkingDirectory(projectID string) (string, error) {
-	if s.dataRoot == "" || !filepath.IsAbs(s.dataRoot) {
-		return "", errors.New("conversation data root is not configured")
+func (s *Service) RecoverProjectMainSessions(ctx context.Context) error {
+	if s == nil || s.repo == nil || s.rpc == nil {
+		return errors.New("conversation service is not configured")
 	}
-	directory := filepath.Clean(filepath.Join(s.dataRoot, "projects", projectID))
+	sessions, err := s.repo.ListSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list project conversations for recovery: %w", err)
+	}
+	var recoveryErr error
+	for _, session := range sessions {
+		if session.Kind != domain.ChatProject || session.Source != "console" || session.ProjectID == nil {
+			continue
+		}
+		if _, err := s.EnsureProjectMainSession(ctx, *session.ProjectID); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("recover project %s: %w", *session.ProjectID, err))
+		}
+	}
+	return recoveryErr
+}
+
+func (s *Service) projectWorkingDirectory(projectID string) (string, error) {
+	if s.taskProjectRoot == "" || !filepath.IsAbs(s.taskProjectRoot) {
+		return "", errors.New("Codex task project root is not configured")
+	}
+	root := filepath.Clean(s.taskProjectRoot)
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("Codex task project root is unavailable")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil || !samePath(root, resolvedRoot) {
+		return "", errors.New("Codex task project root is not canonical")
+	}
+	directory := filepath.Clean(filepath.Join(root, "video-console-tasks", projectID))
 	allowed := false
-	for _, root := range s.roots {
-		if within(root, directory) {
+	for _, configuredRoot := range s.roots {
+		if within(configuredRoot, directory) {
 			allowed = true
 			break
 		}
@@ -177,12 +214,35 @@ func managedThreadStartParams(workingDirectory string) map[string]any {
 	}
 }
 
-func managedTurnSandboxPolicy(workingDirectory string) map[string]any {
+func managedTurnSandboxPolicy(writableRoots ...string) map[string]any {
 	policy := map[string]any{"type": "workspaceWrite"}
-	if workingDirectory = strings.TrimSpace(workingDirectory); workingDirectory != "" {
-		policy["writableRoots"] = []string{workingDirectory}
+	seen := map[string]bool{}
+	roots := make([]string, 0, len(writableRoots))
+	for _, root := range writableRoots {
+		root = strings.TrimSpace(root)
+		key := strings.ToLower(filepath.Clean(root))
+		if root == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		roots = append(roots, root)
+	}
+	if len(roots) != 0 {
+		policy["writableRoots"] = roots
 	}
 	return policy
+}
+
+func projectThreadName(accountName, projectTitle string) string {
+	clean := func(value string) string { return strings.Join(strings.Fields(strings.TrimSpace(value)), " ") }
+	accountName, projectTitle = clean(accountName), clean(projectTitle)
+	if accountName == "" {
+		accountName = "未命名账号"
+	}
+	if projectTitle == "" {
+		projectTitle = "未命名项目"
+	}
+	return "[视频项目] " + accountName + "｜" + projectTitle
 }
 
 func samePath(left, right string) bool {
@@ -289,6 +349,18 @@ func (s *Service) createSession(ctx context.Context, in CreateSessionInput) (dom
 	}
 	if threadID == "" {
 		return domain.ChatSession{}, errors.New("Codex did not return a thread ID")
+	}
+	if in.Kind == domain.ChatProject && in.ProjectID != nil {
+		accountName, projectTitle, labelErr := s.repo.ProjectThreadLabel(ctx, *in.ProjectID)
+		if labelErr != nil {
+			s.cleanupOrphanThread(ctx, threadID, "thread_label_lookup_failed")
+			return domain.ChatSession{}, fmt.Errorf("resolve project thread label: %w", labelErr)
+		}
+		in.Title = projectThreadName(accountName, projectTitle)
+		if err := s.rpc.Call(ctx, "thread/name/set", map[string]any{"threadId": threadID, "name": in.Title}, &struct{}{}); err != nil {
+			s.cleanupOrphanThread(ctx, threadID, "thread_name_failed")
+			return domain.ChatSession{}, fmt.Errorf("name project Codex thread: %w", err)
+		}
 	}
 	now := time.Now().UTC()
 	source := strings.TrimSpace(in.Source)

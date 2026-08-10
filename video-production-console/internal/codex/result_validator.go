@@ -441,8 +441,25 @@ func ValidateResultEnvelopeWithRoots(envelope ResultEnvelope, expectedTaskID str
 			if !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
 				return fmt.Errorf("artifact %d sha256 does not match file content", i)
 			}
+		} else if artifact.Type == "execution_timings" {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil || filepath.IsAbs(artifact.RelativePath) || filepath.Clean(filepath.FromSlash(artifact.RelativePath)) != rel || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("artifact %d execution timing relative_path does not match output path", i)
+			}
+			file, _, _, openErr := openVerifiedArtifact(path, root)
+			if openErr != nil {
+				return fmt.Errorf("artifact %d open execution timings: %w", i, openErr)
+			}
+			actual, hashErr := hashOpenFile(file)
+			_ = file.Close()
+			if hashErr != nil {
+				return fmt.Errorf("artifact %d hash execution timings: %w", i, hashErr)
+			}
+			if !sha256Pattern.MatchString(artifact.SHA256) || !strings.EqualFold(actual, artifact.SHA256) {
+				return fmt.Errorf("artifact %d sha256 does not match execution timings", i)
+			}
 		} else if artifact.RelativePath != "" || (artifact.SHA256 != "" && !directoryArtifact) {
-			return fmt.Errorf("artifact %d receipt fields are only allowed for topic_card", i)
+			return fmt.Errorf("artifact %d receipt fields are only allowed for topic_card or execution_timings", i)
 		}
 		artifactPaths = append(artifactPaths, path)
 	}
@@ -581,7 +598,7 @@ var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 }
 
 func montagePlanArtifactTypes() map[string]bool {
-	return map[string]bool{"production_plan": true, "production_plan_readable": true, "production_plan_validation": true, "selected_media_summary": true, "qc_report": true, "events": true, "stderr_log": true}
+	return map[string]bool{"production_plan": true, "production_plan_readable": true, "production_plan_validation": true, "selected_media_summary": true, "qc_report": true, "events": true, "stderr_log": true, "execution_timings": true}
 }
 
 func montageExecuteArtifactTypes() map[string]bool {

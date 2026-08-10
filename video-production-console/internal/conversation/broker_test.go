@@ -616,7 +616,7 @@ func TestSuccessfulNotificationsProjectSessionSemanticEvents(t *testing.T) {
 	_ = broker
 }
 
-func TestTimingProjectionIsReplayIdempotentAndFinishesExecution(t *testing.T) {
+func TestTimingProjectionDefersExecutionFinishToValidationClaim(t *testing.T) {
 	ctx, db, conversations, session := brokerFixtureWithDB(t)
 	now := time.Now().UTC()
 	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('timing-a','A','#fff','active',?,?)`, now, now); err != nil {
@@ -656,12 +656,29 @@ func TestTimingProjectionIsReplayIdempotentAndFinishesExecution(t *testing.T) {
 	if err := broker.projectTimingNotification(ctx, turnID, codexapp.Notification{Method: "turn/completed", Params: []byte(`{"turn":{"id":"turn-timing"}}`)}); err != nil {
 		t.Fatal(err)
 	}
+	lateStart := codexapp.Notification{Method: "turn/started", Params: []byte(`{"turn":{"id":"turn-timing"}}`)}
+	for range 2 {
+		if err := broker.projectTimingNotification(ctx, turnID, lateStart); err != nil {
+			t.Fatal(err)
+		}
+	}
 	phases, err := timings.ForTask(ctx, taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(phases) != 3 || phases[0].PhaseKey != "codex_execution" || phases[0].State != domain.PhaseCompleted || phases[1].PhaseKey != "web_research" || phases[1].State != domain.PhaseCompleted || phases[2].ExternalID != "search-2" || phases[2].State != domain.PhaseCompleted {
-		t.Fatalf("phases=%+v", phases)
+	if len(phases) != 3 || phases[0].PhaseKey != "codex_execution" || phases[0].State != domain.PhaseRunning || phases[1].PhaseKey != "web_research" || phases[1].State != domain.PhaseCompleted || phases[2].ExternalID != "search-2" || phases[2].State != domain.PhaseCompleted {
+		t.Fatalf("phases before validation claim=%+v", phases)
+	}
+	validationID, claimed, err := tasks.ClaimAppServerResultValidation(ctx, taskID, turnID, time.Now().UTC())
+	if err != nil || !claimed || validationID == "" {
+		t.Fatalf("validation=%q claimed=%v err=%v", validationID, claimed, err)
+	}
+	phases, err = timings.ForTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 4 || phases[0].PhaseKey != "codex_execution" || phases[0].State != domain.PhaseCompleted || phases[3].ID != validationID || phases[3].PhaseKey != "result_validation" || phases[3].State != domain.PhaseRunning {
+		t.Fatalf("phases after validation claim=%+v", phases)
 	}
 	if phases[1].DetailJSON != `{"classification":"observable_tool_event"}` || strings.Contains(phases[1].DetailJSON, "private") {
 		t.Fatalf("unsafe detail_json=%q", phases[1].DetailJSON)

@@ -21,6 +21,7 @@ type PublicSettings struct {
 	MachineProfilePath          string   `json:"machine_profile_path"`
 	AppServerEnabled            bool     `json:"app_server_enabled"`
 	CodexWorkspaceRoots         []string `json:"codex_workspace_roots"`
+	CodexTaskProjectRoot        string   `json:"codex_task_project_root"`
 	CodexHistoryLimit           int      `json:"codex_history_limit"`
 }
 

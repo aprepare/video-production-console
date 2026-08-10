@@ -2,7 +2,6 @@ package codex
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -45,6 +44,10 @@ type TaskScheduler struct {
 	wake               chan struct{}
 	stop               chan struct{}
 	done               chan struct{}
+	runWG              sync.WaitGroup
+	closeOnce          sync.Once
+	closeDone          chan struct{}
+	closed             bool
 }
 
 func NewScheduler(tasks *store.TaskRepository, limit int, makeCommand CommandFactory, makeResume ResumeCommandFactory, broadcast func(Event)) (*TaskScheduler, error) {
@@ -54,7 +57,7 @@ func NewScheduler(tasks *store.TaskRepository, limit int, makeCommand CommandFac
 	if limit < 1 || limit > 4 {
 		return nil, fmt.Errorf("concurrency limit must be between 1 and 4")
 	}
-	s := &TaskScheduler{tasks: tasks, makeCommand: makeCommand, makeResume: makeResume, broadcast: broadcast, limit: limit, running: map[string]*scheduled{}, projectLocks: map[string]string{}, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &TaskScheduler{tasks: tasks, makeCommand: makeCommand, makeResume: makeResume, broadcast: broadcast, limit: limit, running: map[string]*scheduled{}, projectLocks: map[string]string{}, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), closeDone: make(chan struct{})}
 	go s.loop()
 	return s, nil
 }
@@ -129,9 +132,10 @@ func (s *TaskScheduler) dispatch() {
 			cmd, root, err = s.makeCommand(t)
 		}
 		if err != nil {
-			_ = finishTimingPhase(context.Background(), s.tasks.DB(), t.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
-			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "command_build_failed", err.Error())
-			s.notifyTerminalObserver(context.Background(), t.ID)
+			changed, failErr := s.tasks.FailQueuedTask(context.Background(), t.ID, "command_build_failed", err.Error(), time.Now().UTC())
+			if failErr == nil && changed {
+				_ = s.notifyTerminalObserver(context.Background(), t.ID)
+			}
 			s.mu.Lock()
 			delete(s.projectLocks, key)
 			s.mu.Unlock()
@@ -139,27 +143,12 @@ func (s *TaskScheduler) dispatch() {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		startedAt := time.Now().UTC()
-		if err := finishTimingPhase(context.Background(), s.tasks.DB(), t.ID, "queue_wait", domain.PhaseCompleted, startedAt); err != nil {
+		if _, err := s.tasks.ClaimLegacyStart(context.Background(), t.ID, startedAt); err != nil {
 			cancel()
-			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "queue_timing_failed", err.Error())
-			s.mu.Lock()
-			delete(s.projectLocks, key)
-			s.mu.Unlock()
-			continue
-		}
-		execution, err := store.NewTaskTimingRepository(s.tasks.DB()).StartPhase(context.Background(), store.StartPhase{TaskID: t.ID, Attempt: 1, Key: "codex_execution", DisplayName: "Codex 执行", Source: domain.PhaseSourceHost, ExternalID: "legacy-execution", At: startedAt})
-		if err != nil {
-			cancel()
-			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "execution_timing_failed", err.Error())
-			s.mu.Lock()
-			delete(s.projectLocks, key)
-			s.mu.Unlock()
-			continue
-		}
-		if err := s.tasks.MarkRunning(context.Background(), t.ID, startedAt); err != nil {
-			cancel()
-			_, _ = store.NewTaskTimingRepository(s.tasks.DB()).FinishPhase(context.Background(), store.FinishPhase{ID: execution.ID, State: domain.PhaseFailed, At: startedAt})
-			_ = s.tasks.UpdateStatus(context.Background(), t.ID, domain.TaskFailed, "", "task_start_failed", err.Error())
+			changed, failErr := s.tasks.FailQueuedTask(context.Background(), t.ID, "task_start_failed", err.Error(), startedAt)
+			if failErr == nil && changed {
+				_ = s.notifyTerminalObserver(context.Background(), t.ID)
+			}
 			s.mu.Lock()
 			delete(s.projectLocks, key)
 			s.mu.Unlock()
@@ -169,7 +158,11 @@ func (s *TaskScheduler) dispatch() {
 		s.running[t.ID] = &scheduled{cancel: cancel, cmd: cmd}
 		s.mu.Unlock()
 		slots--
-		go s.run(ctx, t, cmd, root, key)
+		s.runWG.Add(1)
+		go func() {
+			defer s.runWG.Done()
+			s.run(ctx, t, cmd, root, key)
+		}()
 	}
 }
 func (s *TaskScheduler) run(ctx context.Context, t domain.CodexTask, cmd *exec.Cmd, root, key string) {
@@ -212,6 +205,12 @@ func (s *TaskScheduler) SetCompletionObserver(observer taskcompletion.Observer) 
 	s.mu.Unlock()
 }
 func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("scheduler is closed")
+	}
+	defer s.mu.Unlock()
 	if t.ID == "" {
 		return errors.New("task id is required")
 	}
@@ -229,21 +228,11 @@ func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 	if t.SkillName != resolved.Skill {
 		return fmt.Errorf("task skill %q does not match action %q", t.SkillName, t.Action)
 	}
-	if _, err := s.tasks.Get(ctx, t.ID); errors.Is(err, sql.ErrNoRows) {
-		if err := s.tasks.CreateV2(ctx, t); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
 	if t.Status != domain.TaskQueued {
 		return fmt.Errorf("task is not queued")
 	}
 	acceptedAt := time.Now().UTC()
-	if err := s.tasks.MarkQueued(ctx, t.ID, acceptedAt); err != nil {
-		return err
-	}
-	if _, err := store.NewTaskTimingRepository(s.tasks.DB()).StartPhase(ctx, store.StartPhase{TaskID: t.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: acceptedAt}); err != nil {
+	if _, err := s.tasks.AdmitQueuedTask(ctx, t, acceptedAt); err != nil {
 		return err
 	}
 	s.signal()
@@ -251,11 +240,17 @@ func (s *TaskScheduler) Enqueue(ctx context.Context, t domain.CodexTask) error {
 }
 
 func (s *TaskScheduler) Resume(ctx context.Context, id, answer string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("scheduler is closed")
+	}
+	defer s.mu.Unlock()
 	t, err := s.tasks.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	if t.Status != domain.TaskAwaitingInput && t.Status != domain.TaskWaitingInput {
+	if !t.Status.IsWaitingForInput() {
 		return fmt.Errorf("task is not waiting for input")
 	}
 	if t.CodexSessionID == nil || *t.CodexSessionID == "" {
@@ -264,10 +259,7 @@ func (s *TaskScheduler) Resume(ctx context.Context, id, answer string) error {
 	if s.makeResume == nil {
 		return fmt.Errorf("resume is not configured")
 	}
-	if err := s.tasks.AddMessage(ctx, domain.TaskMessage{TaskID: id, Role: "user", Content: answer}); err != nil {
-		return err
-	}
-	if err := s.tasks.UpdateStatus(ctx, id, domain.TaskQueued, "", "", ""); err != nil {
+	if err := s.tasks.BeginLegacyResume(ctx, id, answer, time.Now().UTC()); err != nil {
 		return err
 	}
 	// The resume command is selected when dispatch sees the task's session.
@@ -275,9 +267,17 @@ func (s *TaskScheduler) Resume(ctx context.Context, id, answer string) error {
 	return nil
 }
 func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
-	t, err := s.tasks.Get(ctx, id)
+	persistCtx := context.WithoutCancel(ctx)
+	changed, err := s.tasks.CancelTask(persistCtx, id, time.Now().UTC())
 	if err != nil {
 		return err
+	}
+	if !changed {
+		task, getErr := s.tasks.Get(persistCtx, id)
+		if getErr != nil {
+			return getErr
+		}
+		return fmt.Errorf("task cannot be cancelled in status %s", task.Status)
 	}
 	s.mu.Lock()
 	item := s.running[id]
@@ -286,39 +286,10 @@ func (s *TaskScheduler) Cancel(ctx context.Context, id string) error {
 		if item.cmd != nil && item.cmd.Process != nil {
 			terminateProcess(item.cmd)
 		}
-		s.mu.Unlock()
-		persistCtx := context.WithoutCancel(ctx)
-		_ = s.tasks.AppendEvent(persistCtx, id, domain.TaskEvent{Kind: "cancel_requested", Level: "warning", DisplayText: "Task cancellation requested"})
-		if err := s.tasks.UpdateStatus(persistCtx, id, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
-			return err
-		}
-		return s.notifyTerminalObserver(persistCtx, id)
 	}
 	s.mu.Unlock()
-	if t.Status == domain.TaskQueued || t.Status == domain.TaskAwaitingInput || t.Status == domain.TaskWaitingInput {
-		_ = finishTimingPhase(ctx, s.tasks.DB(), id, "queue_wait", domain.PhaseCanceled, time.Now().UTC())
-		_ = s.tasks.AppendEvent(ctx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
-		if err := s.tasks.UpdateStatus(ctx, id, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
-			return err
-		}
-		return s.notifyTerminalObserver(ctx, id)
-	}
-	return fmt.Errorf("task cannot be cancelled in status %s", t.Status)
-}
-
-func finishTimingPhase(ctx context.Context, db *sql.DB, taskID, key string, state domain.TaskPhaseState, at time.Time) error {
-	timings := store.NewTaskTimingRepository(db)
-	phases, err := timings.ForTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	for i := len(phases) - 1; i >= 0; i-- {
-		if phases[i].PhaseKey == key && phases[i].FinishedAt == nil {
-			_, err := timings.FinishPhase(ctx, store.FinishPhase{ID: phases[i].ID, State: state, At: at})
-			return err
-		}
-	}
-	return nil
+	_ = s.tasks.AppendEvent(persistCtx, id, domain.TaskEvent{Kind: "cancelled", Level: "warning", DisplayText: "Task cancelled"})
+	return s.notifyTerminalObserver(persistCtx, id)
 }
 
 func (s *TaskScheduler) notifyTerminalObserver(ctx context.Context, taskID string) error {
@@ -355,18 +326,27 @@ func (s *TaskScheduler) Snapshot() SchedulerSnapshot {
 	return SchedulerSnapshot{Limit: s.limit, Running: len(s.running), Queued: len(q)}
 }
 func (s *TaskScheduler) Close() {
-	select {
-	case <-s.stop:
-	default:
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
 		close(s.stop)
-	}
-	<-s.done
-	s.mu.Lock()
-	for _, v := range s.running {
-		v.cancel()
-		if v.cmd != nil && v.cmd.Process != nil {
-			terminateProcess(v.cmd)
+		<-s.done
+
+		s.mu.Lock()
+		running := make([]*scheduled, 0, len(s.running))
+		for _, item := range s.running {
+			running = append(running, item)
 		}
-	}
-	s.mu.Unlock()
+		s.mu.Unlock()
+		for _, item := range running {
+			item.cancel()
+			if item.cmd != nil && item.cmd.Process != nil {
+				terminateProcess(item.cmd)
+			}
+		}
+		s.runWG.Wait()
+		close(s.closeDone)
+	})
+	<-s.closeDone
 }

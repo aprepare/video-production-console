@@ -25,8 +25,6 @@ type workflowTaskLauncher struct {
 	mu        sync.Mutex
 }
 
-const durableLaunchConfirmationTimeout = 5 * time.Second
-
 func NewWorkflowTaskLauncher(db *sql.DB, scheduler codex.Scheduler, preparer TaskManifestPreparer, models TaskModelResolver) workflow.TaskLauncher {
 	return &workflowTaskLauncher{db: db, scheduler: scheduler, preparer: preparer, models: models}
 }
@@ -41,7 +39,7 @@ func (l *workflowTaskLauncher) LaunchTopicCommit(ctx context.Context, in workflo
 	if err != nil {
 		return domain.CodexTask{}, err
 	}
-	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now, taskID: workflowStepTaskID(in.WorkflowID, "topic"), publish: l.publishPreparedTask})
+	return enqueueTopicCommit(ctx, l.db, l.scheduler, l.preparer, l.models, in.Project, selection, topicCommitLaunch{model: taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort}, now: in.Now, taskID: workflowStepTaskID(in.WorkflowID, "topic"), publish: l.scheduler.Enqueue})
 }
 
 func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in workflow.LaunchTask) (domain.CodexTask, error) {
@@ -54,6 +52,10 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		return domain.CodexTask{}, errors.New("ready project topic card is required")
 	}
 	tasks := store.NewTaskRepository(l.db)
+	prepareStartedAt := in.Now
+	if prepareStartedAt.IsZero() {
+		prepareStartedAt = time.Now().UTC()
+	}
 	model, err := resolveTaskModel(ctx, l.models, taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort})
 	if err != nil {
 		return domain.CodexTask{}, err
@@ -67,24 +69,15 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 			return existing, nil
 		}
 		if _, _, manifestErr := tasks.PreparedManifest(ctx, taskID); manifestErr == nil {
-			return existing, nil
+			return publishQueuedTask(ctx, l.db, existing, l.scheduler.Enqueue)
 		} else if !errors.Is(manifestErr, sql.ErrNoRows) {
 			return domain.CodexTask{}, manifestErr
 		}
-		if err := l.preparer.Prepare(ctx, existing, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}); err != nil {
-			return domain.CodexTask{}, err
-		}
-		if err := l.publishPreparedTask(ctx, existing); err != nil {
-			return domain.CodexTask{}, err
-		}
-		return existing, nil
+		return prepareAndPublishTask(ctx, l.db, l.preparer, existing, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}, prepareStartedAt, l.scheduler.Enqueue, nil)
 	} else if !errors.Is(readErr, sql.ErrNoRows) {
 		return domain.CodexTask{}, readErr
 	}
-	now := in.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
+	now := prepareStartedAt
 	projectID := in.Project.ID
 	task := domain.CodexTask{
 		ID: taskID, ProjectID: &projectID, AccountID: in.Project.AccountID,
@@ -92,38 +85,7 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		Status: domain.TaskQueued, PromptSnapshot: "Create a remix from the approved topic card.",
 		ModelName: model.Model, ReasoningEffort: model.ReasoningEffort, CreatedAt: now,
 	}
-	if err := l.preparer.Prepare(ctx, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}); err != nil {
-		return domain.CodexTask{}, err
-	}
-	if err := l.publishPreparedTask(ctx, task); err != nil {
-		return domain.CodexTask{}, err
-	}
-	return task, nil
-}
-
-func (l *workflowTaskLauncher) publishPreparedTask(ctx context.Context, expected domain.CodexTask) error {
-	notifyErr := l.scheduler.Enqueue(ctx, expected)
-	if notifyErr == nil {
-		return nil
-	}
-	confirmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), durableLaunchConfirmationTimeout)
-	defer cancel()
-	tasks := store.NewTaskRepository(l.db)
-	persisted, readErr := tasks.Get(confirmCtx, expected.ID)
-	if readErr != nil {
-		return errors.Join(notifyErr, readErr)
-	}
-	projectMatches := (expected.ProjectID == nil && persisted.ProjectID == nil) || (expected.ProjectID != nil && persisted.ProjectID != nil && *expected.ProjectID == *persisted.ProjectID)
-	identityMatches := projectMatches && persisted.AccountID == expected.AccountID && persisted.Type == expected.Type && persisted.SkillName == expected.SkillName && persisted.Action == expected.Action && persisted.ModelName == expected.ModelName && persisted.ReasoningEffort == expected.ReasoningEffort
-	if !identityMatches {
-		return errors.Join(notifyErr, errors.New("durable workflow task identity mismatch"))
-	}
-	snapshot, path, manifestErr := tasks.PreparedManifest(confirmCtx, expected.ID)
-	if manifestErr != nil || strings.TrimSpace(snapshot) == "" || strings.TrimSpace(path) == "" {
-		return errors.Join(notifyErr, manifestErr, errors.New("durable workflow task manifest is missing"))
-	}
-	_ = tasks.AppendEvent(confirmCtx, expected.ID, domain.TaskEvent{Kind: "workflow_scheduler_notify_warning", Level: "warning", DisplayText: notifyErr.Error()})
-	return nil
+	return prepareAndPublishTask(ctx, l.db, l.preparer, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}, prepareStartedAt, l.scheduler.Enqueue, nil)
 }
 
 func workflowStepTaskID(workflowID, step string) string {

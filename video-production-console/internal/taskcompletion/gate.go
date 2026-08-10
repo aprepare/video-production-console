@@ -8,13 +8,16 @@ import (
 )
 
 type CompletedInput struct {
-	Task           domain.CodexTask
-	ManifestPath   string
-	Action         domain.TaskAction
-	Summary        string
-	RawJSON        string
-	Artifacts      []store.TaskArtifact
-	ExpectedTurnID *string
+	Task               domain.CodexTask
+	ManifestPath       string
+	Action             domain.TaskAction
+	Summary            string
+	RawJSON            string
+	Artifacts          []store.TaskArtifact
+	ExpectedTurnID     *string
+	ValidationPhaseID  string
+	AssetCommitPhaseID string
+	SkillTimings       []domain.SkillTimingRun
 }
 
 type Gate interface {

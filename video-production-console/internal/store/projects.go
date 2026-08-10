@@ -254,13 +254,6 @@ func (r *ProjectRepository) PublishProject(ctx context.Context, id string, now t
 		}
 		return out, ErrProjectNotInReview
 	}
-	var readyFinal int
-	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM asset_items AS item JOIN asset_versions AS version ON version.id=item.current_version_id WHERE item.project_id=? AND item.type='final_video' AND version.state='ready'`, id).Scan(&readyFinal); err != nil {
-		return out, err
-	}
-	if readyFinal == 0 {
-		return out, ErrFinalVideoMissing
-	}
 	result, err := conn.ExecContext(ctx, `UPDATE projects SET stage='published',publication_status='published',published_at=?,updated_at=? WHERE id=? AND stage='review'`, now, now, id)
 	if err != nil {
 		return out, err

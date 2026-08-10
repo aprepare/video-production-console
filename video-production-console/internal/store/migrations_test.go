@@ -1035,7 +1035,7 @@ func TestV2MigrationBackfillsAssetsAndTasks(t *testing.T) {
 
 	wantSettings := map[string]string{
 		"max_codex_concurrency": "2",
-		"listen_addr":           "0.0.0.0:2030",
+		"listen_addr":           "127.0.0.1:2030",
 		"baokuan_base_url":      "http://127.0.0.1:2022",
 		"codex_binary_path":     "codex",
 	}

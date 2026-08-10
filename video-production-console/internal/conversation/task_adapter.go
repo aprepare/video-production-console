@@ -76,7 +76,7 @@ func (a *TaskAdapter) RetryOutput(ctx context.Context, taskID string) error {
 	if err != nil {
 		return fmt.Errorf("read retained output: %w", err)
 	}
-	turnID, err := a.tasks.ClaimOutputInvalidRetry(ctx, task.ID)
+	turnID, validationID, err := a.tasks.ClaimOutputInvalidRetryValidation(ctx, task.ID, time.Now().UTC())
 	if errors.Is(err, store.ErrOutputRetryNotEligible) {
 		return ErrOutputRetryNotEligible
 	}
@@ -88,6 +88,7 @@ func (a *TaskAdapter) RetryOutput(ctx context.Context, taskID string) error {
 	runner.CompletionGate = a.completionGate
 	runner.CompletionObserver = a.completionObserver
 	runner.ExpectedTurnID = turnID
+	runner.ValidationPhaseID = validationID
 	return runner.CompleteAgentResult(ctx, string(raw))
 }
 
@@ -108,23 +109,14 @@ func (a *TaskAdapter) Enqueue(ctx context.Context, task domain.CodexTask) error 
 	if task.CompletionPhase == "" {
 		task.CompletionPhase = "agent_running"
 	}
-	if _, err := a.tasks.Get(ctx, task.ID); err != nil {
-		if err := a.tasks.CreateV2(ctx, task); err != nil {
-			return err
-		}
-	}
 	acceptedAt := time.Now().UTC()
-	if err := a.tasks.MarkQueued(ctx, task.ID, acceptedAt); err != nil {
-		return err
-	}
-	if _, err := store.NewTaskTimingRepository(a.tasks.DB()).StartPhase(ctx, store.StartPhase{TaskID: task.ID, Attempt: 1, Key: "queue_wait", DisplayName: "排队等待", Source: domain.PhaseSourceHost, ExternalID: "scheduler-accept", At: acceptedAt}); err != nil {
+	if _, err := a.tasks.AdmitQueuedTask(ctx, task, acceptedAt); err != nil {
 		return err
 	}
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: taskClientKeyPrefix + task.ID + ":initial", Text: task.PromptSnapshot})
 	if err != nil {
-		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
-		_ = a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_enqueue_failed", err.Error())
-		return errors.Join(err, a.afterTerminal(ctx, task.ID))
+		_, persistErr := a.tasks.FailQueuedTask(ctx, task.ID, "app_server_enqueue_failed", err.Error(), time.Now().UTC())
+		return errors.Join(err, persistErr, a.afterTerminal(ctx, task.ID))
 	}
 	if receipt.TurnID == "" {
 		return nil
@@ -147,7 +139,7 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 	if task.ChatSessionID == nil || *task.ChatSessionID == "" {
 		return errors.New("App Server task has no chat session")
 	}
-	if task.Status != domain.TaskAwaitingInput && task.Status != domain.TaskWaitingInput {
+	if !task.Status.IsWaitingForInput() {
 		return errors.New("task is not waiting for input")
 	}
 	if task.CodexTurnID == nil || strings.TrimSpace(*task.CodexTurnID) == "" {
@@ -161,8 +153,7 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 	}
 	receipt, err := a.broker.SendTask(ctx, SendInput{SessionID: *task.ChatSessionID, ClientKey: resumeKey, Text: answer})
 	if err != nil {
-		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
-		persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "app_server_resume_failed", err.Error())
+		persistErr := a.tasks.FailTask(ctx, task.ID, "app_server_resume_failed", err.Error(), time.Now().UTC())
 		return errors.Join(err, persistErr, a.afterTerminal(ctx, task.ID))
 	}
 	if receipt.TurnID == "" {
@@ -175,7 +166,7 @@ func (a *TaskAdapter) Resume(ctx context.Context, taskID, answer string) error {
 }
 
 func (a *TaskAdapter) failBindReceipt(ctx context.Context, taskID string, cause error) error {
-	if err := a.tasks.UpdateStatus(ctx, taskID, domain.TaskFailed, "", "task_turn_bind_failed", cause.Error()); err != nil {
+	if err := a.tasks.FailTask(ctx, taskID, "task_turn_bind_failed", cause.Error(), time.Now().UTC()); err != nil {
 		return errors.Join(cause, err)
 	}
 	return errors.Join(cause, a.afterTerminal(ctx, taskID))
@@ -227,7 +218,7 @@ func (a *TaskAdapter) CompleteTurn(ctx context.Context, sessionID, turnID, resul
 	if a.dataRoot == "" {
 		return errors.New("App Server task completion data root is not configured")
 	}
-	claimed, err := a.tasks.ClaimAppServerResult(ctx, task.ID, turnID)
+	validationID, claimed, err := a.tasks.ClaimAppServerResultValidation(ctx, task.ID, turnID, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -244,6 +235,7 @@ func (a *TaskAdapter) CompleteTurn(ctx context.Context, sessionID, turnID, resul
 	runner.CompletionGate = a.completionGate
 	runner.CompletionObserver = a.completionObserver
 	runner.ExpectedTurnID = &turnID
+	runner.ValidationPhaseID = validationID
 	return runner.CompleteAgentResult(ctx, resultText)
 }
 
@@ -261,7 +253,7 @@ func (a *TaskAdapter) FailTurn(ctx context.Context, sessionID, turnID, code stri
 	if task.ChatSessionID == nil || *task.ChatSessionID != sessionID {
 		return errors.New("App Server task failure identity mismatch")
 	}
-	if task.Status == domain.TaskCompleted || task.Status == domain.TaskFailed || task.Status == domain.TaskCanceled || task.Status == domain.TaskInterrupted {
+	if task.Status.IsTerminal() {
 		return nil
 	}
 	message := code
@@ -285,11 +277,10 @@ func (a *TaskAdapter) TaskTurnStarted(ctx context.Context, clientKey, sessionID,
 		return err
 	}
 	fail := func(cause error) error {
-		if task.Status == domain.TaskCompleted || task.Status == domain.TaskFailed || task.Status == domain.TaskCanceled || task.Status == domain.TaskInterrupted || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput {
+		if task.Status.IsTerminal() || task.Status.IsWaitingForInput() {
 			return cause
 		}
-		_ = finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC())
-		if persistErr := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_turn_bind_failed", cause.Error()); persistErr != nil {
+		if persistErr := a.tasks.FailTask(ctx, task.ID, "task_turn_bind_failed", cause.Error(), time.Now().UTC()); persistErr != nil {
 			return errors.Join(cause, persistErr)
 		}
 		return errors.Join(cause, a.afterTerminal(ctx, task.ID))
@@ -322,35 +313,17 @@ func (a *TaskAdapter) TaskDeliveryFailed(ctx context.Context, clientKey, session
 	if task.ChatSessionID == nil || *task.ChatSessionID != sessionID {
 		return errors.New("formal task queued delivery identity mismatch")
 	}
-	if task.Status == domain.TaskCompleted || task.Status == domain.TaskFailed || task.Status == domain.TaskCanceled || task.Status == domain.TaskInterrupted {
+	if task.Status.IsTerminal() {
 		return nil
 	}
 	message := "queued formal task delivery failed"
 	if cause != nil {
 		message = cause.Error()
 	}
-	if err := finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseFailed, time.Now().UTC()); err != nil {
-		return err
-	}
-	if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskFailed, "", "task_delivery_failed", message); err != nil {
+	if err := a.tasks.FailTask(ctx, task.ID, "task_delivery_failed", message, time.Now().UTC()); err != nil {
 		return err
 	}
 	return a.afterTerminal(ctx, task.ID)
-}
-
-func finishTaskTimingPhase(ctx context.Context, db *sql.DB, taskID, key string, state domain.TaskPhaseState, at time.Time) error {
-	timings := store.NewTaskTimingRepository(db)
-	phases, err := timings.ForTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	for i := len(phases) - 1; i >= 0; i-- {
-		if phases[i].PhaseKey == key && phases[i].FinishedAt == nil {
-			_, err := timings.FinishPhase(ctx, store.FinishPhase{ID: phases[i].ID, State: state, At: at})
-			return err
-		}
-	}
-	return nil
 }
 
 func formalTaskID(clientKey string) (string, error) {
@@ -365,32 +338,40 @@ func formalTaskID(clientKey string) (string, error) {
 	return taskID, nil
 }
 
-func (a *TaskAdapter) TaskExecutionConfig(ctx context.Context, clientKey string) (string, string, error) {
+func (a *TaskAdapter) TaskExecutionConfig(ctx context.Context, clientKey string) (FormalTaskExecutionConfig, error) {
 	if a == nil || a.tasks == nil {
-		return "", "", errors.New("formal task configuration is unavailable")
+		return FormalTaskExecutionConfig{}, errors.New("formal task configuration is unavailable")
 	}
 	taskID, err := formalTaskID(clientKey)
 	if err != nil {
-		return "", "", err
+		return FormalTaskExecutionConfig{}, err
 	}
 	task, err := a.tasks.Get(ctx, taskID)
 	if err != nil {
-		return "", "", err
+		return FormalTaskExecutionConfig{}, err
 	}
-	return strings.TrimSpace(task.ModelName), strings.TrimSpace(task.ReasoningEffort), nil
+	if a.dataRoot == "" || !filepath.IsAbs(a.dataRoot) {
+		return FormalTaskExecutionConfig{}, errors.New("formal task output root is unavailable")
+	}
+	projectRootID := task.ID
+	if task.ProjectID != nil && strings.TrimSpace(*task.ProjectID) != "" {
+		projectRootID = strings.TrimSpace(*task.ProjectID)
+	}
+	outputDirectory := filepath.Join(a.dataRoot, "projects", projectRootID, "tasks", task.ID, "output")
+	return FormalTaskExecutionConfig{Model: strings.TrimSpace(task.ModelName), Effort: strings.TrimSpace(task.ReasoningEffort), WritableRoots: []string{outputDirectory}}, nil
 }
 
 func (a *TaskAdapter) Cancel(ctx context.Context, task domain.CodexTask) error {
 	if a == nil || a.tasks == nil {
 		return errors.New("App Server task adapter is not configured")
 	}
-	if task.Status == domain.TaskQueued || task.Status == domain.TaskResuming {
-		at := time.Now().UTC()
-		if err := finishTaskTimingPhase(ctx, a.tasks.DB(), task.ID, "queue_wait", domain.PhaseCanceled, at); err != nil {
+	if task.Status == domain.TaskQueued || task.Status == domain.TaskResuming || task.Status.IsWaitingForInput() {
+		changed, err := a.tasks.CancelTask(ctx, task.ID, time.Now().UTC())
+		if err != nil {
 			return err
 		}
-		if err := a.tasks.UpdateStatus(ctx, task.ID, domain.TaskCanceled, "", "canceled", "task canceled"); err != nil {
-			return err
+		if !changed {
+			return errors.New("App Server task is no longer cancelable")
 		}
 		return a.afterTerminal(ctx, task.ID)
 	}

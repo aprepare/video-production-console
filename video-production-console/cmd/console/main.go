@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"video-production-console/internal/app"
 	"video-production-console/internal/assets"
 	consoleauth "video-production-console/internal/auth"
+	"video-production-console/internal/buildinfo"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/codexapp"
 	"video-production-console/internal/config"
@@ -40,6 +44,14 @@ var codexSecretEnvironmentKeys = []string{
 }
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Println(buildinfo.String())
+		return
+	}
+
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
 	settings := config.Default()
 	executablePath, _ := os.Executable()
 	workingDirectory, _ := os.Getwd()
@@ -57,13 +69,18 @@ func main() {
 		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
 	}
 	desktopWorkingDirectory := resolveDesktopWorkingDirectory(workingDirectory)
+	homeDirectory, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("resolve user home: %v", err)
+	}
+	defaultTaskProjectRoot := defaultCodexTaskProjectRoot(homeDirectory)
 	db, err := store.Open(settings.DatabasePath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 	settingsService := consoleSettings.NewService(store.NewSettingsRepository(db), security.NewSecretProtector())
-	boot := consoleSettings.BootSettings{ListenAddr: settings.ListenAddr, DataRoot: settings.DataRoot, CodexBinaryPath: settings.CodexBinaryPath, ObsidianVault: settings.ObsidianVault, CodexWorkspaceRoots: uniqueCanonicalPaths([]string{workingDirectory, desktopWorkingDirectory, settings.DataRoot})}
+	boot := consoleSettings.BootSettings{ListenAddr: settings.ListenAddr, DataRoot: settings.DataRoot, CodexBinaryPath: settings.CodexBinaryPath, ObsidianVault: settings.ObsidianVault, CodexTaskProjectRoot: defaultTaskProjectRoot, CodexWorkspaceRoots: uniqueCanonicalPaths([]string{workingDirectory, desktopWorkingDirectory, settings.DataRoot, defaultTaskProjectRoot})}
 	if err := settingsService.InitializeBootSettings(context.Background(), boot); err != nil {
 		log.Fatalf("initialize settings: %v", err)
 	}
@@ -89,17 +106,13 @@ func main() {
 	settings.BaokuanBaseURL = runtimeSettings.BaokuanBaseURL
 	settings.CodexBinaryPath = runtimeSettings.CodexBinaryPath
 	settings.ObsidianVault = runtimeSettings.ObsidianVault
-	runtimeSettings.CodexWorkspaceRoots = uniqueCanonicalPaths(append(runtimeSettings.CodexWorkspaceRoots, desktopWorkingDirectory))
+	runtimeSettings.CodexWorkspaceRoots = uniqueCanonicalPaths(append(runtimeSettings.CodexWorkspaceRoots, desktopWorkingDirectory, runtimeSettings.CodexTaskProjectRoot))
 	// The local proxy rejects Codex's advanced JSON Schema dialect. Results are
 	// still strictly validated by the console before any artifact is accepted.
 	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
-	home, homeErr := os.UserHomeDir()
-	if homeErr != nil {
-		log.Fatalf("resolve user home for Skills: %v", homeErr)
-	}
 	skillsService := skillregistry.NewService(store.NewSkillRepository(db), skillregistry.Options{
-		Roots: skillregistry.DefaultRoots(filepath.Join(home, ".codex", "skills")),
+		Roots: skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills")),
 	})
 	if _, scanErr := skillsService.ScanAll(context.Background()); scanErr != nil {
 		log.Printf("Skill scan completed with errors; manifest-backed tasks may be unavailable: %v", scanErr)
@@ -161,6 +174,7 @@ func main() {
 		log.Printf("montage registration is disabled because no machine profile is configured")
 	}
 	hub := realtime.NewHub(taskRepo)
+	defer hub.Close()
 	legacyScheduler.SetTaskBroadcast(func(taskID string, _ codex.Event) {
 		events, err := taskRepo.Events(context.Background(), taskID)
 		if err == nil && len(events) > 0 {
@@ -173,12 +187,16 @@ func main() {
 	var appServerHealth func() codexapp.Health
 	var completionRetryer httpapi.CompletionRetryer
 	if runtimeSettings.AppServerEnabled {
-		manager := codexapp.NewManager(codexapp.NewCommandProcessFactory(codexapp.ProcessConfig{CodexBinary: settings.CodexBinaryPath, WorkingDirectory: workingDirectory, Environment: os.Environ()}))
+		manager := codexapp.NewManager(codexapp.NewCommandProcessFactory(codexapp.ProcessConfig{CodexBinary: settings.CodexBinaryPath, WorkingDirectory: workingDirectory, Environment: commandConfig.SafeEnvironment()}))
 		defer manager.Close()
 		appServerHealth = manager.Health
 		rpc := codexapp.NewManagerRPC(manager)
 		broker := conversation.NewBroker(store.NewConversationRepository(db), rpc)
-		conversations = conversation.NewService(store.NewConversationRepository(db), broker, rpc, runtimeSettings.CodexWorkspaceRoots, skillNames(skillsService), conversation.ServiceOptions{DataRoot: runtimeSettings.DataRoot, DesktopWorkingDirectory: desktopWorkingDirectory})
+		defer broker.Close()
+		conversations = conversation.NewService(store.NewConversationRepository(db), broker, rpc, runtimeSettings.CodexWorkspaceRoots, skillNames(skillsService), conversation.ServiceOptions{DataRoot: runtimeSettings.DataRoot, TaskProjectRoot: runtimeSettings.CodexTaskProjectRoot, DesktopWorkingDirectory: desktopWorkingDirectory})
+		if recoveryErr := conversations.RecoverProjectMainSessions(context.Background()); recoveryErr != nil {
+			log.Printf("recover Codex project routing: %v", recoveryErr)
+		}
 		historyService = history.NewService(history.NewAppServerSource(rpc), store.NewConversationRepository(db))
 		completionConfig := wireTaskCompletion(legacyScheduler, settings.DataRoot, montageCoordinator, remixCoordinator)
 		taskAdapter := conversation.NewTaskAdapter(taskRepo, broker, rpc, completionConfig)
@@ -190,9 +208,10 @@ func main() {
 		cancelRecovery()
 		scheduler = codex.NewCompositeScheduler(taskRepo, legacyScheduler, taskAdapter, conversations)
 	}
-	authService := consoleauth.NewService(store.NewAuthStore(db), consoleauth.Options{})
-	if err := authService.Bootstrap(context.Background(), "123321"); err != nil {
-		log.Fatalf("bootstrap administrator: %v", err)
+	authStore := store.NewAuthStore(db)
+	authService := consoleauth.NewService(authStore, consoleauth.Options{})
+	if err := initializeAdministrator(context.Background(), authStore.Admin, authService.Bootstrap, os.LookupEnv); err != nil {
+		log.Fatal(err)
 	}
 	var montageRetryer interface {
 		Retry(context.Context, string) (domain.RegistrationAttempt, error)
@@ -201,9 +220,10 @@ func main() {
 		montageRetryer = montageCoordinator
 	}
 	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, Conversations: conversations, AppServerHealth: appServerHealth, History: historyService, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
+	server := newServer(settings.ListenAddr, application.Handler())
 	log.Printf("video production console listening on %s", settings.ListenAddr)
-	if err := newServer(settings.ListenAddr, application.Handler()).ListenAndServe(); err != nil {
-		log.Fatal(err)
+	if err := serveUntilShutdown(signalCtx, server); err != nil {
+		log.Printf("serve video production console: %v", err)
 	}
 }
 
@@ -254,6 +274,19 @@ func resolveDesktopWorkingDirectory(fallback string) string {
 		}
 	}
 	return filepath.Clean(fallback)
+}
+
+func defaultCodexTaskProjectRoot(home string) string {
+	candidate := filepath.Clean(filepath.Join(home, "Documents", "杂项"))
+	info, err := os.Stat(candidate)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil || filepath.Clean(resolved) != candidate {
+		return ""
+	}
+	return candidate
 }
 
 // resolveBootDataRoot keeps packaged builds on one install-scoped database
@@ -560,6 +593,48 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 		environment["PEXELS_API_KEY"] = runtime.PexelsAPIKey
 	}
 	return environment
+}
+
+const initialPasswordEnvironment = "VIDEO_CONSOLE_INITIAL_PASSWORD"
+
+func initializeAdministrator(ctx context.Context, admin func(context.Context) (store.Admin, error), bootstrap func(context.Context, string) error, lookupEnv func(string) (string, bool)) error {
+	if _, err := admin(ctx); err == nil {
+		return nil
+	} else if !errors.Is(err, store.ErrUnauthenticated) {
+		return fmt.Errorf("read administrator: %w", err)
+	}
+	password, ok := lookupEnv(initialPasswordEnvironment)
+	if !ok {
+		return fmt.Errorf("%s is required when no administrator exists", initialPasswordEnvironment)
+	}
+	if err := bootstrap(ctx, password); err != nil {
+		return fmt.Errorf("bootstrap administrator: %w", err)
+	}
+	return nil
+}
+
+func serveUntilShutdown(ctx context.Context, server *http.Server) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+
+	select {
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		err := <-errCh
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
 }
 
 func newServer(address string, handler http.Handler) *http.Server {

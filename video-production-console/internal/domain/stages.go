@@ -60,7 +60,7 @@ func CanMove(from, to ProjectStage, available map[AssetType]bool) error {
 		required = []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground}
 	}
 	if from == StageReview && to == StagePublished {
-		required = []AssetType{AssetFinalVideo}
+		required = nil
 	}
 	missing := make([]AssetType, 0)
 	for _, assetType := range required {

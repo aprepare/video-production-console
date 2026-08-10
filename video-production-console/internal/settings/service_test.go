@@ -233,6 +233,39 @@ func TestFreshDatabaseBootInitializationMakesRuntimeConfigured(t *testing.T) {
 	}
 }
 
+func TestLegacyBootWithoutCodexTaskProjectRootRemainsSchemaShaped(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	// A legacy installation has no codex_task_project_root row. Boot must still
+	// initialize and expose the required JSON property as an empty string.
+	if err := service.InitializeBootSettings(t.Context(), BootSettings{
+		DataRoot:        public.DataRoot,
+		CodexBinaryPath: public.CodexBinaryPath,
+	}); err != nil {
+		t.Fatalf("legacy InitializeBootSettings() error=%v", err)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatalf("legacy Get() error=%v", err)
+	}
+	if view.Public.CodexTaskProjectRoot != "" {
+		t.Fatalf("legacy task project root=%q, want empty", view.Public.CodexTaskProjectRoot)
+	}
+	encoded, err := json.Marshal(view.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var properties map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &properties); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := properties["codex_task_project_root"]; !ok {
+		t.Fatalf("legacy JSON omitted required property: %s", encoded)
+	}
+	if _, err := service.Runtime(t.Context()); err != nil {
+		t.Fatalf("legacy Runtime() error=%v", err)
+	}
+}
+
 func TestBootInitializationDoesNotOverwriteExistingUserValues(t *testing.T) {
 	service, db, _, public := newSettingsTestService(t, Options{})
 	customRoot := filepath.Join(t.TempDir(), "custom-data")
@@ -629,6 +662,50 @@ func TestHTTPClientRedirectsAreDisabledWithoutMutatingInjectedClient(t *testing.
 	}
 	if original.CheckRedirect != nil {
 		t.Fatal("injected client was mutated")
+	}
+}
+
+func TestCodexTaskProjectRootRoundTripsAndValidates(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexTaskProjectRoot = filepath.Join(t.TempDir(), "Documents", "杂项")
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.CodexTaskProjectRoot != public.CodexTaskProjectRoot {
+		t.Fatalf("task project root=%q want %q", view.Public.CodexTaskProjectRoot, public.CodexTaskProjectRoot)
+	}
+	for _, invalidRoot := range []string{"relative\\misc", public.CodexTaskProjectRoot + string(filepath.Separator) + ".." + string(filepath.Separator) + "other"} {
+		invalid := public
+		invalid.CodexTaskProjectRoot = invalidRoot
+		if _, err := service.PutPublic(t.Context(), invalid); !errors.Is(err, ErrInvalidSettings) {
+			t.Fatalf("root %q error=%v, want invalid settings", invalidRoot, err)
+		}
+	}
+}
+
+func TestCodexTaskProjectRootRequiresRestart(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Runtime(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	updated := public
+	updated.CodexTaskProjectRoot = filepath.Join(t.TempDir(), "misc")
+	view, err := service.Update(t.Context(), updated, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.RestartRequired {
+		t.Fatal("restart_required=false after Codex task project root change")
+	}
+	if view.ActivePublic.CodexTaskProjectRoot != public.CodexTaskProjectRoot || view.Public.CodexTaskProjectRoot != updated.CodexTaskProjectRoot {
+		t.Fatalf("configured/active roots=%q/%q", view.Public.CodexTaskProjectRoot, view.ActivePublic.CodexTaskProjectRoot)
 	}
 }
 

@@ -55,6 +55,16 @@ export type MontageResult = {
   can_retry_registration: boolean;
 };
 
+export type PublishingPackage = {
+  titles?: string[];
+  top_titles?: Array<{ rank: number; title: string; reason: string }>;
+  short_titles?: string[];
+  descriptions?: string[];
+  description?: string;
+  topics?: string[];
+  cta?: string;
+};
+
 export type ProjectTask = {
   id: string;
   project_id?: string;
@@ -83,6 +93,7 @@ export type ProjectTask = {
     created_at?: string;
   }>;
   montage?: MontageResult;
+  publishing_package?: PublishingPackage;
 };
 
 export type ActiveWorkflow = {
@@ -113,6 +124,7 @@ export type ProjectDetail = {
 
 export type PrimaryActionID =
   | "start-remix"
+  | "start-source-remix"
   | "prepare-assets"
   | "start-mixing"
   | "upload-final-video"

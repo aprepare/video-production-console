@@ -60,8 +60,8 @@ func (h *ideasHandler) create(w http.ResponseWriter, r *http.Request) {
 		AccountID string `json:"account_id"`
 		Title     string `json:"title"`
 	}
-	if decodeJSON(r, &in) != nil {
-		writeError(w, 400, "invalid_idea", "A valid idea session is required.")
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_idea", "A valid idea session is required.")
 		return
 	}
 	id := uuid.NewString()
@@ -127,7 +127,11 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 		AccountID string `json:"account_id"`
 		taskModelRequest
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Content) == "" {
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "message_required", "Message content is required.")
+		return
+	}
+	if strings.TrimSpace(in.Content) == "" {
 		writeError(w, 400, "message_required", "Message content is required.")
 		return
 	}
@@ -164,19 +168,17 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := uuid.NewString()
 	task := domain.CodexTask{ID: taskID, AccountID: *account, Type: "topic_select", SkillName: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Status: domain.TaskQueued, PromptSnapshot: msg.Content, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, CreatedAt: now}
-	if h.preparer != nil {
-		if e := h.preparer.Prepare(r.Context(), task, TaskManifestRequest{SessionID: id}); e != nil {
+	prepared, e := prepareAndPublishTask(r.Context(), h.repo.DB(), h.preparer, task, TaskManifestRequest{SessionID: id}, now, h.scheduler.Enqueue, nil)
+	if e != nil {
+		var publishErr taskPublishError
+		if errors.As(e, &publishErr) {
+			writeError(w, 500, "idea_task_failed", "Idea planning task could not be queued.")
+		} else {
 			writeError(w, http.StatusConflict, "task_manifest_not_ready", e.Error())
-			return
 		}
-	}
-	// Enqueue persists codex_tasks synchronously before signalling the worker.
-	// The message references that task through a foreign key, so its parent
-	// must exist before the conversation entry is inserted.
-	if e := h.scheduler.Enqueue(r.Context(), task); e != nil {
-		writeError(w, 500, "idea_task_failed", "Idea planning task could not be queued.")
 		return
 	}
+	taskID = prepared.ID
 	taskMsg := msg
 	taskMsg.TaskID = &taskID
 	if e := h.repo.AddMessage(r.Context(), taskMsg); e != nil {
@@ -192,7 +194,11 @@ func (h *ideasHandler) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		AccountID   string `json:"account_id"`
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.CandidateID) == "" {
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "candidate_required", "Candidate ID is required.")
+		return
+	}
+	if strings.TrimSpace(in.CandidateID) == "" {
 		writeError(w, 400, "candidate_required", "Candidate ID is required.")
 		return
 	}

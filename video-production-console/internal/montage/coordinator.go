@@ -249,7 +249,7 @@ func (c *Coordinator) HandleCompleted(ctx context.Context, input taskcompletion.
 			input.Artifacts[i].Path = workspacePath
 		}
 	}
-	attempt, err := c.repo.CompleteAndBegin(ctx, store.CompleteRegistration{TaskID: input.Task.ID, ManifestPath: manifestPath, WorkspacePath: workspacePath, Result: store.TaskResultWrite{Status: domain.TaskCompleted, Summary: input.Summary, AssistantContent: input.Summary, EventKind: "plaintext_ready", RawJSON: input.RawJSON, ExpectedTurnID: input.ExpectedTurnID}, Artifacts: input.Artifacts})
+	attempt, err := c.repo.CompleteAndBegin(ctx, store.CompleteRegistration{TaskID: input.Task.ID, ManifestPath: manifestPath, WorkspacePath: workspacePath, Result: store.TaskResultWrite{Status: domain.TaskCompleted, Summary: input.Summary, AssistantContent: input.Summary, EventKind: "plaintext_ready", RawJSON: input.RawJSON, ExpectedTurnID: input.ExpectedTurnID, ValidationPhaseID: input.ValidationPhaseID, AssetCommitPhaseID: input.AssetCommitPhaseID}, Artifacts: input.Artifacts})
 	if err != nil {
 		return true, err
 	}

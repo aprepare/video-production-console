@@ -99,6 +99,11 @@ export function ProjectAssets({
   }, [uploadRequest]);
 
   const isPending = (_type: ProjectAssetUploadType) => pendingActions.length > 0;
+  const backgroundState = assetState(detail.background_reference || undefined);
+  const readyAssetCount = assetDefinitions.reduce((count, definition) => (
+    detail.assets[definition.type]?.state === "ready" ? count + 1 : count
+  ), detail.background_reference?.state === "ready" ? 1 : 0);
+
   return (
     <section className="project-assets" aria-label="当前项目资产">
       <details className="mobile-accordion" open>
@@ -111,8 +116,12 @@ export function ProjectAssets({
         <div>
           <span>PROJECT ASSETS</span>
           <h2>当前项目资产</h2>
+          <p>所有文件仅归属于“{detail.project.title}”</p>
         </div>
-        <p>以下文件仅属于“{detail.project.title}”</p>
+        <div className="asset-inventory" aria-label={`${readyAssetCount} 个资产已就绪，共 ${assetDefinitions.length + 1} 个`}>
+          <strong>{String(readyAssetCount).padStart(2, "0")}</strong>
+          <span>/ {String(assetDefinitions.length + 1).padStart(2, "0")} 已就绪</span>
+        </div>
       </div>
 
       <div className="project-assets__list">
@@ -128,12 +137,13 @@ export function ProjectAssets({
               || "未命名草稿"
             : "";
           return (
-            <article className="project-asset" key={definition.type}>
+            <article className={`project-asset project-asset--${state.className}`} key={definition.type}>
               <div className="project-asset__icon" aria-hidden="true"><Icon size={18} /></div>
               <div className="project-asset__copy">
                 <div className="project-asset__title">
                   <strong>{definition.label}</strong>
                   <span className={`asset-state asset-state--${state.className}`}>
+                    <span className="asset-state__dot" aria-hidden="true" />
                     {isRegisteredDraft ? "已登记 · 可继续编辑" : state.label}
                   </span>
                 </div>
@@ -155,7 +165,7 @@ export function ProjectAssets({
                 ) : (
                   <>
                     <p>{definition.description}</p>
-                    {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>尚未上传到当前项目</small>}
+                    {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>等待上传 · 补齐后可继续制作</small>}
                   </>
                 )}
               </div>
@@ -193,13 +203,14 @@ export function ProjectAssets({
           );
         })}
 
-        <article className="project-asset project-asset--inherited">
+        <article className={`project-asset project-asset--inherited project-asset--${backgroundState.className}`}>
           <div className="project-asset__icon" aria-hidden="true"><Image size={18} /></div>
           <div className="project-asset__copy">
             <div className="project-asset__title">
               <strong>账号背景图</strong>
-              <span className={`asset-state asset-state--${assetState(detail.background_reference || undefined).className}`}>
-                {assetState(detail.background_reference || undefined).label}
+              <span className={`asset-state asset-state--${backgroundState.className}`}>
+                <span className="asset-state__dot" aria-hidden="true" />
+                {backgroundState.label}
               </span>
             </div>
             <p>由当前账号提供，混剪时作为该项目的固定画面来源。</p>

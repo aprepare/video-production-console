@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -49,8 +48,7 @@ func (h *authHandler) login(response http.ResponseWriter, request *http.Request)
 	var body struct {
 		Password string `json:"password"`
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096))
-	if err := decoder.Decode(&body); err != nil {
+	if err := decodeJSON(response, request, maxSmallJSONRequest, &body); err != nil {
 		writeAuthError(response, http.StatusUnauthorized)
 		return
 	}
@@ -127,8 +125,8 @@ func (h *authHandler) serveProtected(response http.ResponseWriter, request *http
 			Current string `json:"current_password"`
 			New     string `json:"new_password"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096)).Decode(&body); err != nil {
-			writeError(response, http.StatusBadRequest, "invalid_request", "The request is invalid.")
+		if err := decodeJSON(response, request, maxSmallJSONRequest, &body); err != nil {
+			writeDecodeError(response, err, "invalid_request", "The request is invalid.")
 			return
 		}
 		err := h.service.ChangePassword(request.Context(), identity, body.Current, body.New)

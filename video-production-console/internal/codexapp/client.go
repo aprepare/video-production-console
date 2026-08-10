@@ -127,7 +127,9 @@ func (c *Client) Call(ctx context.Context, method string, params, result any) er
 			return c.awaitClaimedResult(response, result)
 		}
 		if writeState.CompareAndSwap(writeStateWriting, writeStateCanceled) {
-			c.terminate(fmt.Errorf("codex app request write canceled: %w", ctx.Err()))
+			if c.closeTransport != nil {
+				c.terminate(fmt.Errorf("codex app request write canceled: %w", ctx.Err()))
+			}
 			return ctx.Err()
 		}
 		return ctx.Err()

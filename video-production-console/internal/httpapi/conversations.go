@@ -129,8 +129,8 @@ func (h *conversationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		ProjectID        *string         `json:"project_id"`
 		IdeaSessionID    *string         `json:"idea_session_id"`
 	}
-	if decodeJSON(r, &in) != nil {
-		writeError(w, 400, "invalid_chat_session", "A valid conversation is required.")
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_chat_session", "A valid conversation is required.")
 		return
 	}
 	if !optionalUUID(in.ProjectID) || !optionalUUID(in.IdeaSessionID) {
@@ -171,7 +171,11 @@ func (h *conversationsHandler) message(w http.ResponseWriter, r *http.Request) {
 		Delivery  domain.DeliveryMode `json:"delivery"`
 		ClientKey string              `json:"client_key"`
 	}
-	if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Text) == "" || len([]byte(in.Text)) > 64<<10 || strings.TrimSpace(in.ClientKey) == "" {
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_chat_message", "Message text and client key are required.")
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" || len([]byte(in.Text)) > 64<<10 || strings.TrimSpace(in.ClientKey) == "" {
 		writeError(w, 400, "invalid_chat_message", "Message text and client key are required.")
 		return
 	}

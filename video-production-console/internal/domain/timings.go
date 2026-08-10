@@ -38,6 +38,20 @@ type TaskPhaseRun struct {
 	CreatedAt   time.Time
 }
 
+type SkillTimingRun struct {
+	TaskID          string
+	SkillSnapshotID string
+	PhaseKey        string
+	DisplayName     string
+	ExternalID      string
+	DetailJSON      string
+	Attempt         int
+	State           TaskPhaseState
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	DurationMS      int64
+}
+
 type TaskTimingSummary struct {
 	TaskID              string
 	TotalMS             int64

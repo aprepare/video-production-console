@@ -108,9 +108,15 @@ func (r *MontageRepository) CompleteAndBegin(ctx context.Context, input Complete
 				return err
 			}
 		}
+		if err := importSkillTimingsTx(ctx, q, input.TaskID, input.Result.SkillTimings, now); err != nil {
+			return err
+		}
 		var err error
 		attempt, err = insertQueuedRegistration(ctx, q, BeginRegistration{TaskID: input.TaskID, ManifestPath: input.ManifestPath, WorkspacePath: input.WorkspacePath}, now)
 		if err != nil {
+			return err
+		}
+		if err := finishResultWritePhasesTx(ctx, q, input.TaskID, input.Result, now); err != nil {
 			return err
 		}
 		query, args := claimedResultUpdate(`UPDATE codex_tasks SET status=?,completion_phase=?,result_summary=?,error_code=NULL,error_message=NULL,finished_at=NULL WHERE id=?`, []any{domain.TaskRunning, domain.CompletionPlaintextReady, nullable(input.Result.Summary), input.TaskID}, input.Result.ExpectedTurnID)
@@ -283,8 +289,46 @@ func insertQueuedRegistration(ctx context.Context, q assetDBTX, input BeginRegis
 		return domain.RegistrationAttempt{}, err
 	}
 	attempt := domain.RegistrationAttempt{ID: uuid.NewString(), TaskID: input.TaskID, ManifestPath: input.ManifestPath, WorkspacePath: input.WorkspacePath, State: domain.RegistrationQueued, Attempt: number, StartedAt: now}
-	_, err := q.ExecContext(ctx, `INSERT INTO montage_registration_attempts(id,task_id,manifest_path,workspace_path,state,attempt,started_at) VALUES(?,?,?,?,?,?,?)`, attempt.ID, attempt.TaskID, attempt.ManifestPath, attempt.WorkspacePath, attempt.State, attempt.Attempt, attempt.StartedAt)
+	if _, err := q.ExecContext(ctx, `INSERT INTO montage_registration_attempts(id,task_id,manifest_path,workspace_path,state,attempt,started_at) VALUES(?,?,?,?,?,?,?)`, attempt.ID, attempt.TaskID, attempt.ManifestPath, attempt.WorkspacePath, attempt.State, attempt.Attempt, attempt.StartedAt); err != nil {
+		return domain.RegistrationAttempt{}, err
+	}
+	_, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), attempt.TaskID, attempt.Attempt, "jianying_registration", "剪映草稿注册", domain.PhaseSourceHost, domain.PhaseQueued, now, attempt.ID, `{}`, now)
 	return attempt, err
+}
+
+func markRegistrationTimingRunningTx(ctx context.Context, q assetDBTX, attemptID string, at time.Time) error {
+	result, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,running_at=? WHERE external_id=? AND phase_key='jianying_registration' AND source=? AND state=? AND finished_at IS NULL AND ?>=started_at`, domain.PhaseRunning, at, attemptID, domain.PhaseSourceHost, domain.PhaseQueued, at)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("registration timing is not queued")
+	}
+	return nil
+}
+
+func finishRegistrationTimingTx(ctx context.Context, q assetDBTX, attemptID string, state domain.TaskPhaseState, at time.Time) error {
+	var started time.Time
+	if err := q.QueryRowContext(ctx, `SELECT started_at FROM task_phase_runs WHERE external_id=? AND phase_key='jianying_registration' AND source=? AND state IN ('queued','running') AND finished_at IS NULL`, attemptID, domain.PhaseSourceHost).Scan(&started); err != nil {
+		return err
+	}
+	if at.Before(started) {
+		return errors.New("registration timing finish precedes start")
+	}
+	result, err := q.ExecContext(ctx, `UPDATE task_phase_runs SET state=?,finished_at=?,duration_ms=? WHERE external_id=? AND phase_key='jianying_registration' AND source=? AND state IN ('queued','running') AND finished_at IS NULL`, state, at, at.Sub(started).Milliseconds(), attemptID, domain.PhaseSourceHost)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("registration timing is not active")
+	}
+	return nil
 }
 
 // RecoverActive interrupts work that was inside the host registration process
@@ -378,7 +422,10 @@ func (r *MontageRepository) recoverActiveOnce(ctx context.Context) (domain.Regis
 				if _, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND state=?`, domain.RegistrationFailed, code, message, now, item.ID, domain.RegistrationQueued); err != nil {
 					return err
 				}
-				if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=?`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, item.TaskID); err != nil {
+				if err := finishRegistrationTimingTx(ctx, q, item.ID, domain.PhaseFailed, now); err != nil {
+					return err
+				}
+				if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status NOT IN (?,?,?)`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, item.TaskID, domain.TaskCanceled, domain.TaskCancelled, domain.TaskInterrupted); err != nil {
 					return err
 				}
 				continue
@@ -396,7 +443,10 @@ func (r *MontageRepository) recoverActiveOnce(ctx context.Context) (domain.Regis
 			}
 			item.State, item.ErrorCode, item.ErrorMessage, item.FinishedAt = domain.RegistrationInterrupted, &code, &message, &now
 			recovery.Interrupted = append(recovery.Interrupted, item)
-			if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=?`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, item.TaskID); err != nil {
+			if err := finishRegistrationTimingTx(ctx, q, item.ID, domain.PhaseInterrupted, now); err != nil {
+				return err
+			}
+			if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status NOT IN (?,?,?)`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, item.TaskID, domain.TaskCanceled, domain.TaskCancelled, domain.TaskInterrupted); err != nil {
 				return err
 			}
 		}
@@ -417,8 +467,20 @@ func (r *MontageRepository) MarkRunning(ctx context.Context, id string) error {
 			}
 			return fmt.Errorf("registration attempt is not queued")
 		}
-		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET completion_phase=? WHERE id=(SELECT task_id FROM montage_registration_attempts WHERE id=?)`, domain.CompletionRegistering, id)
-		return err
+		if err := markRegistrationTimingRunningTx(ctx, q, id, now); err != nil {
+			return err
+		}
+		result, err = q.ExecContext(ctx, `UPDATE codex_tasks SET completion_phase=? WHERE id=(SELECT task_id FROM montage_registration_attempts WHERE id=?) AND status=?`, domain.CompletionRegistering, id, domain.TaskRunning)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("registration task is not running")
+		}
+		return nil
 	})
 	if commitOutcome(err) == CommitUnknown {
 		reconcileCtx, cancel := registrationReconcileContext(ctx)
@@ -440,7 +502,8 @@ func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuc
 	err := r.immediate(ctx, "complete montage registration", func(q assetDBTX, now time.Time) error {
 		var taskID, accountID, projectID string
 		var state domain.RegistrationState
-		if err := q.QueryRowContext(ctx, `SELECT attempt.task_id,attempt.state,task.account_id,COALESCE(task.project_id,'') FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id WHERE attempt.id=?`, success.AttemptID).Scan(&taskID, &state, &accountID, &projectID); err != nil {
+		var taskStatus domain.TaskStatus
+		if err := q.QueryRowContext(ctx, `SELECT attempt.task_id,attempt.state,task.account_id,COALESCE(task.project_id,''),task.status FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id WHERE attempt.id=?`, success.AttemptID).Scan(&taskID, &state, &accountID, &projectID, &taskStatus); err != nil {
 			return err
 		}
 		if state == domain.RegistrationSucceeded {
@@ -453,8 +516,8 @@ func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuc
 			}
 			return nil
 		}
-		if state != domain.RegistrationRunning || projectID == "" {
-			return fmt.Errorf("registration attempt is not running or task has no project")
+		if state != domain.RegistrationRunning || projectID == "" || taskStatus != domain.TaskRunning {
+			return fmt.Errorf("registration attempt or task is not running")
 		}
 		var workspaceArtifacts int
 		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_artifacts WHERE task_id=? AND kind='plaintext_workspace' AND LOWER(sha256)=?`, taskID, strings.ToLower(success.WorkspaceSHA256)).Scan(&workspaceArtifacts); err != nil {
@@ -476,7 +539,10 @@ func (r *MontageRepository) Succeed(ctx context.Context, success RegistrationSuc
 			}
 			return fmt.Errorf("registration attempt changed during completion")
 		}
-		if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=NULL,error_message=NULL,finished_at=? WHERE id=?`, domain.TaskCompleted, domain.CompletionRegistered, now, taskID); err != nil {
+		if err := finishRegistrationTimingTx(ctx, q, success.AttemptID, domain.PhaseCompleted, now); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=NULL,error_message=NULL,finished_at=? WHERE id=? AND status=?`, domain.TaskCompleted, domain.CompletionRegistered, now, taskID, domain.TaskRunning); err != nil {
 			return err
 		}
 		_, err = q.ExecContext(ctx, `UPDATE projects SET stage=CASE WHEN stage IN ('topic','script','assets','mixing') THEN 'review' ELSE stage END,updated_at=?,ready_at=CASE WHEN stage IN ('topic','script','assets','mixing') THEN COALESCE(ready_at,?) ELSE ready_at END WHERE id=?`, now, now, projectID)
@@ -762,6 +828,14 @@ func (r *MontageRepository) CompleteDraftDisplayReconcile(ctx context.Context, s
 
 func (r *MontageRepository) Fail(ctx context.Context, id, code, message string) error {
 	err := r.immediate(ctx, "fail montage registration", func(q assetDBTX, now time.Time) error {
+		var taskID string
+		var taskStatus domain.TaskStatus
+		if err := q.QueryRowContext(ctx, `SELECT attempt.task_id,task.status FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id WHERE attempt.id=?`, id).Scan(&taskID, &taskStatus); err != nil {
+			return err
+		}
+		if taskStatus != domain.TaskRunning {
+			return fmt.Errorf("registration task is not running")
+		}
 		result, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND state IN ('queued','running')`, domain.RegistrationFailed, code, message, now, id)
 		if err != nil {
 			return err
@@ -772,7 +846,10 @@ func (r *MontageRepository) Fail(ctx context.Context, id, code, message string) 
 			}
 			return fmt.Errorf("registration attempt is not active")
 		}
-		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=(SELECT task_id FROM montage_registration_attempts WHERE id=?)`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, id)
+		if err := finishRegistrationTimingTx(ctx, q, id, domain.PhaseFailed, now); err != nil {
+			return err
+		}
+		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status=?`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, taskID, domain.TaskRunning)
 		return err
 	})
 	if commitOutcome(err) == CommitUnknown {
@@ -794,7 +871,8 @@ func (r *MontageRepository) FailCommit(ctx context.Context, id, message string) 
 		var taskID string
 		var registeredPath sql.NullString
 		var state domain.RegistrationState
-		if err := q.QueryRowContext(ctx, `SELECT task_id,state,registered_path FROM montage_registration_attempts WHERE id=?`, id).Scan(&taskID, &state, &registeredPath); err != nil {
+		var taskStatus domain.TaskStatus
+		if err := q.QueryRowContext(ctx, `SELECT attempt.task_id,attempt.state,attempt.registered_path,task.status FROM montage_registration_attempts attempt JOIN codex_tasks task ON task.id=attempt.task_id WHERE attempt.id=?`, id).Scan(&taskID, &state, &registeredPath, &taskStatus); err != nil {
 			return err
 		}
 		if state == domain.RegistrationSucceeded {
@@ -812,8 +890,8 @@ func (r *MontageRepository) FailCommit(ctx context.Context, id, message string) 
 			_, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=?`, domain.TaskFailed, domain.CompletionPlaintextReady, "registration_commit_failed", message, now, taskID)
 			return err
 		}
-		if state != domain.RegistrationRunning {
-			return fmt.Errorf("registration attempt cannot fail commit from state %s", state)
+		if state != domain.RegistrationRunning || taskStatus != domain.TaskRunning {
+			return fmt.Errorf("registration attempt or task cannot fail commit from state %s/%s", state, taskStatus)
 		}
 		code := "registration_commit_failed"
 		result, err := q.ExecContext(ctx, `UPDATE montage_registration_attempts SET state=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND state=?`, domain.RegistrationFailed, code, message, now, id, domain.RegistrationRunning)
@@ -826,7 +904,10 @@ func (r *MontageRepository) FailCommit(ctx context.Context, id, message string) 
 			}
 			return fmt.Errorf("registration attempt changed during commit failure")
 		}
-		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=?`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, taskID)
+		if err := finishRegistrationTimingTx(ctx, q, id, domain.PhaseFailed, now); err != nil {
+			return err
+		}
+		_, err = q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,completion_phase=?,error_code=?,error_message=?,finished_at=? WHERE id=? AND status=?`, domain.TaskFailed, domain.CompletionPlaintextReady, code, message, now, taskID, domain.TaskRunning)
 		return err
 	})
 	if commitOutcome(err) == CommitUnknown {

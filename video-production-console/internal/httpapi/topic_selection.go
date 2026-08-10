@@ -159,14 +159,14 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 			if existing.Status != domain.TaskQueued {
 				return existing, nil
 			}
-			if _, _, manifestErr := tasks.PreparedManifest(ctx, existing.ID); manifestErr == nil {
-				return existing, nil
-			} else if !errors.Is(manifestErr, sql.ErrNoRows) {
-				return domain.CodexTask{}, manifestErr
-			}
 			publish := scheduler.Enqueue
 			if options[0].publish != nil {
 				publish = options[0].publish
+			}
+			if _, _, manifestErr := tasks.PreparedManifest(ctx, existing.ID); manifestErr == nil {
+				return publishQueuedTask(ctx, db, existing, publish)
+			} else if !errors.Is(manifestErr, sql.ErrNoRows) {
+				return domain.CodexTask{}, manifestErr
 			}
 			prepared, err := prepareAndPublishTask(ctx, db, preparer, existing, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}, prepareStartedAt, publish, nil)
 			if err != nil {
@@ -188,7 +188,15 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 		}
 		modelMatches := requested.Model == "" || (task.ModelName == model.Model && task.ReasoningEffort == model.ReasoningEffort)
 		if task.Action == domain.ActionTopicCommit && modelMatches && (task.Status == domain.TaskQueued || task.Status == domain.TaskRunning || task.Status == domain.TaskResuming || task.Status == domain.TaskAwaitingInput || task.Status == domain.TaskWaitingInput) {
-			return task, nil
+			if task.Status != domain.TaskQueued {
+				return task, nil
+			}
+			if _, _, manifestErr := tasks.PreparedManifest(ctx, task.ID); manifestErr == nil {
+				return publishQueuedTask(ctx, db, task, scheduler.Enqueue)
+			} else if !errors.Is(manifestErr, sql.ErrNoRows) {
+				return domain.CodexTask{}, manifestErr
+			}
+			return prepareAndPublishTask(ctx, db, preparer, task, TaskManifestRequest{SessionID: selection.SessionID, CandidateID: selection.Candidate.ID, TopicCandidatesPath: selection.TopicCandidatesPath}, prepareStartedAt, scheduler.Enqueue, nil)
 		}
 	}
 	taskID := uuid.NewString()

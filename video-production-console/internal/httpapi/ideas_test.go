@@ -42,12 +42,19 @@ func TestDeleteIdeaSessionRemovesConversation(t *testing.T) {
 	}
 }
 
-// persistedIdeaScheduler models the synchronous persistence step that the
+// persistedIdeaScheduler models the synchronous queue admission step that the
 // production scheduler performs before it signals its worker loop.
-type persistedIdeaScheduler struct{ tasks *store.TaskRepository }
+type persistedIdeaScheduler struct {
+	tasks *store.TaskRepository
+	err   error
+}
 
 func (s persistedIdeaScheduler) Enqueue(ctx context.Context, task domain.CodexTask) error {
-	return s.tasks.CreateV2(ctx, task)
+	if s.err != nil {
+		return s.err
+	}
+	_, err := s.tasks.AdmitQueuedTask(ctx, task, time.Now().UTC())
+	return err
 }
 func (persistedIdeaScheduler) Resume(context.Context, string, string) error { return nil }
 func (persistedIdeaScheduler) Cancel(context.Context, string) error         { return nil }
@@ -85,8 +92,59 @@ func TestIdeaMessagePersistsTaskBeforeForeignKeyReference(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].TaskID == nil {
 		t.Fatalf("messages=%+v err=%v", messages, err)
 	}
-	if _, err := store.NewTaskRepository(db).Get(context.Background(), *messages[0].TaskID); err != nil {
+	if task, err := store.NewTaskRepository(db).Get(context.Background(), *messages[0].TaskID); err != nil {
 		t.Fatalf("referenced task was not persisted: %v", err)
+	} else if task.QueuedAt == nil {
+		t.Fatalf("referenced task was not admitted: %+v", task)
+	}
+}
+
+type failingIdeaPreparer struct{ err error }
+
+func (p failingIdeaPreparer) Prepare(context.Context, domain.CodexTask, TaskManifestRequest) error {
+	return p.err
+}
+
+func TestIdeaMessageDoesNotPublishPreparationOrEnqueueFailure(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		preparer   TaskManifestPreparer
+		scheduler  persistedIdeaScheduler
+		wantStatus int
+	}{
+		{name: "preparation", preparer: failingIdeaPreparer{err: errors.New("manifest invalid")}, wantStatus: http.StatusConflict},
+		{name: "enqueue", scheduler: persistedIdeaScheduler{err: errors.New("queue unavailable")}, wantStatus: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := store.Open(t.TempDir() + "/console.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			now := time.Now().UTC()
+			accountID := uuid.NewString()
+			if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, accountID, "test", "#000", "active", now, now); err != nil {
+				t.Fatal(err)
+			}
+			ideas := store.NewIdeaRepository(db)
+			sessionID := uuid.NewString()
+			if err := ideas.CreateSession(context.Background(), domain.IdeaSession{ID: sessionID, AccountID: &accountID, Title: "test", Status: "planning", CreatedAt: now, UpdatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			test.scheduler.tasks = store.NewTaskRepository(db)
+			handler := NewIdeasHandler(db, test.scheduler, test.preparer, nil)
+			request := httptest.NewRequest(http.MethodPost, "/api/ideas/"+sessionID+"/messages", strings.NewReader(`{"content":"测试选题"}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			messages, err := ideas.Messages(context.Background(), sessionID)
+			if err != nil || len(messages) != 0 {
+				t.Fatalf("messages=%+v err=%v", messages, err)
+			}
+		})
 	}
 }
 

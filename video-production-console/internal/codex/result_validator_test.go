@@ -13,6 +13,32 @@ import (
 	"video-production-console/internal/domain"
 )
 
+func TestValidateResultEnvelopeAcceptsExecutionTimingsReceipt(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(out, "execution-timings.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":"1.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	envelope := ResultEnvelope{
+		SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontageExecute,
+		Status: "completed", Summary: "done", Questions: []Question{}, AssetOutputs: []AssetOutput{}, Warnings: []string{},
+		Artifacts: []ArtifactOutput{{Type: "execution_timings", Path: path, Description: "file", RelativePath: "execution-timings.json", SHA256: sha256HexForTest(t, path)}},
+	}
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Artifacts[0].RelativePath = "../execution-timings.json"
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("execution timing path escape accepted")
+	}
+	envelope.Artifacts[0].RelativePath = "execution-timings.json"
+	envelope.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err == nil {
+		t.Fatal("execution timing sha mismatch accepted")
+	}
+}
+
 func TestValidateResultEnvelopeAcceptsCompletedAndTransitionStatus(t *testing.T) {
 	out := t.TempDir()
 	file := filepath.Join(out, "script.md")

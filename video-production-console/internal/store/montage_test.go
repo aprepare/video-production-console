@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,6 +221,28 @@ func TestCompleteAndBeginRollsBackPlaintextWhenAttemptCannotBeQueued(t *testing.
 	}
 }
 
+func TestCompleteAndBeginClosesAssetCommitBeforeQueuingRegistration(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	validationID, assetCommitID := beginTestResultPhases(t, repo.db, NewTaskRepository(repo.db), taskID, domain.PhaseSourceHost)
+	attempt, err := repo.CompleteAndBegin(context.Background(), CompleteRegistration{
+		TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace,
+		Result: TaskResultWrite{
+			Status: domain.TaskCompleted, Summary: "plaintext", AssistantContent: "plaintext", EventKind: "plaintext_ready",
+			ValidationPhaseID: validationID, AssetCommitPhaseID: assetCommitID,
+		},
+		Artifacts: []TaskArtifact{{Kind: "plaintext_workspace", Path: workspace, Filename: "workspace", MIMEType: "inode/directory", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultPhaseStates(t, repo.db, taskID, map[string]domain.TaskPhaseState{
+		"result_validation": domain.PhaseCompleted,
+		"asset_commit":      domain.PhaseCompleted,
+	})
+	assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseQueued)
+}
+
 func TestCompleteAndBeginReconcilesCommittedUnknownOutcome(t *testing.T) {
 	repo, _, _, _, taskID := montageFixture(t)
 	manifest, workspace := retainedRegistrationPaths(t)
@@ -400,6 +424,255 @@ func TestMontageRecoverInterruptsRunningAndReturnsQueued(t *testing.T) {
 	}
 	if len(recovery.Queued) != 1 || recovery.Queued[0].ID != queued.ID || len(recovery.Interrupted) != 0 {
 		t.Fatalf("queued recovery=%#v", recovery)
+	}
+}
+
+func TestRegistrationTimingLifecycle(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseQueued)
+	if err := repo.MarkRunning(context.Background(), attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseRunning)
+	if err := repo.Fail(context.Background(), attempt.ID, "registration_failed", "failed"); err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseFailed)
+
+	retry, err := repo.BeginRetry(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, retry, domain.PhaseQueued)
+	if retry.Attempt != 2 {
+		t.Fatalf("retry attempt=%d", retry.Attempt)
+	}
+	if err := repo.MarkRunning(context.Background(), retry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RecoverActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, retry, domain.PhaseInterrupted)
+}
+
+func TestRegistrationRecoveryMissingInputFailsTiming(t *testing.T) {
+	repo, _, _, _, taskID := montageFixture(t)
+	manifest, workspace := retainedRegistrationPaths(t)
+	attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RecoverActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseFailed)
+}
+
+func TestRegistrationTimingCompletesWithSuccess(t *testing.T) {
+	repo, _, success := preparedMontageSuccess(t)
+	attempt, err := repo.Attempt(context.Background(), success.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Succeed(context.Background(), success); err != nil {
+		t.Fatal(err)
+	}
+	assertRegistrationTiming(t, repo, attempt.TaskID, attempt, domain.PhaseCompleted)
+}
+
+func TestRegistrationCancellationEndsTimingAndRejectsLateResults(t *testing.T) {
+	t.Run("queued failure", func(t *testing.T) {
+		repo, _, _, _, taskID := montageFixture(t)
+		manifest, workspace := retainedRegistrationPaths(t)
+		attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := NewTaskRepository(repo.db).CancelTask(context.Background(), taskID, time.Now().UTC().Add(time.Second)); err != nil || !changed {
+			t.Fatalf("cancel changed=%v err=%v", changed, err)
+		}
+		assertRegistrationTiming(t, repo, taskID, attempt, domain.PhaseCanceled)
+		canceledAttempt, err := repo.Attempt(context.Background(), attempt.ID)
+		if err != nil || canceledAttempt.State != domain.RegistrationInterrupted || canceledAttempt.ManifestPath != manifest || canceledAttempt.WorkspacePath != workspace {
+			t.Fatalf("canceled attempt=%+v err=%v", canceledAttempt, err)
+		}
+		if err := repo.Fail(context.Background(), attempt.ID, "late", "late"); err == nil {
+			t.Fatal("late failure changed canceled task")
+		}
+		var status domain.TaskStatus
+		if err := repo.db.QueryRow(`SELECT status FROM codex_tasks WHERE id=?`, taskID).Scan(&status); err != nil || status != domain.TaskCanceled {
+			t.Fatalf("status=%s err=%v", status, err)
+		}
+	})
+
+	t.Run("running success", func(t *testing.T) {
+		repo, _, success := preparedMontageSuccess(t)
+		attempt, err := repo.Attempt(context.Background(), success.AttemptID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := NewTaskRepository(repo.db).CancelTask(context.Background(), attempt.TaskID, time.Now().UTC().Add(time.Second)); err != nil || !changed {
+			t.Fatalf("cancel changed=%v err=%v", changed, err)
+		}
+		assertRegistrationTiming(t, repo, attempt.TaskID, attempt, domain.PhaseCanceled)
+		canceledAttempt, err := repo.Attempt(context.Background(), attempt.ID)
+		if err != nil || canceledAttempt.State != domain.RegistrationInterrupted || canceledAttempt.ManifestPath != attempt.ManifestPath || canceledAttempt.WorkspacePath != attempt.WorkspacePath {
+			t.Fatalf("canceled attempt=%+v err=%v", canceledAttempt, err)
+		}
+		if err := repo.Succeed(context.Background(), success); err == nil {
+			t.Fatal("late success changed canceled task")
+		}
+		var status domain.TaskStatus
+		var assets int
+		if err := repo.db.QueryRow(`SELECT status FROM codex_tasks WHERE id=?`, attempt.TaskID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, attempt.TaskID).Scan(&assets); err != nil {
+			t.Fatal(err)
+		}
+		if status != domain.TaskCanceled || assets != 0 {
+			t.Fatalf("status=%s assets=%d", status, assets)
+		}
+	})
+}
+
+func TestRegistrationCancelCompletionRaceLeavesOneTerminalOutcome(t *testing.T) {
+	for iteration := 0; iteration < 24; iteration++ {
+		t.Run(fmt.Sprintf("success-%02d", iteration), func(t *testing.T) {
+			repo, _, success := preparedMontageSuccess(t)
+			attempt, err := repo.Attempt(context.Background(), success.AttemptID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			var cancelChanged bool
+			var cancelErr, successErr error
+			go func() {
+				defer wg.Done()
+				<-start
+				cancelChanged, cancelErr = NewTaskRepository(repo.db).CancelTask(context.Background(), attempt.TaskID, time.Now().UTC().Add(time.Second))
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				successErr = repo.Succeed(context.Background(), success)
+			}()
+			close(start)
+			wg.Wait()
+			if cancelErr != nil || (successErr != nil && !cancelChanged) {
+				t.Fatalf("cancelChanged=%v cancelErr=%v successErr=%v", cancelChanged, cancelErr, successErr)
+			}
+			assertRegistrationRaceOutcome(t, repo, attempt, successErr == nil)
+		})
+
+		t.Run(fmt.Sprintf("failure-%02d", iteration), func(t *testing.T) {
+			repo, _, _, _, taskID := montageFixture(t)
+			manifest, workspace := retainedRegistrationPaths(t)
+			attempt, err := repo.Begin(context.Background(), BeginRegistration{TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			var cancelChanged bool
+			var cancelErr, failErr error
+			go func() {
+				defer wg.Done()
+				<-start
+				cancelChanged, cancelErr = NewTaskRepository(repo.db).CancelTask(context.Background(), taskID, time.Now().UTC().Add(time.Second))
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				failErr = repo.Fail(context.Background(), attempt.ID, "registration_failed", "failed")
+			}()
+			close(start)
+			wg.Wait()
+			if cancelErr != nil || (failErr != nil && !cancelChanged) {
+				t.Fatalf("cancelChanged=%v cancelErr=%v failErr=%v", cancelChanged, cancelErr, failErr)
+			}
+			assertRegistrationRaceOutcome(t, repo, attempt, false)
+		})
+	}
+}
+
+func assertRegistrationRaceOutcome(t *testing.T, repo *MontageRepository, attempt domain.RegistrationAttempt, succeeded bool) {
+	t.Helper()
+	persisted, err := repo.Attempt(context.Background(), attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status domain.TaskStatus
+	if err := repo.db.QueryRow(`SELECT status FROM codex_tasks WHERE id=?`, attempt.TaskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	phases, err := NewTaskTimingRepository(repo.db).ForTask(context.Background(), attempt.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registration *domain.TaskPhaseRun
+	for i := range phases {
+		if phases[i].PhaseKey == "jianying_registration" && phases[i].ExternalID == attempt.ID {
+			if registration != nil {
+				t.Fatalf("duplicate registration timing rows: %+v", phases)
+			}
+			registration = &phases[i]
+		}
+	}
+	if registration == nil || registration.FinishedAt == nil || registration.DurationMS == nil {
+		t.Fatalf("unfinished registration timing: %+v", phases)
+	}
+	if succeeded {
+		if persisted.State != domain.RegistrationSucceeded || status != domain.TaskCompleted || registration.State != domain.PhaseCompleted {
+			t.Fatalf("success outcome attempt=%+v status=%s phase=%+v", persisted, status, registration)
+		}
+		return
+	}
+	if persisted.State == domain.RegistrationSucceeded || status == domain.TaskCompleted || (registration.State != domain.PhaseCanceled && registration.State != domain.PhaseFailed) {
+		t.Fatalf("non-success outcome attempt=%+v status=%s phase=%+v", persisted, status, registration)
+	}
+	if persisted.ManifestPath != attempt.ManifestPath || persisted.WorkspacePath != attempt.WorkspacePath {
+		t.Fatalf("retained paths changed: before=%+v after=%+v", attempt, persisted)
+	}
+	var assets int
+	if err := repo.db.QueryRow(`SELECT COUNT(*) FROM asset_versions WHERE source_task_id=?`, attempt.TaskID).Scan(&assets); err != nil {
+		t.Fatal(err)
+	}
+	if assets != 0 {
+		t.Fatalf("late completion leaked %d assets", assets)
+	}
+}
+
+func assertRegistrationTiming(t *testing.T, repo *MontageRepository, taskID string, attempt domain.RegistrationAttempt, state domain.TaskPhaseState) {
+	t.Helper()
+	phases, err := NewTaskTimingRepository(repo.db).ForTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matches []domain.TaskPhaseRun
+	for _, phase := range phases {
+		if phase.PhaseKey == "jianying_registration" && phase.ExternalID == attempt.ID {
+			matches = append(matches, phase)
+		}
+	}
+	if len(matches) != 1 || matches[0].Attempt != attempt.Attempt || matches[0].State != state {
+		t.Fatalf("attempt=%+v state=%s phases=%+v", attempt, state, phases)
+	}
+	terminal := state == domain.PhaseCompleted || state == domain.PhaseFailed || state == domain.PhaseCanceled || state == domain.PhaseInterrupted
+	if terminal && (matches[0].FinishedAt == nil || matches[0].DurationMS == nil) {
+		t.Fatalf("terminal timing missing finish: %+v", matches[0])
 	}
 }
 

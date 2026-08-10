@@ -19,6 +19,27 @@ type backupManifestEntry struct {
 	ModTime time.Time `json:"mod_time"`
 }
 
+// CreateBackup writes a consistent SQLite snapshot and data-root manifest.
+// The destination directory must not contain the data root.
+func CreateBackup(db *sql.DB, dataRoot, backupDir string, now time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database is required")
+	}
+	dataRoot = canonicalPath(dataRoot)
+	backupDir = canonicalPath(backupDir)
+	if pathWithin(dataRoot, backupDir) || pathWithin(backupDir, dataRoot) {
+		return fmt.Errorf("backup directory and data root must not contain each other: backup=%s data=%s", backupDir, dataRoot)
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return backupDatabase(db, OpenOptions{
+		DataRoot:  dataRoot,
+		BackupDir: backupDir,
+		Now:       func() time.Time { return now },
+	})
+}
+
 func backupDatabase(db *sql.DB, options OpenOptions) (returnErr error) {
 	if err := os.MkdirAll(options.BackupDir, 0o755); err != nil {
 		return fmt.Errorf("create migration backup directory: %w", err)

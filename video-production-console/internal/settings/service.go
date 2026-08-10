@@ -88,6 +88,7 @@ type BootSettings struct {
 	MediaRoot            string
 	JianyingRoot         string
 	MachineProfilePath   string
+	CodexTaskProjectRoot string
 	CodexWorkspaceRoots  []string
 }
 
@@ -159,6 +160,7 @@ func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings)
 		{"media_root", boot.MediaRoot},
 		{"jianying_root", boot.JianyingRoot},
 		{"machine_profile_path", boot.MachineProfilePath},
+		{"codex_task_project_root", boot.CodexTaskProjectRoot},
 	}
 	values := make(map[string]string, len(paths)+1)
 	if boot.ListenAddr != "" {
@@ -490,6 +492,7 @@ func validatePublic(value domain.PublicSettings) error {
 		{"media_root", value.MediaRoot, false},
 		{"jianying_root", value.JianyingRoot, false},
 		{"machine_profile_path", value.MachineProfilePath, false},
+		{"codex_task_project_root", value.CodexTaskProjectRoot, false},
 	}
 	for _, path := range paths {
 		if path.value == "" && !path.required {
@@ -635,10 +638,11 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
 		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
-		"machine_profile_path":  value.MachineProfilePath,
-		"app_server_enabled":    strconv.FormatBool(value.AppServerEnabled),
-		"codex_workspace_roots": string(workspaceRoots),
-		"codex_history_limit":   strconv.Itoa(historyLimit),
+		"machine_profile_path":    value.MachineProfilePath,
+		"app_server_enabled":      strconv.FormatBool(value.AppServerEnabled),
+		"codex_workspace_roots":   string(workspaceRoots),
+		"codex_task_project_root": value.CodexTaskProjectRoot,
+		"codex_history_limit":     strconv.Itoa(historyLimit),
 	}
 }
 
@@ -670,7 +674,8 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],
-		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots, CodexHistoryLimit: historyLimit,
+		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots,
+		CodexTaskProjectRoot: values["codex_task_project_root"], CodexHistoryLimit: historyLimit,
 	}
 }
 

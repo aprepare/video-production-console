@@ -1,0 +1,21 @@
+name: Baseline
+
+on: [push, pull_request]
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npx --prefix web playwright install chromium
+      - shell: pwsh
+        run: ./scripts/verify-baseline.ps1 -StrictEmbeddedDist

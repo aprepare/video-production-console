@@ -10,9 +10,9 @@ import (
 
 // Record persists one safe classification. Replayed starts collapse through
 // external_id; completions close the exact item run. Codex execution is the
-// sole exception: TaskTurnStarted owns its start, so a terminal turn boundary
-// closes the currently active execution phase even though its host external ID
-// differs from the App Server turn ID.
+// sole exception: StartAppServerTurn owns its start, so generic turn starts are
+// ignored and terminal turn boundaries close the currently active execution
+// phase even though its host external ID differs from the App Server turn ID.
 func Record(ctx context.Context, repo *store.TaskTimingRepository, taskID string, source domain.TaskPhaseSource, classification Classification, at time.Time) error {
 	if repo == nil || taskID == "" || classification.PhaseKey == "" || classification.ExternalItemID == "" || at.IsZero() {
 		return nil
@@ -29,11 +29,7 @@ func Record(ctx context.Context, repo *store.TaskTimingRepository, taskID string
 	}
 	if classification.Boundary == BoundaryStart {
 		if classification.PhaseKey == "codex_execution" {
-			for i := len(phases) - 1; i >= 0; i-- {
-				if phases[i].Attempt == attempt && phases[i].PhaseKey == classification.PhaseKey && phases[i].FinishedAt == nil {
-					return nil
-				}
-			}
+			return nil
 		}
 		_, err = repo.StartPhase(ctx, store.StartPhase{
 			TaskID: taskID, Attempt: attempt, Key: classification.PhaseKey,

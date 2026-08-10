@@ -73,6 +73,12 @@ func TestCompositeDispatcherKeepsPreparedProjectTaskOnLegacyExec(t *testing.T) {
 	if err := repo.CreateV2(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES(?,?,?,?,?,?,?)`, "snapshot-"+taskID, "skill", t.TempDir(), "sha", "[]", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetPreparedManifest(context.Background(), taskID, "snapshot-"+taskID, "manifest.json"); err != nil {
+		t.Fatal(err)
+	}
 
 	resolver := &dispatcherProjectResolverStub{session: projectSession}
 	legacy, app := &dispatcherLegacyStub{}, &dispatcherAppStub{}
@@ -135,13 +141,26 @@ func TestCompositeDispatcherMovesQueuedPreparedProjectTaskOffAppServer(t *testin
 	if err := dispatcher.Enqueue(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
-	if resolver.calls != 0 {
-		t.Fatalf("resolver calls=%d, want 0", resolver.calls)
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls=%d, want 1", resolver.calls)
 	}
-	if len(app.enqueued) != 0 || len(legacy.enqueued) != 1 {
-		t.Fatalf("legacy=%d app=%d, want legacy only", len(legacy.enqueued), len(app.enqueued))
+	if len(app.enqueued) != 1 || len(legacy.enqueued) != 0 {
+		t.Fatalf("legacy=%d app=%d, want App Server only", len(legacy.enqueued), len(app.enqueued))
 	}
-	if legacy.enqueued[0].Transport != TransportLegacyExec || legacy.enqueued[0].ChatSessionID != nil || legacy.enqueued[0].CodexThreadID != nil {
-		t.Fatalf("legacy task retained App Server binding: %#v", legacy.enqueued[0])
+	if app.enqueued[0].ChatSessionID == nil || *app.enqueued[0].ChatSessionID != projectSession.ID || app.enqueued[0].CodexThreadID == nil || *app.enqueued[0].CodexThreadID != replacementThread {
+		t.Fatalf("App Server task binding=%#v", app.enqueued[0])
+	}
+	persisted, err := repo.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ChatSessionID == nil || *persisted.ChatSessionID != projectSession.ID || persisted.CodexThreadID == nil || *persisted.CodexThreadID != replacementThread {
+		t.Fatalf("persisted task binding=%#v", persisted)
+	}
+	if err := dispatcher.Enqueue(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls after idempotent enqueue=%d, want 2", resolver.calls)
 	}
 }

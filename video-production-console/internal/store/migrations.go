@@ -386,7 +386,7 @@ CREATE INDEX task_relations_related_idx ON task_relations(related_task_id, kind)
 
 INSERT INTO settings(key, value) VALUES
     ('max_codex_concurrency', '2'),
-    ('listen_addr', '0.0.0.0:2030'),
+    ('listen_addr', '127.0.0.1:2030'),
     ('baokuan_base_url', 'http://127.0.0.1:2022'),
     ('codex_binary_path', 'codex')
 ON CONFLICT(key) DO NOTHING;`,

@@ -35,6 +35,40 @@ const (
 	TaskCancelled TaskStatus = "cancelled"
 )
 
+// Canonical maps historical spellings to the current persisted vocabulary.
+func (s TaskStatus) Canonical() TaskStatus {
+	switch s {
+	case TaskWaitingInput:
+		return TaskAwaitingInput
+	case TaskCancelled:
+		return TaskCanceled
+	default:
+		return s
+	}
+}
+
+func (s TaskStatus) IsTerminal() bool {
+	switch s.Canonical() {
+	case TaskCompleted, TaskFailed, TaskCanceled, TaskInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s TaskStatus) IsWaitingForInput() bool {
+	return s.Canonical() == TaskAwaitingInput
+}
+
+func (s TaskStatus) IsActive() bool {
+	switch s.Canonical() {
+	case TaskQueued, TaskRunning, TaskAwaitingInput, TaskResuming:
+		return true
+	default:
+		return false
+	}
+}
+
 type Account struct {
 	ID                string
 	Name              string

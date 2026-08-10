@@ -86,48 +86,13 @@ func New(options Options) *App {
 		taskResultsHandler := httpapi.NewTaskResultsHandler(store.NewTaskRepository(options.DB))
 		montageHandler := httpapi.NewMontageHandler(options.MontageRetryer)
 		completionRetryHandler := httpapi.NewCompletionRetryHandler(options.CompletionRetryer)
-		mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
-			if options.Scheduler != nil && (strings.HasSuffix(r.URL.Path, "/tasks") || strings.HasSuffix(r.URL.Path, "/topic-card")) {
-				tasksHandler.ServeHTTP(w, r)
-				return
-			}
-			projects.ServeHTTP(w, r)
-		})
+		mux.Handle("/api/projects/", projectRouteHandler(projects, tasksHandler, options.Scheduler != nil))
 		tasks := store.NewTaskRepository(options.DB)
 		hub := options.Realtime
 		if hub == nil {
 			hub = realtime.NewHub(tasks)
 		}
-		mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
-			const prefix = "/api/tasks/"
-			path := r.URL.Path
-			if !strings.HasPrefix(path, prefix) {
-				http.NotFound(w, r)
-				return
-			}
-			if strings.HasSuffix(path, "/artifacts") || strings.HasSuffix(path, "/result") || strings.HasSuffix(path, "/diagnostics") || strings.HasSuffix(path, "/semantic-events") {
-				taskResultsHandler.ServeHTTP(w, r)
-				return
-			}
-			if strings.HasSuffix(path, "/retry-registration") {
-				montageHandler.ServeHTTP(w, r)
-				return
-			}
-			if strings.HasSuffix(path, "/retry-completion") {
-				completionRetryHandler.ServeHTTP(w, r)
-				return
-			}
-			if !strings.HasSuffix(path, "/events") {
-				tasksHandler.ServeHTTP(w, r)
-				return
-			}
-			taskID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/events")
-			if taskID == "" || strings.Contains(taskID, "/") {
-				http.NotFound(w, r)
-				return
-			}
-			hub.Handler(w, r, taskID)
-		})
+		mux.Handle("/api/tasks/", taskRouteHandler(tasksHandler, taskResultsHandler, montageHandler, completionRetryHandler, hub))
 		// Mount task commands separately; the event route above remains the
 		// narrowly-scoped WebSocket endpoint.
 		if options.Scheduler != nil {
@@ -202,6 +167,39 @@ func New(options Options) *App {
 		}
 		protected.ServeHTTP(w, r)
 	})}
+}
+
+func projectRouteHandler(projects, tasks http.Handler, taskRoutesEnabled bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if taskRoutesEnabled && (strings.HasSuffix(r.URL.Path, "/tasks") || strings.HasSuffix(r.URL.Path, "/topic-card")) {
+			tasks.ServeHTTP(w, r)
+			return
+		}
+		projects.ServeHTTP(w, r)
+	})
+}
+
+func taskRouteHandler(tasks, results, montage, completion http.Handler, hub *realtime.Hub) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/artifacts"), strings.HasSuffix(path, "/result"), strings.HasSuffix(path, "/diagnostics"), strings.HasSuffix(path, "/semantic-events"):
+			results.ServeHTTP(w, r)
+		case strings.HasSuffix(path, "/retry-registration"):
+			montage.ServeHTTP(w, r)
+		case strings.HasSuffix(path, "/retry-completion"):
+			completion.ServeHTTP(w, r)
+		case strings.HasSuffix(path, "/events"):
+			taskID := strings.TrimSuffix(strings.TrimPrefix(path, "/api/tasks/"), "/events")
+			if taskID == "" || strings.Contains(taskID, "/") {
+				http.NotFound(w, r)
+				return
+			}
+			hub.Handler(w, r, taskID)
+		default:
+			tasks.ServeHTTP(w, r)
+		}
+	})
 }
 
 type settingsWithScheduler struct {

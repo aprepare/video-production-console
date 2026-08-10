@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -142,10 +141,8 @@ func (h *accountsHandler) rename(response http.ResponseWriter, request *http.Req
 	var input struct {
 		Name string `json:"name"`
 	}
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "A JSON object with a name is required.")
+	if err := decodeJSON(response, request, maxNormalJSONRequest, &input); err != nil {
+		writeDecodeError(response, err, "invalid_json", "A JSON object with a name is required.")
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
@@ -294,14 +291,4 @@ func toAccountResponse(account domain.Account) accountResponse {
 		Color: account.Color, Status: account.Status,
 		CreatedAt: account.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: account.UpdatedAt.Format(time.RFC3339Nano),
 	}
-}
-
-func writeError(response http.ResponseWriter, status int, code, message string) {
-	writeJSON(response, status, map[string]string{"code": code, "message": message})
-}
-
-func writeJSON(response http.ResponseWriter, status int, value any) {
-	response.Header().Set("Content-Type", "application/json")
-	response.WriteHeader(status)
-	_ = json.NewEncoder(response).Encode(value)
 }

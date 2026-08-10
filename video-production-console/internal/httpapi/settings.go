@@ -2,9 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -51,14 +49,8 @@ func (h *settingsHandler) put(response http.ResponseWriter, request *http.Reques
 		Public  domain.PublicSettings `json:"public"`
 		Secrets map[string]string     `json:"secrets"`
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, maxSettingsRequestSize))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_settings", "The settings request is invalid.")
-		return
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_settings", "The settings request is invalid.")
+	if err := decodeJSON(response, request, maxSettingsRequestSize, &input); err != nil {
+		writeDecodeError(response, err, "invalid_settings", "The settings request is invalid.")
 		return
 	}
 	if input.Secrets == nil {
@@ -88,16 +80,4 @@ func (h *settingsHandler) testDependency(response http.ResponseWriter, request *
 
 func (h *settingsHandler) repairBaokuanMCP(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, h.service.RepairBaokuanMCP(request.Context()))
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var trailing any
-	err := decoder.Decode(&trailing)
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err == nil {
-		return errors.New("multiple JSON values")
-	}
-	return err
 }

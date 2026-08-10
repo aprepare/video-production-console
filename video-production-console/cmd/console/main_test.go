@@ -20,6 +20,7 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
+	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
 )
 
@@ -29,6 +30,66 @@ func TestNewServerHasDefensiveTimeouts(t *testing.T) {
 		server.WriteTimeout != 2*time.Minute || server.IdleTimeout != time.Minute || server.MaxHeaderBytes != 1<<20 {
 		t.Fatalf("server limits = header:%v read:%v write:%v idle:%v max-header:%d",
 			server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout, server.MaxHeaderBytes)
+	}
+}
+
+func TestServeUntilShutdownStopsOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	server := newServer("127.0.0.1:0", http.NewServeMux())
+	if err := serveUntilShutdown(ctx, server); err != nil {
+		t.Fatalf("serveUntilShutdown: %v", err)
+	}
+}
+
+func TestInitializeAdministratorSkipsBootstrapForExistingAdmin(t *testing.T) {
+	err := initializeAdministrator(context.Background(), func(context.Context) (store.Admin, error) {
+		return store.Admin{ID: "admin"}, nil
+	}, func(context.Context, string) error {
+		t.Fatal("bootstrap called")
+		return nil
+	}, func(string) (string, bool) {
+		t.Fatal("environment read")
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInitializeAdministratorRequiresExplicitPassword(t *testing.T) {
+	err := initializeAdministrator(context.Background(), func(context.Context) (store.Admin, error) {
+		return store.Admin{}, store.ErrUnauthenticated
+	}, func(context.Context, string) error {
+		t.Fatal("bootstrap called without password")
+		return nil
+	}, func(key string) (string, bool) {
+		if key != initialPasswordEnvironment {
+			t.Fatalf("lookup key=%q", key)
+		}
+		return "", false
+	})
+	if err == nil || !strings.Contains(err.Error(), initialPasswordEnvironment) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDefaultCodexTaskProjectRootUsesDocumentsMisc(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	want := filepath.Join(home, "Documents", "杂项")
+	if err := os.MkdirAll(want, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got := defaultCodexTaskProjectRoot(home)
+	if got != want {
+		t.Fatalf("task project root=%q want=%q", got, want)
+	}
+}
+
+func TestDefaultCodexTaskProjectRootDoesNotFallbackWhenUnavailable(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	if got := defaultCodexTaskProjectRoot(home); got != "" {
+		t.Fatalf("task project root=%q, want unavailable root to remain empty", got)
 	}
 }
 

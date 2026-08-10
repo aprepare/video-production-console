@@ -98,6 +98,23 @@ func (r *ConversationRepository) ResolveProjectMainSession(ctx context.Context, 
 	return session, err
 }
 
+func (r *ConversationRepository) ProjectThreadLabel(ctx context.Context, projectID string) (string, string, error) {
+	var accountName, projectTitle string
+	err := r.db.QueryRowContext(ctx, `SELECT accounts.name,projects.title FROM projects JOIN accounts ON accounts.id=projects.account_id WHERE projects.id=?`, projectID).Scan(&accountName, &projectTitle)
+	return accountName, projectTitle, err
+}
+
+func (r *ConversationRepository) SessionHasActiveWork(ctx context.Context, sessionID string) (bool, error) {
+	var activeTurns, activeTasks int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chat_turns WHERE session_id=? AND status IN ('running','awaiting_input')`, sessionID).Scan(&activeTurns); err != nil {
+		return false, err
+	}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codex_tasks WHERE chat_session_id=? AND status IN ('queued','running','awaiting_input','resuming','waiting_input')`, sessionID).Scan(&activeTasks); err != nil {
+		return false, err
+	}
+	return activeTurns != 0 || activeTasks != 0, nil
+}
+
 // DemoteProjectMainSession preserves a superseded or unusable conversation,
 // including its thread and messages, while releasing the main-session slot.
 func (r *ConversationRepository) DemoteProjectMainSession(ctx context.Context, id string) error {

@@ -76,7 +76,7 @@ func TestMoveProjectUsesExpectedStageAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestPublishProjectRequiresReviewAndReadyFinalVideo(t *testing.T) {
+func TestPublishProjectRequiresReviewButFinalVideoIsOptional(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "publish.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -87,14 +87,7 @@ func TestPublishProjectRequiresReviewAndReadyFinalVideo(t *testing.T) {
 	_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
 	_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','review','producing',?,?)`, projectID, accountID, now, now)
 	repo := NewProjectRepository(db)
-	if _, err := repo.PublishProject(context.Background(), projectID, now.Add(time.Minute)); !errors.Is(err, ErrFinalVideoMissing) {
-		t.Fatalf("missing final video err=%v", err)
-	}
-	assertProjectPublication(t, db, projectID, domain.StageReview, "producing", nil, now)
-	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "final.mp4", Filename: "final.mp4", MIMEType: "video/mp4", SHA256: "final"}); err != nil {
-		t.Fatal(err)
-	}
-	publishedAt := now.Add(2 * time.Minute)
+	publishedAt := now.Add(time.Minute)
 	p, err := repo.PublishProject(context.Background(), projectID, publishedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +173,7 @@ func TestPublishProjectWrongStageDoesNotPartiallyWrite(t *testing.T) {
 	assertProjectPublication(t, db, projectID, domain.StageMixing, "producing", nil, now)
 }
 
-func TestPublishProjectRejectsNonReadyCurrentFinalVideo(t *testing.T) {
+func TestPublishProjectIgnoresOptionalFinalVideoState(t *testing.T) {
 	for _, currentState := range []domain.AssetState{domain.AssetStale, domain.AssetFailed} {
 		t.Run(string(currentState), func(t *testing.T) {
 			db, err := Open(filepath.Join(t.TempDir(), "publish-current.db"))
@@ -193,9 +186,6 @@ func TestPublishProjectRejectsNonReadyCurrentFinalVideo(t *testing.T) {
 			_, _ = db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,'#fff','active',?,?)`, accountID, "a", now, now)
 			_, _ = db.Exec(`INSERT INTO projects(id,account_id,title,stage,publication_status,created_at,updated_at) VALUES(?,?,'p','review','producing',?,?)`, projectID, accountID, now, now)
 			repo := NewProjectRepository(db)
-			if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "ready.mp4", Filename: "ready.mp4", MIMEType: "video/mp4", SHA256: "ready"}); err != nil {
-				t.Fatal(err)
-			}
 			current, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &projectID, Type: domain.AssetFinalVideo, Path: "current.mp4", Filename: "current.mp4", MIMEType: "video/mp4", SHA256: "current"})
 			if err != nil {
 				t.Fatal(err)
@@ -203,10 +193,11 @@ func TestPublishProjectRejectsNonReadyCurrentFinalVideo(t *testing.T) {
 			if _, err := db.Exec(`UPDATE asset_versions SET state=? WHERE id=?`, currentState, current.ID); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.PublishProject(context.Background(), projectID, now.Add(time.Minute)); !errors.Is(err, ErrFinalVideoMissing) {
+			publishedAt := now.Add(time.Minute)
+			if _, err := repo.PublishProject(context.Background(), projectID, publishedAt); err != nil {
 				t.Fatalf("current %s err=%v", currentState, err)
 			}
-			assertProjectPublication(t, db, projectID, domain.StageReview, "producing", nil, now)
+			assertProjectPublication(t, db, projectID, domain.StagePublished, "published", &publishedAt, publishedAt)
 		})
 	}
 }
