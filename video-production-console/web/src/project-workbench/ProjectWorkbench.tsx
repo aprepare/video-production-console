@@ -10,7 +10,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ProjectAsset, ProjectDetail, ProjectTask } from "./types";
+import type { ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
@@ -18,7 +18,7 @@ import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets
 import { ProjectConversation } from "./ProjectConversation";
 import "./project-workbench.css";
 
-type UploadAssetType = "narration" | "subtitle_srt" | "final_video";
+type UploadAssetType = "narration" | "subtitle_srt";
 
 export type ProjectWorkbenchProps = {
   detail: ProjectDetail;
@@ -48,7 +48,6 @@ const missingLabels: Record<string, string> = {
   subtitle_srt: "SRT 字幕",
   account_background: "账号背景图",
   mix_draft: "混剪草稿",
-  final_video: "成片",
 };
 
 const stageLabels = {
@@ -70,8 +69,33 @@ const stagePositions = {
 function primaryActionIcon(actionId: string) {
   if (actionId === "publish") return <Send size={19} aria-hidden="true" />;
   if (actionId === "start-mixing") return <Clapperboard size={19} aria-hidden="true" />;
-  if (actionId === "prepare-assets" || actionId === "upload-final-video") return <UploadCloud size={19} aria-hidden="true" />;
+  if (actionId === "prepare-assets") return <UploadCloud size={19} aria-hidden="true" />;
   return <WandSparkles size={19} aria-hidden="true" />;
+}
+
+function shouldShowPublishingCopy(stage: ProductionStage, hasPackage: boolean) {
+  if (stage === "review" || stage === "published") return true;
+  return stage === "mixing" && hasPackage;
+}
+
+function CopyFieldButton(props: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const disabled = !props.value.trim();
+  return (
+    <button
+      type="button"
+      className={`publishing-copy-button${props.copied ? " is-copied" : ""}`}
+      aria-label={props.label}
+      disabled={disabled}
+      onClick={props.onCopy}
+    >
+      {props.copied ? "已复制" : "复制"}
+    </button>
+  );
 }
 
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
@@ -99,14 +123,17 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     .filter((task) => task.project_id === detail.project.id && task.publishing_package)
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
   const publishingPackage = publishingTask?.publishing_package;
-  const recommendedTitles = publishingPackage?.top_titles?.length
-    ? [...publishingPackage.top_titles].sort((left, right) => left.rank - right.rank).map((item) => item.title)
-    : publishingPackage?.titles || [];
   const description = publishingPackage?.description || publishingPackage?.descriptions?.[0] || "";
+  const descriptionForCopy = [description, publishingPackage?.cta || ""]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n\n");
   const shortTitles = publishingPackage?.short_titles || [];
-  const topics = publishingPackage?.topics || [];
+  const primaryShortTitle = shortTitles[0] || "";
+  const showPublishingCopy = shouldShowPublishingCopy(stage, Boolean(publishingPackage));
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const [sourceScript, setSourceScript] = useState("");
+  const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
   const sourceAssetID = sourceReady ? detail.assets.source_script?.id : "";
@@ -117,7 +144,25 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
   useEffect(() => {
     setSourceScript("");
+    setCopiedKey("");
   }, [detail.project.id]);
+
+  useEffect(() => {
+    if (!copiedKey) return;
+    const timer = window.setTimeout(() => setCopiedKey(""), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copiedKey]);
+
+  async function copyPublishingText(key: string, value: string) {
+    const text = value.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+    } catch {
+      // Clipboard can fail without a secure context; leave the button label unchanged.
+    }
+  }
 
   useEffect(() => {
     if (!sourceAssetID || !loadSourceScriptContent) return;
@@ -134,7 +179,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     };
   }, [loadSourceScriptContent, sourceAssetID]);
 
-  const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]);
+  const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft"]);
   const unknownMissing = missing.find((type) => !knownMissing.has(type));
   const pendingForAction = action?.id === "start-remix"
     ? "remix"
@@ -142,9 +187,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       ? "montage"
       : action?.id === "publish"
         ? "publish"
-        : action?.id === "upload-final-video"
-          ? "upload:final_video"
-          : "";
+        : "";
   const actionPending = projectPending || (action?.id === "start-source-remix" && sourceRemixLive) || (action?.id === "prepare-assets"
     ? missing.some((type) => props.pendingActions.includes(`upload:${type}`))
     : pendingForAction ? props.pendingActions.includes(pendingForAction) : false);
@@ -162,9 +205,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     else if (action.id === "start-mixing") props.onMix();
     else if (action.id === "publish") props.onPublish();
     else {
-      const target = action.id === "upload-final-video" ? "final_video" : missing[0];
-      if (["narration", "subtitle_srt", "account_background", "final_video"].includes(target))
-        requestUpload(target as ProjectAssetUploadType);
+      const target = missing[0];
+      if (target === "narration" || target === "subtitle_srt" || target === "account_background")
+        requestUpload(target);
     }
   };
 
@@ -254,7 +297,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         </section>
       )}
 
-      <div className={`workbench-grid${stage === "review" ? " workbench-grid--review" : ""}`}>
+      <div className={`workbench-grid${showPublishingCopy ? " workbench-grid--review" : ""}`}>
         <section className="primary-action-panel" aria-label="下一主动作">
           <div className="primary-action-panel__head">
             <div>
@@ -266,7 +309,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <small>/ 05</small>
             </span>
           </div>
-          <h2 className="primary-action-panel__title">{stage === "review" ? "确认发布信息" : "继续当前制作"}</h2>
+          <h2 className="primary-action-panel__title">{stage === "review" || stage === "published" ? "确认发布信息" : "继续当前制作"}</h2>
           {action ? (
             <>
               {primaryActionButton("desktop-primary-action")}
@@ -280,7 +323,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                     : action.id === "start-mixing"
                       ? "仅使用连续文案、配音、SRT 与账号背景图。"
                       : action.id === "publish"
-                        ? "成片文件为可选项。检查发布文案后，可直接确认项目已发布。"
+                        ? "检查视频描述与短标题后，可直接确认项目已发布。"
                         : "先补齐当前阶段所需文件。"}
               </p>
             </>
@@ -319,43 +362,51 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </div>
         </section>
 
-        {stage === "review" ? (
-          <section className="publishing-review" aria-label="发布文案审核">
+        {showPublishingCopy ? (
+          <section className="publishing-review" aria-label="发布文案">
             <div className="workbench-section-heading publishing-review__heading">
               <div>
                 <span>PUBLISHING COPY</span>
                 <h2>发布文案</h2>
-                <p>成片文件不是必填项；发布前重点检查标题、简介和话题。</p>
+                <p>只展示视频号发布要用的「视频描述」和「短标题」，点复制即可粘贴。</p>
               </div>
               {publishingTask ? <span className="publishing-review__source">来自最近二创结果</span> : null}
             </div>
             {publishingPackage ? (
-              <div className="publishing-review__content">
-                <section className="publishing-copy-block publishing-copy-block--title">
-                  <span>推荐标题</span>
-                  <h3>{recommendedTitles[0] || detail.project.title}</h3>
-                  {recommendedTitles.length > 1 ? (
-                    <ol>{recommendedTitles.slice(1, 4).map((title) => <li key={title}>{title}</li>)}</ol>
-                  ) : null}
-                </section>
-                <section className="publishing-copy-block">
-                  <span>短标题</span>
-                  <p>{shortTitles[0] || "暂未生成短标题"}</p>
-                </section>
+              <div className="publishing-review__content publishing-review__content--compact">
                 <section className="publishing-copy-block publishing-copy-block--description">
-                  <span>内容简介</span>
-                  <p>{description || "暂未生成内容简介"}</p>
+                  <div className="publishing-copy-block__head">
+                    <span>视频描述</span>
+                    <CopyFieldButton
+                      label="复制视频描述"
+                      value={descriptionForCopy}
+                      copied={copiedKey === "description"}
+                      onCopy={() => void copyPublishingText("description", descriptionForCopy)}
+                    />
+                  </div>
+                  <p>{description || "暂未生成视频描述"}</p>
                   {publishingPackage.cta ? <small>{publishingPackage.cta}</small> : null}
                 </section>
-                <section className="publishing-copy-block publishing-copy-block--topics">
-                  <span>话题</span>
-                  <div>{topics.length ? topics.map((topic) => <b key={topic}>#{topic.replace(/^#/, "")}</b>) : <p>暂未生成话题</p>}</div>
+                <section className="publishing-copy-block">
+                  <div className="publishing-copy-block__head">
+                    <span>短标题</span>
+                    <CopyFieldButton
+                      label="复制短标题"
+                      value={primaryShortTitle}
+                      copied={copiedKey === "short-title"}
+                      onCopy={() => void copyPublishingText("short-title", primaryShortTitle)}
+                    />
+                  </div>
+                  <p>{primaryShortTitle || "暂未生成短标题"}</p>
+                  {shortTitles.length > 1 ? (
+                    <ol>{shortTitles.slice(1, 4).map((title) => <li key={title}>{title}</li>)}</ol>
+                  ) : null}
                 </section>
               </div>
             ) : (
               <div className="publishing-review__empty">
                 <strong>暂未找到发布文案</strong>
-                <p>完成二创文案任务后，这里会自动显示推荐标题、短标题、内容简介和话题。</p>
+                <p>完成二创文案任务后，这里会自动显示视频描述和短标题。</p>
               </div>
             )}
           </section>

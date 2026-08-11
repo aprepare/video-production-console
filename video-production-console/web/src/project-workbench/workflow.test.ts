@@ -115,12 +115,13 @@ describe("production workflow view model", () => {
       ),
     ).toBe("mixing");
     expect(deriveProductionStage(detail("mixing", { mix_draft: "ready" }))).toBe("review");
-    expect(deriveProductionStage(detail("mixing", { final_video: "ready" }))).toBe("review");
+    // final_video is not a workbench gate; alone it must not advance the stage.
+    expect(deriveProductionStage(detail("mixing", { final_video: "ready" }))).toBe("script");
   });
 
   test("derives published only from the backend project stage", () => {
     expect(deriveProductionStage(detail("published"))).toBe("published");
-    expect(deriveProductionStage(detail("review", { final_video: "ready" }))).toBe("review");
+    expect(deriveProductionStage(detail("review", { mix_draft: "ready" }))).toBe("review");
   });
 
   test("ignores current assets that are not explicitly ready", () => {
@@ -182,10 +183,28 @@ describe("production workflow view model", () => {
           { continuous_script: "stale" },
           undefined,
           undefined,
-          ["final_video"],
+          ["mix_draft"],
         ),
       ),
     ).toEqual(["continuous_script"]);
+  });
+
+  test("ignores legacy final_video missing hints from the backend", () => {
+    expect(
+      missingProductionInputs(
+        detail(
+          "mixing",
+          {
+            continuous_script: "ready",
+            narration: "ready",
+            subtitle_srt: "ready",
+          },
+          undefined,
+          "ready",
+          ["final_video", "mix_draft"],
+        ),
+      ),
+    ).toEqual(["mix_draft"]);
   });
 
   test("maps active workflow steps to a disabled primary action", () => {
@@ -237,7 +256,7 @@ describe("production workflow view model", () => {
         ),
       ),
     ).toMatchObject({ id: "start-mixing", disabled: false });
-    expect(nextPrimaryAction(detail("review", { final_video: "ready" }))).toMatchObject({
+    expect(nextPrimaryAction(detail("review", { mix_draft: "ready" }))).toMatchObject({
       id: "publish",
       label: "确认已发布",
       disabled: false,
@@ -245,7 +264,7 @@ describe("production workflow view model", () => {
     expect(nextPrimaryAction(detail("published"))).toBeNull();
   });
 
-  test("allows publishing a review draft without requiring a final video upload", () => {
+  test("allows publishing after mix draft without any final video asset", () => {
     expect(nextPrimaryAction(detail("review", { mix_draft: "ready" }))).toMatchObject({
       id: "publish",
       label: "确认已发布",

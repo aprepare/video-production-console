@@ -218,7 +218,7 @@ test("the published action posts the project publish endpoint", async () => {
     if (path === "/api/projects") return json([project]);
     if (path === `/api/projects/${routedProjectID}`) return json({
       project,
-      assets: { final_video: testAsset("final_video") },
+      assets: { mix_draft: testAsset("mix_draft") },
       missing_assets: [],
     });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
@@ -310,7 +310,7 @@ test("serializes every mutation for one project while allowing another project t
 
   const deleteButton = screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" });
   expect(deleteButton.disabled).toBe(true);
-  for (const label of ["上传配音", "上传SRT 字幕", "上传成片", "上传账号背景图"]) {
+  for (const label of ["上传配音", "上传SRT 字幕", "上传账号背景图"]) {
     expect(screen.getByLabelText<HTMLInputElement>(label).disabled).toBe(true);
   }
   fireEvent.click(deleteButton);
@@ -362,7 +362,7 @@ test("does not let a completed project A publish request abort or replace projec
     if (path === "/api/projects") return json([projectA, projectB]);
     if (path === `/api/projects/${projectA.id}`) return json({
       project: projectA,
-      assets: { final_video: testAsset("final_video") },
+      assets: { mix_draft: testAsset("mix_draft") },
       missing_assets: [],
     });
     if (path === `/api/projects/${projectB.id}`) {
@@ -403,7 +403,6 @@ test("contains no legacy project drawer or bypass production controls in App sou
 test.each([
   ["narration", "上传配音"],
   ["subtitle_srt", "上传SRT 字幕"],
-  ["final_video", "上传成片"],
 ] as const)("uploads %s to its formal project endpoint and refreshes detail", async (type, label) => {
   const project = { id: routedProjectID, account_id: "account-upload", title: "上传素材项目", stage: "assets" };
   const uploads: Array<{ path: string; body: FormData }> = [];
@@ -427,7 +426,9 @@ test.each([
     }
   }));
   render(<App />);
-  const file = new File([type], `${type}.dat`, { type: "application/octet-stream" });
+  const file = type === "narration"
+    ? new File([type], "voice.mp3", { type: "audio/mpeg" })
+    : new File([type], "subs.srt", { type: "application/x-subrip" });
 
   fireEvent.change(await screen.findByLabelText(label), { target: { files: [file] } });
 

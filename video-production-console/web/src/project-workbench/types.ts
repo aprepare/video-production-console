@@ -127,7 +127,6 @@ export type PrimaryActionID =
   | "start-source-remix"
   | "prepare-assets"
   | "start-mixing"
-  | "upload-final-video"
   | "publish";
 
 export type PrimaryAction = {

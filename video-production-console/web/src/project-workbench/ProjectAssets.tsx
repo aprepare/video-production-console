@@ -7,14 +7,13 @@ import {
   FileText,
   Image,
   Upload,
-  Video,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useEffect, useRef } from "react";
 import type { ProjectAsset, ProjectDetail, RegisteredMontageAsset } from "./types";
 
-type AssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft" | "final_video";
-export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "final_video" | "account_background";
+type AssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft";
+export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "account_background";
 export type AssetUploadRequest = { type: ProjectAssetUploadType; token: number } | null;
 
 const assetDefinitions: Array<{
@@ -55,14 +54,6 @@ const assetDefinitions: Array<{
     accept: ".zip,application/zip",
     icon: Clapperboard,
   },
-  {
-    type: "final_video",
-    label: "成片",
-    description: "审核完成的最终视频，确认发布状态前必须存在。",
-    accept: "video/*",
-    icon: Video,
-    manualUpload: true,
-  },
 ];
 
 function assetState(asset?: ProjectAsset) {
@@ -75,7 +66,7 @@ function assetState(asset?: ProjectAsset) {
 type ProjectAssetsProps = {
   detail: ProjectDetail;
   registeredDraft?: RegisteredMontageAsset & { task_id: string };
-  onUpload: (type: "narration" | "subtitle_srt" | "final_video", file: File) => void;
+  onUpload: (type: "narration" | "subtitle_srt", file: File) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   pendingActions: string[];
@@ -192,7 +183,7 @@ export function ProjectAssets({
                           return;
                         }
                         const file = event.target.files?.[0];
-                        if (file) onUpload(definition.type as "narration" | "subtitle_srt" | "final_video", file);
+                        if (file) onUpload(definition.type as "narration" | "subtitle_srt", file);
                         event.target.value = "";
                       }}
                     />

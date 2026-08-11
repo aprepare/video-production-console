@@ -23,7 +23,8 @@ function isBackgroundReady(detail: ProjectDetail) {
 
 export function deriveProductionStage(detail: ProjectDetail): ProductionStage {
   if (detail.project.stage === "published") return "published";
-  if (isReady(detail, "mix_draft") || isReady(detail, "final_video")) return "review";
+  // Final exported video is not part of the console workflow; only a ready mix draft advances review.
+  if (isReady(detail, "mix_draft")) return "review";
   if (
     isReady(detail, "continuous_script") &&
     isReady(detail, "narration") &&
@@ -46,9 +47,7 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
       if (!isBackgroundReady(detail)) computed.push("account_background");
       break;
     case "mixing":
-      computed = isReady(detail, "mix_draft") || isReady(detail, "final_video")
-        ? []
-        : ["mix_draft"];
+      computed = isReady(detail, "mix_draft") ? [] : ["mix_draft"];
       break;
     case "review":
       computed = [];
@@ -60,7 +59,8 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
   const backendMissing = detail.project.stage === derivedStage
     ? detail.missing_assets || []
     : [];
-  return [...new Set([...backendMissing, ...computed])];
+  // final_video is intentionally out of the workbench; ignore legacy backend hints.
+  return [...new Set([...backendMissing, ...computed])].filter((type) => type !== "final_video");
 }
 
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {

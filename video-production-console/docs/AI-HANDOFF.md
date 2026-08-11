@@ -8,7 +8,42 @@
 
 **一句话定位：**本地视频生产控制台——Go 提供鉴权、项目/资产、Codex 任务调度、对话与实时事件；React/Vite 提供项目看板和五阶段工作台；混剪明文草稿可登记为剪映正式资产。
 
-**当前状态：**主流程具备登录、项目隔离、资产管理、Codex/桌面对话、任务进度与恢复、爆款库代理、Obsidian/Skills、混剪登记、五阶段工作台、主题与项目列折叠。同行原文闭环已落地：`source_script` 上传 → `remix.standard`（`source_version_id` 绑定与活动任务幂等）→ `continuous_script`（依赖血缘）→ 解锁素材阶段。SPA 路由刷新由 `internal/webui/embed.go` 回退到 `index.html`。
+**当前状态（2026-08-11）：**主流程具备登录、项目隔离、资产管理、Codex/桌面对话、任务进度与恢复、爆款库代理、Obsidian/Skills、混剪登记、五阶段工作台、主题与项目列折叠。同行原文闭环已落地：`source_script` 上传 → `remix.standard`（`source_version_id` 绑定与活动任务幂等）→ `continuous_script`（依赖血缘）→ 解锁素材阶段。SPA 路由刷新由 `internal/webui/embed.go` 回退到 `index.html`。
+
+### 1.1 近期进度快照（接手必读）
+
+已完成：
+
+| 主题 | 说明 | 关键位置 / 提交线索 |
+|---|---|---|
+| 混剪 script runtime | `montage.execute` 默认走本地确定性 plan + skill Python，不再默认 Codex | `internal/agentruntime/`、`montageplan/`、`montagescript/`；`feat: route montage.execute through local script AgentRuntime` |
+| openai_compat runtime | remix/topic opt-in；env 配齐才启用，失败回退 Codex | `internal/agentruntime/openaicompat/`；`feat: add openai_compat runtime for remix/topic` |
+| Pi runtime | remix/topic opt-in；本机需 `pi`；失败回退 Codex | `internal/agentruntime/piruntime/`；`feat: add opt-in Pi runtime for remix/topic` |
+| Runtime 文档 | 矩阵与 env 已写入本文 §3 | `docs: document pluggable agent runtimes` |
+| 片内标题 | 画面标题去掉账号前缀/任务后缀；草稿文件夹名仍可用 `draft_display_name` | `internal/agentruntime/montageplan/plan.go` |
+| 发布文案复制 | 工作台在混剪/审核展示「视频描述」「短标题」并支持一键复制；**不展示**推荐标题/话题/成片 | `web/src/project-workbench/ProjectWorkbench.tsx` |
+| 去掉成片资产 | 工作台资产列表与主动作不再出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts` |
+
+默认运行时（勿擅自改默认）：
+
+- 混剪 → `script`
+- remix/topic → `codex`
+- OpenAI / Pi → 仅环境变量 opt-in（见 §3）
+
+本地服务常见地址：`http://127.0.0.1:2030`；嵌入前端变更需 `npm --prefix web run build:embed` 后重建 exe。
+
+### 1.2 下一阶段规划（建议接手顺序）
+
+1. **混剪失败排障（高优先）**  
+   用户项目常卡在混剪：`mix_draft` 失败/未登记。先查任务 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
+2. **真机试用 openai_compat / pi（可选）**  
+   设 env 重启后跑一条 `remix.standard`；确认仍走 manifest → result schema → 资产入库。设置页 UI **不做**。
+3. **发布文案质量（可选）**  
+   文案来自二创 `publishing_package`；若描述/短标题空，查 remix skill 产物而非前端。
+4. **明确不做**  
+   设置页选 runtime；App Server 接到 openai/pi；强行把 remix/topic 默认切离 Codex；把成片上传加回工作台。
+
+回滚基线参考：Week1 script runtime `15ca7d9`（以当时分支为准）。分支常为 `codex/video-production-console`。
 
 ## 2. 目录结构与职责
 
@@ -90,7 +125,8 @@ go run .\cmd\console
 
 ## 7. 前端工作台要点
 
-- 阶段：`script → assets → mixing → review → published`；成片 `final_video` 可选。
+- 阶段：`script → assets → mixing → review → published`；**进审核条件是剪映草稿 ready**，工作台不展示/不要求成片 `final_video`。
+- 发布文案：混剪及之后若有 `publishing_package`，展示「视频描述」「短标题」并提供复制；对应视频号发布页粘贴。
 - 同行原文入口仅在 `script` 阶段；主动作区分选题卡 `/remix` 与正式 `remix.standard`。
 - 主题键 `video-production-console-theme`；项目列折叠阈值 `4`。
 
@@ -119,7 +155,7 @@ go run .\cmd\console
 
 ## 11. 已知限制
 
-- 不自动打开微信视频号或剪映。
+- 不自动打开微信视频号或剪映；成片导出在剪映侧完成，控制台不托管成片上传。
 - 外部依赖离线会影响功能。
 - 源码与嵌入 dist 可能暂时不一致；开发页与生产二进制不是同一路径。
 - AgentRuntime 切换仅环境变量；设置页 UI 不做 runtime 选择。

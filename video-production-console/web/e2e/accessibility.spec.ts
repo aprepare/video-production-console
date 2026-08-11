@@ -60,7 +60,7 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
                 created_at: "2026-08-09T12:00:00Z",
               },
             },
-            missing_assets: ["final_video"],
+            missing_assets: [],
             active_workflow: null,
           }
         : { project: activeProject, assets: {}, missing_assets: [], active_workflow: null };

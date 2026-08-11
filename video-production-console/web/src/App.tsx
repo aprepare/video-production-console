@@ -1580,7 +1580,7 @@ function App() {
     }
   };
   const uploadProjectAsset = async (
-    type: "narration" | "subtitle_srt" | "final_video",
+    type: "narration" | "subtitle_srt",
     file: File,
   ) => {
     if (!selected) return;
@@ -1667,7 +1667,7 @@ function App() {
     const project = selected;
     if (
       !window.confirm(
-        `确定删除项目“${project.title}”吗？项目专属文案、配音、SRT、草稿、成片和任务记录都会一并删除，此操作无法恢复。`,
+        `确定删除项目“${project.title}”吗？项目专属文案、配音、SRT、草稿和任务记录都会一并删除，此操作无法恢复。`,
       )
     )
       return;
@@ -2362,7 +2362,7 @@ function App() {
           </form>
           </nav>
           <div className="aside-foot">
-            每个账号使用一张固定背景图；每个项目独立管理文案、配音、字幕和成片。
+            每个账号使用一张固定背景图；每个项目独立管理文案、配音、字幕和剪映草稿。
           </div>
         </aside>
         <main>

@@ -123,7 +123,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
   expect(currentStep?.textContent).toContain("正在制作");
-  expect(screen.getByLabelText("2 个资产已就绪，共 6 个")).toBeTruthy();
+  expect(screen.getByLabelText("2 个资产已就绪，共 5 个")).toBeTruthy();
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();
   expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
@@ -138,14 +138,14 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(screen.getByText("配音")).toBeTruthy();
   expect(screen.getByText("SRT 字幕")).toBeTruthy();
   expect(screen.getByText("剪映草稿")).toBeTruthy();
-  expect(screen.getByText("成片")).toBeTruthy();
+  expect(screen.queryByText("成片")).toBeNull();
   expect(screen.getAllByText("存在").length).toBeGreaterThan(0);
   expect(screen.getAllByText("失效").length).toBeGreaterThan(0);
   expect(screen.getAllByText("缺失").length).toBeGreaterThan(0);
 
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").type).toBe("file");
-  expect(screen.getByLabelText<HTMLInputElement>("上传成片").type).toBe("file");
+  expect(screen.queryByLabelText("上传成片")).toBeNull();
   expect(screen.getByLabelText<HTMLInputElement>("替换账号背景图").type).toBe("file");
 
   fireEvent.change(screen.getByLabelText("上传配音"), {
@@ -355,7 +355,7 @@ test("runs mixing from the single primary action when all formal inputs are read
 test("keeps the published button wording while exposing its operation through aria-label", () => {
   const detail = fixture();
   detail.project.stage = "review";
-  detail.assets.final_video = asset("final_video");
+  detail.assets.mix_draft = asset("mix_draft");
   const props = renderWorkbench(detail);
 
   const publish = screen.getByRole("button", { name: "将当前项目标记为已发布" });
@@ -363,6 +363,54 @@ test("keeps the published button wording while exposing its operation through ar
   fireEvent.click(publish);
 
   expect(props.onPublish).toHaveBeenCalledOnce();
+});
+
+test("surfaces WeChat publishing copy with copy actions while still on mixing", async () => {
+  const detail = fixture();
+  detail.project.stage = "mixing";
+  detail.assets = {
+    continuous_script: asset("continuous_script"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+    mix_draft: asset("mix_draft", "failed"),
+  };
+  detail.missing_assets = ["mix_draft"];
+  const remixTask: ProjectTask = {
+    ...task,
+    id: "remix-task",
+    type: "remix",
+    skill_name: "finance-viral-remix",
+    action: "remix.standard",
+    status: "completed",
+    created_at: "2026-08-08T01:00:00Z",
+    publishing_package: {
+      titles: ["长标题备选"],
+      short_titles: ["房贷清零假象", "备用短标题"],
+      description: "房贷还清不等于住房成本清零，真正要算的是大修账单。",
+      topics: ["房贷", "养老"],
+    },
+  };
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const props = workbenchProps(detail);
+  props.tasks = [remixTask, task];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByRole("region", { name: "发布文案" })).toBeTruthy();
+  expect(screen.getByText("视频描述")).toBeTruthy();
+  expect(screen.getByText("房贷还清不等于住房成本清零，真正要算的是大修账单。")).toBeTruthy();
+  expect(screen.getByText("房贷清零假象")).toBeTruthy();
+  expect(screen.queryByText("推荐标题")).toBeNull();
+  expect(screen.queryByText("话题")).toBeNull();
+  expect(screen.queryByRole("button", { name: "一键复制发布文案" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "复制短标题" }));
+  expect(writeText).toHaveBeenCalledWith("房贷清零假象");
+  fireEvent.click(screen.getByRole("button", { name: "复制视频描述" }));
+  expect(writeText).toHaveBeenCalledWith("房贷还清不等于住房成本清零，真正要算的是大修账单。");
 });
 
 test.each([
@@ -449,7 +497,7 @@ test("selects the newest live task consistently in the action panel and conversa
 test("blocks an unknown backend missing key with an actionable explanation", () => {
   const detail = fixture();
   detail.project.stage = "review";
-  detail.assets.final_video = asset("final_video");
+  detail.assets.mix_draft = asset("mix_draft");
   detail.missing_assets = ["future_asset"];
   renderWorkbench(detail);
 
@@ -465,7 +513,7 @@ test("disables the current action, delete, and related input while pending", () 
 
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "补齐制作素材" }).disabled).toBe(true);
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" }).disabled).toBe(true);
-  for (const label of ["上传配音", "上传SRT 字幕", "上传成片", "替换账号背景图"]) {
+  for (const label of ["上传配音", "上传SRT 字幕", "替换账号背景图"]) {
     expect(screen.getByLabelText<HTMLInputElement>(label).disabled).toBe(true);
   }
 });
