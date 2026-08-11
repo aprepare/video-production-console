@@ -990,32 +990,5 @@ func (r *MontageRepository) PlaintextWorkspaceArtifact(ctx context.Context, atte
 }
 
 func (r *MontageRepository) immediate(ctx context.Context, operation string, fn func(assetDBTX, time.Time) error) error {
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("begin %s: %w", operation, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
-		}
-	}()
-	if err := fn(conn, time.Now().UTC()); err != nil {
-		return err
-	}
-	var commitErr error
-	if r.commit != nil {
-		commitErr = r.commit(ctx, conn)
-	} else {
-		_, commitErr = conn.ExecContext(ctx, `COMMIT`)
-	}
-	if commitErr != nil {
-		return &CommitOutcomeError{Outcome: CommitUnknown, Err: fmt.Errorf("commit %s outcome unknown: %w", operation, commitErr)}
-	}
-	committed = true
-	return nil
+	return runImmediate(ctx, r.db, operation, r.commit, fn)
 }
