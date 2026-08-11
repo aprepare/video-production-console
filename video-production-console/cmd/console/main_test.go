@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"video-production-console/internal/agentruntime"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
@@ -205,7 +206,7 @@ func TestCodexCommandFactoriesUseUnifiedBuilders(t *testing.T) {
 	schema := filepath.Join(t.TempDir(), "codex-result.schema.json")
 	base := testCodexCommandConfig(t, schema)
 	base.SecretEnvironment = map[string]string{"GROK_SEARCH_API_KEY": "secret"}
-	makeCommand, makeResume := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
+	makeCommand, makeResume := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, nil)
 	projectID := "project-1"
 	task := domain.CodexTask{ID: "task-1", ProjectID: &projectID, Type: "topic_select", PromptSnapshot: "stored prompt", ModelName: "openai/custom", ReasoningEffort: "high"}
 
@@ -277,7 +278,7 @@ func TestCodexCommandFactoryUsesPreparedManifestAction(t *testing.T) {
 	dataRoot := t.TempDir()
 	schema := filepath.Join(t.TempDir(), "codex-result.schema.json")
 	base := testCodexCommandConfig(t, schema)
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, nil)
 
 	projectID := uuid.NewString()
 	accountID := uuid.NewString()
@@ -383,7 +384,7 @@ func (*completionObserverStubMain) AfterTerminal(context.Context, domain.CodexTa
 func TestCodexCommandFactoriesRejectProjectRootEscape(t *testing.T) {
 	dataRoot := t.TempDir()
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, nil)
 	projectID := ".."
 	if _, _, err := makeCommand(domain.CodexTask{ID: "task-1", ProjectID: &projectID, Type: "topic_select"}); err == nil {
 		t.Fatal("expected project root escape to be rejected")
@@ -393,7 +394,7 @@ func TestCodexCommandFactoriesRejectProjectRootEscape(t *testing.T) {
 func TestCodexCommandFactoriesRejectTaskRootEscape(t *testing.T) {
 	dataRoot := t.TempDir()
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base)
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, nil)
 	projectID := "project-1"
 	if _, _, err := makeCommand(domain.CodexTask{ID: "..", ProjectID: &projectID, Type: "topic_select"}); err == nil {
 		t.Fatal("expected task root escape to be rejected")
@@ -413,6 +414,77 @@ func testCodexCommandConfig(t *testing.T, schema string) codex.Config {
 		BinaryResolver: func(string) (string, error) {
 			return binary, nil
 		},
+	}
+}
+
+func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
+	t.Setenv(agentruntime.EnvMontageRuntime, "script")
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "jianying-montage-draft")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), []byte("#"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func() (string, error) {
+		return skillRoot, nil
+	})
+	projectID := "project-montage"
+	taskID := "task-montage-1"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "montage", Action: domain.ActionMontageExecute}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(taskRoot, "task_manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"task_id":"task-montage-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, gotRoot, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	if gotRoot != root {
+		t.Fatalf("root=%q want %q", gotRoot, root)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "montage-script-run") || !strings.Contains(joined, "--skill-root") {
+		t.Fatalf("args=%#v", cmd.Args)
+	}
+	if !strings.Contains(joined, "--output-last-message") {
+		t.Fatalf("missing output-last-message in %#v", cmd.Args)
+	}
+}
+
+func TestCodexCommandFactoryHonorsCodexMontageRuntime(t *testing.T) {
+	t.Setenv(agentruntime.EnvMontageRuntime, "codex")
+	dataRoot := t.TempDir()
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func() (string, error) {
+		return t.TempDir(), nil
+	})
+	projectID := "project-montage"
+	taskID := "task-montage-2"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "montage", Action: domain.ActionMontageExecute, ModelName: "gpt-5.6-sol", ReasoningEffort: "medium"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTaskDirectory(root, taskID); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "montage-script-run") {
+		t.Fatalf("expected Codex exec, got %#v", cmd.Args)
 	}
 }
 

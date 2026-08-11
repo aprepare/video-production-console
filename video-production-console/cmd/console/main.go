@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"video-production-console/internal/agentruntime"
+	"video-production-console/internal/agentruntime/montagescript"
 	"video-production-console/internal/app"
 	"video-production-console/internal/assets"
 	consoleauth "video-production-console/internal/auth"
@@ -46,6 +48,13 @@ var codexSecretEnvironmentKeys = []string{
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "version") {
 		fmt.Println(buildinfo.String())
+		return
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "montage-script-run" {
+		if err := runMontageScriptCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "montage-script-run: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -130,7 +139,18 @@ func main() {
 	} else if interrupted > 0 {
 		log.Printf("marked %d unfinished Codex task(s) interrupted after restart", interrupted)
 	}
-	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig)
+	resolveMontageSkillRoot := func() (string, error) {
+		snapshot, err := skillsService.Latest(context.Background(), "jianying-montage-draft")
+		if err != nil {
+			return "", err
+		}
+		root := strings.TrimSpace(snapshot.Path)
+		if root == "" {
+			return "", fmt.Errorf("jianying-montage-draft skill path is empty")
+		}
+		return root, nil
+	}
+	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveMontageSkillRoot)
 	legacyScheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -414,7 +434,40 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func newCodexCommandFactories(settings config.Config, base codex.Config) (codex.CommandFactory, codex.ResumeCommandFactory) {
+func runMontageScriptCommand(args []string) error {
+	var manifestPath, skillRoot, outputLast string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--manifest":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--manifest requires a path")
+			}
+			i++
+			manifestPath = args[i]
+		case "--skill-root":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--skill-root requires a path")
+			}
+			i++
+			skillRoot = args[i]
+		case "--output-last-message":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--output-last-message requires a path")
+			}
+			i++
+			outputLast = args[i]
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	return montagescript.Run(montagescript.Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: outputLast,
+	})
+}
+
+func newCodexCommandFactories(settings config.Config, base codex.Config, resolveMontageSkillRoot func() (string, error)) (codex.CommandFactory, codex.ResumeCommandFactory) {
 	makeCommand := func(task domain.CodexTask) (*exec.Cmd, string, error) {
 		root, workspace, err := managedTaskRoot(settings.DataRoot, task)
 		if err != nil {
@@ -425,6 +478,18 @@ func newCodexCommandFactories(settings config.Config, base codex.Config) (codex.
 			return nil, "", err
 		}
 		cfg := taskCommandConfig(base, task, root, taskRoot)
+		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
+		if task.Action == domain.ActionMontageExecute {
+			preferred := agentruntime.MontageRuntimeFromEnv()
+			selected := agentruntime.Select(task.Action, preferred)
+			if selected == agentruntime.RuntimeScript {
+				cmd, scriptErr := buildMontageScriptCommand(cfg, manifestPath, resolveMontageSkillRoot)
+				if scriptErr == nil {
+					return cmd, root, nil
+				}
+				log.Printf("montage script runtime unavailable, falling back to Codex: %v", scriptErr)
+			}
+		}
 		ctx := codex.TaskContext{
 			ProjectID:    projectIDForTask(task),
 			TaskType:     task.Type,
@@ -437,7 +502,6 @@ func newCodexCommandFactories(settings config.Config, base codex.Config) (codex.
 		// manifest has been prepared in this controlled task directory, make it
 		// authoritative for the command prompt rather than falling back to the
 		// compatibility task-type mapping.
-		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
 		if info, statErr := os.Lstat(manifestPath); statErr == nil {
 			if !info.Mode().IsRegular() {
 				return nil, "", fmt.Errorf("task manifest must be a regular file")
@@ -481,6 +545,38 @@ func newCodexCommandFactories(settings config.Config, base codex.Config) (codex.
 		return cmd, root, nil
 	}
 	return makeCommand, makeResume
+}
+
+func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveMontageSkillRoot func() (string, error)) (*exec.Cmd, error) {
+	if resolveMontageSkillRoot == nil {
+		return nil, fmt.Errorf("montage skill root resolver is nil")
+	}
+	if info, err := os.Lstat(manifestPath); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("montage script runtime requires task_manifest.json")
+	}
+	skillRoot, err := resolveMontageSkillRoot()
+	if err != nil {
+		return nil, err
+	}
+	script := filepath.Join(skillRoot, "scripts", "run_montage_job.py")
+	if _, err := os.Stat(script); err != nil {
+		return nil, fmt.Errorf("montage script missing: %w", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve executable: %w", err)
+	}
+	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
+		return nil, fmt.Errorf("montage script command requires working directory and output-last-message")
+	}
+	cmd := exec.Command(exe, "montage-script-run",
+		"--manifest", manifestPath,
+		"--skill-root", skillRoot,
+		"--output-last-message", cfg.OutputLastMessage,
+	)
+	cmd.Dir = cfg.WorkingDirectory
+	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
+	return cmd, nil
 }
 
 func taskCommandConfig(base codex.Config, task domain.CodexTask, projectRoot, taskRoot string) codex.Config {
