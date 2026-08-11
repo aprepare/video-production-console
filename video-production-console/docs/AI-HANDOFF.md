@@ -32,7 +32,7 @@
 | 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go`；`afe21c5` |
 | 改稿 UX 收拢 | 去掉占屏「连续文案改稿」大面板；**查看**弹窗内直接改保存；资产行/预览旁 **重做** 弹窗选模型+填要求；embed 已重建 | `App.tsx`、`ProjectAssets.tsx`；`6da39c2` |
 | 混剪长片 SFX | `>=240s` 计划自动铺 3–5 个 verified SFX（开场+间隔≥12s），修复 `validate-plan` 因只有 1 个音效失败 | `montageplan/plan.go` `buildSFXPlacements`；`5e545f6` |
-| 混剪镜头时长 | 镜头 `source_in/out`/`speed` 不得超出素材；skill execute 再钳制；任务详情顶栏显示总耗时 | `montageplan.fitShotToClip`、`jianying-montage-draft/run_montage_job.py`、`App.tsx` |
+| 混剪镜头时长 | 镜头 `source_in/out`/`speed` 不得超出素材；skill execute 再钳制；任务详情顶栏显示总耗时 | `montageplan.fitShotToClip`、`jianying-montage-draft/run_montage_job.py`、`App.tsx`；`e513a25` |
 
 默认运行时（勿擅自改默认）：
 
@@ -45,7 +45,7 @@
 ### 1.2 下一阶段规划（建议接手顺序）
 
 1. **混剪真机回归（高优先）**  
-   重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`：缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
+   重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`（含 ≥240s 旁白）：应不再因 SFX 数量或 `source_timerange` 超素材失败；任务详情顶栏应显示总耗时。缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
 2. **二创改稿真机点验**  
    有连续文案后：点「查看」→ 弹窗内直接改稿保存（版本 +1、下游 stale）；点资产旁「重做」→ 选模型 + 填要求 → `remix.review`（manifest `non_secret_settings.revision_notes`）。工作台主操作旁模型为空时继承设置默认。嵌入前端：`npm --prefix web run build:embed` 后重建/重启。
 3. **真机试用 openai_compat / pi（可选）**  
