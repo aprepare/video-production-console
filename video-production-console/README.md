@@ -10,6 +10,7 @@
 |---|---|
 | [使用说明](docs/USER-GUIDE.md) | 登录、五阶段、同行原文二创、混剪限制 |
 | [AI 接手说明](docs/AI-HANDOFF.md) | 架构、验证命令、工程边界、排障 |
+| [优化工单](docs/OPTIMIZATION-BACKLOG.md) | 待办优化项，按 P0→P3 排序，每条含证据/改法/验收/边界 |
 | [混剪登记](docs/operations/montage-registration.md) | 明文草稿、登记、重试与本机限制 |
 | [验收清单](docs/operations/acceptance-checklist.md) | 人工验收路径 |
 
