@@ -2,12 +2,14 @@ package montageplan
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -130,7 +132,7 @@ func Build(opts Options) error {
 		return fmt.Errorf("media_root and media_index_path are required")
 	}
 
-	clips, err := sampleMedia(mediaIndex, mediaRoot, limit)
+	clips, err := sampleMedia(mediaIndex, mediaRoot, limit, manifest.TaskID, false)
 	if err != nil {
 		return err
 	}
@@ -273,7 +275,7 @@ func ProbeDuration(path string) (float64, error) {
 	return value, nil
 }
 
-func sampleMedia(indexPath, mediaRoot string, limit int) ([]mediaItem, error) {
+func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict bool) ([]mediaItem, error) {
 	file, err := os.Open(indexPath)
 	if err != nil {
 		return nil, fmt.Errorf("open media index: %w", err)
@@ -299,30 +301,80 @@ func sampleMedia(indexPath, mediaRoot string, limit int) ([]mediaItem, error) {
 			continue
 		}
 		abs := filepath.Join(mediaRoot, filepath.FromSlash(item.RelativePath))
-		if _, err := os.Stat(abs); err != nil {
+		info, err := os.Stat(abs)
+		if err != nil || !info.Mode().IsRegular() {
+			if strict {
+				return nil, fmt.Errorf("media index clip is missing or not a regular file: %s", abs)
+			}
 			continue
 		}
 		item.AbsPath = abs
 		if isScenic(item.Category) {
-			if len(preferred) < limit {
-				preferred = append(preferred, item)
-			}
-		} else if len(fallback) < limit {
+			preferred = append(preferred, item)
+		} else {
 			fallback = append(fallback, item)
 		}
-		if len(preferred) >= limit {
-			break
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("close media index array: %w", err)
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != ']' {
+		return nil, fmt.Errorf("media index array is not closed")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("media index contains trailing data")
+		}
+		return nil, fmt.Errorf("read media index end: %w", err)
+	}
+	pool := preferred
+	if len(pool) == 0 {
+		pool = fallback
+	}
+	// A task-specific stable order keeps retries reproducible while preventing
+	// every video from starting at the first rows of media_index.json.
+	sort.SliceStable(pool, func(i, j int) bool {
+		left := mediaRank(seed, pool[i])
+		right := mediaRank(seed, pool[j])
+		return bytes.Compare(left[:], right[:]) < 0
+	})
+	if len(pool) > limit {
+		pool = pool[:limit]
+	}
+	return pool, nil
+}
+
+func mediaRank(seed string, item mediaItem) [sha256.Size]byte {
+	identity := strings.TrimSpace(item.ID) + "\x00" + filepath.Clean(item.AbsPath)
+	return sha256.Sum256([]byte(strings.TrimSpace(seed) + "\x00" + identity))
+}
+
+// ValidateMediaLibrary checks the same indexed clip pool used by Build.
+func ValidateMediaLibrary(indexPath, mediaRoot, profilePath string) error {
+	if strings.TrimSpace(profilePath) != "" {
+		root, index, err := readProfilePaths(profilePath)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(mediaRoot) == "" {
+			mediaRoot = root
+		}
+		if strings.TrimSpace(indexPath) == "" {
+			indexPath = index
 		}
 	}
-	for dec.More() {
-		var skip json.RawMessage
-		_ = dec.Decode(&skip)
+	if strings.TrimSpace(mediaRoot) == "" || strings.TrimSpace(indexPath) == "" {
+		return fmt.Errorf("media_root and media_index_path are required")
 	}
-	_, _ = dec.Token()
-	if len(preferred) > 0 {
-		return preferred, nil
+	clips, err := sampleMedia(indexPath, mediaRoot, 1, "preflight", true)
+	if err != nil {
+		return err
 	}
-	return fallback, nil
+	if len(clips) == 0 {
+		return fmt.Errorf("media index produced no usable clips")
+	}
+	return nil
 }
 
 func isScenic(category string) bool {

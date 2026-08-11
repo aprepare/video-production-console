@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -188,6 +189,18 @@ func prepareMontageManifestFixture(t *testing.T, withPublishingPackage bool) (*t
 			t.Fatal(err)
 		}
 	}
+	mediaRoot := filepath.Join(root, "media")
+	if err := os.MkdirAll(mediaRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clipPath := filepath.Join(mediaRoot, "clip.mp4")
+	if err := os.WriteFile(clipPath, []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mediaIndex := filepath.Join(mediaRoot, "media-index.json")
+	if err := os.WriteFile(mediaIndex, []byte(`[{"id":"clip-1","category":"Nature_Landscape","relative_path":"clip.mp4","duration_seconds":20}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	machineProfile := filepath.Join(root, "machine-profile.json")
 	if err := os.WriteFile(machineProfile, []byte(`{"platform":"windows"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -206,7 +219,7 @@ func prepareMontageManifestFixture(t *testing.T, withPublishingPackage bool) (*t
 	preparer := &taskManifestPreparer{
 		db: db.db, projects: store.NewProjectRepository(db.db), assets: assets,
 		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{
-			DataRoot: root, MachineProfilePath: machineProfile,
+			DataRoot: root, MachineProfilePath: machineProfile, MediaRoot: mediaRoot, MediaIndexPath: mediaIndex,
 		}}},
 		skills: manifestTestSkills{snapshot: snapshot},
 	}
@@ -228,6 +241,21 @@ func TestTaskManifestPreparerFreezesDraftDisplayNameFromFirstShortTitle(t *testi
 	}
 	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_"+task.ID[len(task.ID)-6:] {
 		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
+	}
+}
+
+func TestTaskManifestPreparerRejectsMissingIndexedClipBeforePersist(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	runtime := preparer.settings.(manifestTestSettings).runtime
+	if err := os.Remove(filepath.Join(runtime.MediaRoot, "clip.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	err := preparer.Prepare(context.Background(), task, TaskManifestRequest{})
+	if err == nil || !strings.Contains(err.Error(), "montage media preflight") || !strings.Contains(err.Error(), "clip.mp4") {
+		t.Fatalf("preflight error=%v", err)
+	}
+	if _, statErr := os.Stat(manifestPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("manifest must not be written after failed preflight: %v", statErr)
 	}
 }
 

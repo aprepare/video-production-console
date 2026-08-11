@@ -100,6 +100,63 @@ func TestBuildProducesApprovedPlan(t *testing.T) {
 	}
 }
 
+func TestMediaSelectionVariesByTaskAndPreflightRejectsMissing(t *testing.T) {
+	root := t.TempDir()
+	items := []map[string]any{}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if err := os.WriteFile(filepath.Join(root, id+".mp4"), []byte(id), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, map[string]any{"id": id, "category": "Nature_Landscape", "relative_path": id + ".mp4", "duration_seconds": 20})
+	}
+	indexPath := filepath.Join(root, "index.json")
+	writeIndex := func() {
+		raw, _ := json.Marshal(items)
+		if err := os.WriteFile(indexPath, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeIndex()
+	one, err := sampleMedia(indexPath, root, 4, "task-one", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := sampleMedia(indexPath, root, 4, "task-one", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range one {
+		if one[i].ID != retry[i].ID {
+			t.Fatalf("same task order changed at %d", i)
+		}
+	}
+	openings := map[string]bool{one[0].ID: true}
+	for _, seed := range []string{"task-two", "task-three", "task-four"} {
+		clips, err := sampleMedia(indexPath, root, 4, seed, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		openings[clips[0].ID] = true
+	}
+	if len(openings) < 2 {
+		t.Fatalf("openings did not vary: %v", openings)
+	}
+	items = append(items, map[string]any{"id": "missing", "category": "Nature_Landscape", "relative_path": "missing.mp4", "duration_seconds": 20})
+	writeIndex()
+	if _, err := sampleMedia(indexPath, root, 4, "task", false); err != nil {
+		t.Fatalf("runtime sampling must skip missing entries: %v", err)
+	}
+	if err := ValidateMediaLibrary(indexPath, root, ""); err == nil {
+		t.Fatal("preflight must reject a missing indexed clip")
+	}
+	if err := os.WriteFile(indexPath, []byte(`[{"id":"broken"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sampleMedia(indexPath, root, 4, "task", false); err == nil {
+		t.Fatal("truncated media index must be rejected")
+	}
+}
+
 func TestOnScreenTitleSourceStripsAccountAndTaskSuffix(t *testing.T) {
 	got := onScreenTitleSource("天中观局_房贷困境反思_a4b031")
 	if got != "房贷困境反思" {

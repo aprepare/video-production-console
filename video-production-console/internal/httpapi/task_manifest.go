@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/montage"
@@ -152,6 +153,9 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)
 		if err != nil {
 			return fmt.Errorf("resolve draft display name: %w", err)
+		}
+		if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
+			return fmt.Errorf("montage media preflight: %w", err)
 		}
 	}
 	// Project-less planning tasks use their task ID as the managed root; this

@@ -12,17 +12,23 @@
 
 ### 1.1 近期进度快照（接手必读）
 
-已完成：
+工作区 Git 提示（接手时先 `git status` 复核）：
 
-| 主题 | 说明 | 关键位置 / 提交线索 |
+- 分支常为 `codex/video-production-console`；相对 origin / `master` 可能已 ahead 若干提交。
+- 混剪素材预检与稳定打散已纳入本分支提交（见下表）。
+
+#### 已提交
+
+| 主题 | 说明 | 线索 |
 |---|---|---|
-| 混剪 script runtime | `montage.execute` 默认走本地确定性 plan + skill Python，不再默认 Codex | `internal/agentruntime/`、`montageplan/`、`montagescript/`；`feat: route montage.execute through local script AgentRuntime` |
-| openai_compat runtime | remix/topic opt-in；env 配齐才启用，失败回退 Codex | `internal/agentruntime/openaicompat/`；`feat: add openai_compat runtime for remix/topic` |
-| Pi runtime | remix/topic opt-in；本机需 `pi`；失败回退 Codex | `internal/agentruntime/piruntime/`；`feat: add opt-in Pi runtime for remix/topic` |
-| Runtime 文档 | 矩阵与 env 已写入本文 §3 | `docs: document pluggable agent runtimes` |
-| 片内标题 | 画面标题去掉账号前缀/任务后缀；草稿文件夹名仍可用 `draft_display_name` | `internal/agentruntime/montageplan/plan.go` |
-| 发布文案复制 | 工作台在混剪/审核展示「视频描述」「短标题」并支持一键复制；**不展示**推荐标题/话题/成片 | `web/src/project-workbench/ProjectWorkbench.tsx` |
-| 去掉成片资产 | 工作台资产列表与主动作不再出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts` |
+| 混剪 script runtime | `montage.execute` 默认走本地确定性 plan + skill Python，不再默认 Codex | `internal/agentruntime/`；`15ca7d9` |
+| 素材预检 | 入队前 `ValidateMediaLibrary`；错误前缀 `montage media preflight:` | `httpapi/task_manifest.go`、`montageplan` |
+| 稳定打散取样 | 完整合格池 → `SHA-256(task_id + 素材身份)` 排序 → 最多 48 条；Build 非严格 / 预检严格 | `montageplan.sampleMedia` / `mediaRank` |
+| openai_compat / Pi | remix/topic **opt-in**；失败回退 Codex | `openaicompat/`、`piruntime/`；`967432e`、`4dcf06a` |
+| Runtime 文档 | 矩阵与 env 见 §3 | `26f4360` |
+| 片内标题 | 画面标题去账号前缀/任务后缀；草稿文件夹名仍可用 `draft_display_name` | `montageplan/plan.go`（随 openai 提交） |
+| 发布文案复制 | 混剪/审核展示「视频描述」「短标题」+ 复制；不展示推荐标题/话题/成片 | `ProjectWorkbench.tsx`；`26a8a66` |
+| 去掉成片资产 | 工作台不出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts`；`26a8a66` |
 
 默认运行时（勿擅自改默认）：
 
@@ -30,20 +36,20 @@
 - remix/topic → `codex`
 - OpenAI / Pi → 仅环境变量 opt-in（见 §3）
 
-本地服务常见地址：`http://127.0.0.1:2030`；嵌入前端变更需 `npm --prefix web run build:embed` 后重建 exe。
+本地服务常见地址：`http://127.0.0.1:2030`；嵌入前端变更需 `npm --prefix web run build:embed` 后重建 exe。混剪后端改动需重建/重启服务后生效。
 
 ### 1.2 下一阶段规划（建议接手顺序）
 
-1. **混剪失败排障（高优先）**  
-   用户项目常卡在混剪：`mix_draft` 失败/未登记。先查任务 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
+1. **混剪真机回归（高优先）**  
+   重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`：缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
 2. **真机试用 openai_compat / pi（可选）**  
    设 env 重启后跑一条 `remix.standard`；确认仍走 manifest → result schema → 资产入库。设置页 UI **不做**。
 3. **发布文案质量（可选）**  
    文案来自二创 `publishing_package`；若描述/短标题空，查 remix skill 产物而非前端。
 4. **明确不做**  
-   设置页选 runtime；App Server 接到 openai/pi；强行把 remix/topic 默认切离 Codex；把成片上传加回工作台。
+   设置页选 runtime；App Server 接到 openai/pi；强行把 remix/topic 默认切离 Codex；把成片上传加回工作台；把素材选择做成真正的语义镜头理解（当前只是稳定打散）。
 
-回滚基线参考：Week1 script runtime `15ca7d9`（以当时分支为准）。分支常为 `codex/video-production-console`。
+回滚基线参考：Week1 script runtime `15ca7d9`（以当时分支为准）。
 
 ## 2. 目录结构与职责
 
@@ -114,6 +120,7 @@ go run .\cmd\console
 - 监听：新数据根默认 `127.0.0.1:2030`；已有安装用持久化 `listen_addr`；局域网须显式配置并在 `restart_required` 后重启。
 - 无管理员时必须提供 `VIDEO_CONSOLE_INITIAL_PASSWORD`。
 - 可选 AgentRuntime：见第 3 节；默认不要求 OpenAI / Pi。
+- 混剪还依赖 machine profile / 设置里的 `media_root` + `media_index_path`（见 §6.1）。
 
 ## 6. 关键数据流
 
@@ -122,6 +129,22 @@ go run .\cmd\console
 3. 任务经 manifest 准备后入队；`remix.standard` 可绑定 `source_version_id`；同版本活动任务复用，不同版本 `409 active_remix_conflict`。
 4. 完成时校验输入仍为 current，否则 `input_superseded`；`continuous_script` 写入 source 依赖。
 5. 事件经 WebSocket 推送；混剪明文 → 登记 → 验证 → ready。
+
+### 6.1 混剪素材选择与预检
+
+符号与行为以本分支 `montageplan` / `task_manifest` 实现为准。
+
+1. **素材来源：**设置或 machine profile 的 `media_root` + `media_index_path`。不是项目资产表，也不是每次扫盘枚举全部文件。
+2. **入队前严格预检：**`task_manifest.go` 在 `montage.execute` 准备 manifest 时调用 `montageplan.ValidateMediaLibrary`。内部走 `sampleMedia(..., strict=true)`：索引须为完整 JSON 数组（拒绝截断/尾部脏数据）；ID/相对路径齐全且时长 ≥ 8s 的条目若文件缺失或不是普通文件 → 任务不入队，错误形如 `montage media preflight: ...`。
+3. **构建 plan 时非严格取样：**`Build` → `sampleMedia(..., seed=task_id, strict=false)`。坏文件跳过；最终池为空才失败。避免单个坏条目拖垮整次混剪。
+4. **池与排序：**优先 `isScenic`（category 含 nature/landscape/scenery/architecture/building）；否则用 fallback。对完整优先池做稳定排序：`SHA-256(task_id + "\0" + id + "\0" + clean(absPath))`，再截取最多 **48** 条（`MediaLimit` 默认）。同 `task_id` 重试顺序稳定；不同任务通常不同开头。
+5. **timeline：**按打散顺序轮询；素材不足则循环。前 30 秒约 7 秒一镜，其后约 8 秒一镜。plan JSON 里仍可能出现「前30秒语义匹配」字样——**那是历史文案标签，并非真正的语义镜头理解**。
+
+排障顺序：
+
+1. 点击混剪立即失败 → 看响应/日志里的 `montage media preflight`。
+2. 任务已入队后失败 → 看任务目录 `output-last-message.json`、script stderr。
+3. 草稿生成但资产未 ready → 看 `draft.validation.json` 与登记重试 API。
 
 ## 7. 前端工作台要点
 
@@ -133,19 +156,23 @@ go run .\cmd\console
 ## 8. 测试与验收
 
 - Go：`go test ./...`、`go vet ./...`
+- 混剪本次改动的聚焦验证（接手请复跑）：
+  - `go test ./internal/agentruntime/montageplan ./internal/httpapi -count=1`
+  - `go vet ./...`
+- 全量 `go test ./...` 在 Windows 上可能仍有与本次混剪无关的路径基线失败（曾观察到 `internal/codex` App Server manifest 路径断言、`internal/conversation` 测试 manifest 路径不存在）。接手时先复跑确认；**勿为绿这些测试去改混剪逻辑**。
 - 前端：`npm --prefix web run typecheck|lint|test|test:e2e|build:verify`
 - 人工：[acceptance-checklist.md](operations/acceptance-checklist.md)、[montage-registration.md](operations/montage-registration.md)
 - 自动测试使用 fake Codex / httptest，不等于外部桌面软件已验收。
 
 ## 9. 接手顺序与排障
 
-1. `git status --short`；读本说明与 USER-GUIDE。
+1. `git status --short`；读本说明与 USER-GUIDE；分清已提交 / 未提交。
 2. 确认依赖与数据根，勿清 `video-console-data/`。
 3. 先跑低副作用测试，勿先 `build:embed`。
-4. 阅读 `cmd/console/main.go` → `internal/app` → httpapi/store → `web/src/App.tsx`；任务后端见 `internal/agentruntime/`。
+4. 阅读 `cmd/console/main.go` → `internal/app` → httpapi/store → `web/src/App.tsx`；任务后端见 `internal/agentruntime/`；混剪取样见 `montageplan`。
 5. 修改限于任务范围；提交/推送须明确指令。
 
-排障摘要：登录看库路径与 CSRF；任务卡住看事件/并发/Codex 或当前 LLM runtime；混剪优先重试登记；前端空白区分 Vite 与嵌入 dist；项目页刷新 404 检查 SPA 回退是否已构建进当前二进制。
+排障摘要：登录看库路径与 CSRF；任务卡住看事件/并发/Codex 或当前 LLM runtime；混剪先看是否被 `montage media preflight` 拒绝，再看任务输出，草稿已生成但未 ready 才优先重试登记；前端空白区分 Vite 与嵌入 dist；项目页刷新 404 检查 SPA 回退是否已构建进当前二进制。
 
 ## 10. 工作区保护
 
@@ -159,3 +186,4 @@ go run .\cmd\console
 - 外部依赖离线会影响功能。
 - 源码与嵌入 dist 可能暂时不一致；开发页与生产二进制不是同一路径。
 - AgentRuntime 切换仅环境变量；设置页 UI 不做 runtime 选择。
+- 素材侧当前只是**稳定打散**，不是语义级镜头理解；plan 内「语义匹配」文案不要误读为已实现语义选片。素材池过小或同类高度相似时，成片仍可能视觉重复。
