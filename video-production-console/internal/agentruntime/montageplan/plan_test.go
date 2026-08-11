@@ -204,6 +204,103 @@ func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
 	}
 }
 
+func interleaveTestPool(pairs ...string) []mediaItem {
+	items := make([]mediaItem, 0, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		items = append(items, mediaItem{ID: pairs[i], Category: pairs[i+1]})
+	}
+	return items
+}
+
+func assertSameMembers(t *testing.T, input, output []mediaItem) {
+	t.Helper()
+	if len(output) != len(input) {
+		t.Fatalf("length = %d, want %d", len(output), len(input))
+	}
+	counts := map[string]int{}
+	for _, item := range input {
+		counts[item.ID]++
+	}
+	for _, item := range output {
+		counts[item.ID]--
+	}
+	for id, delta := range counts {
+		if delta != 0 {
+			t.Fatalf("id %q count delta = %d", id, delta)
+		}
+	}
+}
+
+func TestInterleaveByCategorySeparatesNeighboursDeterministically(t *testing.T) {
+	input := interleaveTestPool(
+		"n1", "Nature_Landscape", "n2", "Nature_Landscape", "n3", "Nature_Landscape",
+		"a1", "Architecture", "a2", "architecture ", "a3", "ARCHITECTURE",
+		"s1", "Scenery", "s2", "Scenery", "s3", "Scenery",
+	)
+	got := interleaveByCategory(input)
+	assertSameMembers(t, input, got)
+	for i := 1; i < len(got); i++ {
+		if normalizeCategory(got[i].Category) == normalizeCategory(got[i-1].Category) {
+			t.Fatalf("neighbours %d/%d share category %q", i-1, i, got[i].Category)
+		}
+	}
+	again := interleaveByCategory(input)
+	for i := range got {
+		if got[i].ID != again[i].ID {
+			t.Fatalf("not reproducible at %d: %q vs %q", i, got[i].ID, again[i].ID)
+		}
+	}
+}
+
+func TestInterleaveByCategoryKeepsSingleCategoryOrder(t *testing.T) {
+	input := interleaveTestPool("a", "Nature_Landscape", "b", "nature_landscape", "c", " Nature_Landscape ")
+	got := interleaveByCategory(input)
+	assertSameMembers(t, input, got)
+	for i := range input {
+		if got[i].ID != input[i].ID {
+			t.Fatalf("single category order changed at %d: %q", i, got[i].ID)
+		}
+	}
+}
+
+func TestInterleaveByCategoryHandlesTinyPools(t *testing.T) {
+	if got := interleaveByCategory(nil); len(got) != 0 {
+		t.Fatalf("nil pool = %v", got)
+	}
+	if got := interleaveByCategory([]mediaItem{}); len(got) != 0 {
+		t.Fatalf("empty pool = %v", got)
+	}
+	single := interleaveTestPool("only", "")
+	if got := interleaveByCategory(single); len(got) != 1 || got[0].ID != "only" {
+		t.Fatalf("single pool = %v", got)
+	}
+}
+
+func TestInterleaveByCategorySkewedPoolKeepsEveryClip(t *testing.T) {
+	input := interleaveTestPool(
+		"n1", "Nature_Landscape", "n2", "Nature_Landscape", "n3", "Nature_Landscape",
+		"n4", "Nature_Landscape", "n5", "Nature_Landscape", "n6", "Nature_Landscape",
+		"c1", "City_Traffic", "a1", "Architecture",
+	)
+	got := interleaveByCategory(input)
+	assertSameMembers(t, input, got)
+	// The two rare categories must be spread into the head instead of being
+	// starved; the tail is allowed to degrade to consecutive Nature clips.
+	head := got[:4]
+	distinct := map[string]bool{}
+	for _, item := range head {
+		distinct[normalizeCategory(item.Category)] = true
+	}
+	if len(distinct) != 3 {
+		t.Fatalf("head categories = %v", distinct)
+	}
+	for i := 1; i < len(head); i++ {
+		if normalizeCategory(head[i].Category) == normalizeCategory(head[i-1].Category) {
+			t.Fatalf("head neighbours %d/%d share category", i-1, i)
+		}
+	}
+}
+
 func TestOnScreenTitleSourceStripsAccountAndTaskSuffix(t *testing.T) {
 	got := onScreenTitleSource("天中观局_房贷困境反思_a4b031")
 	if got != "房贷困境反思" {
