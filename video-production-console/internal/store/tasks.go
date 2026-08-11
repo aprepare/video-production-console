@@ -1578,28 +1578,7 @@ func (r *TaskRepository) Artifacts(ctx context.Context, taskID string) ([]TaskAr
 }
 
 func (r *TaskRepository) immediate(ctx context.Context, operation string, fn func(assetDBTX, time.Time) error) error {
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("begin %s: %w", operation, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
-		}
-	}()
-	if err := fn(conn, time.Now().UTC()); err != nil {
-		return err
-	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("commit %s outcome unknown: %w", operation, err)
-	}
-	committed = true
-	return nil
+	return runImmediate(ctx, r.db, operation, nil, fn)
 }
 func (r *TaskRepository) Events(ctx context.Context, taskID string) ([]domain.TaskEvent, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,task_id,sequence,kind,level,display_text,raw_json,created_at FROM task_events WHERE task_id=? ORDER BY sequence`, taskID)
