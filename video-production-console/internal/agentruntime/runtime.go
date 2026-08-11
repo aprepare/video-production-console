@@ -12,6 +12,7 @@ const (
 	RuntimeCodex  RuntimeName = "codex"
 	RuntimeScript RuntimeName = "script"
 	RuntimeOpenAI RuntimeName = "openai_compat"
+	RuntimePi     RuntimeName = "pi"
 )
 
 // EnvMontageRuntime selects the montage.execute backend.
@@ -19,7 +20,7 @@ const (
 const EnvMontageRuntime = "VIDEO_CONSOLE_MONTAGE_RUNTIME"
 
 // EnvLLMRuntime selects the remix/topic LLM backend.
-// Values: "codex" (default) or "openai_compat".
+// Values: "codex" (default), "openai_compat", or "pi".
 const EnvLLMRuntime = "VIDEO_CONSOLE_LLM_RUNTIME"
 
 // OpenAI-compatible endpoint configuration (Week 2: env only).

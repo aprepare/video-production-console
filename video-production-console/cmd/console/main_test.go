@@ -556,6 +556,85 @@ func TestCodexCommandFactoryFallsBackWhenOpenAIKeyMissing(t *testing.T) {
 	}
 }
 
+func TestCodexCommandFactoryUsesPiWhenBinaryAvailable(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "pi")
+	prev := lookPathPi
+	lookPathPi = func(file string) (string, error) {
+		if file != "pi" {
+			t.Fatalf("lookPath file=%q", file)
+		}
+		return `C:\fake\pi.exe`, nil
+	}
+	t.Cleanup(func() { lookPathPi = prev })
+
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		if name != "finance-viral-remix" {
+			t.Fatalf("skill=%q", name)
+		}
+		return skillRoot, nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-pi-1"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "pi-model"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-pi-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "pi-run") || !strings.Contains(joined, "--model") {
+		t.Fatalf("args=%#v", cmd.Args)
+	}
+}
+
+func TestCodexCommandFactoryFallsBackWhenPiMissing(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "pi")
+	prev := lookPathPi
+	lookPathPi = func(string) (string, error) {
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { lookPathPi = prev })
+
+	dataRoot := t.TempDir()
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
+		return t.TempDir(), nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-pi-2"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-5.6-sol", ReasoningEffort: "medium"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTaskDirectory(root, taskID); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "pi-run") {
+		t.Fatalf("expected Codex fallback, got %#v", cmd.Args)
+	}
+}
+
 func TestTaskCommandConfigStripsGrokSecretsForMontage(t *testing.T) {
 	base := codex.Config{SecretEnvironment: map[string]string{
 		"GROK_SEARCH_API_KEY": "secret",

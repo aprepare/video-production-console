@@ -17,6 +17,7 @@ import (
 	"video-production-console/internal/agentruntime"
 	"video-production-console/internal/agentruntime/montagescript"
 	"video-production-console/internal/agentruntime/openaicompat"
+	"video-production-console/internal/agentruntime/piruntime"
 	"video-production-console/internal/app"
 	"video-production-console/internal/assets"
 	consoleauth "video-production-console/internal/auth"
@@ -46,6 +47,9 @@ var codexSecretEnvironmentKeys = []string{
 	"PEXELS_API_KEY",
 }
 
+// lookPathPi resolves the local Pi coding-agent binary. Tests may stub it.
+var lookPathPi = exec.LookPath
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "version") {
 		fmt.Println(buildinfo.String())
@@ -61,6 +65,13 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "openai-compat-run" {
 		if err := runOpenAICompatCommand(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "openai-compat-run: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "pi-run" {
+		if err := runPiCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-run: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -518,6 +529,47 @@ func runOpenAICompatCommand(args []string) error {
 	})
 }
 
+func runPiCommand(args []string) error {
+	var manifestPath, skillRoot, outputLast, model string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--manifest":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--manifest requires a path")
+			}
+			i++
+			manifestPath = args[i]
+		case "--skill-root":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--skill-root requires a path")
+			}
+			i++
+			skillRoot = args[i]
+		case "--output-last-message":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--output-last-message requires a path")
+			}
+			i++
+			outputLast = args[i]
+		case "--model":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--model requires a value")
+			}
+			i++
+			model = args[i]
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	return piruntime.Run(piruntime.Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: outputLast,
+		Model:             model,
+		LookPath:          lookPathPi,
+	})
+}
+
 func newCodexCommandFactories(settings config.Config, base codex.Config, resolveSkillRoot func(string) (string, error)) (codex.CommandFactory, codex.ResumeCommandFactory) {
 	makeCommand := func(task domain.CodexTask) (*exec.Cmd, string, error) {
 		root, workspace, err := managedTaskRoot(settings.DataRoot, task)
@@ -540,12 +592,21 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 				}
 				log.Printf("montage script runtime unavailable, falling back to Codex: %v", scriptErr)
 			}
-		} else if agentruntime.Select(task.Action, agentruntime.LLMRuntimeFromEnv()) == agentruntime.RuntimeOpenAI {
-			cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
-			if openaiErr == nil {
-				return cmd, root, nil
+		} else {
+			switch agentruntime.Select(task.Action, agentruntime.LLMRuntimeFromEnv()) {
+			case agentruntime.RuntimeOpenAI:
+				cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
+				if openaiErr == nil {
+					return cmd, root, nil
+				}
+				log.Printf("openai_compat runtime unavailable, falling back to Codex: %v", openaiErr)
+			case agentruntime.RuntimePi:
+				cmd, piErr := buildPiCommand(cfg, task, manifestPath, resolveSkillRoot)
+				if piErr == nil {
+					return cmd, root, nil
+				}
+				log.Printf("pi runtime unavailable, falling back to Codex: %v", piErr)
 			}
-			log.Printf("openai_compat runtime unavailable, falling back to Codex: %v", openaiErr)
 		}
 		ctx := codex.TaskContext{
 			ProjectID:    projectIDForTask(task),
@@ -678,6 +739,47 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 		agentruntime.EnvOpenAIBaseURL+"="+baseURL,
 		agentruntime.EnvOpenAIAPIKey+"="+apiKey,
 	)
+	return cmd, nil
+}
+
+func buildPiCommand(cfg codex.Config, task domain.CodexTask, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
+	if resolveSkillRoot == nil {
+		return nil, fmt.Errorf("skill root resolver is nil")
+	}
+	if _, err := lookPathPi("pi"); err != nil {
+		return nil, fmt.Errorf("pi binary not found on PATH: %w", err)
+	}
+	if info, err := os.Lstat(manifestPath); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("pi runtime requires task_manifest.json")
+	}
+	resolved, err := codex.ResolveAction(task.Action)
+	if err != nil {
+		return nil, err
+	}
+	skillRoot, err := resolveSkillRoot(resolved.Skill)
+	if err != nil {
+		return nil, err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve executable: %w", err)
+	}
+	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
+		return nil, fmt.Errorf("pi command requires working directory and output-last-message")
+	}
+	model := strings.TrimSpace(task.ModelName)
+	args := []string{
+		"pi-run",
+		"--manifest", manifestPath,
+		"--skill-root", skillRoot,
+		"--output-last-message", cfg.OutputLastMessage,
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = cfg.WorkingDirectory
+	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
 	return cmd, nil
 }
 

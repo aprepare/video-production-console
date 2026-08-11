@@ -28,6 +28,8 @@ func LLMRuntimeFromEnv() RuntimeName {
 	switch value {
 	case string(RuntimeOpenAI):
 		return RuntimeOpenAI
+	case string(RuntimePi):
+		return RuntimePi
 	case string(RuntimeCodex), "":
 		return RuntimeCodex
 	default:
@@ -49,10 +51,14 @@ func Select(action domain.TaskAction, preferred RuntimeName) RuntimeName {
 		return RuntimeScript
 	}
 	if isLLMAction(action) {
-		if preferred == RuntimeOpenAI {
+		switch preferred {
+		case RuntimeOpenAI:
 			return RuntimeOpenAI
+		case RuntimePi:
+			return RuntimePi
+		default:
+			return RuntimeCodex
 		}
-		return RuntimeCodex
 	}
 	return RuntimeCodex
 }
