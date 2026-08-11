@@ -3191,6 +3191,9 @@ function App() {
               {(taskOpen.model || taskOpen.reasoning_effort) && (
                 <span>{[taskOpen.model, taskOpen.reasoning_effort].filter(Boolean).join(" · ")}</span>
               )}
+              {typeof taskElapsedMS(taskOpen, timingNow) === "number" ? (
+                <span aria-label="任务总耗时">总耗时 {formatDuration(taskElapsedMS(taskOpen, timingNow))}</span>
+              ) : null}
               {cancellableTaskStatuses.has(taskOpen.status) && (
                 <button className="secondary" onClick={() => void cancelTask(taskOpen)}>
                   停止任务
@@ -3267,14 +3270,18 @@ function App() {
                 ) : null}
               </section>
             ) : null}
-            {taskOpen.timing_summary || taskOpen.timing_runs?.length ? (
+            {taskOpen.timing_summary || taskOpen.timing_runs?.length || typeof taskElapsedMS(taskOpen, timingNow) === "number" ? (
               <section className="task-timing" aria-label="任务阶段耗时">
                 <h3>阶段耗时</h3>
                 {taskOpen.timing_summary ? (
                   <p className="task-timing-summary">
-                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms", "TotalMS"))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms", "PreparationMS"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms", "QueueMS"))}{(taskOpen.timing_summary.queue_estimated ?? taskOpen.timing_summary.QueueEstimated) ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms", "ExecutionMS"))}
+                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms", "TotalMS") || taskElapsedMS(taskOpen, timingNow))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms", "PreparationMS"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms", "QueueMS"))}{(taskOpen.timing_summary.queue_estimated ?? taskOpen.timing_summary.QueueEstimated) ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms", "ExecutionMS"))}
                   </p>
-                ) : null}
+                ) : (
+                  <p className="task-timing-summary">
+                    总计 {formatDuration(taskElapsedMS(taskOpen, timingNow))}
+                  </p>
+                )}
                 <ul className="task-timing-list">
                   {taskTimingPhases(taskOpen).map((phase, index) => {
                     const phaseID = phaseStringValue(phase, "id", "ID");
@@ -3409,10 +3416,33 @@ function phaseDurationMS(phase: TaskPhaseRun, now: number) {
   const startedAt = Date.parse(phaseStringValue(phase, "started_at", "StartedAt"));
   return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined;
 }
+function taskElapsedMS(task: Task, now: number) {
+  const summaryTotal = timingValue(task.timing_summary, "total_ms", "TotalMS");
+  if (summaryTotal > 0) return summaryTotal;
+  const finishedAt = Date.parse(task.finished_at || "");
+  const startedAt = Date.parse(task.started_at || task.created_at || "");
+  if (Number.isFinite(finishedAt) && Number.isFinite(startedAt) && finishedAt >= startedAt) {
+    return finishedAt - startedAt;
+  }
+  if (
+    Number.isFinite(startedAt)
+    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status)
+  ) {
+    return Math.max(0, now - startedAt);
+  }
+  return undefined;
+}
 function formatDuration(ms?: number) {
   if (typeof ms !== "number") return "暂无";
   if (ms < 1000) return `${ms} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  if (minutes < 60) return `${minutes} 分 ${seconds.toFixed(0)} 秒`;
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return `${hours} 小时 ${remainMinutes} 分`;
 }
 
 function stageLabel(stage: Project["stage"]) {

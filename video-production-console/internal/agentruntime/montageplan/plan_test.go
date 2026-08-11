@@ -157,6 +157,21 @@ func TestMediaSelectionVariesByTaskAndPreflightRejectsMissing(t *testing.T) {
 	}
 }
 
+func TestFitShotToClipNeverExceedsSourceDuration(t *testing.T) {
+	in, out, speed, length := fitShotToClip(8, 12)
+	if speed != 1.1 || in != 1 || out <= in || out > 12 || length != 8 {
+		t.Fatalf("long clip fit = in=%v out=%v speed=%v length=%v", in, out, speed, length)
+	}
+	in, out, speed, length = fitShotToClip(8, 8.5)
+	if speed != 1.0 || out-in > 8.5+0.001 || length != 8 {
+		t.Fatalf("tight clip fit = in=%v out=%v speed=%v length=%v", in, out, speed, length)
+	}
+	in, out, speed, length = fitShotToClip(8, 6)
+	if speed != 1.0 || out > 6+0.001 || length > 6+0.001 || length != out-in {
+		t.Fatalf("short clip fit = in=%v out=%v speed=%v length=%v", in, out, speed, length)
+	}
+}
+
 func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
 	short := buildSFXPlacements(25)
 	if len(short) != 1 {

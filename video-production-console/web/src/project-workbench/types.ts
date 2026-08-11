@@ -78,6 +78,8 @@ export type ProjectTask = {
   model?: string;
   reasoning_effort?: string;
   created_at: string;
+  started_at?: string;
+  finished_at?: string;
   prompt_snapshot?: string;
   messages?: Array<{
     id: string;

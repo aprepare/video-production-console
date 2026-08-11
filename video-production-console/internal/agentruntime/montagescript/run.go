@@ -43,6 +43,7 @@ func Run(opts Options) error {
 	if run == nil {
 		run = func(name string, args ...string) ([]byte, error) {
 			cmd := exec.Command(name, args...)
+			cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

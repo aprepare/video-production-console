@@ -405,7 +405,8 @@ func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict boo
 		if err := dec.Decode(&item); err != nil {
 			return nil, err
 		}
-		if item.ID == "" || item.RelativePath == "" || item.DurationSeconds < 8 {
+		// 8s timeline @ 1.1x needs 8.8s source; keep a 1s lead-in margin when possible.
+		if item.ID == "" || item.RelativePath == "" || item.DurationSeconds < 10 {
 			continue
 		}
 		abs := filepath.Join(mediaRoot, filepath.FromSlash(item.RelativePath))
@@ -504,8 +505,29 @@ func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
 			start := asFloat(prev["start_s"])
 			sourceIn := asFloat(prev["source_in_s"])
 			speed := asFloat(prev["playback_speed"])
+			sourceOut := sourceIn + (duration-start)*speed
+			maxSource := asFloat(prev["source_duration_s"])
+			if maxSource <= 0 {
+				maxSource = sourceOut
+			}
+			if sourceOut > maxSource+0.0001 {
+				// Keep the last shot inside the real clip; slow it to fill remaining narration.
+				sourceOut = maxSource
+				if sourceOut <= sourceIn {
+					sourceIn = 0
+					sourceOut = maxSource
+				}
+				avail := sourceOut - sourceIn
+				if avail > 0 {
+					speed = avail / (duration - start)
+				} else {
+					speed = 1.0
+				}
+				prev["playback_speed"] = roundSFXStart(speed)
+				prev["source_in_s"] = sourceIn
+			}
 			prev["end_s"] = duration
-			prev["source_out_s"] = sourceIn + (duration-start)*speed
+			prev["source_out_s"] = sourceOut
 			break
 		}
 		length := 8.0
@@ -517,22 +539,7 @@ func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
 		}
 		clip := clips[clipIdx%len(clips)]
 		clipIdx++
-		speed := 1.1
-		sourceIn := 0.0
-		maxSource := clip.DurationSeconds
-		need := length * speed
-		if maxSource > need+1 {
-			sourceIn = 1.0
-		}
-		sourceOut := sourceIn + need
-		if sourceOut > maxSource {
-			sourceOut = maxSource
-			sourceIn = maxSource - need
-			if sourceIn < 0 {
-				sourceIn = 0
-				sourceOut = maxSource
-			}
-		}
+		sourceIn, sourceOut, speed, length := fitShotToClip(length, clip.DurationSeconds)
 		reason := "后段风景/建筑类镜头轮询，保持画面节奏稳定"
 		if cursor < 30 {
 			reason = "前30秒语义匹配旁白开场，选用时长充足的本地镜头"
@@ -547,6 +554,7 @@ func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
 			"source_path":            clip.AbsPath,
 			"source_origin":          "local_index",
 			"selection_reason":       reason,
+			"source_duration_s":      clip.DurationSeconds,
 			"source_in_s":            sourceIn,
 			"source_out_s":           sourceOut,
 			"playback_speed":         speed,
@@ -563,6 +571,46 @@ func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
 		shotNo++
 	}
 	return shots
+}
+
+// fitShotToClip chooses source_in/out and speed so source usage never exceeds indexed clip duration.
+func fitShotToClip(length, maxSource float64) (sourceIn, sourceOut, speed, timelineLength float64) {
+	if length < 0.5 {
+		length = 0.5
+	}
+	if maxSource < 0.5 {
+		maxSource = 0.5
+	}
+	try := func(candidateSpeed float64) (float64, float64, float64, bool) {
+		need := length * candidateSpeed
+		if maxSource >= need+1 {
+			return 1.0, 1.0 + need, candidateSpeed, true
+		}
+		if maxSource >= need {
+			return 0, need, candidateSpeed, true
+		}
+		return 0, 0, 0, false
+	}
+	if in, out, sp, ok := try(1.1); ok {
+		return roundSFXStart(in), roundSFXStart(out), sp, length
+	}
+	if in, out, sp, ok := try(1.0); ok {
+		return roundSFXStart(in), roundSFXStart(out), sp, length
+	}
+	// Indexed clip is shorter than the preferred shot: use the full clip at 1.0x.
+	sourceIn = 0
+	if maxSource > 1.5 {
+		sourceIn = 1.0
+	}
+	sourceOut = maxSource
+	speed = 1.0
+	timelineLength = sourceOut - sourceIn
+	if timelineLength < 0.5 {
+		sourceIn = 0
+		timelineLength = maxSource
+		sourceOut = maxSource
+	}
+	return roundSFXStart(sourceIn), roundSFXStart(sourceOut), speed, timelineLength
 }
 
 func asFloat(v any) float64 {
