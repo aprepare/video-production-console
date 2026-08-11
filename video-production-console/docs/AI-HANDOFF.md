@@ -30,6 +30,7 @@
 | 发布文案复制 | 混剪/审核展示「视频描述」「短标题」+ 复制；不展示推荐标题/话题/成片 | `ProjectWorkbench.tsx`；`26a8a66` |
 | 去掉成片资产 | 工作台不出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts`；`26a8a66` |
 | 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go`；`afe21c5` |
+| 改稿 UX 收拢 | 去掉占屏「连续文案改稿」大面板；**查看**弹窗内直接改保存；资产行/预览旁 **重做** 弹窗选模型+填要求 | `App.tsx` 预览/revise 弹窗、`ProjectAssets.tsx` |
 
 默认运行时（勿擅自改默认）：
 
@@ -44,7 +45,7 @@
 1. **混剪真机回归（高优先）**  
    重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`：缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
 2. **二创改稿真机点验**  
-   有连续文案后：手工改稿 → 版本 +1、下游 stale；填写修改要求 → 打回重做 `remix.review`（manifest `non_secret_settings.revision_notes`）；工作台模型为空时继承设置默认。嵌入前端：`npm --prefix web run build:embed` 后重建/重启。
+   有连续文案后：点「查看」→ 弹窗内直接改稿保存（版本 +1、下游 stale）；点资产旁「重做」→ 选模型 + 填要求 → `remix.review`（manifest `non_secret_settings.revision_notes`）。工作台主操作旁模型为空时继承设置默认。嵌入前端：`npm --prefix web run build:embed` 后重建/重启。
 3. **真机试用 openai_compat / pi（可选）**  
    设 env 重启后跑一条 `remix.standard`；确认仍走 manifest → result schema → 资产入库。设置页 UI **不做**。
 4. **发布文案质量（可选）**  

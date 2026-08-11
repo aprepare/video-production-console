@@ -1122,6 +1122,86 @@ summary:focus-visible,
   background: var(--paper);
 }
 
+.asset-editor {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  margin: 19px 0 0;
+  padding: 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink-650);
+  font: 12px/1.65 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  resize: vertical;
+}
+
+.asset-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.asset-editor-save,
+.asset-editor-revise,
+.revise-modal__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--teal-600, #1f8a70);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.asset-editor-revise {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-950);
+}
+
+.asset-editor-save:disabled,
+.revise-modal__submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.revise-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.revise-modal__notes {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--ink-650);
+  font-size: 13px;
+}
+
+.revise-modal__notes textarea {
+  width: 100%;
+  min-height: 140px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink-950);
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.revise-modal__submit {
+  justify-self: start;
+}
+
 .settings-modal .modal-head,
 .settings-note,
 .secret-grid,

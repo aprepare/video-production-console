@@ -6,6 +6,7 @@ import {
   ExternalLink,
   FileText,
   Image,
+  RotateCcw,
   Upload,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -69,7 +70,7 @@ type ProjectAssetsProps = {
   onUpload: (type: "narration" | "subtitle_srt", file: File) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
-  onEditContinuousScript?: () => void;
+  onReviseContinuousScript?: () => void;
   pendingActions: string[];
   uploadRequest: AssetUploadRequest;
 };
@@ -80,7 +81,7 @@ export function ProjectAssets({
   onUpload,
   onReplaceBackground,
   onViewAsset,
-  onEditContinuousScript,
+  onReviseContinuousScript,
   pendingActions,
   uploadRequest,
 }: ProjectAssetsProps) {
@@ -169,9 +170,10 @@ export function ProjectAssets({
                     查看
                   </button>
                 ) : null}
-                {asset && definition.type === "continuous_script" && onEditContinuousScript ? (
-                  <button type="button" onClick={onEditContinuousScript} aria-label="编辑连续文案">
-                    编辑
+                {asset && definition.type === "continuous_script" && onReviseContinuousScript ? (
+                  <button type="button" onClick={onReviseContinuousScript} aria-label="打回重做连续文案">
+                    <RotateCcw size={15} aria-hidden="true" />
+                    重做
                   </button>
                 ) : null}
                 {definition.manualUpload ? (

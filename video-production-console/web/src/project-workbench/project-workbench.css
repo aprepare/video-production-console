@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --workbench-canvas: var(--ds-canvas);
   --workbench-surface: var(--ds-surface);
   --workbench-surface-muted: var(--ds-surface-muted);
@@ -592,76 +592,6 @@
   display: block;
   margin-top: 8px;
   color: var(--workbench-muted);
-}
-
-.script-revise-panel {
-  display: grid;
-  gap: 12px;
-  margin: 0 0 18px;
-  padding: 16px;
-  border: 1px solid var(--workbench-line);
-  border-radius: 12px;
-  background: var(--workbench-surface);
-  box-shadow: var(--workbench-shadow);
-}
-
-.script-revise-panel__version {
-  align-self: start;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--workbench-teal-soft);
-  color: var(--workbench-teal-dark);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.script-revise-panel__actions,
-.script-revise-panel__editor-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.script-revise-panel textarea {
-  width: 100%;
-  min-height: 140px;
-  box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--workbench-line-strong);
-  border-radius: 9px;
-  background: var(--workbench-canvas);
-  color: var(--workbench-ink);
-  font: 14px/1.65 "Microsoft YaHei", Inter, system-ui, sans-serif;
-  resize: vertical;
-}
-
-.script-revise-panel__notes {
-  display: grid;
-  gap: 8px;
-  color: var(--workbench-muted);
-  font-size: 13px;
-}
-
-.script-revise-panel button {
-  min-height: 42px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 9px;
-  background: var(--workbench-teal);
-  color: #fff;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.script-revise-panel button:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-.script-revise-panel__cancel {
-  background: transparent !important;
-  border: 1px solid var(--workbench-line-strong) !important;
-  color: var(--workbench-ink) !important;
 }
 
 .primary-action-panel__hint {
@@ -1597,7 +1527,7 @@
 
 
 
-/* 工作台加载、空闲与操作反馈 */
+/* 宸ヤ綔鍙板姞杞姐€佺┖闂蹭笌鎿嶄綔鍙嶉 */
 .project-workbench--loading::after {
   position: absolute;
   top: 16px;

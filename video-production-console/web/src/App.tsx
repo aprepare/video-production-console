@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeft, RotateCcw, X } from "lucide-react";
 import { apiRequest } from "./api/client";
 import { LoginPage } from "./auth/LoginPage";
 import { useConsoleData } from "./console/useConsoleData";
@@ -552,6 +552,9 @@ function App() {
     asset: Asset;
     text?: string;
   } | null>(null);
+  const [previewDraft, setPreviewDraft] = useState("");
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [reviseNotes, setReviseNotes] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFeedback, setSettingsFeedback] = useState("");
   const [accountFormOpen, setAccountFormOpen] = useState(false);
@@ -1122,7 +1125,7 @@ function App() {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
     const dialogOpen = Boolean(
-      preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
+      preview || reviseOpen || settingsOpen || ideaOpen || chatOpen || taskOpen,
     );
     if (!dialogOpen) {
       if (dialogWasOpenRef.current) previousFocusRef.current?.focus();
@@ -1208,6 +1211,7 @@ function App() {
       } else if (chatOpen) setChatOpen(false);
       else if (ideaOpen) setIdeaOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
+      else if (reviseOpen) setReviseOpen(false);
       else if (preview) setPreview(null);
       else if (selected) {
         clearProjectSelection();
@@ -1230,7 +1234,7 @@ function App() {
         }
       });
     };
-  }, [chatOpen, clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
+  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, settingsOpen, taskOpen]);
   useEffect(() => () => {
     detailAbortRef.current?.abort();
     chatAbortRef.current?.abort();
@@ -1533,11 +1537,6 @@ function App() {
       unlockProjectAction(lockKey);
     }
   };
-  const loadContinuousScriptContent = async (assetID: string): Promise<string> => {
-    const response = await api(`/api/assets/${assetID}/content`);
-    if (!response.ok) throw new Error("连续文案读取失败");
-    return response.text();
-  };
   const saveContinuousScript = async (content: string) => {
     if (!selected) return;
     const project = selected;
@@ -1557,6 +1556,12 @@ function App() {
         return;
       }
       if (selectedIDRef.current !== projectID) return;
+      setPreview((current) =>
+        current?.asset.type === "continuous_script"
+          ? { ...current, text: content }
+          : current,
+      );
+      setPreviewDraft(content);
       setMessage("连续文案已保存为新版本；下游配音/字幕等可能已标记为失效。");
       await loadDetail(project);
     } catch (error) {
@@ -1599,6 +1604,7 @@ function App() {
         return;
       }
       if (selectedIDRef.current !== projectID) return;
+      setReviseOpen(false);
       setProjectTaskModel({ model: "", reasoningEffort: "" });
       setMessage("已按修改要求打回 AI 重做；完成后会生成新的连续文案版本。");
       await loadDetail(project);
@@ -1794,7 +1800,24 @@ function App() {
       setMessage("素材预览读取失败。");
       return;
     }
-    setPreview({ asset, text: await response.text() });
+    const text = await response.text();
+    setPreview({ asset, text });
+    setPreviewDraft(text);
+  };
+  const openReviseDialog = () => {
+    setReviseOpen(true);
+    if (!selected) return;
+    const projectID = selected.id;
+    void (async () => {
+      try {
+        const response = await api(`/api/projects/${projectID}/notes/remix`);
+        if (!response.ok || selectedIDRef.current !== projectID) return;
+        const payload = (await response.json()) as { notes?: string };
+        if (payload.notes) setReviseNotes(payload.notes);
+      } catch {
+        // 没有历史要求时保持空白输入即可。
+      }
+    })();
   };
   const openSettings = async () => {
     const response = await api("/api/settings");
@@ -2238,7 +2261,7 @@ function App() {
     chatDetail?.messages.filter(isTechnicalChatMessage) || [];
   const openMontagePhase = taskOpen?.montage ? derivedMontagePhase(taskOpen) : "";
   const modalLayerOpen = Boolean(
-    preview || settingsOpen || ideaOpen || chatOpen || taskOpen,
+    preview || reviseOpen || settingsOpen || ideaOpen || chatOpen || taskOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -2267,16 +2290,7 @@ function App() {
           onUpload={(type, file) => void uploadProjectAsset(type, file)}
           onSaveSourceScript={(content) => void saveSourceScriptAndStartRemix(content)}
           loadSourceScriptContent={loadSourceScriptContent}
-          loadContinuousScriptContent={loadContinuousScriptContent}
-          onSaveContinuousScript={(content) => void saveContinuousScript(content)}
-          onRemixReview={(notes) => void startRemixReview(notes)}
-          loadRemixRevisionNotes={async () => {
-            if (!selected) return "";
-            const response = await api(`/api/projects/${selected.id}/notes/remix`);
-            if (!response.ok) return "";
-            const payload = (await response.json()) as { notes?: string };
-            return payload.notes || "";
-          }}
+          onReviseContinuousScript={openReviseDialog}
           taskModel={projectTaskModel as SharedTaskModelOverride}
           onTaskModelChange={(value) => setProjectTaskModel(value)}
           taskModelDefaults={settings?.public}
@@ -2539,7 +2553,94 @@ function App() {
                 <X size={20} aria-hidden="true" />
               </button>
             </div>
-            <pre className="asset-text">{preview.text}</pre>
+            {preview.asset.type === "continuous_script" ? (
+              <>
+                <textarea
+                  className="asset-editor"
+                  aria-label="连续文案正文"
+                  value={previewDraft}
+                  onChange={(event) => setPreviewDraft(event.target.value)}
+                />
+                <div className="asset-editor-actions">
+                  <button
+                    type="button"
+                    className="asset-editor-save"
+                    onClick={() => void saveContinuousScript(previewDraft.trim())}
+                    disabled={
+                      !previewDraft.trim()
+                      || previewDraft === preview.text
+                      || selectedPendingActions.includes("save-continuous-script")
+                    }
+                    aria-busy={selectedPendingActions.includes("save-continuous-script")}
+                  >
+                    {selectedPendingActions.includes("save-continuous-script") ? "正在保存…" : "保存修改"}
+                  </button>
+                  <button
+                    type="button"
+                    className="asset-editor-revise"
+                    onClick={() => {
+                      setPreview(null);
+                      openReviseDialog();
+                    }}
+                  >
+                    <RotateCcw size={15} aria-hidden="true" />
+                    打回重做
+                  </button>
+                </div>
+              </>
+            ) : (
+              <pre className="asset-text">{preview.text}</pre>
+            )}
+          </section>
+        </div>
+      )}
+      {reviseOpen && (
+        <div className="modal-backdrop" onClick={() => setReviseOpen(false)}>
+          <section
+            className="preview-modal revise-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="revise-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <span className="muted">连续文案</span>
+                <h2 id="revise-dialog-title">打回重做</h2>
+              </div>
+              <button className="close" aria-label="关闭打回重做" onClick={() => setReviseOpen(false)}>
+                <X size={20} aria-hidden="true" />
+              </button>
+            </div>
+            <label className="revise-modal__notes">
+              修改要求
+              <textarea
+                aria-label="二创修改要求"
+                value={reviseNotes}
+                onChange={(event) => setReviseNotes(event.target.value)}
+                placeholder="例如：开场更口语、缩短前 20 秒、少用排比…"
+              />
+            </label>
+            <TaskModelFields
+              value={projectTaskModel}
+              onChange={setProjectTaskModel}
+              defaults={settings?.public}
+              labelPrefix="打回"
+            />
+            <button
+              type="button"
+              className="revise-modal__submit"
+              onClick={() => void startRemixReview(reviseNotes)}
+              disabled={
+                !reviseNotes.trim()
+                || detail?.assets.continuous_script?.state !== "ready"
+                || selectedPendingActions.includes("remix-review")
+              }
+              aria-busy={selectedPendingActions.includes("remix-review")}
+            >
+              {selectedPendingActions.includes("remix-review") ? "正在打回重做…" : "打回重做"}
+            </button>
           </section>
         </div>
       )}
