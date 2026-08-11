@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -921,46 +920,8 @@ func (r *ConversationRepository) ReleaseThreadLease(ctx context.Context, threadI
 	return err
 }
 
-func (r *ConversationRepository) immediate(ctx context.Context, operation string, fn func(assetDBTX, time.Time) error) (returnErr error) {
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	begun := false
-	ended := false
-	discard := false
-	defer func() {
-		if begun && !ended {
-			if _, rollbackErr := conn.ExecContext(context.Background(), `ROLLBACK`); rollbackErr != nil {
-				returnErr = errors.Join(returnErr, fmt.Errorf("rollback %s: %w", operation, rollbackErr))
-				discard = true
-			} else {
-				ended = true
-			}
-		}
-		if discard {
-			if discardErr := conn.Raw(func(any) error { return driver.ErrBadConn }); discardErr != nil && !errors.Is(discardErr, driver.ErrBadConn) {
-				returnErr = errors.Join(returnErr, fmt.Errorf("discard connection after uncertain %s transaction: %w", operation, discardErr))
-			}
-		}
-		if closeErr := conn.Close(); closeErr != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("release connection after %s: %w", operation, closeErr))
-		}
-	}()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		discard = true
-		return fmt.Errorf("begin %s: %w", operation, err)
-	}
-	begun = true
-	if err := fn(conn, time.Now().UTC()); err != nil {
-		return err
-	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		discard = true
-		return fmt.Errorf("commit %s outcome unknown: %w", operation, err)
-	}
-	ended = true
-	return nil
+func (r *ConversationRepository) immediate(ctx context.Context, operation string, fn func(assetDBTX, time.Time) error) error {
+	return runImmediate(ctx, r.db, operation, nil, fn)
 }
 
 func validDeliveryMode(mode domain.DeliveryMode) bool {
