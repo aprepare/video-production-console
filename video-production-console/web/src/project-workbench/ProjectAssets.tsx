@@ -69,6 +69,7 @@ type ProjectAssetsProps = {
   onUpload: (type: "narration" | "subtitle_srt", file: File) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
+  onEditContinuousScript?: () => void;
   pendingActions: string[];
   uploadRequest: AssetUploadRequest;
 };
@@ -79,6 +80,7 @@ export function ProjectAssets({
   onUpload,
   onReplaceBackground,
   onViewAsset,
+  onEditContinuousScript,
   pendingActions,
   uploadRequest,
 }: ProjectAssetsProps) {
@@ -165,6 +167,11 @@ export function ProjectAssets({
                   <button type="button" onClick={() => onViewAsset(asset)} aria-label={`查看${definition.label}`}>
                     <ExternalLink size={15} aria-hidden="true" />
                     查看
+                  </button>
+                ) : null}
+                {asset && definition.type === "continuous_script" && onEditContinuousScript ? (
+                  <button type="button" onClick={onEditContinuousScript} aria-label="编辑连续文案">
+                    编辑
                   </button>
                 ) : null}
                 {definition.manualUpload ? (

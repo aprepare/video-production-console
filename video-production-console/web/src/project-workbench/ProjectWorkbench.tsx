@@ -10,6 +10,8 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { TaskModelFields } from "../TaskModelFields";
+import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
@@ -35,6 +37,13 @@ export type ProjectWorkbenchProps = {
   onUpload: (type: UploadAssetType, file: File) => void;
   onSaveSourceScript: (content: string) => void;
   loadSourceScriptContent?: (assetID: string) => Promise<string>;
+  loadContinuousScriptContent?: (assetID: string) => Promise<string>;
+  onSaveContinuousScript?: (content: string) => void;
+  onRemixReview?: (notes: string) => void;
+  loadRemixRevisionNotes?: () => Promise<string>;
+  taskModel: TaskModelOverride;
+  onTaskModelChange: (value: TaskModelOverride) => void;
+  taskModelDefaults?: TaskModelDefaults;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onOpenConversation: () => void;
@@ -99,7 +108,7 @@ function CopyFieldButton(props: {
 }
 
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
-  const { detail, loadSourceScriptContent } = props;
+  const { detail, loadSourceScriptContent, loadContinuousScriptContent } = props;
   const stage = deriveProductionStage(detail);
   const action = nextPrimaryAction(detail);
   const missing = missingProductionInputs(detail);
@@ -134,17 +143,36 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const [sourceScript, setSourceScript] = useState("");
   const [copiedKey, setCopiedKey] = useState("");
+  const [editingScript, setEditingScript] = useState(false);
+  const [continuousScriptDraft, setContinuousScriptDraft] = useState("");
+  const [revisionNotes, setRevisionNotes] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
   const sourceAssetID = sourceReady ? detail.assets.source_script?.id : "";
+  const continuousAsset = detail.assets.continuous_script;
+  const continuousAssetID = continuousAsset?.id || "";
+  const continuousVersion = continuousAsset?.version;
+  const continuousReady = continuousAsset?.state === "ready";
   const sourceRemixLive = props.tasks.some((task) =>
     task.action === "remix.standard"
     && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  const remixReviewLive = props.tasks.some((task) =>
+    task.action === "remix.review"
+    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
   const sourceRemixPending = props.pendingActions.includes("source-remix") || sourceRemixLive;
+  const continuousSavePending = props.pendingActions.includes("save-continuous-script");
+  const remixReviewPending = props.pendingActions.includes("remix-review") || remixReviewLive;
+  const showScriptTools = Boolean(continuousAssetID && (stage === "script" || stage === "assets" || stage === "mixing" || stage === "review"));
+  const showTaskModel = Boolean(
+    action && ["start-remix", "start-source-remix", "start-mixing"].includes(action.id),
+  ) || showScriptTools;
 
   useEffect(() => {
     setSourceScript("");
     setCopiedKey("");
+    setEditingScript(false);
+    setContinuousScriptDraft("");
+    setRevisionNotes("");
   }, [detail.project.id]);
 
   useEffect(() => {
@@ -178,6 +206,29 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       active = false;
     };
   }, [loadSourceScriptContent, sourceAssetID]);
+
+  useEffect(() => {
+    if (!showScriptTools || !props.loadRemixRevisionNotes) return;
+    let active = true;
+    void props.loadRemixRevisionNotes()
+      .then((notes) => {
+        if (active) setRevisionNotes(notes);
+      })
+      .catch(() => {
+        // Empty notes keep the revise form usable.
+      });
+    return () => {
+      active = false;
+    };
+  }, [detail.project.id, props.loadRemixRevisionNotes, showScriptTools]);
+
+  const beginEditContinuousScript = () => {
+    if (!continuousAssetID || !loadContinuousScriptContent) return;
+    setEditingScript(true);
+    void loadContinuousScriptContent(continuousAssetID)
+      .then((content) => setContinuousScriptDraft(content))
+      .catch(() => setContinuousScriptDraft(""));
+  };
 
   const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft"]);
   const unknownMissing = missing.find((type) => !knownMissing.has(type));
@@ -293,9 +344,87 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           >
             {sourceRemixPending ? "正在保存/启动…" : "保存原文并开始二创"}
           </button>
+          {showTaskModel ? (
+            <TaskModelFields
+              value={props.taskModel}
+              onChange={props.onTaskModelChange}
+              defaults={props.taskModelDefaults}
+              labelPrefix="工作台"
+            />
+          ) : null}
           <small>普通对话不会写入项目或解锁下一步。</small>
         </section>
       )}
+
+      {showScriptTools ? (
+        <section className="script-revise-panel" aria-label="连续文案改稿与打回">
+          <div className="workbench-section-heading">
+            <div>
+              <span>CONTINUOUS SCRIPT</span>
+              <h2>连续文案改稿</h2>
+              <p>小问题可直接改稿保存；风格不对可填写要求后打回 AI 重做。</p>
+            </div>
+            {continuousVersion ? <span className="script-revise-panel__version">当前 v{continuousVersion}</span> : null}
+          </div>
+          <div className="script-revise-panel__actions">
+            {!editingScript ? (
+              <button type="button" onClick={beginEditContinuousScript} disabled={!loadContinuousScriptContent}>
+                编辑连续文案
+              </button>
+            ) : null}
+          </div>
+          {editingScript ? (
+            <div className="script-revise-panel__editor">
+              <textarea
+                aria-label="连续文案正文"
+                value={continuousScriptDraft}
+                onChange={(event) => setContinuousScriptDraft(event.target.value)}
+              />
+              <div className="script-revise-panel__editor-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (continuousScriptDraft.trim() && props.onSaveContinuousScript)
+                      props.onSaveContinuousScript(continuousScriptDraft.trim());
+                  }}
+                  disabled={!continuousScriptDraft.trim() || continuousSavePending || !props.onSaveContinuousScript}
+                  aria-busy={continuousSavePending}
+                >
+                  {continuousSavePending ? "正在保存…" : "保存为新版本"}
+                </button>
+                <button type="button" className="script-revise-panel__cancel" onClick={() => setEditingScript(false)}>
+                  取消编辑
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <label className="script-revise-panel__notes">
+            修改要求
+            <textarea
+              aria-label="二创修改要求"
+              value={revisionNotes}
+              onChange={(event) => setRevisionNotes(event.target.value)}
+              placeholder="例如：开场更口语、缩短前 20 秒、少用排比…"
+            />
+          </label>
+          {showTaskModel ? (
+            <TaskModelFields
+              value={props.taskModel}
+              onChange={props.onTaskModelChange}
+              defaults={props.taskModelDefaults}
+              labelPrefix="工作台"
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={() => props.onRemixReview?.(revisionNotes)}
+            disabled={!revisionNotes.trim() || !continuousReady || remixReviewPending || !props.onRemixReview}
+            aria-busy={remixReviewPending}
+          >
+            {remixReviewPending ? "正在打回重做…" : "打回重做"}
+          </button>
+        </section>
+      ) : null}
 
       <div className={`workbench-grid${showPublishingCopy ? " workbench-grid--review" : ""}`}>
         <section className="primary-action-panel" aria-label="下一主动作">
@@ -313,6 +442,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           {action ? (
             <>
               {primaryActionButton("desktop-primary-action")}
+              {showTaskModel && !showScriptTools ? (
+                <TaskModelFields
+                  value={props.taskModel}
+                  onChange={props.onTaskModelChange}
+                  defaults={props.taskModelDefaults}
+                  labelPrefix="工作台"
+                />
+              ) : null}
               <p className="primary-action-panel__hint">
                 {unknownMissing
                   ? `无法识别项目缺项 ${unknownMissing}，请刷新项目；若仍存在，请更新控制台服务。`
@@ -420,6 +557,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onUpload={props.onUpload}
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
+          onEditContinuousScript={beginEditContinuousScript}
           pendingActions={props.pendingActions}
           uploadRequest={uploadRequest}
         />

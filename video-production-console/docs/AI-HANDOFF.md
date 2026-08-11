@@ -15,7 +15,7 @@
 工作区 Git 提示（接手时先 `git status` 复核）：
 
 - 分支常为 `codex/video-production-console`；相对 origin / `master` 可能已 ahead 若干提交。
-- 混剪素材预检与稳定打散已纳入本分支提交（见下表）。
+- 混剪素材预检、稳定打散，以及二创改稿 / 打回重做 / 工作台选模型已纳入本分支（见下表）。
 
 #### 已提交
 
@@ -29,6 +29,7 @@
 | 片内标题 | 画面标题去账号前缀/任务后缀；草稿文件夹名仍可用 `draft_display_name` | `montageplan/plan.go`（随 openai 提交） |
 | 发布文案复制 | 混剪/审核展示「视频描述」「短标题」+ 复制；不展示推荐标题/话题/成片 | `ProjectWorkbench.tsx`；`26a8a66` |
 | 去掉成片资产 | 工作台不出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts`；`26a8a66` |
+| 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go` |
 
 默认运行时（勿擅自改默认）：
 
@@ -42,11 +43,15 @@
 
 1. **混剪真机回归（高优先）**  
    重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`：缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。
-2. **真机试用 openai_compat / pi（可选）**  
+2. **二创改稿真机点验**  
+   有连续文案后：手工改稿 → 版本 +1、下游 stale；填写修改要求 → 打回重做 `remix.review`（manifest `non_secret_settings.revision_notes`）；工作台模型为空时继承设置默认。嵌入前端：`npm --prefix web run build:embed` 后重建/重启。
+3. **真机试用 openai_compat / pi（可选）**  
    设 env 重启后跑一条 `remix.standard`；确认仍走 manifest → result schema → 资产入库。设置页 UI **不做**。
-3. **发布文案质量（可选）**  
+4. **发布文案质量（可选）**  
    文案来自二创 `publishing_package`；若描述/短标题空，查 remix skill 产物而非前端。
-4. **明确不做**  
+5. **二期：项目 notes 提升为 skill（未实施）**  
+   审阅项目级 revision notes → 写入对应 skill 的 `references/` 或约定规则文件；可选跨项目聚合同类需求。本期**不**自动改 `SKILL.md`。
+6. **明确不做**  
    设置页选 runtime；App Server 接到 openai/pi；强行把 remix/topic 默认切离 Codex；把成片上传加回工作台；把素材选择做成真正的语义镜头理解（当前只是稳定打散）。
 
 回滚基线参考：Week1 script runtime `15ca7d9`（以当时分支为准）。

@@ -747,6 +747,7 @@ func TestUploadAcceptsCurrentNarrationAndSubtitleTypes(t *testing.T) {
 	}{
 		{"narration", "voice.mp3", validProjectMP3()},
 		{"subtitle_srt", "captions.srt", []byte("1\n00:00:00,000 --> 00:00:01,000\n字幕\n")},
+		{"continuous_script", "script.txt", []byte("连续文案正文")},
 	} {
 		response := uploadProjectFile(t, handler, created.ID, file.typ, file.name, file.data)
 		if response.StatusCode != http.StatusCreated {
@@ -756,6 +757,49 @@ func TestUploadAcceptsCurrentNarrationAndSubtitleTypes(t *testing.T) {
 			t.Fatalf("missing %s directory: %v", file.typ, err)
 		}
 	}
+}
+
+func TestProjectStepNotesGetPutRoundTrip(t *testing.T) {
+	handler, _, _, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "notes-roundtrip"}))
+	empty := performJSON(t, handler, http.MethodGet, "/api/projects/"+created.ID+"/notes/remix", nil)
+	if empty.StatusCode != http.StatusOK {
+		t.Fatalf("empty get status=%d", empty.StatusCode)
+	}
+	var emptyBody stepNotesView
+	if err := json.NewDecoder(empty.Body).Decode(&emptyBody); err != nil {
+		t.Fatal(err)
+	}
+	_ = empty.Body.Close()
+	if emptyBody.Notes != "" || emptyBody.ProjectID != created.ID {
+		t.Fatalf("unexpected empty notes: %+v", emptyBody)
+	}
+	saved := performJSON(t, handler, http.MethodPut, "/api/projects/"+created.ID+"/notes/remix", map[string]any{"notes": "  语气更口语  "})
+	if saved.StatusCode != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", saved.StatusCode, readResponseBody(t, saved))
+	}
+	var putBody stepNotesView
+	if err := json.NewDecoder(saved.Body).Decode(&putBody); err != nil {
+		t.Fatal(err)
+	}
+	_ = saved.Body.Close()
+	if putBody.Notes != "语气更口语" || putBody.Step != "remix" {
+		t.Fatalf("unexpected put body: %+v", putBody)
+	}
+	loaded := performJSON(t, handler, http.MethodGet, "/api/projects/"+created.ID+"/notes/remix", nil)
+	var getBody stepNotesView
+	if err := json.NewDecoder(loaded.Body).Decode(&getBody); err != nil {
+		t.Fatal(err)
+	}
+	_ = loaded.Body.Close()
+	if getBody.Notes != "语气更口语" {
+		t.Fatalf("unexpected get body: %+v", getBody)
+	}
+	bad := performJSON(t, handler, http.MethodPut, "/api/projects/"+created.ID+"/notes/montage", map[string]any{"notes": "nope"})
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected invalid step, got %d", bad.StatusCode)
+	}
+	_ = bad.Body.Close()
 }
 
 func uploadProjectFile(t *testing.T, h http.Handler, id, typ, name string, data []byte) *http.Response {

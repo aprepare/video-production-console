@@ -155,17 +155,29 @@ func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error
 		return "", fmt.Errorf("skill and wire action are required")
 	}
 	manifestInstruction := fmt.Sprintf("Execute action=%s using the task manifest at %s.", wireAction, manifestPath)
-	if manifestPath == taskManifestEnvironmentKey {
+	useEnvironmentPath := manifestPath == taskManifestEnvironmentKey
+	if useEnvironmentPath {
 		manifestInstruction = fmt.Sprintf("Execute action=%s using the task manifest path from environment variable %s. Read the variable at runtime; do not retype or reconstruct the absolute path.", wireAction, taskManifestEnvironmentKey)
 	}
 	extra := ""
 	if skill == "jianying-montage-draft" && wireAction == "execute" {
-		extra = `
+		manifestStep := "2) Run scripts/run_montage_job.py validate-inputs --manifest %VIDEO_CONSOLE_TASK_MANIFEST% via cmd.exe."
+		if !useEnvironmentPath {
+			manifestStep = "2) Run scripts/run_montage_job.py validate-inputs --manifest <task_manifest_path_from_above> via cmd.exe."
+		}
+		extra = fmt.Sprintf(`
 Console montage.execute only:
 1) Read console-contract.md only. No web/Grok search. Do not open run_montage_job.py source.
-2) Run scripts/run_montage_job.py validate-inputs --manifest %VIDEO_CONSOLE_TASK_MANIFEST% via cmd.exe.
+%s
 3) Write production_plan.json from narration duration + selective media-index queries (never dump whole indexes/scripts).
-4) Run validate-plan then execute --plan. One thread; no subagents.`
+4) Run validate-plan then execute --plan. One thread; no subagents.`, manifestStep)
+	}
+	if skill == "finance-viral-remix" && wireAction == "review" {
+		extra = `
+Console remix.review only:
+1) Read non_secret_settings.revision_notes from the task manifest.
+2) Rewrite the review_target continuous_script to satisfy those notes.
+3) Emit continuous_script under output_dir; refresh publishing_package when titles/description should change.`
 	}
 	prompt := fmt.Sprintf(`Use the $%s skill.
 %s

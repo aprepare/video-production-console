@@ -685,7 +685,7 @@ func manifestHasRole(manifest TaskManifest, role string) bool {
 
 func requiredOutputsForTest(action domain.TaskAction) []ExpectedOutput {
 	switch action {
-	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic:
+	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
 		return []ExpectedOutput{{Type: "continuous_script", Required: true}}
 	default:
 		return []ExpectedOutput{}

@@ -44,6 +44,7 @@ type projectsHandler struct {
 	models     TaskModelResolver
 	workflows  *store.WorkflowRepository
 	tasks      *store.TaskRepository
+	notes      *store.ProjectStepNotesRepository
 }
 
 func NewProjectsHandler(db *sql.DB, service *assets.Service, remix RemixCoordinator, models TaskModelResolver) http.Handler {
@@ -57,6 +58,7 @@ func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, 
 	if db != nil {
 		h.workflows = store.NewWorkflowRepository(db)
 		h.tasks = store.NewTaskRepository(db)
+		h.notes = store.NewProjectStepNotesRepository(db)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects", h.create)
@@ -67,6 +69,8 @@ func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, 
 	mux.HandleFunc("POST /api/projects/{id}/move", h.move)
 	mux.HandleFunc("POST /api/projects/{id}/remix", h.startRemix)
 	mux.HandleFunc("POST /api/projects/{id}/publish", h.publish)
+	mux.HandleFunc("GET /api/projects/{id}/notes/{step}", h.getStepNotes)
+	mux.HandleFunc("PUT /api/projects/{id}/notes/{step}", h.putStepNotes)
 	return mux
 }
 
@@ -383,6 +387,76 @@ func (h *projectsHandler) toWorkflowView(ctx context.Context, run domain.Project
 	taskSummary := viewTask(task)
 	view.CurrentTask = &taskSummary
 	return view, nil
+}
+
+type stepNotesView struct {
+	ProjectID string    `json:"project_id"`
+	Step      string    `json:"step"`
+	Notes     string    `json:"notes"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (h *projectsHandler) getStepNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if h.notes == nil {
+		writeError(w, http.StatusNotImplemented, "step_notes_unavailable", "Project step notes are unavailable.")
+		return
+	}
+	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	notes, err := h.notes.Get(r.Context(), id, r.PathValue("step"))
+	if errors.Is(err, store.ErrInvalidStepNotes) {
+		writeError(w, http.StatusBadRequest, "invalid_step", "The step is not supported.")
+		return
+	}
+	if errors.Is(err, store.ErrStepNotesNotFound) {
+		writeJSON(w, http.StatusOK, stepNotesView{ProjectID: id, Step: strings.TrimSpace(r.PathValue("step")), Notes: ""})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "step_notes_read_failed", "Project step notes could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, stepNotesView{ProjectID: notes.ProjectID, Step: notes.Step, Notes: notes.Notes, UpdatedAt: notes.UpdatedAt})
+}
+
+func (h *projectsHandler) putStepNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if h.notes == nil {
+		writeError(w, http.StatusNotImplemented, "step_notes_unavailable", "Project step notes are unavailable.")
+		return
+	}
+	var in struct {
+		Notes string `json:"notes"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_step_notes", "Notes payload is required.")
+		return
+	}
+	saved, err := h.notes.Upsert(r.Context(), id, r.PathValue("step"), in.Notes, time.Now().UTC())
+	switch {
+	case errors.Is(err, store.ErrInvalidStepNotes):
+		writeError(w, http.StatusBadRequest, "invalid_step", "The step is not supported.")
+		return
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "step_notes_save_failed", "Project step notes could not be saved.")
+		return
+	}
+	writeJSON(w, http.StatusOK, stepNotesView{ProjectID: saved.ProjectID, Step: saved.Step, Notes: saved.Notes, UpdatedAt: saved.UpdatedAt})
 }
 
 func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {

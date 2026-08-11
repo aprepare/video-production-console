@@ -91,7 +91,8 @@
         "media_root": {"type": "string"},
         "jianying_root": {"type": "string"},
         "machine_profile_path": {"type": "string", "minLength": 1},
-        "draft_display_name": {"type": "string", "minLength": 1}
+        "draft_display_name": {"type": "string", "minLength": 1},
+        "revision_notes": {"type": "string"}
       }
     }
   },
@@ -99,10 +100,10 @@
     {"if": {"properties": {"action": {"const": "topic.brainstorm"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_candidates"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_candidates"}, "required": {"const": true}}}}, "non_secret_settings": {"required": ["session_id"]}}}},
     {"if": {"properties": {"action": {"const": "topic.commit"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}}}, "engineering_inputs": {"minItems": 1, "maxItems": 1}, "non_secret_settings": {"required": ["session_id", "candidate_id", "topic_candidates_path", "obsidian_vault", "topic_cards_dir"]}}}},
     {"if": {"properties": {"action": {"const": "topic.deepen"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}}}, "non_secret_settings": {"required": ["session_id", "topic_card_path"]}}}},
-    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card"]}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}}}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review"]}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}}}}}},
     {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path"]}, "expected_outputs": {"items": {"properties": {"type": {"const": "production_plan"}}}}}}},
     {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path", "draft_display_name"]}, "expected_outputs": {"items": {"properties": {"type": {"enum": ["production_plan", "plaintext_workspace"]}}}}}}},
-    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card"]}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review"]}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
     {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "production_plan"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
     {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"expected_outputs": {"allOf": [{"contains": {"properties": {"type": {"const": "production_plan"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}, {"contains": {"properties": {"type": {"const": "plaintext_workspace"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}]}}}},
     {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced"]}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "source_script"}, "role": {"const": "primary_source"}}}}}}},

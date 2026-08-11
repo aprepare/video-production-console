@@ -45,6 +45,47 @@ func (s *manifestTestScheduler) Enqueue(_ context.Context, task domain.CodexTask
 	return nil
 }
 
+func TestRemixReviewPersistsRevisionNotes(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, false)
+	now := time.Now().UTC()
+	path := filepath.Join(db.root, "projects", projectID, "continuous_script", "script.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("continuous script")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(data)
+	if _, err := store.NewAssetRepository(db.db).AddVersion(context.Background(), store.AddAssetVersion{
+		ProjectID: &projectID, AccountID: accountID, Type: domain.AssetContinuousScript,
+		Path: path, Filename: "script.txt", MIMEType: "text/plain", Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:]),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = now
+	scheduler := &manifestTestScheduler{}
+	handler := NewTasksHandler(db.db, scheduler, nil, nil)
+	body := `{"account_id":"` + accountID + `","type":"remix","action":"remix.review","prompt":"rewrite","revision_notes":"语气更口语","model":"gpt-5.6-sol"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated || scheduler.enqueued != 1 {
+		t.Fatalf("status=%d enqueued=%d body=%s", res.Code, scheduler.enqueued, res.Body.String())
+	}
+	notes, err := store.NewProjectStepNotesRepository(db.db).Get(context.Background(), projectID, "remix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notes.Notes != "语气更口语" {
+		t.Fatalf("notes=%q", notes.Notes)
+	}
+	if scheduler.task.Action != domain.ActionRemixReview || scheduler.task.ModelName != "gpt-5.6-sol" {
+		t.Fatalf("task=%+v", scheduler.task)
+	}
+}
+
 func TestTaskHTTPResolvesModelSelectionBeforeEnqueue(t *testing.T) {
 	db, accountID, projectID, _ := setupManifestTask(t, false)
 	for _, tt := range []struct {

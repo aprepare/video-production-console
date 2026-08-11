@@ -32,6 +32,7 @@ type TaskManifestRequest struct {
 	TopicCardPath        string    `json:"topic_card_path,omitempty"`
 	MachineProfilePath   string    `json:"machine_profile_path,omitempty"`
 	ApprovalMode         string    `json:"approval_mode,omitempty"`
+	RevisionNotes        string    `json:"revision_notes,omitempty"`
 	PreparationStartedAt time.Time `json:"-"`
 }
 
@@ -147,7 +148,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		MediaRoot: runtime.MediaRoot, JianyingRoot: runtime.JianyingRoot,
 		SessionID: strings.TrimSpace(req.SessionID), CandidateID: strings.TrimSpace(req.CandidateID),
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
-		MachineProfilePath: machineProfilePath,
+		MachineProfilePath: machineProfilePath, RevisionNotes: strings.TrimSpace(req.RevisionNotes),
 	}
 	if task.Action == domain.ActionMontageExecute {
 		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)
@@ -408,6 +409,22 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 			return nil, fmt.Errorf("required asset %q is missing or not ready", typ)
 		}
 		inputs = append(inputs, version)
+	}
+	// When reviewing an existing continuous script, include the original source
+	// script as an optional对照 input when it is still ready.
+	if action == domain.ActionRemixReview {
+		if source, ok := byType[domain.AssetSourceScript]; ok && source.State == domain.AssetReady {
+			already := false
+			for _, input := range inputs {
+				if input.Type == domain.AssetSourceScript || input.ID == source.ID {
+					already = true
+					break
+				}
+			}
+			if !already {
+				inputs = append(inputs, source)
+			}
+		}
 	}
 	if action == domain.ActionMontagePlan || action == domain.ActionMontageExecute {
 		background, err := repo.assets.CurrentBackgroundForProject(ctx, projectID)

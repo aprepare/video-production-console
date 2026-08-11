@@ -78,6 +78,16 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onPublish: vi.fn(),
     onUpload: vi.fn(),
     onSaveSourceScript: vi.fn(),
+    onSaveContinuousScript: vi.fn(),
+    onRemixReview: vi.fn(),
+    loadContinuousScriptContent: vi.fn(async () => "现有连续文案"),
+    loadRemixRevisionNotes: vi.fn(async () => ""),
+    taskModel: { model: "", reasoningEffort: "" },
+    onTaskModelChange: vi.fn(),
+    taskModelDefaults: {
+      codex_default_model: "gpt-test",
+      codex_default_reasoning_effort: "medium",
+    },
     onReplaceBackground: vi.fn(),
     onViewAsset: vi.fn(),
     onOpenConversation: vi.fn(),
@@ -480,7 +490,29 @@ test("does not expose manual upload controls for generated continuous scripts or
   expect(screen.queryByLabelText("上传连续文案")).toBeNull();
   expect(screen.queryByLabelText("上传剪映草稿")).toBeNull();
   expect(screen.getByRole("button", { name: "查看连续文案" })).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "编辑连续文案" }).length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "查看剪映草稿" })).toBeTruthy();
+});
+
+test("edits continuous script, exposes revise notes, and shows workbench model fields", async () => {
+  const props = workbenchProps();
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByText("模型与推理强度（可选）")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("二创修改要求"), {
+    target: { value: "开场更口语" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "打回重做" }));
+  expect(props.onRemixReview).toHaveBeenCalledWith("开场更口语");
+
+  fireEvent.click(screen.getAllByRole("button", { name: "编辑连续文案" })[0]);
+  expect(await screen.findByLabelText("连续文案正文")).toBeTruthy();
+  expect(props.loadContinuousScriptContent).toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("连续文案正文"), {
+    target: { value: "手工改过的连续文案" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存为新版本" }));
+  expect(props.onSaveContinuousScript).toHaveBeenCalledWith("手工改过的连续文案");
 });
 
 test("selects the newest live task consistently in the action panel and conversation", () => {

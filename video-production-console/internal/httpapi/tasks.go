@@ -187,11 +187,26 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
 		return
 	}
+	manifestRequest := in.TaskManifestRequest
+	if action == domain.ActionRemixReview {
+		notes := strings.TrimSpace(manifestRequest.RevisionNotes)
+		if notes == "" {
+			notes = strings.TrimSpace(in.Prompt)
+		}
+		if notes == "" {
+			writeError(w, 400, "revision_notes_required", "Revision notes are required for remix.review.")
+			return
+		}
+		manifestRequest.RevisionNotes = notes
+		if _, err := store.NewProjectStepNotesRepository(h.repo.DB()).Upsert(r.Context(), pid, "remix", notes, prepareStartedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "step_notes_save_failed", "Project revision notes could not be saved.")
+			return
+		}
+	}
 	t := domain.CodexTask{ID: id, ProjectID: &p, AccountID: in.AccountID, Type: in.Type, SkillName: resolved.Skill, Action: action, Status: domain.TaskQueued, PromptSnapshot: in.Prompt, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, CreatedAt: prepareStartedAt}
 	// chat_session_id is accepted for wire compatibility but is never routing
 	// authority. CompositeScheduler resolves the console-owned project session.
 	if h.preparer != nil {
-		manifestRequest := in.TaskManifestRequest
 		if action == domain.ActionTopicDeepen && strings.TrimSpace(manifestRequest.SessionID) == "" {
 			_ = h.repo.DB().QueryRowContext(r.Context(), `SELECT id FROM idea_sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT 1`, pid).Scan(&manifestRequest.SessionID)
 		}

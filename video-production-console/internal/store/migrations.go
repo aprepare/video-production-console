@@ -786,6 +786,14 @@ WHERE external_id IS NOT NULL;
 CREATE INDEX task_phase_task_attempt_idx
 ON task_phase_runs(task_id,attempt,started_at,id);`,
 	`ALTER TABLE montage_registration_attempts ADD COLUMN draft_id TEXT;`,
+	`CREATE TABLE project_step_notes (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    step TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (project_id, step),
+    CHECK (step IN ('remix'))
+);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

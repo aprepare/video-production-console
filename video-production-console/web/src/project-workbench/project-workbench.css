@@ -594,6 +594,76 @@
   color: var(--workbench-muted);
 }
 
+.script-revise-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid var(--workbench-line);
+  border-radius: 12px;
+  background: var(--workbench-surface);
+  box-shadow: var(--workbench-shadow);
+}
+
+.script-revise-panel__version {
+  align-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--workbench-teal-soft);
+  color: var(--workbench-teal-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.script-revise-panel__actions,
+.script-revise-panel__editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.script-revise-panel textarea {
+  width: 100%;
+  min-height: 140px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--workbench-line-strong);
+  border-radius: 9px;
+  background: var(--workbench-canvas);
+  color: var(--workbench-ink);
+  font: 14px/1.65 "Microsoft YaHei", Inter, system-ui, sans-serif;
+  resize: vertical;
+}
+
+.script-revise-panel__notes {
+  display: grid;
+  gap: 8px;
+  color: var(--workbench-muted);
+  font-size: 13px;
+}
+
+.script-revise-panel button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--workbench-teal);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.script-revise-panel button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.script-revise-panel__cancel {
+  background: transparent !important;
+  border: 1px solid var(--workbench-line-strong) !important;
+  color: var(--workbench-ink) !important;
+}
+
 .primary-action-panel__hint {
   min-height: 48px;
   margin: 10px 2px 18px;

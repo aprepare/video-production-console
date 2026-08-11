@@ -33,6 +33,31 @@ func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
 	}
 }
 
+func TestRemixReviewPromptReadsRevisionNotes(t *testing.T) {
+	taskID := uuid.NewString()
+	manifest := TaskManifest{
+		SchemaVersion: ProtocolSchemaVersion,
+		TaskID:        taskID,
+		JobID:         taskID,
+		Skill:         "finance-viral-remix",
+		Action:        domain.ActionRemixReview,
+		OutputDir:     filepath.Join(`C:\managed`, "tasks", taskID, "output"),
+		NonSecretSettings: ManifestSettings{RevisionNotes: "开场更口语"},
+	}
+	prompt, err := BuildManifestPrompt(manifest, filepath.Join(`C:\managed`, "tasks", taskID, "task_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"action=review", "revision_notes", "continuous_script", "publishing_package"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("review prompt missing %q: %s", want, prompt)
+		}
+	}
+	if len(prompt) > 1200 {
+		t.Fatalf("review prompt is unbounded: %d", len(prompt))
+	}
+}
+
 func TestMontageExecutePromptKeepsPlanFirstAndNoDelegation(t *testing.T) {
 	taskID := uuid.NewString()
 	manifest := TaskManifest{

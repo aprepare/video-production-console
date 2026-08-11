@@ -593,7 +593,7 @@ var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixStandard:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixEnhanced:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
-	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "self_check": true},
+	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionMontagePlan:    montagePlanArtifactTypes(), domain.ActionMontageExecute: montageExecuteArtifactTypes(),
 }
 
@@ -614,7 +614,7 @@ var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
 	domain.ActionRemixStandard:  {domain.AssetContinuousScript: true},
 	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true},
 	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true},
-	domain.ActionRemixReview:    {},
+	domain.ActionRemixReview:    {domain.AssetContinuousScript: true},
 	domain.ActionMontagePlan:    {}, domain.ActionMontageExecute: {},
 }
 

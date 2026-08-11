@@ -7,6 +7,8 @@ import { useConsoleData } from "./console/useConsoleData";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
+import { TaskModelFields } from "./TaskModelFields";
+import type { TaskModelOverride as SharedTaskModelOverride } from "./taskModel";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { ProjectCreateForm } from "./projects/ProjectCreateForm";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
@@ -519,59 +521,6 @@ function taskQuestions(task: Task): string[] {
   } catch {
     return [];
   }
-}
-
-function TaskModelFields({
-  value,
-  onChange,
-  defaults,
-  labelPrefix = "",
-}: {
-  value: TaskModelOverride;
-  onChange: (value: TaskModelOverride) => void;
-  defaults?: PublicSettings;
-  labelPrefix?: string;
-}) {
-  const actualModel = value.model.trim() || defaults?.codex_default_model || "Codex 默认模型";
-  const actualEffort =
-    value.reasoningEffort || defaults?.codex_default_reasoning_effort || "Codex 默认强度";
-  return (
-    <details className="task-model-fields">
-      <summary>模型与推理强度（可选）</summary>
-      <div className="task-model-grid">
-        <label>
-          模型
-          <input
-            aria-label={`${labelPrefix}临时模型`}
-            value={value.model}
-            placeholder="继承默认模型"
-            onChange={(event) => onChange({ ...value, model: event.target.value })}
-          />
-        </label>
-        <label>
-          推理强度
-          <select
-            aria-label={`${labelPrefix}临时推理强度`}
-            value={value.reasoningEffort}
-            onChange={(event) =>
-              onChange({
-                ...value,
-                reasoningEffort: event.target.value as ReasoningEffort | "",
-              })
-            }
-          >
-            <option value="">继承默认强度</option>
-            {reasoningEfforts.map((effort) => (
-              <option key={effort} value={effort}>
-                {effort}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <p>实际将使用：{actualModel} · {actualEffort}</p>
-    </details>
-  );
 }
 
 function messageTone(message: string) {
@@ -1451,6 +1400,10 @@ function App() {
           action: "remix.standard",
           prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
           source_version_id: sourceVersionID,
+          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
+          ...(projectTaskModel.reasoningEffort
+            ? { reasoning_effort: projectTaskModel.reasoningEffort }
+            : {}),
         }),
       });
       if (selectedIDRef.current !== projectID) return;
@@ -1459,6 +1412,7 @@ function App() {
         await loadDetail(project);
         return;
       }
+      setProjectTaskModel({ model: "", reasoningEffort: "" });
       setMessage("同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。");
       await loadDetail(project);
     } catch (error) {
@@ -1575,6 +1529,82 @@ function App() {
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("发布状态更新失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
+    }
+  };
+  const loadContinuousScriptContent = async (assetID: string): Promise<string> => {
+    const response = await api(`/api/assets/${assetID}/content`);
+    if (!response.ok) throw new Error("连续文案读取失败");
+    return response.text();
+  };
+  const saveContinuousScript = async (content: string) => {
+    if (!selected) return;
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockProjectAction(projectID, "save-continuous-script");
+    if (!lockKey) return;
+    const body = new FormData();
+    body.set("file", new File([content], "continuous-script.txt", { type: "text/plain" }));
+    try {
+      const response = await api(`/api/projects/${projectID}/assets/continuous_script`, {
+        method: "POST",
+        body,
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("连续文案保存失败，请稍后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      setMessage("连续文案已保存为新版本；下游配音/字幕等可能已标记为失效。");
+      await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("连续文案保存失败，请检查网络连接后重试。");
+    } finally {
+      unlockProjectAction(lockKey);
+    }
+  };
+  const startRemixReview = async (notes: string) => {
+    if (!selected || !detail?.assets.continuous_script) return;
+    const project = selected;
+    const projectID = project.id;
+    const revisionNotes = notes.trim();
+    if (!revisionNotes) {
+      setMessage("请先填写修改要求，再打回重做。");
+      return;
+    }
+    const lockKey = lockProjectAction(projectID, "remix-review");
+    if (!lockKey) return;
+    try {
+      const response = await api(`/api/projects/${projectID}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: project.account_id,
+          type: "remix",
+          action: "remix.review",
+          prompt: `按修改要求重写当前连续文案。\n\n修改要求：\n${revisionNotes}`,
+          revision_notes: revisionNotes,
+          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
+          ...(projectTaskModel.reasoningEffort
+            ? { reasoning_effort: projectTaskModel.reasoningEffort }
+            : {}),
+        }),
+      });
+      if (!response.ok) {
+        if (selectedIDRef.current === projectID)
+          setMessage("打回重做任务启动失败，请检查当前连续文案与 Codex 配置后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      setProjectTaskModel({ model: "", reasoningEffort: "" });
+      setMessage("已按修改要求打回 AI 重做；完成后会生成新的连续文案版本。");
+      await loadDetail(project);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("打回重做任务启动失败，请检查网络连接后重试。");
     } finally {
       unlockProjectAction(lockKey);
     }
@@ -2237,6 +2267,19 @@ function App() {
           onUpload={(type, file) => void uploadProjectAsset(type, file)}
           onSaveSourceScript={(content) => void saveSourceScriptAndStartRemix(content)}
           loadSourceScriptContent={loadSourceScriptContent}
+          loadContinuousScriptContent={loadContinuousScriptContent}
+          onSaveContinuousScript={(content) => void saveContinuousScript(content)}
+          onRemixReview={(notes) => void startRemixReview(notes)}
+          loadRemixRevisionNotes={async () => {
+            if (!selected) return "";
+            const response = await api(`/api/projects/${selected.id}/notes/remix`);
+            if (!response.ok) return "";
+            const payload = (await response.json()) as { notes?: string };
+            return payload.notes || "";
+          }}
+          taskModel={projectTaskModel as SharedTaskModelOverride}
+          onTaskModelChange={(value) => setProjectTaskModel(value)}
+          taskModelDefaults={settings?.public}
           onReplaceBackground={(file) => void replaceProjectBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenConversation={() => void openGeneralChat()}

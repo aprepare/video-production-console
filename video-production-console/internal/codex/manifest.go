@@ -110,6 +110,7 @@ type ManifestSettings struct {
 	JianyingRoot         string `json:"jianying_root,omitempty"`
 	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
 	DraftDisplayName     string `json:"draft_display_name,omitempty"`
+	RevisionNotes        string `json:"revision_notes,omitempty"`
 }
 
 type BuildManifestInput struct {
@@ -622,7 +623,7 @@ var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixStandard:  {"continuous_script": true},
 	domain.ActionRemixEnhanced:  {"continuous_script": true},
 	domain.ActionRemixFromTopic: {"continuous_script": true},
-	domain.ActionRemixReview:    {},
+	domain.ActionRemixReview:    {"continuous_script": true},
 	domain.ActionMontagePlan:    {"production_plan": true},
 	// A montage execution produces a validated plaintext workspace only. The
 	// trusted host registers it into Jianying before a formal mix_draft asset
@@ -643,6 +644,7 @@ var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
 var requiredExpectedOutputTypes = map[domain.TaskAction][]string{
 	domain.ActionTopicBrainstorm: {"topic_candidates"}, domain.ActionTopicCommit: {"topic_card"}, domain.ActionTopicDeepen: {"topic_card"},
 	domain.ActionRemixStandard: {"continuous_script"}, domain.ActionRemixEnhanced: {"continuous_script"}, domain.ActionRemixFromTopic: {"continuous_script"},
+	domain.ActionRemixReview: {"continuous_script"},
 	domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
 }
 
