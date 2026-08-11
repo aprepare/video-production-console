@@ -31,6 +31,7 @@
 | 去掉成片资产 | 工作台不出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts`；`26a8a66` |
 | 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go`；`afe21c5` |
 | 改稿 UX 收拢 | 去掉占屏「连续文案改稿」大面板；**查看**弹窗内直接改保存；资产行/预览旁 **重做** 弹窗选模型+填要求；embed 已重建 | `App.tsx`、`ProjectAssets.tsx`；`6da39c2` |
+| 混剪长片 SFX | `>=240s` 计划自动铺 3–5 个 verified SFX（开场+间隔≥12s），修复 `validate-plan` 因只有 1 个音效失败 | `montageplan/plan.go` `buildSFXPlacements` |
 
 默认运行时（勿擅自改默认）：
 

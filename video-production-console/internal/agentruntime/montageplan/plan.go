@@ -19,6 +19,37 @@ const (
 	transitionEffectID = "322577"
 	transitionResID    = "6724845717472416269"
 	bgmLoopSeconds     = 194.4
+	sfxMinGapSeconds   = 12.0
+	sfxLongFormSeconds = 240.0
+)
+
+type verifiedSFX struct {
+	Name       string
+	EffectID   string
+	ResourceID string
+	CacheKey   string
+}
+
+var (
+	sfxOpening = verifiedSFX{
+		Name: "综艺开头-咚（空旷）", EffectID: "7132789318354996487",
+		ResourceID: "7132789318354996487", CacheKey: "sfx_opening_hit",
+	}
+	sfxLibrary = []verifiedSFX{
+		sfxOpening,
+		{
+			Name: "水滴", EffectID: "6924829910603287822",
+			ResourceID: "6924829910603287822", CacheKey: "sfx_water_drop",
+		},
+		{
+			Name: "“呼”的转场音效", EffectID: "6896679799100656904",
+			ResourceID: "6896679799100656904", CacheKey: "sfx_whoosh",
+		},
+		{
+			Name: "综艺咚", EffectID: "7072236855973924103",
+			ResourceID: "7072236855973924103", CacheKey: "sfx_conclusion_hit",
+		},
+	}
 )
 
 // DurationFunc measures narration length in seconds.
@@ -178,10 +209,7 @@ func Build(opts Options) error {
 				"name": "EXTA$Y+ (Remake)", "music_id": "7223314484093405186", "resource_id": "7223314484093405186",
 				"cache_key": "bgm_extasy_remake", "linear_volume": 0.1593, "loop_every_s": bgmLoopSeconds, "required": true,
 			},
-			"sfx": []map[string]any{{
-				"name": "综艺开头-咚（空旷）", "effect_id": "7132789318354996487", "resource_id": "7132789318354996487",
-				"cache_key": "sfx_opening_hit", "start_s": 0, "db": -8,
-			}},
+			"sfx": buildSFXPlacements(duration),
 		},
 		"graphics": map[string]any{
 			"title":          map[string]any{"text": title, "chars_min": 6, "chars_max": 8, "size_min": 16, "y": 0.6, "full_duration": true},
@@ -220,6 +248,86 @@ func nullIfEmpty(path string) any {
 		return nil
 	}
 	return path
+}
+
+// buildSFXPlacements emits verified SFX that satisfy jianying-montage-draft validate-plan:
+// opening hit at 0s, optional mid/end hits for >=240s videos (3-5 total, >=12s apart).
+func buildSFXPlacements(duration float64) []map[string]any {
+	count := 1
+	if duration >= sfxLongFormSeconds {
+		count = 4
+		if duration < sfxLongFormSeconds+2*sfxMinGapSeconds {
+			count = 3
+		}
+		if maxByGap := int(duration/sfxMinGapSeconds) + 1; maxByGap < count {
+			count = maxByGap
+		}
+		if count < 3 {
+			count = 3
+		}
+		if count > 5 {
+			count = 5
+		}
+		if count > len(sfxLibrary) {
+			count = len(sfxLibrary)
+		}
+	}
+
+	starts := make([]float64, 0, count)
+	starts = append(starts, 0)
+	if count > 1 {
+		span := duration - sfxMinGapSeconds
+		if span < sfxMinGapSeconds {
+			span = sfxMinGapSeconds
+		}
+		for i := 1; i < count; i++ {
+			frac := float64(i) / float64(count)
+			start := roundSFXStart(span * frac)
+			prev := starts[len(starts)-1]
+			if start-prev < sfxMinGapSeconds {
+				start = prev + sfxMinGapSeconds
+			}
+			if start >= duration {
+				start = duration - 0.001
+			}
+			if start <= prev {
+				continue
+			}
+			starts = append(starts, start)
+		}
+	}
+	// Long-form validation requires 3-5 placements; keep filling from the end if rounding collapsed any.
+	for duration >= sfxLongFormSeconds && len(starts) < 3 {
+		next := starts[len(starts)-1] + sfxMinGapSeconds
+		if next >= duration {
+			next = duration - 0.001
+		}
+		if next <= starts[len(starts)-1] {
+			break
+		}
+		starts = append(starts, next)
+	}
+
+	out := make([]map[string]any, 0, len(starts))
+	for i, start := range starts {
+		item := sfxLibrary[i%len(sfxLibrary)]
+		if i == 0 {
+			item = sfxOpening
+		}
+		out = append(out, map[string]any{
+			"name":        item.Name,
+			"effect_id":   item.EffectID,
+			"resource_id": item.ResourceID,
+			"cache_key":   item.CacheKey,
+			"start_s":     start,
+			"db":          -8,
+		})
+	}
+	return out
+}
+
+func roundSFXStart(value float64) float64 {
+	return float64(int(value*1000+0.5)) / 1000
 }
 
 func readProfilePaths(path string) (mediaRoot, mediaIndex string, err error) {

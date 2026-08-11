@@ -157,6 +157,38 @@ func TestMediaSelectionVariesByTaskAndPreflightRejectsMissing(t *testing.T) {
 	}
 }
 
+func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
+	short := buildSFXPlacements(25)
+	if len(short) != 1 {
+		t.Fatalf("short sfx count = %d", len(short))
+	}
+	if short[0]["start_s"].(float64) != 0 || short[0]["cache_key"] != "sfx_opening_hit" {
+		t.Fatalf("short opening = %#v", short[0])
+	}
+
+	long := buildSFXPlacements(293.832)
+	if n := len(long); n < 3 || n > 5 {
+		t.Fatalf("long sfx count = %d", n)
+	}
+	if long[0]["start_s"].(float64) != 0 || long[0]["name"] != "综艺开头-咚（空旷）" {
+		t.Fatalf("long opening = %#v", long[0])
+	}
+	prev := -sfxMinGapSeconds
+	for i, item := range long {
+		start := item["start_s"].(float64)
+		if start < 0 || start >= 293.832 {
+			t.Fatalf("placement %d start_s=%v out of range", i, start)
+		}
+		if start-prev < sfxMinGapSeconds {
+			t.Fatalf("placement %d gap too small: %v -> %v", i, prev, start)
+		}
+		if item["db"].(int) != -8 {
+			t.Fatalf("placement %d db = %v", i, item["db"])
+		}
+		prev = start
+	}
+}
+
 func TestOnScreenTitleSourceStripsAccountAndTaskSuffix(t *testing.T) {
 	got := onScreenTitleSource("天中观局_房贷困境反思_a4b031")
 	if got != "房贷困境反思" {
