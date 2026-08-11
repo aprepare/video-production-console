@@ -685,7 +685,7 @@ function App() {
     [csrf],
   );
   const { accounts, projects, setProjects, loading, reload: reloadConsoleData } =
-    useConsoleData<Account, Project>(api);
+    useConsoleData<Account, Project>(api, authenticated === true);
   const { data: runtime = null } = useRuntimeQuery(api, authenticated === true);
 
   const load = useCallback(async () => {
