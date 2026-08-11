@@ -63,7 +63,16 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
             missing_assets: [],
             active_workflow: null,
           }
-        : { project: activeProject, assets: {}, missing_assets: [], active_workflow: null };
+        : {
+            project: activeProject,
+            assets: {},
+            missing_assets: [],
+            active_workflow: null,
+            // A topic card unlocks the "开始二创文案" primary action; without it the
+            // script stage falls back to "先粘贴同行原文" and this test's mobile
+            // action-bar assertion cannot match.
+            topic_context: { id: "topic-1", title: "浏览器验收选题" },
+          };
     } else if (path === `/api/tasks?project_id=${projectID}`) {
       body = review
         ? [{
