@@ -794,6 +794,11 @@ ON task_phase_runs(task_id,attempt,started_at,id);`,
     PRIMARY KEY (project_id, step),
     CHECK (step IN ('remix'))
 );`,
+	// App Server turn lookups filter on codex_turn_id without codex_thread_id, so
+	// codex_tasks_thread_turn_idx cannot serve them: SQLite needs the leading
+	// column constrained. Without this index every turn claim, interrupt and
+	// cancel scans codex_tasks end to end.
+	`CREATE INDEX codex_tasks_turn_idx ON codex_tasks(codex_turn_id);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup
