@@ -428,7 +428,7 @@ func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func() (string, error) {
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
 		return skillRoot, nil
 	})
 	projectID := "project-montage"
@@ -466,7 +466,7 @@ func TestCodexCommandFactoryHonorsCodexMontageRuntime(t *testing.T) {
 	t.Setenv(agentruntime.EnvMontageRuntime, "codex")
 	dataRoot := t.TempDir()
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func() (string, error) {
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
 		return t.TempDir(), nil
 	})
 	projectID := "project-montage"
@@ -485,6 +485,74 @@ func TestCodexCommandFactoryHonorsCodexMontageRuntime(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(cmd.Args, " "), "montage-script-run") {
 		t.Fatalf("expected Codex exec, got %#v", cmd.Args)
+	}
+}
+
+func TestCodexCommandFactoryUsesOpenAICompatWhenConfigured(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "openai_compat")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "https://example.invalid/v1")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "test-key")
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		if name != "finance-viral-remix" {
+			t.Fatalf("skill=%q", name)
+		}
+		return skillRoot, nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-1"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-test"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "--model") {
+		t.Fatalf("args=%#v", cmd.Args)
+	}
+}
+
+func TestCodexCommandFactoryFallsBackWhenOpenAIKeyMissing(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "openai_compat")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "https://example.invalid/v1")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "")
+	dataRoot := t.TempDir()
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
+		return t.TempDir(), nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-2"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-5.6-sol", ReasoningEffort: "medium"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTaskDirectory(root, taskID); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "openai-compat-run") {
+		t.Fatalf("expected Codex fallback, got %#v", cmd.Args)
 	}
 }
 

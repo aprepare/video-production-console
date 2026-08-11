@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,7 +48,8 @@ func TestBuildProducesApprovedPlan(t *testing.T) {
 			{"role": "subtitle_srt", "path": srt},
 		},
 		"non_secret_settings": map[string]string{
-			"media_root": mediaRoot, "media_index_path": indexPath, "draft_display_name": "房贷困境与时代反思",
+			"media_root": mediaRoot, "media_index_path": indexPath,
+			"draft_display_name": "天中观局_房贷困境反思_a4b031",
 		},
 	}
 	rawManifest, _ := json.Marshal(manifest)
@@ -92,5 +94,18 @@ func TestBuildProducesApprovedPlan(t *testing.T) {
 	title := graphics["title"].(map[string]any)["text"].(string)
 	if runeCount := len([]rune(title)); runeCount < 6 || runeCount > 8 {
 		t.Fatalf("title %q has %d runes", title, runeCount)
+	}
+	if strings.Contains(title, "天中观局") {
+		t.Fatalf("on-screen title must not include account name: %q", title)
+	}
+}
+
+func TestOnScreenTitleSourceStripsAccountAndTaskSuffix(t *testing.T) {
+	got := onScreenTitleSource("天中观局_房贷困境反思_a4b031")
+	if got != "房贷困境反思" {
+		t.Fatalf("got %q", got)
+	}
+	if got := onScreenTitleSource("房贷困境与时代反思"); got != "房贷困境与时代反思" {
+		t.Fatalf("plain label = %q", got)
 	}
 }

@@ -33,9 +33,33 @@ func TestSelectMontageDefaultsToScript(t *testing.T) {
 	}
 }
 
+func TestLLMRuntimeFromEnvDefaultsToCodex(t *testing.T) {
+	t.Setenv(EnvLLMRuntime, "")
+	if got := LLMRuntimeFromEnv(); got != RuntimeCodex {
+		t.Fatalf("got %q", got)
+	}
+	t.Setenv(EnvLLMRuntime, "openai_compat")
+	if got := LLMRuntimeFromEnv(); got != RuntimeOpenAI {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSelectRemixOpenAIWhenPreferred(t *testing.T) {
+	if got := Select(domain.ActionRemixStandard, RuntimeOpenAI); got != RuntimeOpenAI {
+		t.Fatalf("got %q", got)
+	}
+	if got := Select(domain.ActionTopicBrainstorm, RuntimeCodex); got != RuntimeCodex {
+		t.Fatalf("got %q", got)
+	}
+	if got := Select(domain.ActionMontageExecute, RuntimeOpenAI); got != RuntimeScript {
+		t.Fatalf("montage must ignore openai preferred, got %q", got)
+	}
+}
+
 func TestRuntimeSupports(t *testing.T) {
 	var script ScriptAdapter
 	var codex CodexAdapter
+	var openai OpenAIAdapter
 	if !script.Supports(domain.ActionMontageExecute) {
 		t.Fatal("script should support montage.execute")
 	}
@@ -44,5 +68,11 @@ func TestRuntimeSupports(t *testing.T) {
 	}
 	if !codex.Supports(domain.ActionRemixStandard) {
 		t.Fatal("codex should support remix")
+	}
+	if !openai.Supports(domain.ActionRemixStandard) || !openai.Supports(domain.ActionTopicBrainstorm) {
+		t.Fatal("openai should support remix/topic")
+	}
+	if openai.Supports(domain.ActionMontageExecute) {
+		t.Fatal("openai must not claim montage")
 	}
 }

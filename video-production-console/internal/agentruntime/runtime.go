@@ -11,11 +11,22 @@ type RuntimeName string
 const (
 	RuntimeCodex  RuntimeName = "codex"
 	RuntimeScript RuntimeName = "script"
+	RuntimeOpenAI RuntimeName = "openai_compat"
 )
 
 // EnvMontageRuntime selects the montage.execute backend.
 // Values: "script" (default) or "codex".
 const EnvMontageRuntime = "VIDEO_CONSOLE_MONTAGE_RUNTIME"
+
+// EnvLLMRuntime selects the remix/topic LLM backend.
+// Values: "codex" (default) or "openai_compat".
+const EnvLLMRuntime = "VIDEO_CONSOLE_LLM_RUNTIME"
+
+// OpenAI-compatible endpoint configuration (Week 2: env only).
+const (
+	EnvOpenAIBaseURL = "VIDEO_CONSOLE_OPENAI_BASE_URL"
+	EnvOpenAIAPIKey  = "VIDEO_CONSOLE_OPENAI_API_KEY"
+)
 
 type ModelRef struct {
 	Provider  string

@@ -139,7 +139,9 @@ func Build(opts Options) error {
 	}
 
 	workspace := filepath.Join(manifest.OutputDir, "workspace", manifest.JobID)
-	title, subtitle := titlePair(manifest.NonSecretSettings.DraftDisplayName)
+	// draft_display_name is for Jianying draft folder naming (includes account).
+	// On-screen title/subtitle must use only the content label, never the account.
+	title, subtitle := titlePair(onScreenTitleSource(manifest.NonSecretSettings.DraftDisplayName))
 	timeline := buildTimeline(duration, clips)
 	plan := map[string]any{
 		"plan_version":       "1.0",
@@ -414,8 +416,39 @@ func asFloat(v any) float64 {
 	}
 }
 
-func titlePair(displayName string) (string, string) {
-	base := strings.TrimSpace(displayName)
+func onScreenTitleSource(draftDisplayName string) string {
+	name := strings.TrimSpace(draftDisplayName)
+	if name == "" {
+		return "时代观察"
+	}
+	// Format from montage.BuildDraftDisplayName: account_label_taskSuffix
+	if i := strings.LastIndex(name, "_"); i > 0 && len(name)-i-1 == 6 && isHexSuffix(name[i+1:]) {
+		name = name[:i]
+	}
+	if i := strings.Index(name, "_"); i > 0 && i+1 < len(name) {
+		name = name[i+1:]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || name == "未命名项目" {
+		return "时代观察"
+	}
+	return name
+}
+
+func isHexSuffix(value string) bool {
+	if len(value) != 6 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func titlePair(contentLabel string) (string, string) {
+	base := strings.TrimSpace(contentLabel)
 	if base == "" {
 		base = "时代观察"
 	}

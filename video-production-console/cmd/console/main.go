@@ -16,6 +16,7 @@ import (
 
 	"video-production-console/internal/agentruntime"
 	"video-production-console/internal/agentruntime/montagescript"
+	"video-production-console/internal/agentruntime/openaicompat"
 	"video-production-console/internal/app"
 	"video-production-console/internal/assets"
 	consoleauth "video-production-console/internal/auth"
@@ -53,6 +54,13 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "montage-script-run" {
 		if err := runMontageScriptCommand(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "montage-script-run: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "openai-compat-run" {
+		if err := runOpenAICompatCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "openai-compat-run: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -139,18 +147,18 @@ func main() {
 	} else if interrupted > 0 {
 		log.Printf("marked %d unfinished Codex task(s) interrupted after restart", interrupted)
 	}
-	resolveMontageSkillRoot := func() (string, error) {
-		snapshot, err := skillsService.Latest(context.Background(), "jianying-montage-draft")
+	resolveSkillRoot := func(name string) (string, error) {
+		snapshot, err := skillsService.Latest(context.Background(), name)
 		if err != nil {
 			return "", err
 		}
 		root := strings.TrimSpace(snapshot.Path)
 		if root == "" {
-			return "", fmt.Errorf("jianying-montage-draft skill path is empty")
+			return "", fmt.Errorf("skill %q path is empty", name)
 		}
 		return root, nil
 	}
-	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveMontageSkillRoot)
+	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveSkillRoot)
 	legacyScheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -467,7 +475,50 @@ func runMontageScriptCommand(args []string) error {
 	})
 }
 
-func newCodexCommandFactories(settings config.Config, base codex.Config, resolveMontageSkillRoot func() (string, error)) (codex.CommandFactory, codex.ResumeCommandFactory) {
+func runOpenAICompatCommand(args []string) error {
+	var manifestPath, skillRoot, outputLast, model string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--manifest":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--manifest requires a path")
+			}
+			i++
+			manifestPath = args[i]
+		case "--skill-root":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--skill-root requires a path")
+			}
+			i++
+			skillRoot = args[i]
+		case "--output-last-message":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--output-last-message requires a path")
+			}
+			i++
+			outputLast = args[i]
+		case "--model":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--model requires a value")
+			}
+			i++
+			model = args[i]
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	baseURL, apiKey := agentruntime.OpenAIConfigFromEnv()
+	return openaicompat.Run(openaicompat.Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: outputLast,
+		Model:             model,
+		BaseURL:           baseURL,
+		APIKey:            apiKey,
+	})
+}
+
+func newCodexCommandFactories(settings config.Config, base codex.Config, resolveSkillRoot func(string) (string, error)) (codex.CommandFactory, codex.ResumeCommandFactory) {
 	makeCommand := func(task domain.CodexTask) (*exec.Cmd, string, error) {
 		root, workspace, err := managedTaskRoot(settings.DataRoot, task)
 		if err != nil {
@@ -483,12 +534,18 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 			preferred := agentruntime.MontageRuntimeFromEnv()
 			selected := agentruntime.Select(task.Action, preferred)
 			if selected == agentruntime.RuntimeScript {
-				cmd, scriptErr := buildMontageScriptCommand(cfg, manifestPath, resolveMontageSkillRoot)
+				cmd, scriptErr := buildMontageScriptCommand(cfg, manifestPath, resolveSkillRoot)
 				if scriptErr == nil {
 					return cmd, root, nil
 				}
 				log.Printf("montage script runtime unavailable, falling back to Codex: %v", scriptErr)
 			}
+		} else if agentruntime.Select(task.Action, agentruntime.LLMRuntimeFromEnv()) == agentruntime.RuntimeOpenAI {
+			cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
+			if openaiErr == nil {
+				return cmd, root, nil
+			}
+			log.Printf("openai_compat runtime unavailable, falling back to Codex: %v", openaiErr)
 		}
 		ctx := codex.TaskContext{
 			ProjectID:    projectIDForTask(task),
@@ -547,14 +604,14 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 	return makeCommand, makeResume
 }
 
-func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveMontageSkillRoot func() (string, error)) (*exec.Cmd, error) {
-	if resolveMontageSkillRoot == nil {
-		return nil, fmt.Errorf("montage skill root resolver is nil")
+func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
+	if resolveSkillRoot == nil {
+		return nil, fmt.Errorf("skill root resolver is nil")
 	}
 	if info, err := os.Lstat(manifestPath); err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("montage script runtime requires task_manifest.json")
 	}
-	skillRoot, err := resolveMontageSkillRoot()
+	skillRoot, err := resolveSkillRoot("jianying-montage-draft")
 	if err != nil {
 		return nil, err
 	}
@@ -576,6 +633,51 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveMon
 	)
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
+	return cmd, nil
+}
+
+func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
+	if resolveSkillRoot == nil {
+		return nil, fmt.Errorf("skill root resolver is nil")
+	}
+	baseURL, apiKey := agentruntime.OpenAIConfigFromEnv()
+	if baseURL == "" || apiKey == "" {
+		return nil, fmt.Errorf("VIDEO_CONSOLE_OPENAI_BASE_URL and VIDEO_CONSOLE_OPENAI_API_KEY are required")
+	}
+	if info, err := os.Lstat(manifestPath); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("openai_compat runtime requires task_manifest.json")
+	}
+	resolved, err := codex.ResolveAction(task.Action)
+	if err != nil {
+		return nil, err
+	}
+	skillRoot, err := resolveSkillRoot(resolved.Skill)
+	if err != nil {
+		return nil, err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve executable: %w", err)
+	}
+	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
+		return nil, fmt.Errorf("openai_compat command requires working directory and output-last-message")
+	}
+	model := strings.TrimSpace(task.ModelName)
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	cmd := exec.Command(exe, "openai-compat-run",
+		"--manifest", manifestPath,
+		"--skill-root", skillRoot,
+		"--output-last-message", cfg.OutputLastMessage,
+		"--model", model,
+	)
+	cmd.Dir = cfg.WorkingDirectory
+	cmd.Env = append(cfg.SafeEnvironment(),
+		"VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath,
+		agentruntime.EnvOpenAIBaseURL+"="+baseURL,
+		agentruntime.EnvOpenAIAPIKey+"="+apiKey,
+	)
 	return cmd, nil
 }
 
