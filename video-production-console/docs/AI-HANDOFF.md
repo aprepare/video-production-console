@@ -29,7 +29,7 @@
 | 片内标题 | 画面标题去账号前缀/任务后缀；草稿文件夹名仍可用 `draft_display_name` | `montageplan/plan.go`（随 openai 提交） |
 | 发布文案复制 | 混剪/审核展示「视频描述」「短标题」+ 复制；不展示推荐标题/话题/成片 | `ProjectWorkbench.tsx`；`26a8a66` |
 | 去掉成片资产 | 工作台不出现 `final_video`；进审核只看剪映草稿 ready | `ProjectAssets.tsx`、`workflow.ts`；`26a8a66` |
-| 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go` |
+| 二创改稿/打回/选模型 | 连续文案可编辑；`project_step_notes` + `remix.review`（`revision_notes`）；工作台 `TaskModelFields`；embed 已重建 | `store/project_step_notes.go`、`ProjectWorkbench.tsx`、`tasks.go`；`afe21c5` |
 
 默认运行时（勿擅自改默认）：
 
