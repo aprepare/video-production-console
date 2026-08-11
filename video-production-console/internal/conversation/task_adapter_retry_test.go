@@ -170,6 +170,7 @@ func testTaskAdapterRetry(t *testing.T, transport string) {
 	if _, err := timings.FinishPhase(ctx, store.FinishPhase{ID: previousValidation.ID, State: domain.PhaseFailed, At: now}); err != nil {
 		t.Fatal(err)
 	}
+	writeTaskManifestFixture(t, dataRoot, taskID, task.SkillName, domain.ActionMontageExecute)
 	output := filepath.Join(dataRoot, "projects", taskID, "tasks", taskID, "output")
 	workspace := filepath.Join(output, "workspace", taskID)
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -366,6 +367,32 @@ func TestTaskAdapterCompletionGateFailureDoesNotPersistFormalResult(t *testing.T
 	}
 }
 
+// writeTaskManifestFixture publishes the manifest the completion path reads from
+// {dataRoot}/projects/{taskID}/tasks/{taskID}/task_manifest.json. Identity must
+// match the task or Runner.taskManifest rejects it.
+func writeTaskManifestFixture(t *testing.T, dataRoot, taskID, skill string, action domain.TaskAction) {
+	t.Helper()
+	taskDir := filepath.Join(dataRoot, "projects", taskID, "tasks", taskID)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(codex.TaskManifest{
+		SchemaVersion: codex.ProtocolSchemaVersion,
+		TaskID:        taskID,
+		JobID:         taskID,
+		Skill:         skill,
+		Action:        action,
+		Inputs:        []codex.ManifestInput{},
+		OutputDir:     filepath.Join(taskDir, "output"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "task_manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func appServerCompletionFixture(t *testing.T, action domain.TaskAction, gate taskcompletion.Gate, rpc ThreadRPC) (context.Context, *sql.DB, *store.TaskRepository, *TaskAdapter, domain.CodexTask, string, string) {
 	t.Helper()
 	ctx, db, _, session := brokerFixtureWithDB(t)
@@ -390,6 +417,7 @@ func appServerCompletionFixture(t *testing.T, action domain.TaskAction, gate tas
 	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeTaskManifestFixture(t, dataRoot, task.ID, task.SkillName, action)
 	adapter := NewTaskAdapter(repo, nil, rpc, TaskCompletionConfig{DataRoot: dataRoot, Gate: gate})
 	return ctx, db, repo, adapter, task, session.ID, turnID
 }
