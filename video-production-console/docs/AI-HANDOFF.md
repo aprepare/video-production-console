@@ -20,6 +20,7 @@
 - `internal/store/`：SQLite 迁移与 Repository。
 - `internal/domain/`：共享领域类型。
 - `internal/codex/`：Runner、Dispatcher、Scheduler、manifest、结果校验。
+- `internal/agentruntime/`：可插拔任务后端（script / openai_compat / pi / codex 路由与适配）。
 - `internal/codexapp/`、`internal/conversation/`：App Server 与控制台对话。
 - `internal/realtime/`：任务事件 Hub 与断线重放。
 - `internal/workflow/`、`internal/montage/`：二创工作流与剪映登记。
@@ -31,7 +32,28 @@
 
 权威数据库：`video-console-data/console.db`。根目录遗留 `video-console.db` 不是权威库。
 
-## 3. 启动、开发与验证
+## 3. AgentRuntime 矩阵与环境变量
+
+控制台仍拥有资产、manifest、结果校验与剪映登记；Codex App Server / 设置页 UI **不**切换这些后端。选择仅通过环境变量（进程启动时生效），均为 **opt-in**，默认行为不变。
+
+| 任务 | 默认 runtime | Opt-in | 回退 |
+|---|---|---|---|
+| `montage.execute` / `montage.plan` | `script`（本机 `montage-script-run` + skill Python） | `VIDEO_CONSOLE_MONTAGE_RUNTIME=codex` | script 构建失败 → Codex |
+| `remix.*` / `topic.*` | `codex` | `VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 或 `pi` | 构建失败 → Codex |
+| 其他任务 | `codex` | — | — |
+
+环境变量：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VIDEO_CONSOLE_MONTAGE_RUNTIME` | `script` | `script` \| `codex` |
+| `VIDEO_CONSOLE_LLM_RUNTIME` | `codex` | `codex` \| `openai_compat` \| `pi` |
+| `VIDEO_CONSOLE_OPENAI_BASE_URL` | （空） | `openai_compat` 必填 |
+| `VIDEO_CONSOLE_OPENAI_API_KEY` | （空） | `openai_compat` 必填 |
+
+子命令（由 `os.Executable()` 自调用，不改产品 HTTP）：`montage-script-run`、`openai-compat-run`、`pi-run`。`pi` 要求本机 `LookPath("pi")` 可用；不可用时日志回退 Codex。密钥只走环境变量，勿写入仓库或设置页。
+
+## 4. 启动、开发与验证
 
 PowerShell；不要用 bash 的 `&&`。
 
@@ -50,14 +72,15 @@ go run .\cmd\console
 
 发布同步嵌入前端时才运行 `npm --prefix web run build:embed`，随后 `.\scripts\check-embedded-dist.ps1 -Strict`。正式发布优先 `.\scripts\release.ps1 -Version x.y.z`。
 
-## 4. 运行前置
+## 5. 运行前置
 
 - Codex CLI 可执行；爆款库 `:2022` 只读代理（可选，不阻塞手动粘贴原文）。
 - Obsidian Vault / 选题卡目录、Skills 根、剪映 machine profile 按设置配置。
 - 监听：新数据根默认 `127.0.0.1:2030`；已有安装用持久化 `listen_addr`；局域网须显式配置并在 `restart_required` 后重启。
 - 无管理员时必须提供 `VIDEO_CONSOLE_INITIAL_PASSWORD`。
+- 可选 AgentRuntime：见第 3 节；默认不要求 OpenAI / Pi。
 
-## 5. 关键数据流
+## 6. 关键数据流
 
 1. 登录会话 + CSRF；API 鉴权与限速。
 2. 项目资产版本化；`source_script` 替换会使依赖下游变 stale。
@@ -65,37 +88,38 @@ go run .\cmd\console
 4. 完成时校验输入仍为 current，否则 `input_superseded`；`continuous_script` 写入 source 依赖。
 5. 事件经 WebSocket 推送；混剪明文 → 登记 → 验证 → ready。
 
-## 6. 前端工作台要点
+## 7. 前端工作台要点
 
 - 阶段：`script → assets → mixing → review → published`；成片 `final_video` 可选。
 - 同行原文入口仅在 `script` 阶段；主动作区分选题卡 `/remix` 与正式 `remix.standard`。
 - 主题键 `video-production-console-theme`；项目列折叠阈值 `4`。
 
-## 7. 测试与验收
+## 8. 测试与验收
 
 - Go：`go test ./...`、`go vet ./...`
 - 前端：`npm --prefix web run typecheck|lint|test|test:e2e|build:verify`
 - 人工：[acceptance-checklist.md](operations/acceptance-checklist.md)、[montage-registration.md](operations/montage-registration.md)
 - 自动测试使用 fake Codex / httptest，不等于外部桌面软件已验收。
 
-## 8. 接手顺序与排障
+## 9. 接手顺序与排障
 
 1. `git status --short`；读本说明与 USER-GUIDE。
 2. 确认依赖与数据根，勿清 `video-console-data/`。
 3. 先跑低副作用测试，勿先 `build:embed`。
-4. 阅读 `cmd/console/main.go` → `internal/app` → httpapi/store → `web/src/App.tsx`。
+4. 阅读 `cmd/console/main.go` → `internal/app` → httpapi/store → `web/src/App.tsx`；任务后端见 `internal/agentruntime/`。
 5. 修改限于任务范围；提交/推送须明确指令。
 
-排障摘要：登录看库路径与 CSRF；任务卡住看事件/并发/Codex；混剪优先重试登记；前端空白区分 Vite 与嵌入 dist；项目页刷新 404 检查 SPA 回退是否已构建进当前二进制。
+排障摘要：登录看库路径与 CSRF；任务卡住看事件/并发/Codex 或当前 LLM runtime；混剪优先重试登记；前端空白区分 Vite 与嵌入 dist；项目页刷新 404 检查 SPA 回退是否已构建进当前二进制。
 
-## 9. 工作区保护
+## 10. 工作区保护
 
 - 禁止擅自 `git reset/checkout/restore/stash/clean` 或删除未跟踪的数据库与嵌入 dist。
 - `.gitignore` 已忽略 `.tmp/`、`dist/`、`video-console-data/`、日志、exe、Playwright 缓存等。
 - 清理运行垃圾时保留：`video-console-data/`、`internal/webui/dist/`、当前正在监听的服务进程所用 exe。
 
-## 10. 已知限制
+## 11. 已知限制
 
 - 不自动打开微信视频号或剪映。
 - 外部依赖离线会影响功能。
 - 源码与嵌入 dist 可能暂时不一致；开发页与生产二进制不是同一路径。
+- AgentRuntime 切换仅环境变量；设置页 UI 不做 runtime 选择。

@@ -26,6 +26,8 @@ go run .\cmd\console
 
 浏览器打开 `http://127.0.0.1:2030`，首次登录后立即改密。
 
+可选 AgentRuntime（默认不变：混剪 `script`，remix/topic `codex`）：见 [AI 接手说明 §3](docs/AI-HANDOFF.md)。例如 `VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 并配置 `VIDEO_CONSOLE_OPENAI_*`。设置页不做 runtime UI。
+
 ## 日常验证（不覆盖嵌入前端）
 
 ```powershell
