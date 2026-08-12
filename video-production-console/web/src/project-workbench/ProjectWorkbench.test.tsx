@@ -347,6 +347,9 @@ test("accepts a non-empty source script and starts source remix once", () => {
   detail.project.stage = "script";
   detail.assets = {};
   const props = renderWorkbench(detail);
+  expect(screen.queryByLabelText("同行原文")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "粘贴同行原文" }));
+  expect(screen.getByRole("dialog", { name: "粘贴同行原文" })).toBeTruthy();
   const source = screen.getByLabelText<HTMLTextAreaElement>("同行原文");
   const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存原文并开始二创" });
 
@@ -357,6 +360,43 @@ test("accepts a non-empty source script and starts source remix once", () => {
 
   expect(props.onSaveSourceScript).toHaveBeenCalledOnce();
   expect(props.onSaveSourceScript).toHaveBeenCalledWith("同行原文正文");
+});
+
+test("keeps source entry compact and closes the dialog without saving", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  const props = renderWorkbench(detail);
+
+  expect(screen.getByRole("button", { name: "粘贴同行原文" })).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "粘贴同行原文" }));
+  fireEvent.change(screen.getByLabelText("同行原文"), { target: { value: "不会保存" } });
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(props.onSaveSourceScript).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "粘贴同行原文" }));
+});
+
+test("traps source dialog focus and closes it with Escape", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  renderWorkbench(detail);
+
+  const open = screen.getByRole("button", { name: "粘贴同行原文" });
+  fireEvent.click(open);
+  const dialog = screen.getByRole("dialog", { name: "粘贴同行原文" });
+  const close = within(dialog).getByRole("button", { name: "关闭原文输入" });
+  const cancel = within(dialog).getByRole("button", { name: "取消" });
+
+  close.focus();
+  fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(open);
 });
 
 test("backfills a ready source script without leaking it across projects", async () => {
@@ -371,10 +411,13 @@ test("backfills a ready source script without leaking it across projects", async
   props.loadSourceScriptContent = vi.fn().mockResolvedValue("已保存的同行原文");
   const rendered = render(<ProjectWorkbench {...props} />);
 
+  expect(await screen.findByRole("button", { name: "查看或替换同行原文" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "查看或替换同行原文" }));
   expect(await screen.findByDisplayValue("已保存的同行原文")).toBeTruthy();
   rendered.rerender(<ProjectWorkbench {...workbenchProps(second)} loadSourceScriptContent={props.loadSourceScriptContent} />);
 
-  expect(screen.getByLabelText<HTMLTextAreaElement>("同行原文").value).toBe("");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("button", { name: "粘贴同行原文" })).toBeTruthy();
 });
 
 test("disables source entry while source remix is pending", () => {
@@ -615,8 +658,8 @@ test("keeps three workbench columns through 760 pixels and switches to one below
   const compact = css.slice(compactStart, mobileStart);
   const mobile = css.slice(mobileStart, reducedMotionStart);
 
-  expect(css).toContain("height: 100vh");
-  expect(css).toContain("overflow: hidden");
+  expect(css).toContain("min-height: 100vh");
+  expect(css).toContain("overflow-y: auto");
   expect(compact).toContain("grid-template-columns:");
   expect(compact).not.toContain("grid-column: 1 / -1");
   expect(mobile).toContain("display: block");

@@ -53,7 +53,7 @@
 
 看板用 **6 段**：`topic → script → assets → mixing → review → published`（`web/src/projects/stages.ts:5-12`，中文标签 `:18-23`）。
 项目详情页的「生产轨」只画后 **5 段**：`script → assets → mixing → review → published`（`web/src/project-workbench/workflow.ts:3-9`）。
-文档里出现的「五阶段工作台」指的是后者；看板多一个 `topic` 前置段。阶段流转规则在 `internal/domain/stages.go:36`（`CanMove`）。
+文档里出现的「五阶段工作台」指的是后者；看板多一个 `topic` 前置段。阶段流转规则在 `internal/domain/stages.go:36`（`CanMove`）。工作台文案阶段把同行原文收纳为紧凑按钮，点击后才弹出原文与模型强度输入；根容器允许纵向滚动，避免制作状态和项目资产被固定视口裁切。
 
 ### 3.2 端到端走一遍
 

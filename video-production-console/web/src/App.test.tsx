@@ -551,6 +551,7 @@ test("saves a source script before starting remix.standard with its version id",
     }
   }));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "粘贴同行原文" }));
   fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "同行原文正文" } });
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
 
@@ -586,6 +587,7 @@ test("locks source save and remix against double clicks", async () => {
     }
   }));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "粘贴同行原文" }));
   fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "正文" } });
   const save = screen.getByRole("button", { name: "保存原文并开始二创" });
   fireEvent.click(save);
@@ -611,6 +613,7 @@ test("does not create a remix task when source script upload fails", async () =>
     }
   }));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "粘贴同行原文" }));
   fireEvent.change(await screen.findByLabelText("同行原文"), { target: { value: "正文" } });
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
 
@@ -646,11 +649,13 @@ test("retries only remix after a saved matching source script task failure", asy
     }
   }));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "粘贴同行原文" }));
   const source = await screen.findByLabelText("同行原文");
   fireEvent.change(source, { target: { value: "正文" } });
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
   await screen.findByText("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
   await waitFor(() => expect(detailReads).toBeGreaterThan(1));
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
 
   await waitFor(() => expect(taskAttempts).toBe(2));

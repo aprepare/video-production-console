@@ -4,12 +4,14 @@ import {
   CircleCheck,
   Clapperboard,
   Info,
+  FileText,
+  X,
   Send,
   Trash2,
   UploadCloud,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TaskModelFields } from "../TaskModelFields";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
@@ -140,6 +142,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const showPublishingCopy = shouldShowPublishingCopy(stage, Boolean(publishingPackage));
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const [sourceScript, setSourceScript] = useState("");
+  const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
+  const sourceOpenButtonRef = useRef<HTMLButtonElement>(null);
+  const sourceDialogRef = useRef<HTMLElement>(null);
   const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
@@ -154,6 +159,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
   useEffect(() => {
     setSourceScript("");
+    setSourceDialogOpen(false);
     setCopiedKey("");
   }, [detail.project.id]);
 
@@ -162,6 +168,37 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     const timer = window.setTimeout(() => setCopiedKey(""), 1600);
     return () => window.clearTimeout(timer);
   }, [copiedKey]);
+
+  useEffect(() => {
+    if (!sourceDialogOpen) return;
+    const openButton = sourceOpenButtonRef.current;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSourceDialogOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(sourceDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      openButton?.focus();
+    };
+  }, [sourceDialogOpen]);
 
   async function copyPublishingText(key: string, value: string) {
     const text = value.trim();
@@ -222,7 +259,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   };
 
   const saveSourceScriptAndRemix = () => {
-    if (sourceScript.trim()) props.onSaveSourceScript(sourceScript.trim());
+    if (sourceScript.trim()) {
+      props.onSaveSourceScript(sourceScript.trim());
+      setSourceDialogOpen(false);
+    }
   };
 
   const primaryActionButton = (className: string, mobile = false) => action ? (
@@ -288,32 +328,83 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
       {stage === "script" && (
         <section className="source-script-entry" aria-label="同行原文输入">
-          <h2>先粘贴同行原文，再开始二创</h2>
-          <textarea
-            aria-label="同行原文"
-            value={sourceScript}
-            onChange={(event) => setSourceScript(event.target.value)}
-            placeholder="把同行文章全文粘贴到这里…"
-          />
+          <div className="source-script-entry__copy">
+            <FileText size={18} aria-hidden="true" />
+            <div>
+              <h2>{sourceReady ? "同行原文已保存" : "需要参考同行原文？"}</h2>
+              <p>{sourceReady ? `已载入 ${sourceScript.length || "…"} 字，可随时查看或替换。` : "按需打开输入框，不再占用制作状态的首屏空间。"}</p>
+            </div>
+          </div>
           <button
+            ref={sourceOpenButtonRef}
             type="button"
-            onClick={saveSourceScriptAndRemix}
-            disabled={!sourceScript.trim() || sourceRemixPending}
-            aria-busy={sourceRemixPending}
+            className="source-script-entry__open"
+            onClick={() => setSourceDialogOpen(true)}
+            disabled={sourceRemixPending}
           >
-            {sourceRemixPending ? "正在保存/启动…" : "保存原文并开始二创"}
+            {sourceRemixPending ? "正在保存/启动…" : sourceReady ? "查看或替换同行原文" : "粘贴同行原文"}
           </button>
-          {showTaskModel ? (
-            <TaskModelFields
-              value={props.taskModel}
-              onChange={props.onTaskModelChange}
-              defaults={props.taskModelDefaults}
-              labelPrefix="工作台"
-            />
-          ) : null}
-          <small>普通对话不会写入项目或解锁下一步。</small>
         </section>
       )}
+
+      {sourceDialogOpen ? (
+        <div
+          className="source-script-dialog-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSourceDialogOpen(false);
+          }}
+        >
+          <section
+            ref={sourceDialogRef}
+            className="source-script-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-script-dialog-title"
+          >
+            <header>
+              <div>
+                <span className="panel-kicker">SOURCE SCRIPT</span>
+                <h2 id="source-script-dialog-title">{sourceReady ? "查看或替换同行原文" : "粘贴同行原文"}</h2>
+                <p>原文只在保存后进入当前项目，并按所选模型强度启动二创。</p>
+              </div>
+              <button type="button" className="source-script-dialog__close" aria-label="关闭原文输入" onClick={() => setSourceDialogOpen(false)}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </header>
+            <textarea
+              autoFocus
+              aria-label="同行原文"
+              value={sourceScript}
+              onChange={(event) => setSourceScript(event.target.value)}
+              placeholder="把同行文章全文粘贴到这里…"
+            />
+            {showTaskModel ? (
+              <TaskModelFields
+                value={props.taskModel}
+                onChange={props.onTaskModelChange}
+                defaults={props.taskModelDefaults}
+                labelPrefix="工作台"
+              />
+            ) : null}
+            <footer>
+              <small>普通对话不会写入项目或解锁下一步。</small>
+              <div>
+                <button type="button" className="source-script-dialog__cancel" onClick={() => setSourceDialogOpen(false)}>取消</button>
+                <button
+                  type="button"
+                  className="source-script-dialog__save"
+                  onClick={saveSourceScriptAndRemix}
+                  disabled={!sourceScript.trim() || sourceRemixPending}
+                  aria-busy={sourceRemixPending}
+                >
+                  {sourceRemixPending ? "正在保存/启动…" : "保存原文并开始二创"}
+                </button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       <div className={`workbench-grid${showPublishingCopy ? " workbench-grid--review" : ""}`}>
         <section className="primary-action-panel" aria-label="下一主动作">
