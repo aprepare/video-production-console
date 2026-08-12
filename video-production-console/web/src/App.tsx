@@ -8,194 +8,37 @@ import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
 import { TaskModelFields } from "./TaskModelFields";
-import type { TaskModelOverride as SharedTaskModelOverride } from "./taskModel";
+import { reasoningEfforts } from "./taskModel";
+import type { ReasoningEffort, TaskModelOverride } from "./taskModel";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { ProjectCreateForm } from "./projects/ProjectCreateForm";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import type { SemanticEvent, TaskEvent } from "./tasks/event-types";
 import type {
-  ProjectAsset,
-  ProjectDetail as WorkbenchProjectDetail,
-  ProjectTask as WorkbenchProjectTask,
   MontageResult,
-  ProjectStage,
-  ProjectSummary,
+  ProjectDetail as WorkbenchProjectDetail,
 } from "./project-workbench/types";
-
-type Account = { id: string; name: string; status?: string };
-type Project = Omit<ProjectSummary, "stage"> & {
-  stage: ProjectStage | "topic" | "ready";
-  missing_assets?: string[];
-};
-type Asset = ProjectAsset;
-type TaskPhaseRun = {
-  id?: string;
-  task_id?: string;
-  phase_key?: string;
-  display_name?: string;
-  attempt?: number;
-  source?: string;
-  state?: string;
-  started_at?: string;
-  running_at?: string;
-  finished_at?: string;
-  duration_ms?: number;
-  ID?: string;
-  TaskID?: string;
-  PhaseKey?: string;
-  DisplayName?: string;
-  Attempt?: number;
-  Source?: string;
-  State?: string;
-  StartedAt?: string;
-  RunningAt?: string;
-  FinishedAt?: string;
-  DurationMS?: number;
-};
-type TaskTimingSummary = {
-  task_id?: string;
-  total_ms?: number;
-  preparation_ms?: number;
-  queue_ms?: number;
-  execution_ms?: number;
-  queue_estimated?: boolean;
-  legacy_without_phases?: boolean;
-  phases?: TaskPhaseRun[];
-  TaskID?: string;
-  TotalMS?: number;
-  PreparationMS?: number;
-  QueueMS?: number;
-  ExecutionMS?: number;
-  QueueEstimated?: boolean;
-  LegacyWithoutPhases?: boolean;
-  Phases?: TaskPhaseRun[];
-};
-type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-type TaskModelOverride = { model: string; reasoningEffort: ReasoningEffort | "" };
-type Task = WorkbenchProjectTask & {
-  model?: string;
-  reasoning_effort?: ReasoningEffort;
-  events?: TaskEvent[];
-  timing_summary?: TaskTimingSummary;
-  timing_runs?: TaskPhaseRun[];
-  publishing_package?: PublishingPackage;
-};
-type PublishingPackage = {
-  titles?: string[];
-  top_titles?: Array<{ rank: number; title: string; reason: string }>;
-  short_titles?: string[];
-  descriptions?: string[];
-  description?: string;
-  topics?: string[];
-  cta?: string;
-};
-type ProjectDetail = Omit<
-  WorkbenchProjectDetail,
-  "project" | "topic_context"
-> & {
-  project: Project;
-  topic_context?: IdeaCandidate | null;
-};
-type PublicSettings = {
-  listen_addr: string;
-  data_root: string;
-  max_codex_concurrency: number;
-  baokuan_base_url: string;
-  baokuan_mcp_executable: string;
-  obsidian_vault: string;
-  topic_cards_dir: string;
-  grok_base_url: string;
-  grok_model: string;
-  codex_binary_path: string;
-  media_index_path: string;
-  media_root: string;
-  jianying_root: string;
-  machine_profile_path: string;
-  app_server_enabled: boolean;
-  codex_workspace_roots: string[];
-  codex_history_limit: number;
-  codex_default_model: string;
-  codex_default_reasoning_effort: ReasoningEffort;
-};
-type Settings = {
-  public: PublicSettings;
-  configured_public?: PublicSettings;
-  active_public?: PublicSettings;
-  restart_required?: boolean;
-  settings_version: number;
-  secrets: Record<string, { configured: boolean; masked: string }>;
-};
-type IdeaMessage = {
-  id: string;
-  role: string;
-  content: string;
-  task_id?: string;
-  createdAt?: string;
-  created_at?: string;
-};
-type IdeaCandidate = {
-  id: string;
-  title: string;
-  summary?: string;
-  mother_theme?: string;
-  family_conflict?: string;
-  anomaly_framing?: string;
-  narrative_entry?: string;
-  source_refs?: string[];
-  fragment_refs?: string[];
-  score?: number;
-  selected?: boolean;
-};
-type IdeaSession = {
-  id: string;
-  accountID?: string;
-  account_id?: string;
-  title: string;
-  status: string;
-  messages?: IdeaMessage[];
-  candidates?: IdeaCandidate[];
-};
-type IdeaSessionDetail = {
-  session: IdeaSession;
-  messages?: IdeaMessage[];
-  candidates?: IdeaCandidate[];
-};
-type ChatMessage = {
-  id: string;
-  role: string;
-  kind: string;
-  content: string;
-  delivery_status: string;
-  turn_id?: string;
-  created_at: string;
-};
-type ChatSession = {
-  id: string;
-  title: string;
-  kind: string;
-  source?: "console" | "desktop";
-  status: string;
-  model?: string;
-  reasoning_effort?: string;
-  skill_names?: string[];
-  updated_at: string;
-};
-type ChatDetail = { session: ChatSession; messages: ChatMessage[] };
-type HistoryThread = {
-  id: string;
-  title: string;
-  preview: string;
-  source: "desktop" | "cli" | "task";
-  model?: string;
-  reasoning_effort?: string;
-  active: boolean;
-  recency: string;
-};
-type DirectoryManifest = {
-  asset_id: string;
-  registered_path: string;
-  entries: Array<{ path: string; kind: string; size: number }>;
-};
+import type {
+  Account,
+  Asset,
+  ChatDetail,
+  ChatMessage,
+  ChatSession,
+  DirectoryManifest,
+  HistoryThread,
+  IdeaCandidate,
+  IdeaSession,
+  IdeaSessionDetail,
+  Project,
+  ProjectDetail,
+  PublicSettings,
+  PublicStringSettingKey,
+  Settings,
+  Task,
+  TaskPhaseRun,
+  TaskTimingSummary,
+  Theme,
+} from "./types";
 
 const historySourceLabels: Record<HistoryThread["source"], string> = {
   desktop: "桌面版",
@@ -286,8 +129,6 @@ function montageHeadline(montage: MontageResult, phase: string) {
   }
 }
 
-type Theme = "light" | "dark";
-
 const THEME_STORAGE_KEY = "video-production-console-theme";
 const PROJECT_COLLAPSE_LIMIT = 4;
 
@@ -363,17 +204,6 @@ const textAssets = new Set([
   "subtitle",
   "subtitle_srt",
 ]);
-const reasoningEfforts: ReasoningEffort[] = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-];
-type PublicStringSettingKey = {
-  [Key in keyof PublicSettings]: PublicSettings[Key] extends string ? Key : never;
-}[keyof PublicSettings];
 const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["baokuan_base_url", "爆款库地址", "http://127.0.0.1:2022"],
   ["obsidian_vault", "Obsidian Vault", "本地 Vault 目录"],
@@ -2291,7 +2121,7 @@ function App() {
           onSaveSourceScript={(content) => void saveSourceScriptAndStartRemix(content)}
           loadSourceScriptContent={loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
-          taskModel={projectTaskModel as SharedTaskModelOverride}
+          taskModel={projectTaskModel}
           onTaskModelChange={(value) => setProjectTaskModel(value)}
           taskModelDefaults={settings?.public}
           onReplaceBackground={(file) => void replaceProjectBackground(file)}
