@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { apiRequest } from "./api/client";
 import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
@@ -9,6 +9,7 @@ import { LoginPage } from "./auth/LoginPage";
 import { ChatWorkbenchDialog } from "./chat/ChatWorkbenchDialog";
 import { useChatWorkbench } from "./chat/useChatWorkbench";
 import { SettingsPanel } from "./settings/SettingsPanel";
+import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
 import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
 import { useIdeaPlanner } from "./idea/useIdeaPlanner";
@@ -16,9 +17,9 @@ import { queryKeys } from "./query/keys";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
-import type { TaskModelOverride } from "./taskModel";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
+import { useProjectActions } from "./projects/useProjectActions";
 import { ConsoleHome } from "./shell/ConsoleHome";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
@@ -38,7 +39,6 @@ import type {
   DirectoryManifest,
   Project,
   ProjectDetail,
-  PublicSettings,
   Settings,
   Task,
   Theme,
@@ -108,20 +108,7 @@ function App() {
   const [previewDraft, setPreviewDraft] = useState("");
   const [reviseOpen, setReviseOpen] = useState(false);
   const [reviseNotes, setReviseNotes] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsFeedback, setSettingsFeedback] = useState("");
   const [accountFormOpen, setAccountFormOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<PublicSettings | null>(
-    null,
-  );
-  const [secretDraft, setSecretDraft] = useState({
-    grok_api_key: "",
-    pexels_api_key: "",
-  });
-  const [projectTaskModel, setProjectTaskModel] = useState<TaskModelOverride>({
-    model: "",
-    reasoningEffort: "",
-  });
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
@@ -129,10 +116,8 @@ function App() {
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
   const [urlRevision, setURLRevision] = useState(0);
-  const [pendingProjectActions, setPendingProjectActions] = useState<string[]>([]);
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
-  const pendingProjectActionsRef = useRef(new Set<string>());
   const detailRefreshTimerRef = useRef<number | null>(null);
   const taskCacheRef = useRef(new Map<string, Task>());
   const taskOpenIDRef = useRef("");
@@ -141,18 +126,6 @@ function App() {
   const activeDialogRef = useRef<HTMLElement | null>(null);
   const nestedDialogFocusRef = useRef<HTMLElement[]>([]);
   const taskRestoreAbortRef = useRef<AbortController | null>(null);
-  const lockProjectAction = useCallback((projectID: string, action: string) => {
-    const key = `${projectID}:${action}`;
-    if ([...pendingProjectActionsRef.current].some((pending) => pending.startsWith(`${projectID}:`)))
-      return "";
-    pendingProjectActionsRef.current.add(key);
-    setPendingProjectActions([...pendingProjectActionsRef.current]);
-    return key;
-  }, []);
-  const unlockProjectAction = useCallback((key: string) => {
-    pendingProjectActionsRef.current.delete(key);
-    setPendingProjectActions([...pendingProjectActionsRef.current]);
-  }, []);
   const clearProjectSelection = useCallback(() => {
     selectedIDRef.current = "";
     if (detailRefreshTimerRef.current !== null)
@@ -223,6 +196,8 @@ function App() {
     setMessage,
   });
   const { open: chatOpen, setOpen: setChatOpen } = chat;
+  const settingsPanel = useSettingsDialog({ api, readSettings, setMessage });
+  const { open: settingsOpen, setOpen: setSettingsOpen } = settingsPanel;
 
   useEffect(() => {
     if (consoleDataFailed) setMessage("控制台服务尚未连接");
@@ -355,6 +330,27 @@ function App() {
     (project: Project) => refreshProject(project.id),
     [refreshProject],
   );
+  const projectActions = useProjectActions({
+    api,
+    selected,
+    setSelected,
+    detail,
+    refreshProject,
+    setProjects,
+    setMessage,
+    selectedIDRef,
+    newProjectTitle: newProject,
+    selectedAccountID: account,
+    onProjectCreated: () => setNewProject(""),
+    onContinuousScriptSaved: (content) => {
+      setPreview((current) =>
+        current?.asset.type === "continuous_script" ? { ...current, text: content } : current,
+      );
+      setPreviewDraft(content);
+    },
+    onRemixReviewStarted: () => setReviseOpen(false),
+    onProjectDeleted: () => closeProject(),
+  });
 
   // Task websockets can fire in bursts; collapse them into one refresh.
   const scheduleDetailRefresh = useCallback(
@@ -368,70 +364,6 @@ function App() {
     },
     [loadDetail],
   );
-
-  // Writes go through mutations so react-query owns the request and the cache
-  // refresh that follows it; the per-project action lock stays because it encodes
-  // a product rule (one action per project) rather than a fetch concern.
-  // A rejected request and a rejecting server mean different things to the user,
-  // so these resolve to `ok` for an HTTP failure and only reject when the request
-  // itself could not be made. Callers keep their two distinct messages.
-  const createProjectMutation = useMutation({
-    mutationFn: async (input: { accountID: string; title: string }) => {
-      const response = await api("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ account_id: input.accountID, title: input.title }),
-      });
-      return response.ok;
-    },
-    onSuccess: async (ok) => {
-      if (!ok) return;
-      setNewProject("");
-      await client.invalidateQueries({ queryKey: queryKeys.projects() });
-    },
-  });
-
-  const startProjectTaskMutation = useMutation({
-    mutationFn: async (input: { projectID: string; body: Record<string, unknown> }) => {
-      const response = await api(`/api/projects/${input.projectID}/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input.body),
-      });
-      return response.ok;
-    },
-    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
-  });
-
-  const startRemixWorkflowMutation = useMutation({
-    mutationFn: async (input: { projectID: string; body: Record<string, unknown> }) => {
-      const response = await api(`/api/projects/${input.projectID}/remix`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input.body),
-      });
-      return response.ok;
-    },
-    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
-  });
-
-  // Saving a revision bumps the asset version and marks downstream assets stale,
-  // so the refresh has to cover the project detail as well as the task list.
-  const saveContinuousScriptMutation = useMutation({
-    mutationFn: async (input: { projectID: string; content: string }) => {
-      const body = new FormData();
-      body.set(
-        "file",
-        new File([input.content], "continuous-script.txt", { type: "text/plain" }),
-      );
-      const response = await api(`/api/projects/${input.projectID}/assets/continuous_script`, {
-        method: "POST",
-        body,
-      });
-      return response.ok;
-    },
-    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
-  });
 
   useEffect(() => {
     if (detailFailed) setMessage("项目刷新暂时中断，将在下次活动时重试。");
@@ -755,7 +687,7 @@ function App() {
         }
       });
     };
-  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setChatOpen, setIdeaOpen, settingsOpen, taskOpen]);
+  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setChatOpen, setIdeaOpen, setSettingsOpen, settingsOpen, taskOpen]);
   useEffect(() => () => {
     taskRestoreAbortRef.current?.abort();
     if (detailRefreshTimerRef.current !== null)
@@ -851,376 +783,6 @@ function App() {
     setMessage("账号已创建。");
     await client.invalidateQueries({ queryKey: queryKeys.accounts() });
   };
-  const createProject = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!newProject.trim() || !account) return;
-    const created = await createProjectMutation.mutateAsync({
-      accountID: account,
-      title: newProject.trim(),
-    });
-    if (!created) setMessage("项目创建失败。");
-  };
-  const loadSourceScriptContent = async (assetID: string): Promise<string> => {
-    const response = await api(`/api/assets/${assetID}/content`);
-    if (!response.ok) throw new Error("同行原文读取失败");
-    return response.text();
-  };
-  const saveSourceScriptAndStartRemix = async (content: string) => {
-    if (!selected) return;
-    const project = selected;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "source-remix");
-    if (!lockKey) return;
-    try {
-      let sourceVersionID = "";
-      const savedSource = detail?.project.id === projectID ? detail.assets.source_script : undefined;
-      if (savedSource?.state === "ready") {
-        try {
-          const existingContent = await loadSourceScriptContent(savedSource.id);
-          if (selectedIDRef.current !== projectID) return;
-          if (existingContent === content) sourceVersionID = savedSource.id;
-        } catch {
-          if (selectedIDRef.current !== projectID) return;
-        }
-      }
-      if (!sourceVersionID) {
-        const body = new FormData();
-        body.set("file", new File([content], "source-script.txt", { type: "text/plain" }));
-        const response = await api(`/api/projects/${projectID}/assets/source_script`, {
-          method: "POST",
-          body,
-        });
-        if (selectedIDRef.current !== projectID) return;
-        if (!response.ok) {
-          setMessage("同行原文保存失败，请稍后重试。");
-          await loadDetail(project);
-          return;
-        }
-        const asset = (await response.json()) as Asset;
-        if (selectedIDRef.current !== projectID) return;
-        sourceVersionID = asset.id;
-      }
-      const started = await startProjectTaskMutation.mutateAsync({
-        projectID,
-        body: {
-          account_id: project.account_id,
-          type: "remix",
-          action: "remix.standard",
-          prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
-          source_version_id: sourceVersionID,
-          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
-          ...(projectTaskModel.reasoningEffort
-            ? { reasoning_effort: projectTaskModel.reasoningEffort }
-            : {}),
-        },
-      });
-      if (selectedIDRef.current !== projectID) return;
-      if (!started) {
-        setMessage("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
-        await loadDetail(project);
-        return;
-      }
-      setProjectTaskModel({ model: "", reasoningEffort: "" });
-      setMessage("同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。");
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("原文保存或二创任务启动失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-
-  const startMontageTask = async (prompt: string) => {
-    if (!selected) return;
-    const project = selected;
-    const projectDetail = detail;
-    if (!projectDetail || projectDetail.project.id !== project.id) {
-      setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
-      return;
-    }
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "montage");
-    if (!lockKey) return;
-    try {
-      const started = await startProjectTaskMutation.mutateAsync({
-        projectID,
-        body: {
-          account_id: project.account_id,
-          type: "montage",
-          prompt,
-          ...(projectTaskModel.model.trim()
-            ? { model: projectTaskModel.model.trim() }
-            : {}),
-          ...(projectTaskModel.reasoningEffort
-            ? { reasoning_effort: projectTaskModel.reasoningEffort }
-            : {}),
-        },
-      });
-      if (!started) {
-        if (selectedIDRef.current === projectID)
-          setMessage("混剪任务启动失败，请检查项目素材与 Codex 配置后重试。");
-        return;
-      }
-      if (selectedIDRef.current !== projectID) return;
-      setProjectTaskModel({ model: "", reasoningEffort: "" });
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("混剪任务启动失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const startRemixWorkflow = async () => {
-    if (!selected || !detail) return;
-    const project = selected;
-    const projectID = project.id;
-    if (detail.assets?.continuous_script) {
-      const confirmed = window.confirm(
-        `当前项目已有连续文案 v${detail.assets.continuous_script.version}。再次二创会生成新版本，旧版本仍会保留。确定继续吗？`,
-      );
-      if (!confirmed) return;
-    }
-    const lockKey = lockProjectAction(projectID, "remix");
-    if (!lockKey) return;
-    try {
-      const started = await startRemixWorkflowMutation.mutateAsync({
-        projectID,
-        body: {
-          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
-          ...(projectTaskModel.reasoningEffort
-            ? { reasoning_effort: projectTaskModel.reasoningEffort }
-            : {}),
-        },
-      });
-      if (!started) {
-        if (selectedIDRef.current === projectID)
-          setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置后重试。");
-        return;
-      }
-      if (selectedIDRef.current !== projectID) return;
-      setProjectTaskModel({ model: "", reasoningEffort: "" });
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("二创工作流启动失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const publishProject = async () => {
-    if (!selected) return;
-    const project = selected;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "publish");
-    if (!lockKey) return;
-    try {
-      const response = await api(`/api/projects/${projectID}/publish`, { method: "POST" });
-      if (!response.ok) {
-        if (selectedIDRef.current === projectID)
-          setMessage("发布状态更新失败，请稍后重试。");
-        return;
-      }
-      const published = { ...project, stage: "published" as const };
-      setProjects((current) =>
-        current.map((item) => item.id === projectID ? published : item),
-      );
-      if (selectedIDRef.current !== projectID) return;
-      setSelected(published);
-      client.setQueryData<ProjectDetail>(queryKeys.project(projectID), (current) =>
-        current && current.project.id === projectID
-          ? { ...current, project: { ...current.project, stage: "published" } }
-          : current,
-      );
-      setMessage("项目已标记为已发布。");
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("发布状态更新失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const saveContinuousScript = async (content: string) => {
-    if (!selected) return;
-    const project = selected;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "save-continuous-script");
-    if (!lockKey) return;
-    try {
-      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content });
-      if (!saved) {
-        if (selectedIDRef.current === projectID)
-          setMessage("连续文案保存失败，请稍后重试。");
-        return;
-      }
-      if (selectedIDRef.current !== projectID) return;
-      setPreview((current) =>
-        current?.asset.type === "continuous_script"
-          ? { ...current, text: content }
-          : current,
-      );
-      setPreviewDraft(content);
-      setMessage("连续文案已保存为新版本；下游配音/字幕等可能已标记为失效。");
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("连续文案保存失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const startRemixReview = async (notes: string) => {
-    if (!selected || !detail?.assets.continuous_script) return;
-    const project = selected;
-    const projectID = project.id;
-    const revisionNotes = notes.trim();
-    if (!revisionNotes) {
-      setMessage("请先填写修改要求，再打回重做。");
-      return;
-    }
-    const lockKey = lockProjectAction(projectID, "remix-review");
-    if (!lockKey) return;
-    try {
-      const started = await startProjectTaskMutation.mutateAsync({
-        projectID,
-        body: {
-          account_id: project.account_id,
-          type: "remix",
-          action: "remix.review",
-          prompt: `按修改要求重写当前连续文案。\n\n修改要求：\n${revisionNotes}`,
-          revision_notes: revisionNotes,
-          ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
-          ...(projectTaskModel.reasoningEffort
-            ? { reasoning_effort: projectTaskModel.reasoningEffort }
-            : {}),
-        },
-      });
-      if (!started) {
-        if (selectedIDRef.current === projectID)
-          setMessage("打回重做任务启动失败，请检查当前连续文案与 Codex 配置后重试。");
-        return;
-      }
-      if (selectedIDRef.current !== projectID) return;
-      setReviseOpen(false);
-      setProjectTaskModel({ model: "", reasoningEffort: "" });
-      setMessage("已按修改要求打回 AI 重做；完成后会生成新的连续文案版本。");
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("打回重做任务启动失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const uploadProjectAsset = async (
-    type: "narration" | "subtitle_srt",
-    file: File,
-  ) => {
-    if (!selected) return;
-    const project = selected;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, `upload:${type}`);
-    if (!lockKey) return;
-    if (type === "narration") {
-      const name = file.name.toLowerCase();
-      if (!(name.endsWith(".mp3") || name.endsWith(".wav") || name.endsWith(".m4a"))) {
-        setMessage("配音仅支持 mp3、wav、m4a 文件。");
-        unlockProjectAction(lockKey);
-        return;
-      }
-    }
-    if (type === "subtitle_srt" && !file.name.toLowerCase().endsWith(".srt")) {
-      setMessage("字幕仅支持 .srt 文件。");
-      unlockProjectAction(lockKey);
-      return;
-    }
-    const body = new FormData();
-    body.set("file", file);
-    try {
-      const response = await api(`/api/projects/${projectID}/assets/${type}`, {
-        method: "POST",
-        body,
-      });
-      if (!response.ok) {
-        if (selectedIDRef.current !== projectID) return;
-        let code = "";
-        try {
-          const payload = (await response.json()) as { code?: string };
-          code = payload.code || "";
-        } catch {
-          /* ignore non-JSON bodies */
-        }
-        if (response.status === 413 || code === "payload_too_large")
-          setMessage("素材过大，配音请控制在 200MB 以内。");
-        else if (response.status === 403 || code === "csrf_invalid")
-          setMessage("登录状态已失效，请刷新页面后重新登录再上传。");
-        else if (response.status === 401 || code === "authentication_required")
-          setMessage("未登录或会话过期，请重新登录后再上传。");
-        else if (code === "invalid_asset_type")
-          setMessage("当前服务不支持该素材类型，请重启控制台到最新版本后重试。");
-        else setMessage("素材上传失败，请检查文件格式后重试。");
-        return;
-      }
-      if (selectedIDRef.current === projectID) await loadDetail(project);
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("素材上传失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const replaceProjectBackground = async (file: File) => {
-    if (!selected) return;
-    const project = selected;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "upload:account_background");
-    if (!lockKey) return;
-    const body = new FormData();
-    body.set("background", file);
-    try {
-      const response = await api(`/api/accounts/${project.account_id}/background`, {
-        method: "POST",
-        body,
-      });
-      if (!response.ok) {
-        if (selectedIDRef.current === projectID)
-          setMessage("账号背景图上传失败，请选择 PNG、JPEG 或 WebP 图片后重试。");
-        return;
-      }
-      if (selectedIDRef.current === projectID) await loadDetail(project);
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("账号背景图上传失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
-  const deleteProject = async () => {
-    if (!selected) return;
-    const project = selected;
-    if (
-      !window.confirm(
-        `确定删除项目“${project.title}”吗？项目专属文案、配音、SRT、草稿和任务记录都会一并删除，此操作无法恢复。`,
-      )
-    )
-      return;
-    const projectID = project.id;
-    const lockKey = lockProjectAction(projectID, "delete");
-    if (!lockKey) return;
-    try {
-      const response = await api(`/api/projects/${projectID}`, { method: "DELETE" });
-      if (!response.ok) {
-        if (selectedIDRef.current === projectID)
-          setMessage("项目删除失败，请稍后重试。");
-        return;
-      }
-      setProjects((current) => current.filter((item) => item.id !== projectID));
-      if (selectedIDRef.current !== projectID) return;
-      closeProject();
-      setMessage(`项目“${project.title}”已删除。`);
-    } catch (error) {
-      if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("项目删除失败，请检查网络连接后重试。");
-    } finally {
-      unlockProjectAction(lockKey);
-    }
-  };
   const answerTask = async (task: Task, providedAnswer?: string) => {
     const questions = taskQuestions(task);
     const prompt = questions.length
@@ -1312,40 +874,6 @@ function App() {
       }
     })();
   };
-  const openSettings = async () => {
-    try {
-      // staleTime 0 keeps the dialog's always-refetch-on-open behaviour.
-      const next = await client.fetchQuery({
-        queryKey: queryKeys.settings(),
-        queryFn: ({ signal }) => readSettings(signal),
-        staleTime: 0,
-      });
-      setSettingsDraft({ ...next.public });
-      setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
-      setSettingsFeedback("");
-      setSettingsOpen(true);
-    } catch {
-      setMessage("设置读取失败。");
-    }
-  };
-  const saveSettings = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!settingsDraft) return;
-    const response = await api("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ public: settingsDraft, secrets: secretDraft }),
-    });
-    if (!response.ok) {
-      setSettingsFeedback("设置保存失败，请检查填写内容。");
-      return;
-    }
-    const next = (await response.json()) as Settings;
-    client.setQueryData(queryKeys.settings(), next);
-    setSettingsDraft({ ...next.public });
-    setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
-    setSettingsFeedback("设置已保存。");
-  };
 
   if (authenticated === null)
     return <div className="splash">正在验证访问权限…</div>;
@@ -1366,7 +894,7 @@ function App() {
     window.location.hostname.toLowerCase(),
   );
   const selectedPendingActions = selected
-    ? pendingProjectActions
+    ? projectActions.pendingActions
         .filter((key) => key.startsWith(`${selected.id}:`))
         .map((key) => key.slice(selected.id.length + 1))
     : [];
@@ -1382,18 +910,18 @@ function App() {
           theme={theme}
           onThemeChange={setTheme}
           onBack={closeProject}
-          onDelete={() => void deleteProject()}
-          onRemix={() => void startRemixWorkflow()}
-          onMix={() => void startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
-          onPublish={() => void publishProject()}
-          onUpload={(type, file) => void uploadProjectAsset(type, file)}
-          onSaveSourceScript={(content) => void saveSourceScriptAndStartRemix(content)}
-          loadSourceScriptContent={loadSourceScriptContent}
+          onDelete={() => void projectActions.deleteProject()}
+          onRemix={() => void projectActions.startRemixWorkflow()}
+          onMix={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
+          onPublish={() => void projectActions.publishProject()}
+          onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
+          onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
+          loadSourceScriptContent={projectActions.loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
-          taskModel={projectTaskModel}
-          onTaskModelChange={(value) => setProjectTaskModel(value)}
+          taskModel={projectActions.taskModel}
+          onTaskModelChange={(value) => projectActions.setTaskModel(value)}
           taskModelDefaults={settings?.public}
-          onReplaceBackground={(file) => void replaceProjectBackground(file)}
+          onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenConversation={() => void chat.openWorkbench()}
           onOpenTask={(task) => openTask(task as Task)}
@@ -1418,7 +946,7 @@ function App() {
           runtime={runtime}
           onOpenIdeaPlanner={() => void idea.openPlanner()}
           onOpenConversation={() => void chat.openWorkbench()}
-          onOpenSettings={() => void openSettings()}
+          onOpenSettings={() => void settingsPanel.openDialog()}
           onLogout={() => void logout()}
           accounts={accounts}
           selectedAccountID={account}
@@ -1432,7 +960,7 @@ function App() {
           onAccountBackgroundChange={setAccountBackground}
           newProject={newProject}
           onNewProjectChange={setNewProject}
-          onCreateProject={createProject}
+          onCreateProject={projectActions.createProject}
           message={message}
           onDismissMessage={() => setMessage("")}
           loading={loading}
@@ -1449,7 +977,7 @@ function App() {
           onDraftChange={setPreviewDraft}
           saving={selectedPendingActions.includes("save-continuous-script")}
           onClose={() => setPreview(null)}
-          onSave={(content) => void saveContinuousScript(content)}
+          onSave={(content) => void projectActions.saveContinuousScript(content)}
           onRevise={() => {
             setPreview(null);
             openReviseDialog();
@@ -1460,8 +988,8 @@ function App() {
         <ReviseDialog
           notes={reviseNotes}
           onNotesChange={setReviseNotes}
-          taskModel={projectTaskModel}
-          onTaskModelChange={setProjectTaskModel}
+          taskModel={projectActions.taskModel}
+          onTaskModelChange={projectActions.setTaskModel}
           taskModelDefaults={settings?.public}
           submitDisabled={
             !reviseNotes.trim()
@@ -1470,22 +998,19 @@ function App() {
           }
           submitting={selectedPendingActions.includes("remix-review")}
           onClose={() => setReviseOpen(false)}
-          onSubmit={(notes) => void startRemixReview(notes)}
+          onSubmit={(notes) => void projectActions.startRemixReview(notes)}
         />
       )}
-      {settingsOpen && settingsDraft && (
+      {settingsOpen && settingsPanel.draft && (
         <SettingsPanel
           settings={settings}
-          draft={settingsDraft}
-          onDraftChange={setSettingsDraft}
-          secretDraft={secretDraft}
-          onSecretDraftChange={setSecretDraft}
-          feedback={settingsFeedback}
-          onClose={() => {
-            setSettingsFeedback("");
-            setSettingsOpen(false);
-          }}
-          onSubmit={saveSettings}
+          draft={settingsPanel.draft}
+          onDraftChange={settingsPanel.setDraft}
+          secretDraft={settingsPanel.secretDraft}
+          onSecretDraftChange={settingsPanel.setSecretDraft}
+          feedback={settingsPanel.feedback}
+          onClose={settingsPanel.close}
+          onSubmit={settingsPanel.save}
         />
       )}
       {ideaOpen && idea.session && (

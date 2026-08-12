@@ -370,58 +370,29 @@ func ProbeDuration(path string) (float64, error) {
 }
 
 func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict bool) ([]mediaItem, error) {
-	file, err := os.Open(indexPath)
-	if err != nil {
-		return nil, fmt.Errorf("open media index: %w", err)
-	}
-	defer file.Close()
-	dec := json.NewDecoder(readerWithoutBOM(file))
-	tok, err := dec.Token()
+	scan, err := scanMediaIndex(indexPath, mediaRoot, strict)
 	if err != nil {
 		return nil, err
 	}
-	delim, ok := tok.(json.Delim)
-	if !ok || delim != '[' {
-		return nil, fmt.Errorf("media index must be a JSON array")
-	}
 	preferred := make([]mediaItem, 0, limit)
 	fallback := make([]mediaItem, 0, limit)
-	for dec.More() {
-		var item mediaItem
-		if err := dec.Decode(&item); err != nil {
-			return nil, err
-		}
-		// 8s timeline @ 1.1x needs 8.8s source; keep a 1s lead-in margin when possible.
-		if item.ID == "" || item.RelativePath == "" || item.DurationSeconds < 10 {
-			continue
-		}
-		abs := filepath.Join(mediaRoot, filepath.FromSlash(item.RelativePath))
-		info, err := os.Stat(abs)
-		if err != nil || !info.Mode().IsRegular() {
+	for _, row := range scan.rows {
+		if !row.usable {
+			// An unusable row always precedes the error that ended the scan,
+			// so strict keeps reporting it first.
 			if strict {
-				return nil, fmt.Errorf("media index clip is missing or not a regular file: %s", abs)
+				return nil, fmt.Errorf("media index clip is missing or not a regular file: %s", row.item.AbsPath)
 			}
 			continue
 		}
-		item.AbsPath = abs
-		if isScenic(item.Category) {
-			preferred = append(preferred, item)
+		if isScenic(row.item.Category) {
+			preferred = append(preferred, row.item)
 		} else {
-			fallback = append(fallback, item)
+			fallback = append(fallback, row.item)
 		}
 	}
-	end, err := dec.Token()
-	if err != nil {
-		return nil, fmt.Errorf("close media index array: %w", err)
-	}
-	if delim, ok := end.(json.Delim); !ok || delim != ']' {
-		return nil, fmt.Errorf("media index array is not closed")
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("media index contains trailing data")
-		}
-		return nil, fmt.Errorf("read media index end: %w", err)
+	if scan.err != nil {
+		return nil, scan.err
 	}
 	pool := preferred
 	if len(pool) == 0 {
