@@ -14,6 +14,7 @@
 | [优化工单](docs/OPTIMIZATION-BACKLOG.md) | 待办优化项，按 P0→P3 排序，每条含证据/改法/验收/边界 |
 | [混剪登记](docs/operations/montage-registration.md) | 明文草稿、登记、重试与本机限制 |
 | [验收清单](docs/operations/acceptance-checklist.md) | 人工验收路径 |
+| [常见问题与排障](docs/operations/troubleshooting.md) | 已验证故障、错误原文、根因、最小处置与禁止操作 |
 
 ## 最短启动
 
