@@ -448,6 +448,8 @@ func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict boo
 		right := mediaRank(seed, pool[j])
 		return bytes.Compare(left[:], right[:]) < 0
 	})
+	// Rotate categories before truncating so the kept prefix is spread out too.
+	pool = interleaveByCategory(pool)
 	if len(pool) > limit {
 		pool = pool[:limit]
 	}

@@ -204,6 +204,53 @@ func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
 	}
 }
 
+func TestSampleMediaSpreadsCategoriesAndStaysReproducible(t *testing.T) {
+	root := t.TempDir()
+	items := []map[string]any{}
+	for _, category := range []string{"Nature_Landscape", "Architecture", "Scenery"} {
+		for i := 0; i < 4; i++ {
+			id := category + "-" + string(rune('a'+i))
+			if err := os.WriteFile(filepath.Join(root, id+".mp4"), []byte(id), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			items = append(items, map[string]any{
+				"id": id, "category": category,
+				"relative_path": id + ".mp4", "duration_seconds": 20,
+			})
+		}
+	}
+	indexPath := filepath.Join(root, "index.json")
+	raw, _ := json.Marshal(items)
+	if err := os.WriteFile(indexPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	clips, err := sampleMedia(indexPath, root, 6, "task-spread", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clips) != 6 {
+		t.Fatalf("clip count = %d", len(clips))
+	}
+	for i := 1; i < len(clips); i++ {
+		if normalizeCategory(clips[i].Category) == normalizeCategory(clips[i-1].Category) {
+			t.Fatalf("neighbours %d/%d share category %q", i-1, i, clips[i].Category)
+		}
+	}
+	retry, err := sampleMedia(indexPath, root, 6, "task-spread", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range clips {
+		if clips[i].ID != retry[i].ID {
+			t.Fatalf("same seed order changed at %d: %q vs %q", i, clips[i].ID, retry[i].ID)
+		}
+	}
+	if err := ValidateMediaLibrary(indexPath, root, ""); err != nil {
+		t.Fatalf("preflight must still accept a complete library: %v", err)
+	}
+}
+
 func interleaveTestPool(pairs ...string) []mediaItem {
 	items := make([]mediaItem, 0, len(pairs)/2)
 	for i := 0; i+1 < len(pairs); i += 2 {
