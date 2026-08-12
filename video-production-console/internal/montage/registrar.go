@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"video-production-console/internal/logging"
 )
 
 var ErrInvalidRegistration = errors.New("invalid montage registration")
@@ -95,6 +98,7 @@ func (r *Registrar) Register(ctx context.Context, request RegisterRequest) (Regi
 		if message == "" {
 			message = "registration command failed"
 		}
+		logScriptFailure(ctx, request.TaskID, "register", command, message)
 		return RegisterResult{}, fmt.Errorf("%w: %s", ErrInvalidRegistration, message)
 	}
 	receiptReported := false
@@ -149,6 +153,7 @@ func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (Re
 		return ReconcileResult{}, &ReconcileBusyError{RetryAfter: time.Duration(envelope.Retry.AfterSeconds) * time.Second, OwnerJobID: strings.TrimSpace(envelope.Retry.OwnerJobID)}
 	}
 	if command.ExitCode != 0 || envelope.Status != "completed" {
+		logScriptFailure(ctx, request.TaskID, "reconcile-name", command, strings.TrimSpace(envelope.Summary))
 		return ReconcileResult{}, fmt.Errorf("%w: %s", ErrInvalidRegistration, strings.TrimSpace(envelope.Summary))
 	}
 	reported := false
@@ -161,6 +166,29 @@ func (r *Registrar) Reconcile(ctx context.Context, request ReconcileRequest) (Re
 		return ReconcileResult{}, fmt.Errorf("%w: reconciliation receipt was not reported", ErrInvalidRegistration)
 	}
 	return ValidateReconciledDraft(validation)
+}
+
+// maxScriptStderrTail bounds the subprocess diagnostics copied into one log
+// record. The registration script writes progress and tracebacks to stderr and
+// the console otherwise discards it, which leaves failures unexplained.
+const maxScriptStderrTail = 2000
+
+func logScriptFailure(ctx context.Context, taskID, command string, result CommandResult, summary string) {
+	logging.LoggerFrom(ctx).Error("montage registration script failed",
+		"task_id", strings.TrimSpace(taskID), "phase", "registration", "script_command", command,
+		"exit_code", result.ExitCode, "summary", summary, "stderr_tail", stderrTail(result.Stderr))
+}
+
+func stderrTail(stderr []byte) string {
+	text := strings.TrimSpace(string(stderr))
+	if len(text) <= maxScriptStderrTail {
+		return text
+	}
+	tail := text[len(text)-maxScriptStderrTail:]
+	for len(tail) > 0 && !utf8.ValidString(tail) {
+		tail = tail[1:]
+	}
+	return tail
 }
 
 func retainedPathExists(path string) (bool, error) {

@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
@@ -297,6 +300,39 @@ func TestTaskManifestPreparerRejectsMissingIndexedClipBeforePersist(t *testing.T
 	}
 	if _, statErr := os.Stat(manifestPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("manifest must not be written after failed preflight: %v", statErr)
+	}
+}
+
+func TestTaskManifestPreparerLogsPreflightRejectionWithTaskID(t *testing.T) {
+	preparer, task, _ := prepareMontageManifestFixture(t, false)
+	runtime := preparer.settings.(manifestTestSettings).runtime
+	if err := os.Remove(filepath.Join(runtime.MediaRoot, "clip.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	restore := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(restore) })
+	var records bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&records, nil)))
+
+	ctx := logging.WithRequestID(context.Background(), "request-9")
+	if err := preparer.Prepare(ctx, task, TaskManifestRequest{}); err == nil {
+		t.Fatal("preflight must still reject the task")
+	}
+
+	var record struct {
+		Message   string `json:"msg"`
+		TaskID    string `json:"task_id"`
+		RequestID string `json:"request_id"`
+		Phase     string `json:"phase"`
+	}
+	if err := json.Unmarshal(records.Bytes(), &record); err != nil {
+		t.Fatalf("decode log record %q: %v", records.String(), err)
+	}
+	if record.Message != "montage media preflight rejected" || record.TaskID != task.ID {
+		t.Fatalf("unexpected record: %+v", record)
+	}
+	if record.RequestID != "request-9" || record.Phase != "preflight" {
+		t.Fatalf("preflight record is not correlated: %+v", record)
 	}
 }
 

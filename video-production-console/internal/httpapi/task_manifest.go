@@ -14,6 +14,7 @@ import (
 	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/publishing"
 	consoleSettings "video-production-console/internal/settings"
@@ -156,6 +157,10 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 			return fmt.Errorf("resolve draft display name: %w", err)
 		}
 		if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
+			logging.LoggerFrom(ctx).Error("montage media preflight rejected",
+				"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
+				"media_index_path", settings.MediaIndexPath, "media_root", settings.MediaRoot,
+				"error", err)
 			return fmt.Errorf("montage media preflight: %w", err)
 		}
 	}

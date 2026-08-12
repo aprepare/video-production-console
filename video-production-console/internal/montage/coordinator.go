@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
 )
@@ -268,8 +268,10 @@ func (c *Coordinator) Retry(ctx context.Context, taskID string) (domain.Registra
 	}
 	attempt, err := c.repo.BeginRetry(ctx, taskID)
 	if err != nil {
+		logging.LoggerFrom(ctx).Warn("montage registration retry rejected", "task_id", taskID, "phase", "registration", "error", err)
 		return domain.RegistrationAttempt{}, err
 	}
+	logging.LoggerFrom(ctx).Info("montage registration retry queued", "task_id", taskID, "phase", "registration", "attempt_id", attempt.ID)
 	if err := c.enqueue(ctx, attempt); err != nil {
 		if failErr := c.repo.Fail(context.Background(), attempt.ID, "registration_enqueue_failed", "Registration could not be queued."); failErr != nil {
 			c.reportFailure(attempt.TaskID, "registration_enqueue_failure_persist_failed", failErr)
@@ -519,6 +521,8 @@ func (c *Coordinator) resolveReconciliationRuntime(candidate domain.DraftDisplay
 
 func (c *Coordinator) process(job registrationJob) {
 	ctx := c.ctx
+	logger := logging.TaskLogger(job.Attempt.TaskID)
+	logger.Info("montage registration started", "attempt_id", job.Attempt.ID, "phase", "registration")
 	if err := c.repo.MarkRunning(ctx, job.Attempt.ID); err != nil {
 		c.reportFailure(job.Attempt.TaskID, "registration_start_failed", err)
 		return
@@ -563,7 +567,9 @@ func (c *Coordinator) process(job registrationJob) {
 		if failErr := c.repo.FailCommit(context.Background(), job.Attempt.ID, err.Error()); failErr != nil {
 			c.reportFailure(job.Attempt.TaskID, "registration_commit_reconcile_failed", failErr)
 		}
+		return
 	}
+	logger.Info("montage registration succeeded", "attempt_id", job.Attempt.ID, "phase", "registration", "recovered", recovered, "draft_id", result.DraftID)
 }
 
 // recoverRegisteredDraft validates a registration already published by an
@@ -639,10 +645,11 @@ func (c *Coordinator) reportFailure(taskID, code string, err error) {
 	if c == nil || strings.TrimSpace(taskID) == "" || err == nil {
 		return
 	}
-	log.Printf("montage registration warning task=%s code=%s: %v", taskID, code, err)
+	logger := logging.TaskLogger(taskID)
+	logger.Warn("montage registration warning", "code", code, "phase", "registration", "error", err)
 	if c.tasks != nil {
 		if eventErr := c.tasks.AppendEvent(context.Background(), taskID, domain.TaskEvent{Kind: code, Level: "warning", DisplayText: err.Error()}); eventErr != nil {
-			log.Printf("montage registration warning event failed task=%s code=%s: %v", taskID, code, eventErr)
+			logger.Error("montage registration warning event failed", "code", code, "phase", "registration", "error", eventErr)
 		}
 	}
 }
