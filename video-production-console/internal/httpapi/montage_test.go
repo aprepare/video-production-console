@@ -2,21 +2,54 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/store"
 )
 
-type montageRetryStub struct{ err error }
+type montageRetryStub struct {
+	err     error
+	attempt domain.RegistrationAttempt
+}
 
 func (s montageRetryStub) Retry(context.Context, string) (domain.RegistrationAttempt, error) {
-	return domain.RegistrationAttempt{}, s.err
+	return s.attempt, s.err
+}
+
+func TestMontageRetryReturnsSnakeCaseAttempt(t *testing.T) {
+	started := time.Date(2026, 8, 12, 7, 0, 0, 0, time.UTC)
+	registered := "workspace/draft"
+	attempt := domain.RegistrationAttempt{ID: "attempt-1", TaskID: "task", ManifestPath: "manifests/task.json", WorkspacePath: "workspace", State: domain.RegistrationQueued, Attempt: 2, RegisteredPath: &registered, StartedAt: started}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/tasks/task/retry-registration", nil)
+	NewMontageHandler(montageRetryStub{attempt: attempt}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	assertSnakeCaseKeys(t, "/api/tasks/task/retry-registration", recorder.Body.Bytes())
+	var body struct {
+		ID             string  `json:"id"`
+		TaskID         string  `json:"task_id"`
+		ManifestPath   string  `json:"manifest_path"`
+		WorkspacePath  string  `json:"workspace_path"`
+		State          string  `json:"state"`
+		Attempt        int     `json:"attempt"`
+		RegisteredPath *string `json:"registered_path"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ID != attempt.ID || body.TaskID != attempt.TaskID || body.ManifestPath != attempt.ManifestPath || body.WorkspacePath != attempt.WorkspacePath || body.State != string(domain.RegistrationQueued) || body.Attempt != 2 || body.RegisteredPath == nil || *body.RegisteredPath != registered {
+		t.Fatalf("body=%+v raw=%s", body, recorder.Body.String())
+	}
 }
 
 func TestMontageRetryMapsTypedErrors(t *testing.T) {

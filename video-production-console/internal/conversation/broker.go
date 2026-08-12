@@ -29,6 +29,9 @@ const (
 	completionQueueSize = 64
 	completionTimeout   = 5 * time.Minute
 	completionRetry     = 2 * time.Second
+	// completionSweepInterval bounds how long a completion that nobody woke a
+	// worker for (retry backoff, another process' leftovers) can sit unnoticed.
+	completionSweepInterval = time.Second
 )
 
 var errCompletionInProgress = errors.New("formal task completion is already in progress")
@@ -86,6 +89,9 @@ type Broker struct {
 	completed TurnCompletedHandler
 
 	completionWake chan struct{}
+	// completionTick carries the shared idle sweep signal. Its capacity of one
+	// coalesces sweeps, so a backlog of ticks cannot pile up behind busy workers.
+	completionTick chan struct{}
 	workerCtx      context.Context
 	cancelWorkers  context.CancelFunc
 	workerWG       sync.WaitGroup
@@ -99,6 +105,13 @@ func (b *Broker) SetTurnCompletedHandler(handler TurnCompletedHandler) {
 	b.mu.Lock()
 	b.completed = handler
 	b.mu.Unlock()
+	b.signalCompletionWake()
+}
+
+// signalCompletionWake hands one unit of work to an idle completion worker. It
+// never blocks: a full buffer already carries more wakeups than there are
+// workers, and the shared sweep is the backstop for anything dropped here.
+func (b *Broker) signalCompletionWake() {
 	select {
 	case b.completionWake <- struct{}{}:
 	default:
@@ -115,17 +128,22 @@ func NewBroker(repo *store.ConversationRepository, rpc RPC) *Broker {
 		sessions:       make(map[string]*sync.Mutex),
 		turns:          make(map[string]string),
 		completionWake: make(chan struct{}, completionQueueSize),
+		completionTick: make(chan struct{}, 1),
 		workerCtx:      workerCtx,
 		cancelWorkers:  cancelWorkers,
 	}
 	if rpc != nil {
-		b.workerWG.Add(completionWorkers + 1)
+		b.workerWG.Add(completionWorkers + 2)
 		for range completionWorkers {
 			go func() {
 				defer b.workerWG.Done()
 				b.consumeCompletions()
 			}()
 		}
+		go func() {
+			defer b.workerWG.Done()
+			b.sweepCompletions()
+		}()
 		notifications := rpc.Notifications()
 		go func() {
 			defer b.workerWG.Done()
@@ -777,15 +795,33 @@ func (b *Broker) projectNotification(ctx context.Context, sessionID string, noti
 	return err
 }
 
-func (b *Broker) consumeCompletions() {
-	ticker := time.NewTicker(time.Second)
+// sweepCompletions owns the only ticker behind the completion workers. One
+// shared tick replaces a per-worker ticker so an idle console opens one claim
+// transaction per interval instead of one per worker, without the four workers
+// waking in lockstep.
+func (b *Broker) sweepCompletions() {
+	ticker := time.NewTicker(completionSweepInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-b.workerCtx.Done():
 			return
-		case <-b.completionWake:
 		case <-ticker.C:
+		}
+		select {
+		case b.completionTick <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (b *Broker) consumeCompletions() {
+	for {
+		select {
+		case <-b.workerCtx.Done():
+			return
+		case <-b.completionWake:
+		case <-b.completionTick:
 		}
 		ctx, cancel := context.WithTimeout(b.workerCtx, completionTimeout)
 		_ = b.drainCompletions(ctx)
@@ -805,10 +841,7 @@ func (b *Broker) persistCompletion(sessionID, turnID string) {
 		err := b.repo.EnqueueCompletion(ctx, sessionID, turnID)
 		cancel()
 		if err == nil {
-			select {
-			case b.completionWake <- struct{}{}:
-			default:
-			}
+			b.signalCompletionWake()
 			return
 		}
 		b.recordCompletionError(sessionID, turnID, "completion_inbox_persist_failed", err)
@@ -840,6 +873,10 @@ func (b *Broker) drainCompletions(ctx context.Context) error {
 		if !claimed {
 			return resultErr
 		}
+		// A single sweep tick wakes a single worker, so hand the rest of the
+		// backlog on: every claim invites one more worker to look for the next
+		// item and the fan-out stops as soon as the inbox runs dry.
+		b.signalCompletionWake()
 		err = b.processTurnCompleted(ctx, item.SessionID, item.CodexTurnID)
 		if err != nil {
 			b.recordCompletionError(item.SessionID, item.CodexTurnID, "completion_failed", err)

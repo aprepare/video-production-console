@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,14 +74,14 @@ func TestTimingHTTPContractSummaryRunsAndTaskDetail(t *testing.T) {
 		}
 		if path == "/api/tasks/"+task.ID+"/timing/summary" {
 			var summary struct {
-				TaskID      string `json:"TaskID"`
-				TotalMS     int64  `json:"TotalMS"`
-				ExecutionMS int64  `json:"ExecutionMS"`
+				TaskID      string `json:"task_id"`
+				TotalMS     int64  `json:"total_ms"`
+				ExecutionMS int64  `json:"execution_ms"`
 				Phases      []struct {
-					PhaseKey    string `json:"PhaseKey"`
-					DisplayName string `json:"DisplayName"`
-					DurationMS  *int64 `json:"DurationMS"`
-				} `json:"Phases"`
+					PhaseKey    string `json:"phase_key"`
+					DisplayName string `json:"display_name"`
+					DurationMS  *int64 `json:"duration_ms"`
+				} `json:"phases"`
 			}
 			if err := json.Unmarshal(recorder.Body.Bytes(), &summary); err != nil {
 				t.Fatal(err)
@@ -88,13 +89,14 @@ func TestTimingHTTPContractSummaryRunsAndTaskDetail(t *testing.T) {
 			if summary.TaskID != task.ID || summary.TotalMS != 15000 || summary.ExecutionMS != 10000 || len(summary.Phases) != 1 || summary.Phases[0].PhaseKey != "codex_execution" || summary.Phases[0].DisplayName != "Codex 执行" || summary.Phases[0].DurationMS == nil || *summary.Phases[0].DurationMS != 8000 {
 				t.Fatalf("summary=%+v", summary)
 			}
+			assertSnakeCaseKeys(t, path, recorder.Body.Bytes())
 		}
 		if path == "/api/tasks/"+task.ID+"/timing/runs" {
 			var runs []struct {
-				TaskID     string `json:"TaskID"`
-				PhaseKey   string `json:"PhaseKey"`
-				State      string `json:"State"`
-				DurationMS *int64 `json:"DurationMS"`
+				TaskID     string `json:"task_id"`
+				PhaseKey   string `json:"phase_key"`
+				State      string `json:"state"`
+				DurationMS *int64 `json:"duration_ms"`
 			}
 			if err := json.Unmarshal(recorder.Body.Bytes(), &runs); err != nil {
 				t.Fatal(err)
@@ -102,17 +104,18 @@ func TestTimingHTTPContractSummaryRunsAndTaskDetail(t *testing.T) {
 			if len(runs) != 1 || runs[0].TaskID != task.ID || runs[0].PhaseKey != "codex_execution" || runs[0].State != "completed" || runs[0].DurationMS == nil || *runs[0].DurationMS != 8000 {
 				t.Fatalf("runs=%+v", runs)
 			}
+			assertSnakeCaseKeys(t, path, recorder.Body.Bytes())
 		}
 		if path == "/api/tasks/"+task.ID {
 			var detail struct {
 				TimingSummary *struct {
-					TaskID string `json:"TaskID"`
+					TaskID string `json:"task_id"`
 					Phases []struct {
-						PhaseKey string `json:"PhaseKey"`
-					} `json:"Phases"`
+						PhaseKey string `json:"phase_key"`
+					} `json:"phases"`
 				} `json:"timing_summary"`
 				TimingRuns []struct {
-					PhaseKey string `json:"PhaseKey"`
+					PhaseKey string `json:"phase_key"`
 				} `json:"timing_runs"`
 			}
 			if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
@@ -121,6 +124,89 @@ func TestTimingHTTPContractSummaryRunsAndTaskDetail(t *testing.T) {
 			if detail.TimingSummary == nil || detail.TimingSummary.TaskID != task.ID || len(detail.TimingSummary.Phases) != 1 || detail.TimingSummary.Phases[0].PhaseKey != "codex_execution" || len(detail.TimingRuns) != 1 || detail.TimingRuns[0].PhaseKey != "codex_execution" {
 				t.Fatalf("detail=%+v", detail)
 			}
+			assertSnakeCaseKeys(t, path, recorder.Body.Bytes())
+		}
+	}
+}
+
+func TestTimingResponsesExposeExpectedSnakeCaseKeys(t *testing.T) {
+	summary := domain.TaskTimingSummary{Phases: []domain.TaskPhaseRun{{}}, SlowestPhase: &domain.TaskPhaseRun{}}
+	encodedSummary, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summaryKeys map[string]json.RawMessage
+	if err := json.Unmarshal(encodedSummary, &summaryKeys); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"task_id", "total_ms", "preparation_ms", "queue_ms", "execution_ms", "queue_estimated", "slowest_phase", "slowest_phase_percent", "phases", "legacy_without_phases"} {
+		if _, ok := summaryKeys[key]; !ok {
+			t.Fatalf("summary is missing key %q: %s", key, encodedSummary)
+		}
+	}
+	if len(summaryKeys) != 10 {
+		t.Fatalf("summary has unexpected keys: %s", encodedSummary)
+	}
+	encodedPhase, err := json.Marshal(domain.TaskPhaseRun{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var phaseKeys map[string]json.RawMessage
+	if err := json.Unmarshal(encodedPhase, &phaseKeys); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"id", "task_id", "phase_key", "display_name", "external_id", "detail_json", "attempt", "source", "state", "started_at", "running_at", "finished_at", "duration_ms", "created_at"} {
+		if _, ok := phaseKeys[key]; !ok {
+			t.Fatalf("phase run is missing key %q: %s", key, encodedPhase)
+		}
+	}
+	if len(phaseKeys) != 14 {
+		t.Fatalf("phase run has unexpected keys: %s", encodedPhase)
+	}
+}
+
+// assertSnakeCaseKeys fails when any object key in the payload still carries a
+// Go exported field name, which is how untagged structs leak PascalCase.
+func assertSnakeCaseKeys(t *testing.T, path string, payload []byte) {
+	t.Helper()
+	var decoded any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("%s invalid JSON: %v", path, err)
+	}
+	walkJSONKeys(decoded, func(key string) {
+		if !isSnakeCaseKey(key) {
+			t.Fatalf("%s returned non snake_case key %q: %s", path, key, payload)
+		}
+	})
+}
+
+func isSnakeCaseKey(key string) bool {
+	return key != "" && key == strings.ToLower(key)
+}
+
+func TestSnakeCaseKeyGuardRejectsExportedGoFieldNames(t *testing.T) {
+	for _, key := range []string{"TaskID", "PhaseKey", "DurationMS", "Phases", ""} {
+		if isSnakeCaseKey(key) {
+			t.Fatalf("guard accepted non snake_case key %q", key)
+		}
+	}
+	for _, key := range []string{"task_id", "phase_key", "duration_ms", "phases"} {
+		if !isSnakeCaseKey(key) {
+			t.Fatalf("guard rejected snake_case key %q", key)
+		}
+	}
+}
+
+func walkJSONKeys(value any, visit func(string)) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			visit(key)
+			walkJSONKeys(child, visit)
+		}
+	case []any:
+		for _, child := range node {
+			walkJSONKeys(child, visit)
 		}
 	}
 }

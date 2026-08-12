@@ -22,20 +22,20 @@ const (
 )
 
 type TaskPhaseRun struct {
-	ID          string
-	TaskID      string
-	PhaseKey    string
-	DisplayName string
-	ExternalID  string
-	DetailJSON  string
-	Attempt     int
-	Source      TaskPhaseSource
-	State       TaskPhaseState
-	StartedAt   time.Time
-	RunningAt   *time.Time
-	FinishedAt  *time.Time
-	DurationMS  *int64
-	CreatedAt   time.Time
+	ID          string          `json:"id"`
+	TaskID      string          `json:"task_id"`
+	PhaseKey    string          `json:"phase_key"`
+	DisplayName string          `json:"display_name"`
+	ExternalID  string          `json:"external_id"`
+	DetailJSON  string          `json:"detail_json"`
+	Attempt     int             `json:"attempt"`
+	Source      TaskPhaseSource `json:"source"`
+	State       TaskPhaseState  `json:"state"`
+	StartedAt   time.Time       `json:"started_at"`
+	RunningAt   *time.Time      `json:"running_at"`
+	FinishedAt  *time.Time      `json:"finished_at"`
+	DurationMS  *int64          `json:"duration_ms"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
 type SkillTimingRun struct {
@@ -53,16 +53,16 @@ type SkillTimingRun struct {
 }
 
 type TaskTimingSummary struct {
-	TaskID              string
-	TotalMS             int64
-	PreparationMS       int64
-	QueueMS             int64
-	ExecutionMS         int64
-	QueueEstimated      bool
-	SlowestPhase        *TaskPhaseRun
-	SlowestPhasePercent float64
-	Phases              []TaskPhaseRun
-	LegacyWithoutPhases bool
+	TaskID              string         `json:"task_id"`
+	TotalMS             int64          `json:"total_ms"`
+	PreparationMS       int64          `json:"preparation_ms"`
+	QueueMS             int64          `json:"queue_ms"`
+	ExecutionMS         int64          `json:"execution_ms"`
+	QueueEstimated      bool           `json:"queue_estimated"`
+	SlowestPhase        *TaskPhaseRun  `json:"slowest_phase"`
+	SlowestPhasePercent float64        `json:"slowest_phase_percent"`
+	Phases              []TaskPhaseRun `json:"phases"`
+	LegacyWithoutPhases bool           `json:"legacy_without_phases"`
 }
 
 type TaskTimingAggregate struct {

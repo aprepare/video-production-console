@@ -22,12 +22,18 @@ const (
 )
 
 type RegistrationAttempt struct {
-	ID, TaskID, ManifestPath, WorkspacePath              string
-	State                                                RegistrationState
-	Attempt                                              int
-	RegisteredPath, ReceiptPath, ErrorCode, ErrorMessage *string
-	StartedAt                                            time.Time
-	FinishedAt                                           *time.Time
+	ID             string            `json:"id"`
+	TaskID         string            `json:"task_id"`
+	ManifestPath   string            `json:"manifest_path"`
+	WorkspacePath  string            `json:"workspace_path"`
+	State          RegistrationState `json:"state"`
+	Attempt        int               `json:"attempt"`
+	RegisteredPath *string           `json:"registered_path"`
+	ReceiptPath    *string           `json:"receipt_path"`
+	ErrorCode      *string           `json:"error_code"`
+	ErrorMessage   *string           `json:"error_message"`
+	StartedAt      time.Time         `json:"started_at"`
+	FinishedAt     *time.Time        `json:"finished_at"`
 }
 
 // RegistrationRecovery is the durable work discovered during console startup.

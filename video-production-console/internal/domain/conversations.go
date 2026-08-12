@@ -46,17 +46,17 @@ type ChatSession struct {
 }
 
 type ChatMessage struct {
-	ID             string
-	SessionID      string
-	Role           string
-	Kind           string
-	Content        string
-	DeliveryStatus string
-	ClientKey      string
-	CodexItemID    *string
-	TurnID         *string
-	Sequence       int64
-	CreatedAt      time.Time
+	ID             string    `json:"id"`
+	SessionID      string    `json:"session_id"`
+	Role           string    `json:"role"`
+	Kind           string    `json:"kind"`
+	Content        string    `json:"content"`
+	DeliveryStatus string    `json:"delivery_status"`
+	ClientKey      string    `json:"client_key"`
+	CodexItemID    *string   `json:"codex_item_id"`
+	TurnID         *string   `json:"turn_id"`
+	Sequence       int64     `json:"sequence"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type ChatTurnStatus string
