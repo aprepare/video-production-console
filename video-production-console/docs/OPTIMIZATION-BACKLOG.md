@@ -50,36 +50,38 @@ npm --prefix web run build:verify   # 输出到 .tmp，不改嵌入 dist
 - [x] P0-4 修复 e2e 移动端主动作断言漂移（新增，见已完成记录）
 - [x] P1-1a react-query：抽 query key 常量 + 类型
 - [x] P1-1b 迁移账号/项目列表 GET（`useConsoleData` 内部换 react-query，对外 API 不变）
-- [ ] P1-1c 迁移项目详情 GET
-- [ ] P1-1d 迁移任务列表 GET + 条件轮询
-- [ ] P1-1e 迁移创建项目 mutation
-- [ ] P1-1f 迁移发起任务 mutation
-- [ ] P1-1g 迁移改稿/重做 mutation
-- [ ] P1-1h 清理 `useConsoleData` 与残余手写 fetch
-- [ ] P1-2a 抽离类型定义到 types 文件
-- [ ] P1-2b 抽 SettingsPanel
-- [ ] P1-2c 抽 AccountSwitcher
-- [ ] P1-2d 抽任务详情弹窗
-- [ ] P1-2e 抽 AppShell/Layout
+- [x] P1-1c 迁移项目详情 GET
+- [x] P1-1d 迁移任务列表 GET + 条件轮询
+- [x] P1-1e 迁移创建项目 mutation
+- [x] P1-1f 迁移发起任务 mutation
+- [x] P1-1g 迁移改稿/重做 mutation
+- [x] P1-1h 清理 `useConsoleData` 与残余手写 fetch
+- [x] P1-2a 抽离类型定义到 types 文件
+- [x] P1-2b 抽 SettingsPanel
+- [x] P1-2c 抽 AccountSwitcher
+- [x] P1-2d 抽任务详情弹窗
+- [x] P1-2e 抽 AppShell/Layout
 - [x] P2-1a 新建共享事务助手
 - [x] P2-1b tasks.go 切换到共享助手
 - [x] P2-1c montage.go 切换到共享助手
 - [x] P2-1d conversations.go 切换到共享助手
-- [ ] P2-2a 审计缺 json tag 的响应 struct（只出清单）
-- [ ] P2-2b 补齐 timing/phase 相关 json tag
-- [ ] P2-2c 前端删 PascalCase 冗余字段
+- [x] P2-2a 审计缺 json tag 的响应 struct（只出清单）
+- [x] P2-2b 补齐 timing/phase 相关 json tag
+- [x] P2-2c 前端删 PascalCase 冗余字段
 - [x] P2-3 加 `codex_turn_id` 索引 migration
-- [ ] P2-4a 初始化全局 slog logger
-- [ ] P2-4b HTTP 中间件注入 request_id
-- [ ] P2-4c 任务/混剪路径注入 task_id
-- [ ] P2-4d 旧 log 调用迁到 slog
-- [ ] P2-5 契约单一真相源（先出方案）
-- [ ] P3-1a 给 mediaItem 池加 category 分组工具函数 + 测试
-- [ ] P3-1b sampleMedia 后插入相邻去重轮转
-- [ ] P3-2 预检结果复用缓存
-- [ ] P3-3a 定义资源配置结构 + 缺省回退
-- [ ] P3-3b plan.go 从配置读取资源 ID
-- [ ] P3-4 完成 worker 空闲轮询优化
+- [x] P2-4a 初始化全局 slog logger
+- [x] P2-4b HTTP 中间件注入 request_id
+- [x] P2-4c 任务/混剪路径注入 task_id
+- [x] P2-4d 旧 log 调用迁到 slog
+- [x] P2-5 契约单一真相源（先出方案）——方案已写入本文档 P2-5 节
+- [x] P2-5a 契约测试：Go json tag ↔ 前端 TS 字段（`internal/httpapi/contract_types_test.go`）
+- [ ] P2-5b 以 Go struct 为源生成 TS 类型——**未拍板，勿动手**（见 P2-5 节「边界」）
+- [x] P3-1a 给 mediaItem 池加 category 分组工具函数 + 测试
+- [x] P3-1b sampleMedia 后插入相邻去重轮转
+- [x] P3-2 预检结果复用缓存
+- [x] P3-3a 定义资源配置结构 + 缺省回退
+- [x] P3-3b plan.go 从配置读取资源 ID
+- [x] P3-4 完成 worker 空闲轮询优化（共享 ticker + 唤醒扇出）
 - [x] DOC 修正 AI-HANDOFF 的 8s/10s 漂移 + 更新测试基线为"全绿"
 
 ---
@@ -98,11 +100,19 @@ npm --prefix web run build:verify   # 输出到 .tmp，不改嵌入 dist
 | P2-3 | `internal/store/migrations.go` | 追加 `CREATE INDEX codex_tasks_turn_idx ON codex_tasks(codex_turn_id)`。原 `codex_tasks_thread_turn_idx` 前导列是 `codex_thread_id`，无法服务只按 `codex_turn_id` 过滤的 turn 热路径 |
 | P1-1a | 新增 `web/src/query/keys.ts` | 集中 query key 工厂（accounts/projects/project/tasks/task/runtime/settings） |
 | P1-1b | `web/src/console/useConsoleData.ts`、`App.tsx`(1 行) | 内部改用 `useQuery`，**对外保留 `setAccounts`/`setProjects`/`reload` 命令式接口**（写入走 `queryClient.setQueryData`），因此 `App.tsx` 的乐观更新调用点无需改动。原 hook 不自动请求，故新增 `enabled` 参数并在调用点传 `authenticated === true`，与 `useRuntimeQuery` 约定一致 |
-
-### 给下一位接手者的提示
-
-- P1-1c 起（项目详情/任务列表迁移）需要处理 `App.tsx` 里 `loadDetail` 的命令式逻辑：`AbortController`、`detailGenerationRef` 代次校验、`detailInFlightRef`/`detailQueuedRef` 排队、`taskCacheRef` 任务级缓存。这套逻辑是为了解决切项目竞态与按需 hydrate，**迁移前先读懂它再动**，不要直接替换成裸 `useQuery`。
-- P1-2（拆分 `App.tsx`）建议在 P1-1 完成后做，否则拆出来的组件仍要接一堆手写 fetch。
+| P1-1c~h | `App.tsx`、`web/src/query/keys.ts` | 项目详情与任务列表迁 `useQuery`（局部 `retry:false`）；轮询节奏改为条件式（任务弹窗打开 5s / 有活跃任务 8s / 否则停）；创建项目、发起任务、改稿重做改 `useMutation`。保留了 `loadDetail` 原有的竞态防护语义（代次校验 + 任务级缓存 hydrate），没有退化成裸 `useQuery` |
+| P1-2a~e | 新增 `web/src/{types.ts,shell/ConsoleHome.tsx,tasks/{TaskDetailDialog.tsx,task-view.ts},assets/{AssetPreviewDialog.tsx,ReviseDialog.tsx,asset-labels.ts},idea/{IdeaPlannerDialog.tsx,useIdeaPlanner.ts},chat/{ChatWorkbenchDialog.tsx,useChatWorkbench.ts},settings/{SettingsPanel.tsx,useSettingsDialog.ts},projects/{useProjectActions.ts,stages.ts},accounts/AccountSwitcher.tsx}` | `App.tsx` 从 2895 行降到 1086 行。留在 `App.tsx` 的是跨弹窗的全局关注点：认证/csrf、主题、选中项目、URL 与 History 同步、WebSocket 订阅、模态焦点陷阱与 Escape 分层、任务水合。**`App.test.tsx` 里按源码字符串断言的用例同步改为跨文件统计**（弹窗 JSX 已不在 `App.tsx`），否则会假红 |
+| P2-2a~c | [审计报告](audits/2026-08-12-p2-2a-json-tag-audit.md)、`internal/domain/timings.go` 等、`web/src/types.ts` | 47 个字段补齐 snake_case tag；前端删掉 PascalCase 兼容字段。这些类型只经列级扫描，无 `json.Unmarshal` 持久化路径，故可直接改 |
+| P2-4a~d | 新增 `internal/logging/{logging.go,context.go}`；全仓 `log` 调用点 | JSON handler → stderr，级别由 `VIDEO_CONSOLE_LOG_LEVEL` 控制。`RequestID` 中间件包住整个 mux（含静态资源），复用入站 `X-Request-Id` 但**严格净化**（≤128 字节、全部可打印 ASCII）以挡头注入，并回写同名响应头。剩余两处标准库 `log` 是有意的桥（`StdLogger` 适配器、`assets` 对账函数参数） |
+| P3-1a/b | 新增 `montageplan/diversify.go`；`plan.go:409` | `interleaveByCategory` 在稳定排序之后、截断之前插入，保证相邻优先不同 category；完全确定性（不依赖 map 迭代序）；单 category 时原样返回、不报错 |
+| P3-2 | 新增 `montageplan/mediascan.go` | 索引扫描结果按 `(Clean(indexPath), Clean(mediaRoot))` 缓存，用 mtime+size 失效。两条正确性保护：strict 提前退出的 partial 扫描永不发布；读完后再 `Stat` 一次确认同一份文件才发布。因此缓存条目一定描述整份索引 |
+| P3-3a/b | 新增 `montageplan/resources.go`；`plan.go` | 转场/SFX/BGM 资源 ID 改为配置读取，默认值仍是原硬编码值（保持渲染一致）。配置位置：machine profile 内联 `montage_resources` 或 `montage_resources_path` 指向独立 JSON；逐字段覆盖，空值保留默认 |
+| P3-4 | `internal/conversation/broker.go:798-833` | 4 个 completion worker 的各自 1s ticker 收敛为**单一共享 ticker** `sweepCompletions` + `completionTick` 扇出。空闲时每周期只开一次认领事务（原先约 4 次），且不再同相位惊群；认领正确性仍由 `BEGIN IMMEDIATE` 保证 |
+| BUG（P2-2 复核外溢） | `internal/httpapi/ideas.go:254`、`ideas_test.go:315-334` | 复核 json tag 时发现的**线上真 bug**：`POST /api/ideas/{id}/select` 直接序列化裸 `domain.Project`（该 struct 无 json tag），响应键是 `ID`/`AccountID`，而前端读 `project.id`/`project.account_id`（`App.tsx:178-189`）。后果：确认选题后 `setAccount(undefined)` 清空当前账号、看板插入一张 id 为 undefined 的卡、`openProject` 写出 `/projects/undefined` 被路由正则拒绝而弹回看板。改用 `toProjectView`（其余 5 处项目响应本来就都走它，此处是唯一漏网）。**原有测试为何没抓到**：它用 `json:"stage"` 反序列化断言，而 `encoding/json` 匹配键名大小写不敏感，`"Stage"` 照样填得进去；新断言改为直接检查原始键名，并已用「回退修复→测试转红」验证过 |
+| FLAKE | `internal/codexapp/manager.go`（`startAttempt.joined`）、`manager_test.go` | `TestManagerCanceledInitializationFailsAllWaitersAndCleansUp` 约每 8 次失败 1 次（实测 8 次里 1 次），此前被当成"负载抖动"。真因是测试竞态：`cancel()` 可能早于第二个 `Ensure` 挂上 in-flight attempt，而 `finishAttempt` 会清掉 `m.starting`（`manager.go:313-315`），于是迟到者另起一次全新初始化、阻塞等一个没人回答的 `initialize`，1 秒后超时。给 `startAttempt` 加只增不减的 `joined` 计数（在 `waitForAttempt` 挂起前自增），测试据此精确等待再 cancel。修后同一用例连跑 40 次全绿，`go test ./...` 连跑 2 轮全绿。**注意本机 `-race` 不可用**（无 cgo：`-race requires cgo`），并发回归只能靠 `-count=N` 压 |
+| P2-5a | 新增 `internal/httpapi/contract_types_test.go` | 6 组配对（TaskPhaseRun/TaskTimingSummary/ChatMessage/TaskEvent/SemanticEvent/projectView↔ProjectSummary）。断言方向是**单向的 TS ⊆ Go**：TS 声明了 Go 不发的键 = 前端读到 undefined，必须红；Go 有前端不用的键只是多余载荷，允许。若要求双向相等，前端就被迫声明 `external_id`/`detail_json` 这类它根本不用的字段。未打 tag 的导出字段按 Go 字段名记录，因此裸 struct 会被同一个测试的 snake_case 断言抓住。已用「删掉 `ChatMessage.DeliveryStatus` 的 tag → 两条断言同时转红」验收 |
+| P2-5 | 本文档 P2-5 节 | 只出方案。复核后发现工单原假设的"三份手写真相"只部分成立，故拆成 P2-5a（契约测试，低风险）与 P2-5b（代码生成，待拍板） |
+| DOC | 新增 [ARCHITECTURE.md](ARCHITECTURE.md)；删除 `docs/superpowers/`（15 份计划/设计稿）与 `docs/history/`（交付快照） | 补了一份"读一遍就懂全项目"的全景说明；删掉的历史稿共 467 个未勾选复选框却全部早已实现，会让接手者误判为待办。`README.md`/`AI-HANDOFF.md` 改为指向全景说明，不再重复架构描述 |
 
 ---
 
@@ -429,6 +439,29 @@ Set-Location web; npm remove @dnd-kit/core @dnd-kit/sortable
 
 **边界：** 基础设施改动，务必先方案后实施。
 
+#### 选型结论（2026-08-12，待用户确认后才实施）
+
+复核后发现工单原始描述里"三份手写真相"这个前提**只在一部分范围内成立**，选型必须先按这个事实分层，否则会为不存在的重叠付出生成器成本。
+
+实际存在的是两类互不重叠的契约：
+
+1. **Codex 进程间契约**（`schemas/task-manifest.schema.json`、`codex-result.schema.json`、`topic-candidates.schema.json`）。它们描述控制台与 Codex CLI / skill 之间交换的**文件**，Go 侧对应 `internal/codex/manifest.go` 等 struct。schema 在运行时被真正当校验器使用，不只是文档：`cmd/console/main.go:438` 把 `codex-result.schema.json` 交给 runtime，`internal/codex/result_validator_test.go:511` 逐个读取三份 schema 做契约测试。**前端完全不消费这三份 schema**（grep `task-manifest|codex-result|topic-candidates` 在 `web/` 下无命中）。所以这一层是 Go struct ↔ JSON Schema 两份真相，不涉及 TS。
+2. **HTTP 响应契约**（`internal/domain/*.go` 的 json tag ↔ `web/src/types.ts`、`web/src/tasks/event-types.ts`）。这一层是 Go struct ↔ TS 类型两份真相，**没有对应的 JSON Schema**——P2-2a 审计已确认 `schemas/` 下没有任何文件描述 timing/phase 响应键（见 [审计报告](audits/2026-08-12-p2-2a-json-tag-audit.md) 与本工单 P2-2a 记录）。`schemas/settings.schema.json` 是唯一例外，但它约束的是**设置输入**的校验规则（如 `secretInput.maxLength = 16KiB`、`additionalProperties: false`），属于安全边界，不是响应形状。
+
+因此**没有任何一个类型同时被三方手写**，选项 (a) 的"一份 schema 生成 Go+TS"缺少落点：为第 2 层新造 schema 只是把两份真相变成三份加一个生成器。
+
+**结论：选 (b) 的方向，但缩小到只解决第 2 层，且分两步、第一步不引入代码生成。**
+
+- **P2-5a（建议先做，低风险）**：加一个 Go 契约测试，用反射遍历 HTTP 响应类型的 json tag，与 `web/src/types.ts` 解析出的字段名比对，任一侧多字段/少字段/拼写不一致即失败。这能立刻抓住 P2-2 那类漂移（前端已消费 `phase_key`、后端却仍输出 `PhaseKey`），且不改任何产品代码、不加构建期依赖、不产生生成物。前端保留手写类型，可继续写注释和窄化联合类型。
+- **P2-5b（仅在 P2-5a 证明字段量继续增长后再做）**：以 Go struct 为源，用 `tygo` 或等价工具生成 `web/src/types.generated.ts`，把生成脚本加进 `scripts/verify-baseline.ps1`，CI 以"生成后 `git diff --exit-code` 为空"检测漂移。**不要选 quicktype**：它以 JSON/Schema 为输入，与选定的 Go-as-source 方向相反。
+- **第 1 层（Codex 契约）明确不动**：schema 是运行时校验器和跨进程约定，由 `result_validator_test.go` 的契约测试守着；从 Go struct 生成它会把安全校验规则（`additionalProperties`、`maxLength`）变成生成器配置，得不偿失。
+
+**P2-5a 验收：** 新增测试在故意把某个 json tag 改回 PascalCase 时失败；`go test ./...` 全绿。
+
+**P2-5a 已实施（`internal/httpapi/contract_types_test.go`）。** 落地时对方案做了一处收紧，理由记在这里以免后人误改：断言不是「两侧字段集相等」，而是**单向的 TS ⊆ Go**。原因是现存配对本来就不相等——`domain.TaskPhaseRun` 有 14 个键，TS `TaskPhaseRun` 只声明 11 个（不含 `external_id`/`detail_json`/`created_at`）。要求相等会逼前端声明它不消费的字段，把类型文件变成后端字段的镜像。单向断言仍然覆盖真正的故障模式：前端读一个没人发的键。另外未打 tag 的导出字段会以 Go 字段名进入键集，于是同一个测试顺带守住「裸 struct 当响应发」这类回归（正是 `ideas.go:254` 那个 bug）。
+
+**边界：** P2-5b 未经用户确认不要动手；引入生成物会改变"前端类型可手写注释"这一现状，需要先取得同意。
+
 ---
 
 ## P3 — 混剪质量与可配置性
@@ -495,7 +528,7 @@ Set-Location web; npm remove @dnd-kit/core @dnd-kit/sortable
 
 ---
 
-### P3-4 完成 worker 空闲轮询优化 ⚠待核
+### P3-4 完成 worker 空闲轮询优化 ✅已完成
 
 **前置依赖：** P0-3（先让 conversation 基线转绿再动并发）。
 

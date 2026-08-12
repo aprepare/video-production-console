@@ -1,5 +1,7 @@
 # P2-2a 审计：HTTP 响应中缺 `json:` tag 的 struct 字段
 
+> 时点快照，结论仍有效。但文中 `web/src/App.tsx:NNNN` 的行号取自 `App.tsx` 拆分前（当时约 2900 行，现为 1086 行），相关调用点已迁到 `web/src/{tasks,assets,projects,chat}/` 等目录——按符号名查找，不要按行号。
+
 审计日期：2026-08-12。范围：`internal/domain`、`internal/httpapi` 全部 `writeJSON` 调用点，以及其它被 HTTP 响应直接序列化的包（`internal/history`、`internal/settings`、`internal/conversation`）。
 
 审计方法：枚举 `internal/httpapi` 下所有 `writeJSON(` 调用点的载荷类型，逐个回溯类型定义，判定字段是否带 `json:` tag；再确认每个类型是否被 `json.Unmarshal` 用于读取库内 JSON 列或磁盘 manifest（决定能否直接改 tag）。
