@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
 import appSource from "./App.tsx?raw";
+import taskDialogSource from "./tasks/TaskDetailDialog.tsx?raw";
 import { parseLocation } from "./project-workbench/routes";
 import { createAppQueryClient } from "./query/client";
 
@@ -391,15 +392,18 @@ test("does not let a completed project A publish request abort or replace projec
 });
 
 test("contains no legacy project drawer or bypass production controls in App source", () => {
-  for (const forbidden of ["renderLegacyProjectDrawer", "remix.spoken_format", "口播稿", "topic_deepen", "spoken_format"]) {
-    expect(appSource).not.toContain(forbidden);
+  const shellSources = [appSource, taskDialogSource];
+  for (const source of shellSources) {
+    for (const forbidden of ["renderLegacyProjectDrawer", "remix.spoken_format", "口播稿", "topic_deepen", "spoken_format"]) {
+      expect(source).not.toContain(forbidden);
+    }
+    expect(source).not.toContain("×");
+    expect(source).not.toContain("●");
+    for (const mojibake of ["锟", "�", "Ã", "鈥"]) expect(source).not.toContain(mojibake);
   }
   expect(appSource).not.toContain("{selected && (\n        <div\n          className=\"drawer-backdrop\"");
-  expect(appSource).not.toContain("×");
-  expect(appSource).not.toContain("●");
-  expect(appSource).toContain('<details className="registered-directory-technical">');
-  expect(appSource).toContain('<summary>路径与文件清单</summary>');
-  for (const mojibake of ["锟", "�", "Ã", "鈥"]) expect(appSource).not.toContain(mojibake);
+  expect(taskDialogSource).toContain('<details className="registered-directory-technical">');
+  expect(taskDialogSource).toContain('<summary>路径与文件清单</summary>');
 });
 
 test.each([

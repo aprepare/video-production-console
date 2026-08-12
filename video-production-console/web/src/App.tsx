@@ -17,11 +17,19 @@ import type { TaskModelOverride } from "./taskModel";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { ProjectCreateForm } from "./projects/ProjectCreateForm";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
-import type { SemanticEvent, TaskEvent } from "./tasks/event-types";
-import type {
-  MontageResult,
-  ProjectDetail as WorkbenchProjectDetail,
-} from "./project-workbench/types";
+import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
+import {
+  derivedMontagePhase,
+  isRunningPhase,
+  liveTaskStatuses,
+  normalizeSemanticEvents,
+  taskEventProgress,
+  taskProgressStatus,
+  taskQuestions,
+  taskTimingPhases,
+} from "./tasks/task-view";
+import type { SemanticEvent } from "./tasks/event-types";
+import type { ProjectDetail as WorkbenchProjectDetail } from "./project-workbench/types";
 import type {
   Account,
   Asset,
@@ -38,8 +46,6 @@ import type {
   PublicSettings,
   Settings,
   Task,
-  TaskPhaseRun,
-  TaskTimingSummary,
   Theme,
 } from "./types";
 
@@ -47,14 +53,6 @@ const historySourceLabels: Record<HistoryThread["source"], string> = {
   desktop: "桌面版",
   cli: "CLI",
   task: "控制台任务",
-};
-const montagePhaseLabels: Record<string, string> = {
-  agent_running: "正在生成明文草稿",
-  plaintext: "明文草稿已生成",
-  registering: "正在登记到剪映",
-  failed: "登记失败",
-  interrupted: "登记已中断",
-  registered: "已登记为正式资产",
 };
 
 function isTechnicalChatMessage(message: ChatMessage) {
@@ -86,52 +84,6 @@ function writeProjectLocation(
   else window.history.replaceState({}, "", target);
 }
 
-const liveTaskStatuses = new Set([
-  "queued",
-  "running",
-  "awaiting_input",
-  "resuming",
-  "waiting_input",
-]);
-
-function latestRegistrationState(montage: MontageResult) {
-  return [...(montage.registration_attempts || [])]
-    .sort((left, right) => right.attempt - left.attempt)[0]?.state?.toLowerCase();
-}
-
-function derivedMontagePhase(task: Task) {
-  if (!task.montage) return task.completion_phase || "agent_running";
-  const attemptState = latestRegistrationState(task.montage);
-  if (attemptState === "failed" || attemptState === "interrupted") return attemptState;
-  if (attemptState === "succeeded") return "registered";
-  if (attemptState === "queued" || attemptState === "running") return "registering";
-  const completion = task.completion_phase || task.montage.phase;
-  if (completion === "plaintext_ready") return "plaintext";
-  if (["agent_running", "registering", "registered"].includes(completion)) return completion;
-  return completion || "agent_running";
-}
-
-function montageHeadline(montage: MontageResult, phase: string) {
-  switch (phase) {
-    case "agent_running":
-      return "Codex 正在生成可登记的明文草稿";
-    case "registered":
-      return "草稿已登记，可以在剪映中继续编辑";
-    case "registering":
-      return "明文草稿已完成，正在登记剪映";
-    case "failed":
-      return "草稿已生成，但登记剪映失败";
-    case "interrupted":
-      return "草稿已保留，登记过程被中断";
-    case "plaintext":
-      return "明文草稿已完成，等待登记剪映";
-    default:
-      return montage.can_retry_registration
-        ? "草稿已生成，可以只重试剪映登记"
-        : "正在生成可登记的明文草稿";
-  }
-}
-
 const THEME_STORAGE_KEY = "video-production-console-theme";
 const PROJECT_COLLAPSE_LIMIT = 4;
 
@@ -160,45 +112,6 @@ const assetLabels: Record<string, string> = {
   mix_draft: "混剪草稿",
   final_video: "成片",
 };
-const statusLabels: Record<string, string> = {
-  queued: "排队中",
-  running: "运行中",
-  awaiting_input: "等待回复",
-  resuming: "恢复中",
-  completed: "已完成",
-  failed: "失败",
-  canceled: "已取消",
-  interrupted: "已中断",
-  waiting_input: "等待回复",
-  cancelled: "已取消",
-};
-const cancellableTaskStatuses = new Set([
-  "queued",
-  "running",
-  "resuming",
-  "awaiting_input",
-  "waiting_input",
-]);
-const taskPhaseStateLabels: Record<string, string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  canceled: "已取消",
-  cancelled: "已取消",
-  interrupted: "已中断",
-};
-const taskActionLabels: Record<string, string> = {
-  "topic.brainstorm": "选题分析",
-  "topic.commit": "保存选题卡",
-  "topic.deepen": "深化选题",
-  "remix.standard": "二创文案",
-  "remix.enhanced": "增强二创文案",
-  "remix.from_topic_card": "根据选题写文案",
-  "remix.review": "文案检查",
-  "montage.plan": "混剪方案",
-  "montage.execute": "混剪草稿",
-};
 const textAssets = new Set([
   "source_script",
   "topic_card",
@@ -207,123 +120,6 @@ const textAssets = new Set([
   "subtitle",
   "subtitle_srt",
 ]);
-function taskTitle(task: Task) {
-  return taskActionLabels[task.action || ""] || task.skill_name || task.type || "Codex 任务";
-}
-
-function taskMessageContent(content: string) {
-  const value = content.trim();
-  if (value === "Plaintext montage draft completed and validated.") {
-    return "明文混剪草稿已生成并校验完成，等待登记到剪映。";
-  }
-  if (!value.startsWith("{")) return content;
-  try {
-    const envelope = JSON.parse(value) as Record<string, unknown>;
-    if (envelope.schema_version !== "2.0" || typeof envelope.action !== "string") return content;
-    const action = envelope.action;
-    const status = envelope.status;
-    if (status === "failed") return "任务没有完成，请查看下方失败原因。";
-    if (status === "awaiting_input") return "Codex 需要你补充信息，请在下方回复。";
-    if (action === "montage.execute") return "明文混剪草稿已生成并校验完成，尚未登记到剪映。";
-    if (action === "topic.brainstorm") return "候选选题已生成，可以选择一个继续深化。";
-    if (action === "topic.commit" || action === "topic.deepen") return "选题卡已处理完成，可在项目素材中查看。";
-    if (action.startsWith("remix.")) return "文案结果已生成，可在项目素材中查看。";
-    return typeof envelope.summary === "string" && envelope.summary.trim()
-      ? envelope.summary
-      : "任务已处理完成。";
-  } catch {
-    return content;
-  }
-}
-
-function taskEventProgress(event: TaskEvent) {
-  const kind = event.kind || "";
-  const displayText = event.display_text || "";
-  const raw = event.raw_json || "";
-  if (displayText) return taskMessageContent(displayText);
-  if (/baokuan_search_materials/i.test(raw)) return "正在检索爆款库素材";
-  if (/baokuan_list_snippets/i.test(raw)) return "正在筛选可借鉴的爆款片段";
-  if (
-    /thread\.started|turn\.started/i.test(kind) ||
-    /thread\.started|turn\.started/i.test(raw)
-  )
-    return "Codex 已启动，正在分析选题";
-  if (/turn\.completed/i.test(kind) || /turn\.completed/i.test(raw))
-    return "正在整理候选选题";
-  if (/error|failed/i.test(kind) || /error|failed/i.test(raw))
-    return "任务遇到问题，正在等待处理";
-  if (/item\.started/i.test(kind) || /item\.started/i.test(raw))
-    return "正在分析素材与选题方向";
-  return "正在推进选题分析";
-}
-
-function taskProgressStatus(task: Task) {
-  if (task.status === "failed")
-    return task.error_message || "任务失败，请查看任务详情";
-  if (task.status === "awaiting_input" || task.status === "waiting_input")
-    return "Codex 正在等待你的回复";
-  if (task.status === "completed") {
-    if (task.action === "topic.brainstorm") return "候选选题已生成";
-    if (task.action === "montage.execute") return "混剪草稿已处理完成";
-    return "任务已完成";
-  }
-  return statusLabels[task.status] || task.status;
-}
-
-function normalizeSemanticEvents(events: SemanticEvent[]) {
-  return events.map((event) => ({
-    id: event.id || "",
-    sequence: event.sequence ?? 0,
-    kind: event.kind || "",
-    phase: event.phase || "",
-    level: event.level || "",
-    title: (event.title || "").trim(),
-    detail: event.detail || "",
-    created_at: event.created_at || "",
-  }));
-}
-
-function taskTimeline(task: Task): string[] {
-  const semantic = normalizeSemanticEvents(task.semantic_events || [])
-    .filter((event) => event.title)
-    .sort((left, right) => left.sequence - right.sequence);
-  const messages = semantic.length
-    ? semantic.map((event) => event.title)
-    : (task.events || []).map(taskEventProgress);
-  const unique = messages.filter(
-    (message, index) => message && messages.indexOf(message) === index,
-  );
-  if (task.status === "failed" && task.error_message) {
-    const withoutGenericFailure = unique.filter(
-      (message) => message !== "任务遇到问题，正在等待处理",
-    );
-    if (!withoutGenericFailure.includes(task.error_message)) {
-      withoutGenericFailure.push(task.error_message);
-    }
-    return withoutGenericFailure.slice(-4);
-  }
-  return unique.slice(-4);
-}
-
-function taskQuestions(task: Task): string[] {
-  const message = [...(task.messages || [])]
-    .reverse()
-    .find((item) => item.role === "assistant" && item.question_schema);
-  if (!message?.question_schema) return [];
-  try {
-    const parsed = JSON.parse(message.question_schema) as Array<
-      string | { text?: string }
-    >;
-    return parsed
-      .map((question) =>
-        typeof question === "string" ? question : question.text || "",
-      )
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
 const noTasks: Task[] = [];
 
 function App() {
@@ -2086,7 +1882,6 @@ function App() {
     chatDetail?.messages.filter((item) => !isTechnicalChatMessage(item)) || [];
   const technicalChatMessages =
     chatDetail?.messages.filter(isTechnicalChatMessage) || [];
-  const openMontagePhase = taskOpen?.montage ? derivedMontagePhase(taskOpen) : "";
   const modalLayerOpen = Boolean(
     preview || reviseOpen || settingsOpen || ideaOpen || chatOpen || taskOpen,
   );
@@ -2766,274 +2561,25 @@ function App() {
         </div>
       )}
       {taskOpen && (
-        <div className="modal-backdrop">
-          <section
-            className="preview-modal task-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="task-dialog-title"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-head">
-              <div>
-                <span className="muted">Codex 任务详情</span>
-                  <h2 id="task-dialog-title">{taskTitle(taskOpen)}</h2>
-                {selected ? <p className="task-project-context">当前项目：{selected.title}</p> : null}
-              </div>
-              <button className="close" aria-label="关闭任务详情" onClick={closeTask}>
-                <X size={20} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="task-modal-meta">
-              <span className={`task-status status-${taskOpen.status}`}>
-                {statusLabels[taskOpen.status] || taskOpen.status}
-              </span>
-              <span>{taskOpen.id}</span>
-              {(taskOpen.model || taskOpen.reasoning_effort) && (
-                <span>{[taskOpen.model, taskOpen.reasoning_effort].filter(Boolean).join(" · ")}</span>
-              )}
-              {typeof taskElapsedMS(taskOpen, timingNow) === "number" ? (
-                <span aria-label="任务总耗时">总耗时 {formatDuration(taskElapsedMS(taskOpen, timingNow))}</span>
-              ) : null}
-              {cancellableTaskStatuses.has(taskOpen.status) && (
-                <button className="secondary" onClick={() => void cancelTask(taskOpen)}>
-                  停止任务
-                </button>
-              )}
-            </div>
-            {taskOpen.action === "montage.execute" && taskOpen.montage ? (
-              <section className={`montage-result phase-${openMontagePhase}`}>
-                <div className="montage-result-head">
-                  <div>
-                    <span>剪映草稿登记</span>
-                    <h3>{montageHeadline(taskOpen.montage, openMontagePhase)}</h3>
-                  </div>
-                  <span className="montage-phase-badge">
-                    {montagePhaseLabels[openMontagePhase] || "正在准备混剪草稿"}
-                  </span>
-                </div>
-                {taskOpen.montage.workspace ? (
-                  <p className="montage-retained">
-                    明文产物已保留：{taskOpen.montage.workspace.filename || "未命名草稿"}。登记失败时不会重新生成或删除。
-                  </p>
-                ) : null}
-                {taskOpen.montage.registration_attempts?.[0]?.error_message ? (
-                  <p className="warning">{taskOpen.montage.registration_attempts?.[0]?.error_message}</p>
-                ) : null}
-                {taskOpen.montage.registered_asset ? (
-                  <div className="registered-directory">
-                    <details className="registered-directory-technical">
-                      <summary>路径与文件清单</summary>
-                      <dl>
-                        <dt>正式项目资产</dt><dd>{taskOpen.montage.registered_asset.filename || "未命名草稿"}</dd>
-                        <dt>剪映路径</dt>
-                        <dd>{directoryManifest?.registered_path || taskOpen.montage.registered_asset.path}</dd>
-                      </dl>
-                      {directoryManifest ? (
-                        <div className="directory-manifest">
-                          <p>目录文件清单（{directoryManifest.entries.length} 项）</p>
-                        <ul>
-                          {directoryManifest.entries.slice(0, 80).map((entry) => (
-                            <li key={`${entry.kind}-${entry.path}`}>
-                              <span>{entry.path}</span>
-                              <small>
-                                {entry.kind === "directory" ? "文件夹" : formatSize(entry.size)}
-                              </small>
-                            </li>
-                          ))}
-                        </ul>
-                        {directoryManifest.entries.length > 80 ? (
-                          <p>清单较长，这里只展示前 80 项；目录共 {directoryManifest.entries.length} 项。</p>
-                        ) : null}
-                        </div>
-                      ) : null}
-                    </details>
-                    {isLoopbackBrowser ? (
-                      <button
-                        type="button"
-                        disabled={openingDirectory}
-                        onClick={() =>
-                          void openRegisteredDirectory(taskOpen.montage!.registered_asset!.id)
-                        }
-                      >
-                        {openingDirectory ? "正在打开…" : "在电脑上打开剪映目录"}
-                      </button>
-                    ) : null}
-                    {directoryManifestStatus ? (
-                      <p className="directory-status" aria-live="polite">{directoryManifestStatus}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-                {taskOpen.montage.can_retry_registration ? (
-                  <button onClick={() => void retryMontageRegistration(taskOpen)}>
-                    只重试剪映登记
-                  </button>
-                ) : null}
-              </section>
-            ) : null}
-            {taskOpen.timing_summary || taskOpen.timing_runs?.length || typeof taskElapsedMS(taskOpen, timingNow) === "number" ? (
-              <section className="task-timing" aria-label="任务阶段耗时">
-                <h3>阶段耗时</h3>
-                {taskOpen.timing_summary ? (
-                  <p className="task-timing-summary">
-                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms") || taskElapsedMS(taskOpen, timingNow))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms"))}{taskOpen.timing_summary.queue_estimated ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms"))}
-                  </p>
-                ) : (
-                  <p className="task-timing-summary">
-                    总计 {formatDuration(taskElapsedMS(taskOpen, timingNow))}
-                  </p>
-                )}
-                <ul className="task-timing-list">
-                  {taskTimingPhases(taskOpen).map((phase, index) => {
-                    const phaseID = phaseStringValue(phase, "id");
-                    const phaseKey = phaseStringValue(phase, "phase_key");
-                    const state = phaseStringValue(phase, "state");
-                    const duration = phaseDurationMS(phase, timingNow);
-                    return (
-                      <li key={phaseID || `${phaseKey}-${index}`}>
-                        <strong>{phaseStringValue(phase, "display_name") || phaseKey || "未命名阶段"}</strong>
-                        <span>{taskPhaseStateLabels[state] || state || "暂无状态"}</span>
-                        <time aria-label={state === "running" ? "运行时长" : "阶段耗时"}>
-                          {formatDuration(duration)}
-                        </time>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {taskOpen.timing_summary?.legacy_without_phases ? <p className="muted">该任务没有已持久化的阶段运行记录，不能据此判定阶段是否开始。</p> : null}
-              </section>
-            ) : null}
-            {taskOpen.prompt_snapshot && (
-              <details className="technical-diagnostics">
-                <summary>任务原始说明</summary>
-                <pre className="asset-text">{taskOpen.prompt_snapshot}</pre>
-              </details>
-            )}
-            {taskOpen.messages?.length ? (
-              <section>
-                <h3>对话记录</h3>
-                {taskOpen.messages.map((item, index) => (
-                  <div className={`task-message ${item.role}`} key={item.id || `${item.role}-${item.created_at}-${index}`}>
-                    <b>{item.role === "user" ? "你" : "Codex"}</b>
-                    <p>{taskMessageContent(item.content)}</p>
-                  </div>
-                ))}
-              </section>
-            ) : null}
-            {taskTimeline(taskOpen).length ? (
-              <section>
-                <h3>处理进度</h3>
-                <ol className="task-timeline task-timeline-expanded">
-                  {taskTimeline(taskOpen).map((item, index) => (
-                    <li key={`${taskOpen.id}-modal-progress-${index}`}>{item}</li>
-                  ))}
-                </ol>
-              </section>
-            ) : null}
-            {taskOpen.events?.length ? (
-              <details className="technical-diagnostics">
-                <summary>技术诊断（{taskOpen.events.length}）</summary>
-                {taskOpen.events.map((item, index) => (
-                  <p className="event" key={item.id || `${item.sequence || 0}-${index}`}>
-                    {item.display_text || "技术事件"}
-                  </p>
-                ))}
-              </details>
-            ) : null}
-            {taskOpen.result_summary && (
-              <section className="task-result-summary">
-                <h3>完成结果</h3>
-                <p>{taskOpen.result_summary}</p>
-                {taskOpen.completion_phase ? <small>结果阶段：{taskOpen.completion_phase}</small> : null}
-              </section>
-            )}
-            {taskOpen.error_message && (
-              <p className="warning">{taskOpen.error_message}</p>
-            )}
-            {taskQuestions(taskOpen).length > 0 && (
-              <section className="task-question">
-                <strong>Codex 正在问：</strong>
-                {taskQuestions(taskOpen).map((question, index) => (
-                  <p key={`${taskOpen.id}-modal-question-${index}`}>{question}</p>
-                ))}
-                <form
-                  className="task-answer-compose"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (taskAnswerInput.trim()) void answerTask(taskOpen, taskAnswerInput.trim());
-                  }}
-                >
-                  <label htmlFor="task-answer-input">回答 Codex</label>
-                  <textarea
-                    id="task-answer-input"
-                    rows={3}
-                    value={taskAnswerInput}
-                    onChange={(event) => setTaskAnswerInput(event.target.value)}
-                    placeholder="在这里回答，Codex 会从当前任务继续"
-                  />
-                  <button disabled={!taskAnswerInput.trim()}>发送回答</button>
-                </form>
-              </section>
-            )}
-          </section>
-        </div>
+        <TaskDetailDialog
+          task={taskOpen}
+          projectTitle={selected?.title || ""}
+          timingNow={timingNow}
+          directoryManifest={directoryManifest}
+          directoryManifestStatus={directoryManifestStatus}
+          canOpenDirectory={isLoopbackBrowser}
+          openingDirectory={openingDirectory}
+          answerInput={taskAnswerInput}
+          onAnswerInputChange={setTaskAnswerInput}
+          onClose={closeTask}
+          onCancelTask={(task) => void cancelTask(task)}
+          onRetryRegistration={(task) => void retryMontageRegistration(task)}
+          onOpenDirectory={(assetID) => void openRegisteredDirectory(assetID)}
+          onAnswer={(task, answer) => void answerTask(task, answer)}
+        />
       )}
     </div>
   );
-}
-
-type TimingNumberKey = "total_ms" | "preparation_ms" | "queue_ms" | "execution_ms";
-type PhaseStringKey = "id" | "phase_key" | "display_name" | "state" | "started_at";
-
-function timingValue(summary: TaskTimingSummary | undefined, key: TimingNumberKey) {
-  const value = summary?.[key];
-  return typeof value === "number" ? value : 0;
-}
-function phaseStringValue(phase: TaskPhaseRun, key: PhaseStringKey) {
-  const value = phase[key];
-  return typeof value === "string" ? value : "";
-}
-function taskTimingPhases(task: Task) {
-  if (task.timing_runs?.length) return task.timing_runs;
-  return task.timing_summary?.phases || [];
-}
-function isRunningPhase(phase: TaskPhaseRun) {
-  return phaseStringValue(phase, "state") === "running";
-}
-function phaseDurationMS(phase: TaskPhaseRun, now: number) {
-  if (typeof phase.duration_ms === "number") return phase.duration_ms;
-  if (!isRunningPhase(phase)) return undefined;
-  const startedAt = Date.parse(phaseStringValue(phase, "started_at"));
-  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined;
-}
-function taskElapsedMS(task: Task, now: number) {
-  const summaryTotal = timingValue(task.timing_summary, "total_ms");
-  if (summaryTotal > 0) return summaryTotal;
-  const finishedAt = Date.parse(task.finished_at || "");
-  const startedAt = Date.parse(task.started_at || task.created_at || "");
-  if (Number.isFinite(finishedAt) && Number.isFinite(startedAt) && finishedAt >= startedAt) {
-    return finishedAt - startedAt;
-  }
-  if (
-    Number.isFinite(startedAt)
-    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status)
-  ) {
-    return Math.max(0, now - startedAt);
-  }
-  return undefined;
-}
-function formatDuration(ms?: number) {
-  if (typeof ms !== "number") return "暂无";
-  if (ms < 1000) return `${ms} ms`;
-  const totalSeconds = ms / 1000;
-  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds - minutes * 60;
-  if (minutes < 60) return `${minutes} 分 ${seconds.toFixed(0)} 秒`;
-  const hours = Math.floor(minutes / 60);
-  const remainMinutes = minutes % 60;
-  return `${hours} 小时 ${remainMinutes} 分`;
 }
 
 function stageLabel(stage: Project["stage"]) {
@@ -3066,11 +2612,6 @@ function projectStageHint(stage: Project["stage"]) {
 }
 function accountName(id: string, accounts: Account[]) {
   return accounts.find((account) => account.id === id)?.name || "未分配";
-}
-function formatSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 function formatDate(value?: string) {
   return value
