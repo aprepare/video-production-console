@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"video-production-console/internal/assets"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskmodel"
 	"video-production-console/internal/workflow"
@@ -100,7 +100,7 @@ func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.assets != nil {
 		if err := h.assets.DeleteProjectData(id); err != nil {
-			log.Printf("remove deleted project data %s: %v", id, err)
+			logging.LoggerFrom(r.Context()).Error("remove deleted project data", "project_id", id, "error", err)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -511,7 +511,7 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if state == store.CommitNotCommitted {
 			if removeErr := os.Remove(saved.Path); removeErr != nil {
-				log.Printf("remove uncommitted project asset: %v", removeErr)
+				logging.LoggerFrom(r.Context()).Error("remove uncommitted project asset", "project_id", id, "asset_type", string(typ), "error", removeErr)
 			}
 		}
 		if state == store.CommitUnknown {
@@ -525,7 +525,7 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 		SyncStageFromAssets(context.Context, string, time.Time) (domain.Project, error)
 	}); ok {
 		if _, syncErr := syncer.SyncStageFromAssets(r.Context(), id, time.Now().UTC()); syncErr != nil {
-			log.Printf("sync project stage after upload %s: %v", id, syncErr)
+			logging.LoggerFrom(r.Context()).Error("sync project stage after upload", "project_id", id, "asset_type", string(typ), "error", syncErr)
 		}
 	}
 	writeJSON(w, 201, toAssetView(a))

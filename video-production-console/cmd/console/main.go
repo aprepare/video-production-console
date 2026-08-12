@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -89,11 +89,11 @@ func main() {
 	settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
 	codexPath, err := exec.LookPath(settings.CodexBinaryPath)
 	if err != nil {
-		log.Fatalf("resolve Codex binary: %v", err)
+		fatal("resolve Codex binary", "error", err)
 	}
 	settings.CodexBinaryPath, err = filepath.Abs(codexPath)
 	if err != nil {
-		log.Fatal(err)
+		fatal("resolve absolute Codex binary path", "codex_binary_path", codexPath, "error", err)
 	}
 	if settings.ObsidianVault != "" {
 		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
@@ -101,18 +101,18 @@ func main() {
 	desktopWorkingDirectory := resolveDesktopWorkingDirectory(workingDirectory)
 	homeDirectory, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("resolve user home: %v", err)
+		fatal("resolve user home", "error", err)
 	}
 	defaultTaskProjectRoot := defaultCodexTaskProjectRoot(homeDirectory)
 	db, err := store.Open(settings.DatabasePath)
 	if err != nil {
-		log.Fatal(err)
+		fatal("open console database", "database_path", settings.DatabasePath, "error", err)
 	}
 	defer db.Close()
 	settingsService := consoleSettings.NewService(store.NewSettingsRepository(db), security.NewSecretProtector())
 	boot := consoleSettings.BootSettings{ListenAddr: settings.ListenAddr, DataRoot: settings.DataRoot, CodexBinaryPath: settings.CodexBinaryPath, ObsidianVault: settings.ObsidianVault, CodexTaskProjectRoot: defaultTaskProjectRoot, CodexWorkspaceRoots: uniqueCanonicalPaths([]string{workingDirectory, desktopWorkingDirectory, settings.DataRoot, defaultTaskProjectRoot})}
 	if err := settingsService.InitializeBootSettings(context.Background(), boot); err != nil {
-		log.Fatalf("initialize settings: %v", err)
+		fatal("initialize settings", "error", err)
 	}
 	// Codex Desktop replaces its versioned binary directory during updates.
 	// Repair a stale persisted path from the resolved executable before loading
@@ -121,15 +121,15 @@ func main() {
 		if _, statErr := os.Stat(publicView.Public.CodexBinaryPath); os.IsNotExist(statErr) {
 			publicView.Public.CodexBinaryPath = settings.CodexBinaryPath
 			if _, updateErr := settingsService.PutPublic(context.Background(), publicView.Public); updateErr != nil {
-				log.Printf("repair stale Codex binary path: %v", updateErr)
+				slog.Error("repair stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath, "error", updateErr)
 			} else {
-				log.Printf("repaired stale Codex binary path to %s", settings.CodexBinaryPath)
+				slog.Info("repaired stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath)
 			}
 		}
 	}
 	runtimeSettings, err := settingsService.Runtime(context.Background())
 	if err != nil {
-		log.Fatalf("load runtime settings: %v", err)
+		fatal("load runtime settings", "error", err)
 	}
 	settings.ListenAddr = runtimeSettings.ListenAddr
 	settings.DataRoot = runtimeSettings.DataRoot
@@ -145,20 +145,21 @@ func main() {
 		Roots: skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills")),
 	})
 	if _, scanErr := skillsService.ScanAll(context.Background()); scanErr != nil {
-		log.Printf("Skill scan completed with errors; manifest-backed tasks may be unavailable: %v", scanErr)
+		slog.Error("Skill scan completed with errors; manifest-backed tasks may be unavailable", "error", scanErr)
 	}
 	taskPreparer := httpapi.NewTaskManifestPreparer(db, settingsService, skillsService)
-	if err := assetService.ReconcileAccountBackgrounds(context.Background(), db, log.Default()); err != nil {
-		log.Printf("account background reconciliation completed with errors: %v", err)
+	reconciliationLogger := logging.StdLogger(slog.LevelWarn)
+	if err := assetService.ReconcileAccountBackgrounds(context.Background(), db, reconciliationLogger); err != nil {
+		slog.Error("account background reconciliation completed with errors", "error", err)
 	}
-	if err := assetService.ReconcileProjectAssets(context.Background(), db, log.Default()); err != nil {
-		log.Printf("project asset reconciliation completed with errors: %v", err)
+	if err := assetService.ReconcileProjectAssets(context.Background(), db, reconciliationLogger); err != nil {
+		slog.Error("project asset reconciliation completed with errors", "error", err)
 	}
 	taskRepo := store.NewTaskRepository(db)
 	if interrupted, err := taskRepo.InterruptInFlight(context.Background()); err != nil {
-		log.Fatalf("recover interrupted tasks: %v", err)
+		fatal("recover interrupted tasks", "error", err)
 	} else if interrupted > 0 {
-		log.Printf("marked %d unfinished Codex task(s) interrupted after restart", interrupted)
+		slog.Info("marked unfinished Codex tasks interrupted after restart", "interrupted", interrupted)
 	}
 	resolveSkillRoot := func(name string) (string, error) {
 		snapshot, err := skillsService.Latest(context.Background(), name)
@@ -174,7 +175,7 @@ func main() {
 	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveSkillRoot)
 	legacyScheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {
-		log.Fatal(err)
+		fatal("create Codex scheduler", "max_concurrency", runtimeSettings.MaxCodexConcurrency, "error", err)
 	}
 	defer legacyScheduler.Close()
 	remixCoordinator := workflow.NewRemixCoordinator(
@@ -182,37 +183,37 @@ func main() {
 		httpapi.NewWorkflowTaskLauncher(db, legacyScheduler, taskPreparer, settingsService),
 	)
 	legacyScheduler.SetCompletionObserver(remixCoordinator)
-	reconcileRemixWorkflows(context.Background(), remixCoordinator, log.Printf)
+	reconcileRemixWorkflows(context.Background(), remixCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
 	var montageCoordinator *montage.Coordinator
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
 		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
 		if runtimeErr != nil {
-			log.Fatalf("resolve trusted montage runtime: %v", runtimeErr)
+			fatal("resolve trusted montage runtime", "error", runtimeErr)
 		}
 		currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft")
 		if skillErr != nil {
-			log.Fatalf("resolve current Jianying montage Skill: %v", skillErr)
+			fatal("resolve current Jianying montage Skill", "skill", "jianying-montage-draft", "error", skillErr)
 		}
 		trustedMontageRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(trustedMontageRuntime, currentMontageSkill)
 		if runtimeErr != nil {
-			log.Fatalf("resolve trusted Jianying reconciliation runtime: %v", runtimeErr)
+			fatal("resolve trusted Jianying reconciliation runtime", "error", runtimeErr)
 		}
 		montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
 		defer montageCoordinator.Close()
 		if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {
-			log.Printf("recover montage registrations: %v", recoverErr)
+			slog.Error("recover montage registrations", "error", recoverErr)
 		} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
-			log.Printf("recovered %d queued montage registration(s); marked %d interrupted", len(recovery.Queued), len(recovery.Interrupted))
+			slog.Info("recovered montage registrations", "queued", len(recovery.Queued), "interrupted", len(recovery.Interrupted))
 		}
-		reconcileMontageDisplayNames(context.Background(), montageCoordinator, log.Printf)
+		reconcileMontageDisplayNames(context.Background(), montageCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
 		if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
-			log.Printf("audit registered montage drafts: %v", auditErr)
+			slog.Error("audit registered montage drafts", "error", auditErr)
 		} else if audit.Staled > 0 {
-			log.Printf("marked %d of %d montage draft asset(s) stale during startup audit", audit.Staled, audit.Inspected)
+			slog.Warn("marked montage draft assets stale during startup audit", "staled", audit.Staled, "inspected", audit.Inspected)
 		}
 		legacyScheduler.SetCompletionGate(montageCoordinator)
 	} else {
-		log.Printf("montage registration is disabled because no machine profile is configured")
+		slog.Warn("montage registration is disabled because no machine profile is configured")
 	}
 	hub := realtime.NewHub(taskRepo)
 	defer hub.Close()
@@ -236,7 +237,7 @@ func main() {
 		defer broker.Close()
 		conversations = conversation.NewService(store.NewConversationRepository(db), broker, rpc, runtimeSettings.CodexWorkspaceRoots, skillNames(skillsService), conversation.ServiceOptions{DataRoot: runtimeSettings.DataRoot, TaskProjectRoot: runtimeSettings.CodexTaskProjectRoot, DesktopWorkingDirectory: desktopWorkingDirectory})
 		if recoveryErr := conversations.RecoverProjectMainSessions(context.Background()); recoveryErr != nil {
-			log.Printf("recover Codex project routing: %v", recoveryErr)
+			slog.Error("recover Codex project routing", "error", recoveryErr)
 		}
 		historyService = history.NewService(history.NewAppServerSource(rpc), store.NewConversationRepository(db))
 		completionConfig := wireTaskCompletion(legacyScheduler, settings.DataRoot, montageCoordinator, remixCoordinator)
@@ -244,7 +245,7 @@ func main() {
 		completionRetryer = taskAdapter
 		recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 30*time.Second)
 		if recoverErr := broker.Recover(recoveryCtx); recoverErr != nil {
-			log.Printf("recover Codex conversations: %v", recoverErr)
+			slog.Error("recover Codex conversations", "error", recoverErr)
 		}
 		cancelRecovery()
 		scheduler = codex.NewCompositeScheduler(taskRepo, legacyScheduler, taskAdapter, conversations)
@@ -252,7 +253,7 @@ func main() {
 	authStore := store.NewAuthStore(db)
 	authService := consoleauth.NewService(authStore, consoleauth.Options{})
 	if err := initializeAdministrator(context.Background(), authStore.Admin, authService.Bootstrap, os.LookupEnv); err != nil {
-		log.Fatal(err)
+		fatal("initialize administrator", "error", err)
 	}
 	var montageRetryer interface {
 		Retry(context.Context, string) (domain.RegistrationAttempt, error)
@@ -262,10 +263,17 @@ func main() {
 	}
 	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, Conversations: conversations, AppServerHealth: appServerHealth, History: historyService, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
 	server := newServer(settings.ListenAddr, application.Handler())
-	log.Printf("video production console listening on %s", settings.ListenAddr)
+	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
 	if err := serveUntilShutdown(signalCtx, server); err != nil {
-		log.Printf("serve video production console: %v", err)
+		slog.Error("serve video production console", "listen_addr", settings.ListenAddr, "error", err)
 	}
+}
+
+// fatal reports an unrecoverable startup failure through the structured logger
+// and exits, preserving the log.Fatal semantics of the startup chain.
+func fatal(message string, args ...any) {
+	slog.Error(message, args...)
+	os.Exit(1)
 }
 
 type completionObserverSetter interface {
@@ -592,7 +600,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 				if scriptErr == nil {
 					return cmd, root, nil
 				}
-				log.Printf("montage script runtime unavailable, falling back to Codex: %v", scriptErr)
+				slog.Warn("montage script runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", scriptErr)
 			}
 		} else {
 			switch agentruntime.Select(task.Action, agentruntime.LLMRuntimeFromEnv()) {
@@ -601,13 +609,13 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 				if openaiErr == nil {
 					return cmd, root, nil
 				}
-				log.Printf("openai_compat runtime unavailable, falling back to Codex: %v", openaiErr)
+				slog.Warn("openai_compat runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", openaiErr)
 			case agentruntime.RuntimePi:
 				cmd, piErr := buildPiCommand(cfg, task, manifestPath, resolveSkillRoot)
 				if piErr == nil {
 					return cmd, root, nil
 				}
-				log.Printf("pi runtime unavailable, falling back to Codex: %v", piErr)
+				slog.Warn("pi runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", piErr)
 			}
 		}
 		ctx := codex.TaskContext{

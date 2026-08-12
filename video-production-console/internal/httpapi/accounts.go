@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"video-production-console/internal/assets"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/store"
 )
 
@@ -92,7 +92,7 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 	accountID := uuid.NewString()
 	saved, err := h.assets.SaveAccountBackground(accountID, header.Filename, file)
 	if err != nil {
-		writeUploadError(response, err)
+		writeUploadError(request.Context(), response, err)
 		return
 	}
 	assetID := uuid.NewString()
@@ -109,7 +109,7 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 	if err != nil {
 		if state == store.CommitNotCommitted {
 			if removeErr := os.Remove(saved.Path); removeErr != nil {
-				log.Printf("remove uncommitted account background: %v", removeErr)
+				logging.LoggerFrom(request.Context()).Error("remove uncommitted account background", "account_id", accountID, "error", removeErr)
 			}
 		}
 		if state == store.CommitUnknown {
@@ -120,13 +120,13 @@ func (h *accountsHandler) create(response http.ResponseWriter, request *http.Req
 			writeError(response, http.StatusConflict, "account_name_conflict", "An active account with this name already exists.")
 			return
 		}
-		log.Printf("create account: %v", err)
+		logging.LoggerFrom(request.Context()).Error("create account", "account_id", accountID, "error", err)
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
 	stored, readErr := h.repository.Get(request.Context(), account.ID)
 	if readErr != nil {
-		log.Printf("read created account: %v", readErr)
+		logging.LoggerFrom(request.Context()).Error("read created account", "account_id", account.ID, "error", readErr)
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
@@ -190,7 +190,7 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 	defer file.Close()
 	saved, err := h.assets.SaveAccountBackground(id, header.Filename, file)
 	if err != nil {
-		writeUploadError(response, err)
+		writeUploadError(request.Context(), response, err)
 		return
 	}
 	background := store.NewBackground{
@@ -201,7 +201,7 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 	if err != nil {
 		if state == store.CommitNotCommitted {
 			if removeErr := os.Remove(saved.Path); removeErr != nil {
-				log.Printf("remove uncommitted replacement background: %v", removeErr)
+				logging.LoggerFrom(request.Context()).Error("remove uncommitted replacement background", "account_id", id, "error", removeErr)
 			}
 		}
 		if state == store.CommitUnknown {
@@ -212,7 +212,7 @@ func (h *accountsHandler) replaceBackground(response http.ResponseWriter, reques
 			writeError(response, http.StatusNotFound, "account_not_found", "The account was not found.")
 			return
 		}
-		log.Printf("replace account background: %v", err)
+		logging.LoggerFrom(request.Context()).Error("replace account background", "account_id", id, "error", err)
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
@@ -259,7 +259,7 @@ func parseMultipart(response http.ResponseWriter, request *http.Request) bool {
 	return true
 }
 
-func writeUploadError(response http.ResponseWriter, err error) {
+func writeUploadError(ctx context.Context, response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, assets.ErrBackgroundTooBig):
 		writeError(response, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
@@ -268,7 +268,7 @@ func writeUploadError(response http.ResponseWriter, err error) {
 	case errors.Is(err, assets.ErrInvalidImage), errors.Is(err, assets.ErrInvalidAccountID):
 		writeError(response, http.StatusBadRequest, "invalid_background", "Background must be a valid PNG, JPEG, or WebP image.")
 	default:
-		log.Printf("save account background: %v", err)
+		logging.LoggerFrom(ctx).Error("save account background", "error", err)
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 	}
 }
