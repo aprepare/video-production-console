@@ -17,6 +17,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/history"
 	"video-production-console/internal/httpapi"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	consoleSettings "video-production-console/internal/settings"
@@ -153,12 +154,12 @@ func New(options Options) *App {
 	})
 	mux.Handle("/", webui.Handler())
 	if options.AuthService == nil {
-		return &App{handler: mux}
+		return &App{handler: logging.RequestID(mux)}
 	}
 	authHandler := httpapi.NewAuthHandler(options.AuthService)
 	mux.Handle("/api/auth/", authHandler)
 	protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
-	return &App{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return &App{handler: logging.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Health and login must remain reachable before a browser has a session.
 		// The auth handler applies its own protection to all remaining auth routes.
 		if r.URL.Path == "/api/health" || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -166,7 +167,7 @@ func New(options Options) *App {
 			return
 		}
 		protected.ServeHTTP(w, r)
-	})}
+	}))}
 }
 
 func projectRouteHandler(projects, tasks http.Handler, taskRoutesEnabled bool) http.Handler {

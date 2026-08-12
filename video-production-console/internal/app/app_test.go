@@ -15,6 +15,7 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/store"
 	"video-production-console/internal/workflow"
 )
@@ -56,6 +57,36 @@ func TestHealth(t *testing.T) {
 	}
 	if got, want := string(body), "{\"status\":\"ok\"}\n"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestRequestIDMiddlewareIsMountedOnEveryRoute(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	for name, application := range map[string]*App{
+		"unauthenticated": New(Options{}),
+		"protected":       New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth}),
+	} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/accounts", nil))
+		if response.Header().Get(logging.RequestIDHeader) == "" {
+			t.Fatalf("%s: response is missing the %s header", name, logging.RequestIDHeader)
+		}
+
+		echoed := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		request.Header.Set(logging.RequestIDHeader, "upstream-7")
+		application.Handler().ServeHTTP(echoed, request)
+		if got := echoed.Header().Get(logging.RequestIDHeader); got != "upstream-7" {
+			t.Fatalf("%s: %s = %q, want upstream-7", name, logging.RequestIDHeader, got)
+		}
 	}
 }
 
