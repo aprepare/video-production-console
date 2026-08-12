@@ -2,12 +2,13 @@ package config
 
 // Config contains the local console's runtime settings.
 type Config struct {
-	ListenAddr      string
-	DataRoot        string
-	DatabasePath    string
-	BaokuanBaseURL  string
-	CodexBinaryPath string
-	ObsidianVault   string
+	ListenAddr         string
+	DataRoot           string
+	DatabasePath       string
+	BaokuanBaseURL     string
+	CodexBinaryPath    string
+	ObsidianVault      string
+	MachineProfilePath string
 }
 
 // Default returns settings suitable for running the console locally.

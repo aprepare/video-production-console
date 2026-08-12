@@ -90,6 +90,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 | 聊天里有文案但项目不解锁 | 必须走正式任务产出 `continuous_script` |
 | 配置改了没生效 | 看设置页是否 `restart_required`，需要则重启 |
 | 手动上传配音显示网络失败 | 先确认控制台版本包含 `/assets/narration` 独立路由；该入口不依赖自动配音服务。MP3/WAV/M4A 需真实内容与扩展名匹配，且不超过 200MB |
+| 混剪立即报 `No module named 'pyJianYingDraft'` | machine profile 的 `python_binary` 必须写为已安装 `pyJianYingDraft` 的 Python 绝对路径；保存后重启控制台。生成与登记两阶段都必须使用该路径，不能依赖启动终端的 `PATH` |
 | 手机打不开剪映目录 | 设计限制；仅本机控制台电脑可触发 |
 | 数据库在哪 | 权威库：`video-console-data/console.db`；不要误用根目录遗留的 `video-console.db` |
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -420,6 +421,18 @@ func testCodexCommandConfig(t *testing.T, schema string) codex.Config {
 func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
 	t.Setenv(agentruntime.EnvMontageRuntime, "script")
 	dataRoot := t.TempDir()
+	pythonBinary := filepath.Join(t.TempDir(), "python.exe")
+	if err := os.WriteFile(pythonBinary, []byte("test python placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "machine-profile.json")
+	profileRaw, err := json.Marshal(map[string]any{"python_binary": pythonBinary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, profileRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	skillRoot := filepath.Join(t.TempDir(), "jianying-montage-draft")
 	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
 		t.Fatal(err)
@@ -428,7 +441,8 @@ func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
+	base.MachineProfilePath = profilePath
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot, MachineProfilePath: profilePath}, base, func(string) (string, error) {
 		return skillRoot, nil
 	})
 	projectID := "project-montage"
@@ -459,6 +473,9 @@ func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--output-last-message") {
 		t.Fatalf("missing output-last-message in %#v", cmd.Args)
+	}
+	if !strings.Contains(joined, "--python-binary") || !strings.Contains(joined, pythonBinary) {
+		t.Fatalf("missing machine-profile python binary in %#v", cmd.Args)
 	}
 }
 

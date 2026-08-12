@@ -25,15 +25,16 @@ var (
 const taskManifestEnvironmentKey = "VIDEO_CONSOLE_TASK_MANIFEST"
 
 type Config struct {
-	CodexBinaryPath   string
-	ModelName         string
-	ReasoningEffort   string
-	ResultSchema      string
-	OutputLastMessage string
-	WorkingDirectory  string
-	SecretEnvironment map[string]string
-	Redactor          *security.Redactor
-	BinaryResolver    func(string) (string, error)
+	CodexBinaryPath    string
+	ModelName          string
+	ReasoningEffort    string
+	ResultSchema       string
+	OutputLastMessage  string
+	WorkingDirectory   string
+	MachineProfilePath string
+	SecretEnvironment  map[string]string
+	Redactor           *security.Redactor
+	BinaryResolver     func(string) (string, error)
 }
 
 // CommandLaunch describes a native process plus any fixed arguments required

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -136,10 +137,11 @@ func main() {
 	settings.BaokuanBaseURL = runtimeSettings.BaokuanBaseURL
 	settings.CodexBinaryPath = runtimeSettings.CodexBinaryPath
 	settings.ObsidianVault = runtimeSettings.ObsidianVault
+	settings.MachineProfilePath = runtimeSettings.MachineProfilePath
 	runtimeSettings.CodexWorkspaceRoots = uniqueCanonicalPaths(append(runtimeSettings.CodexWorkspaceRoots, desktopWorkingDirectory, runtimeSettings.CodexTaskProjectRoot))
 	// The local proxy rejects Codex's advanced JSON Schema dialect. Results are
 	// still strictly validated by the console before any artifact is accepted.
-	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
+	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, MachineProfilePath: settings.MachineProfilePath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
 	skillsService := skillregistry.NewService(store.NewSkillRepository(db), skillregistry.Options{
 		Roots: skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills")),
@@ -464,7 +466,7 @@ func pathWithinRoot(root, path string) bool {
 }
 
 func runMontageScriptCommand(args []string) error {
-	var manifestPath, skillRoot, outputLast string
+	var manifestPath, skillRoot, outputLast, pythonBinary string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--manifest":
@@ -485,6 +487,12 @@ func runMontageScriptCommand(args []string) error {
 			}
 			i++
 			outputLast = args[i]
+		case "--python-binary":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--python-binary requires a path")
+			}
+			i++
+			pythonBinary = args[i]
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -493,6 +501,7 @@ func runMontageScriptCommand(args []string) error {
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
 		OutputLastMessage: outputLast,
+		PythonBinary:      pythonBinary,
 	})
 }
 
@@ -697,14 +706,43 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
 		return nil, fmt.Errorf("montage script command requires working directory and output-last-message")
 	}
+	pythonBinary, err := montagePythonBinary(cfg.MachineProfilePath)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(exe, "montage-script-run",
 		"--manifest", manifestPath,
 		"--skill-root", skillRoot,
 		"--output-last-message", cfg.OutputLastMessage,
+		"--python-binary", pythonBinary,
 	)
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
 	return cmd, nil
+}
+
+func montagePythonBinary(profilePath string) (string, error) {
+	raw, err := os.ReadFile(strings.TrimSpace(profilePath))
+	if err != nil {
+		return "", fmt.Errorf("read montage machine profile: %w", err)
+	}
+	var profile struct {
+		PythonBinary string `json:"python_binary"`
+	}
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		return "", fmt.Errorf("decode montage machine profile: %w", err)
+	}
+	pythonBinary := strings.TrimSpace(profile.PythonBinary)
+	if pythonBinary == "" {
+		return "", fmt.Errorf("montage machine profile python_binary is required")
+	}
+	if !filepath.IsAbs(pythonBinary) {
+		pythonBinary, err = exec.LookPath(pythonBinary)
+		if err != nil {
+			return "", fmt.Errorf("resolve montage python binary: %w", err)
+		}
+	}
+	return filepath.Abs(pythonBinary)
 }
 
 func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
