@@ -151,10 +151,12 @@ test("a direct project path restores the same project", async () => {
 
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: fixture.project.title })).toBeTruthy();
+  // The loading state already renders the title, so wait on the production rail:
+  // that only mounts once the project detail and its task list have both landed.
+  expect(await screen.findByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: fixture.project.title })).toBeTruthy();
   expect(screen.getByRole("button", { name: "返回项目看板" })).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "先粘贴同行原文" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();

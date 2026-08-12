@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, RotateCcw, X } from "lucide-react";
 import { apiRequest } from "./api/client";
 import { LoginPage } from "./auth/LoginPage";
 import { useConsoleData } from "./console/useConsoleData";
+import { queryKeys } from "./query/keys";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
@@ -360,7 +362,10 @@ function messageTone(message: string) {
   return "info";
 }
 
+const noTasks: Task[] = [];
+
 function App() {
+  const client = useQueryClient();
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const [expandedStages, setExpandedStages] = useState<Set<Project["stage"]>>(
@@ -374,10 +379,6 @@ function App() {
   const [newProject, setNewProject] = useState("");
   const [message, setMessage] = useState("");
   const [selected, setSelected] = useState<Project | null>(null);
-  const [detail, setDetail] = useState<ProjectDetail | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
   const [preview, setPreview] = useState<{
     asset: Asset;
     text?: string;
@@ -433,10 +434,6 @@ function App() {
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
   const pendingProjectActionsRef = useRef(new Set<string>());
-  const detailGenerationRef = useRef(0);
-  const detailAbortRef = useRef<AbortController | null>(null);
-  const detailInFlightRef = useRef(false);
-  const detailQueuedRef = useRef<Project | null>(null);
   const detailRefreshTimerRef = useRef<number | null>(null);
   const taskCacheRef = useRef(new Map<string, Task>());
   const taskOpenIDRef = useRef("");
@@ -465,27 +462,12 @@ function App() {
   }, []);
   const clearProjectSelection = useCallback(() => {
     selectedIDRef.current = "";
-    detailGenerationRef.current += 1;
-    detailAbortRef.current?.abort();
-    detailInFlightRef.current = false;
-    detailQueuedRef.current = null;
     if (detailRefreshTimerRef.current !== null)
       window.clearTimeout(detailRefreshTimerRef.current);
     setSelected(null);
-    setDetail(null);
-    setDetailError("");
-    setTasks([]);
   }, []);
-  const activeTasks = useMemo(
-    () =>
-      tasks.filter((task) => liveTaskStatuses.has(task.status)),
-    [tasks],
-  );
   const activeIdeaSessionID = ideaDraft ? undefined : ideaSession?.id;
-  const activeTaskIDs = useMemo(
-    () => activeTasks.map((task) => task.id).sort().join(","),
-    [activeTasks],
-  );
+  const selectedID = selected?.id ?? "";
   const restartChangedFields = useMemo(() => {
     if (!settings?.restart_required || !settings.active_public) return [];
     const configured = settings.configured_public || settings.public;
@@ -528,114 +510,131 @@ function App() {
     }
   }, [api, reloadConsoleData]);
 
-  const loadDetail = useCallback(
-    async (project: Project) => {
-      if (detailInFlightRef.current && selectedIDRef.current === project.id) {
-        detailQueuedRef.current = project;
-        return;
-      }
-      detailAbortRef.current?.abort();
-      const controller = new AbortController();
-      detailAbortRef.current = controller;
-      detailInFlightRef.current = true;
-      const generation = ++detailGenerationRef.current;
-      const projectID = project.id;
-      setDetailError("");
-      setDetailLoading(true);
-      try {
-        const [p, t] = await Promise.all([
-          api(`/api/projects/${projectID}`, { signal: controller.signal }),
-          api(`/api/tasks?project_id=${projectID}`, { signal: controller.signal }),
-        ]);
-        if (!p.ok || !t.ok) throw new Error("读取项目详情失败");
-        const projectDetail = (await p.json()) as ProjectDetail;
-        const listed = (await t.json()) as Task[];
-        const recentIDs = new Set(
-          [...listed]
-            .sort(
-              (left, right) =>
-                new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-            )
-            .slice(0, 6)
-            .map((task) => task.id),
-        );
-        const fullTasks = await Promise.all(
-          listed.map(async (task) => {
-            const shouldHydrate =
-              liveTaskStatuses.has(task.status) ||
-              recentIDs.has(task.id) ||
-              Boolean(task.action?.startsWith("remix.")) ||
-              taskOpenIDRef.current === task.id;
-            if (!shouldHydrate) return taskCacheRef.current.get(task.id) || task;
-            const cached = taskCacheRef.current.get(task.id);
-            const cacheIsStatic =
-              task.action !== "montage.execute" ||
-              (cached ? derivedMontagePhase(cached) === "registered" : false);
-            if (
-              cached &&
-              cacheIsStatic &&
-              !liveTaskStatuses.has(task.status) &&
-              taskOpenIDRef.current !== task.id
-            )
-              return cached;
-            const [taskResponse, progressResponse, resultResponse] = await Promise.all([
-              api(`/api/tasks/${task.id}`, { signal: controller.signal }),
-              api(`/api/tasks/${task.id}/semantic-events?limit=20`, { signal: controller.signal }),
-              task.action === "montage.execute" || !liveTaskStatuses.has(task.status)
-                ? api(`/api/tasks/${task.id}/result`, { signal: controller.signal })
-                : Promise.resolve(null),
-            ]);
-            const full = taskResponse?.ok
-              ? ((await taskResponse.json()) as Task)
-              : { ...task };
-            if (progressResponse?.ok) {
-              const progress = (await progressResponse.json()) as {
-                events?: SemanticEvent[];
-              };
-              full.semantic_events = normalizeSemanticEvents(progress.events || []);
-            }
-            if (resultResponse?.ok) Object.assign(full, await resultResponse.json());
-            taskCacheRef.current.set(task.id, full);
-            return full;
-          }),
-        );
-        if (
-          controller.signal.aborted ||
-          generation !== detailGenerationRef.current ||
-          selectedIDRef.current !== projectID ||
-          projectDetail.project.id !== projectID
-        ) return;
-        setDetail(projectDetail);
-        const refreshedProject = projectDetail.project;
-        setProjects((current) =>
-          current.map((item) => item.id === projectID
-            ? { ...item, stage: refreshedProject.stage }
-            : item),
-        );
-        setSelected((current) => current?.id === projectID
-          ? { ...current, stage: refreshedProject.stage }
-          : current);
-        setDetailError("");
-        setTasks(fullTasks);
-      } catch (error) {
-        if (!isAbortError(error) && selectedIDRef.current === projectID) {
-          setDetailError("项目详情暂时无法读取");
-          setMessage("项目刷新暂时中断，将在下次活动时重试。");
-        }
-      } finally {
-        if (generation === detailGenerationRef.current) {
-          detailInFlightRef.current = false;
-          setDetailLoading(false);
-          const queued = detailQueuedRef.current;
-          detailQueuedRef.current = null;
-          if (queued && selectedIDRef.current === queued.id)
-            window.setTimeout(() => void loadDetail(queued), 0);
-        }
-      }
+  // Hydrating the list is what makes the workbench usable: the list endpoint only
+  // returns task shells, so live/recent/remix tasks are topped up with their
+  // detail, progress and result payloads. taskCacheRef keeps finished tasks from
+  // being re-fetched on every poll.
+  const hydrateTasks = useCallback(
+    async (projectID: string, signal?: AbortSignal) => {
+      const response = await api(`/api/tasks?project_id=${projectID}`, { signal });
+      if (!response.ok) throw new Error("读取项目任务失败");
+      const listed = (await response.json()) as Task[];
+      const recentIDs = new Set(
+        [...listed]
+          .sort(
+            (left, right) =>
+              new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+          )
+          .slice(0, 6)
+          .map((task) => task.id),
+      );
+      return Promise.all(
+        listed.map(async (task) => {
+          const shouldHydrate =
+            liveTaskStatuses.has(task.status) ||
+            recentIDs.has(task.id) ||
+            Boolean(task.action?.startsWith("remix.")) ||
+            taskOpenIDRef.current === task.id;
+          if (!shouldHydrate) return taskCacheRef.current.get(task.id) || task;
+          const cached = taskCacheRef.current.get(task.id);
+          const cacheIsStatic =
+            task.action !== "montage.execute" ||
+            (cached ? derivedMontagePhase(cached) === "registered" : false);
+          if (
+            cached &&
+            cacheIsStatic &&
+            !liveTaskStatuses.has(task.status) &&
+            taskOpenIDRef.current !== task.id
+          )
+            return cached;
+          const [taskResponse, progressResponse, resultResponse] = await Promise.all([
+            api(`/api/tasks/${task.id}`, { signal }),
+            api(`/api/tasks/${task.id}/semantic-events?limit=20`, { signal }),
+            task.action === "montage.execute" || !liveTaskStatuses.has(task.status)
+              ? api(`/api/tasks/${task.id}/result`, { signal })
+              : Promise.resolve(null),
+          ]);
+          const full = taskResponse?.ok
+            ? ((await taskResponse.json()) as Task)
+            : { ...task };
+          if (progressResponse?.ok) {
+            const progress = (await progressResponse.json()) as {
+              events?: SemanticEvent[];
+            };
+            full.semantic_events = normalizeSemanticEvents(progress.events || []);
+          }
+          if (resultResponse?.ok) Object.assign(full, await resultResponse.json());
+          taskCacheRef.current.set(task.id, full);
+          return full;
+        }),
+      );
     },
-    [api, setProjects],
+    [api],
   );
 
+  // Poll only while something can still change: a running task, or an open task
+  // dialog whose timing bar has to keep ticking.
+  const detailPollInterval = useCallback(() => {
+    if (taskOpenIDRef.current) return 5_000;
+    const cached = client.getQueryData<Task[]>(queryKeys.tasks(selectedIDRef.current));
+    const live = cached?.some((task) => liveTaskStatuses.has(task.status));
+    return live ? 8_000 : (false as const);
+  }, [client]);
+
+  // retry stays off so a failed refresh surfaces the retry affordance at once,
+  // the way the hand-rolled fetch did.
+  const detailQuery = useQuery({
+    queryKey: queryKeys.project(selectedID),
+    enabled: authenticated === true && Boolean(selectedID),
+    refetchInterval: detailPollInterval,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const response = await api(`/api/projects/${selectedID}`, { signal });
+      if (!response.ok) throw new Error("读取项目详情失败");
+      return (await response.json()) as ProjectDetail;
+    },
+  });
+  const tasksQuery = useQuery({
+    queryKey: queryKeys.tasks(selectedID),
+    enabled: authenticated === true && Boolean(selectedID),
+    refetchInterval: detailPollInterval,
+    retry: false,
+    queryFn: ({ signal }) => hydrateTasks(selectedID, signal),
+  });
+
+  // The query key carries the project id, so a response can never land on the
+  // project the user switched to; the guard only covers a mismatched payload.
+  const detail =
+    detailQuery.data?.project.id === selectedID ? detailQuery.data : null;
+  const tasks = tasksQuery.data ?? noTasks;
+  // Both halves used to arrive together, so hold the loading state until the task
+  // list has landed too instead of flashing a workbench with no tasks.
+  const detailReady = Boolean(detail) && tasksQuery.data !== undefined;
+  const detailFailed = detailQuery.isError || tasksQuery.isError;
+  const detailError = detailFailed ? "项目详情暂时无法读取" : "";
+
+  const activeTasks = useMemo(
+    () => tasks.filter((task) => liveTaskStatuses.has(task.status)),
+    [tasks],
+  );
+  const activeTaskIDs = useMemo(
+    () => activeTasks.map((task) => task.id).sort().join(","),
+    [activeTasks],
+  );
+
+  // Callers await this expecting the workbench to show post-mutation data, so
+  // refetch rather than merely invalidate.
+  const loadDetail = useCallback(
+    async (project: Project) => {
+      await Promise.all([
+        client.refetchQueries({ queryKey: queryKeys.project(project.id) }),
+        client.refetchQueries({ queryKey: queryKeys.tasks(project.id) }),
+      ]);
+    },
+    [client],
+  );
+
+  // Task websockets can fire in bursts; collapse them into one refresh.
   const scheduleDetailRefresh = useCallback(
     (project: Project) => {
       if (detailRefreshTimerRef.current !== null)
@@ -647,6 +646,24 @@ function App() {
     },
     [loadDetail],
   );
+
+  useEffect(() => {
+    if (detailFailed) setMessage("项目刷新暂时中断，将在下次活动时重试。");
+  }, [detailFailed]);
+
+  // The board and the header title follow the stage the detail response reports.
+  useEffect(() => {
+    if (!detail) return;
+    const { id, stage } = detail.project;
+    setProjects((current) =>
+      current.some((item) => item.id === id && item.stage !== stage)
+        ? current.map((item) => (item.id === id ? { ...item, stage } : item))
+        : current,
+    );
+    setSelected((current) =>
+      current?.id === id && current.stage !== stage ? { ...current, stage } : current,
+    );
+  }, [detail, setProjects]);
 
   useEffect(() => {
     void (async () => {
@@ -758,14 +775,6 @@ function App() {
     };
   }, [api, chatOpen, chatDetail?.session.id, chatRefreshRevision]);
   useEffect(() => {
-    if (!selected || (!activeTaskIDs && !taskOpen)) return;
-    const timer = window.setInterval(
-      () => scheduleDetailRefresh(selected),
-      taskOpen ? 5000 : 8000,
-    );
-    return () => window.clearInterval(timer);
-  }, [selected, activeTaskIDs, taskOpen, scheduleDetailRefresh]);
-  useEffect(() => {
     if (!selected || !activeTaskIDs) return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const sockets = new Map<string, WebSocket>();
@@ -869,18 +878,12 @@ function App() {
         writeProjectLocation(project.id, "replace", true);
       }
       if (selectedIDRef.current !== project.id) {
-        detailAbortRef.current?.abort();
-        detailInFlightRef.current = false;
-        detailQueuedRef.current = null;
         selectedIDRef.current = project.id;
         setSelected(project);
-        setDetail(null);
-        setTasks([]);
-        void loadDetail(project);
       }
       return true;
     },
-    [clearProjectSelection, loadDetail, projects],
+    [clearProjectSelection, projects],
   );
   useEffect(() => {
     if (!authenticated || loading) return;
@@ -913,15 +916,8 @@ function App() {
     handledURLRevisionRef.current = urlRevision;
     if (selectedIDRef.current === project.id) return;
     selectedIDRef.current = project.id;
-    detailQueuedRef.current = null;
-    detailAbortRef.current?.abort();
-    detailInFlightRef.current = false;
     setSelected(project);
-    setDetail(null);
-    setDetailError("");
-    setTasks([]);
-    void loadDetail(project);
-  }, [authenticated, clearProjectSelection, loadDetail, loading, projects, urlRevision]);
+  }, [authenticated, clearProjectSelection, loading, projects, urlRevision]);
   useEffect(() => {
     if (!authenticated || !projects.length) return;
     const taskID = new URL(window.location.href).searchParams.get("task") || "";
@@ -1066,7 +1062,6 @@ function App() {
     };
   }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, settingsOpen, taskOpen]);
   useEffect(() => () => {
-    detailAbortRef.current?.abort();
     chatAbortRef.current?.abort();
     ideaAbortRef.current?.abort();
     taskRestoreAbortRef.current?.abort();
@@ -1121,15 +1116,8 @@ function App() {
       (taskOpen && taskOpen.project_id !== project.id)
     ) closeTask();
     selectedIDRef.current = project.id;
-    detailQueuedRef.current = null;
-    detailAbortRef.current?.abort();
-    detailInFlightRef.current = false;
     setSelected(project);
-    setDetail(null);
-    setDetailError("");
-    setTasks([]);
     writeProjectLocation(project.id, "push");
-    void loadDetail(project);
   };
   const closeProject = () => {
     closeTask();
@@ -1356,9 +1344,11 @@ function App() {
       );
       if (selectedIDRef.current !== projectID) return;
       setSelected(published);
-      setDetail((current) => current && current.project.id === projectID
-        ? { ...current, project: { ...current.project, stage: "published" } }
-        : current);
+      client.setQueryData<ProjectDetail>(queryKeys.project(projectID), (current) =>
+        current && current.project.id === projectID
+          ? { ...current, project: { ...current.project, stage: "published" } }
+          : current,
+      );
       setMessage("项目已标记为已发布。");
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
@@ -2104,7 +2094,7 @@ function App() {
 
   return (
     <div className="shell">
-      {selected && detail ? (
+      {selected && detail && detailReady ? (
         <ProjectWorkbench
           detail={detail as WorkbenchProjectDetail}
           tasks={tasks}
