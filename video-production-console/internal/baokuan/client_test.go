@@ -22,7 +22,7 @@ func TestClientSearchBundleAndSSEReconnect(t *testing.T) {
 			fmt.Fprint(w, `{"materials":[{"id":"a"}]}`)
 		case "/api/channels/library/materials/bundle":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"materials":[{"id":"a"}]}`)
+			fmt.Fprint(w, `{"code":0,"msg":"成功","data":{"videos":[{"record":{"feed_id":"a"},"transcript":{"text":"完整正文"}}]}}`)
 		case "/api/channels/library/events":
 			events++
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -41,7 +41,7 @@ func TestClientSearchBundleAndSSEReconnect(t *testing.T) {
 		t.Fatalf("search: %v %#v", err, m)
 	}
 	b, err := c.GetMaterialBundle(context.Background(), BundleRequest{FeedIDs: []string{"a"}})
-	if err != nil || len(b.Materials) != 1 {
+	if err != nil || len(b.Videos) != 1 {
 		t.Fatalf("bundle: %v %#v", err, b)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

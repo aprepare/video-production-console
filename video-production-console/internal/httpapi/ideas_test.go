@@ -107,6 +107,45 @@ func (p failingIdeaPreparer) Prepare(context.Context, domain.CodexTask, TaskMani
 	return p.err
 }
 
+type capturingIdeaPreparer struct {
+	request TaskManifestRequest
+}
+
+func (p *capturingIdeaPreparer) Prepare(_ context.Context, _ domain.CodexTask, request TaskManifestRequest) error {
+	p.request = request
+	return nil
+}
+
+func TestIdeaMessagePassesExplicitBaokuanSourcesToManifestPreparation(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/console.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	accountID := uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, accountID, "test", "#000", "active", now, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := store.NewIdeaRepository(db)
+	sessionID := uuid.NewString()
+	if err := repo.CreateSession(t.Context(), domain.IdeaSession{ID: sessionID, AccountID: &accountID, Title: "test", Status: "planning", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	preparer := &capturingIdeaPreparer{}
+	h := NewIdeasHandler(db, persistedIdeaScheduler{tasks: store.NewTaskRepository(db)}, preparer, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/ideas/"+sessionID+"/messages", strings.NewReader(`{"content":"plan","source_feed_ids":["14986230628414069221"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "prepared task manifest was not persisted") {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !slices.Equal(preparer.request.SourceFeedIDs, []string{"14986230628414069221"}) {
+		t.Fatalf("source feed IDs=%v", preparer.request.SourceFeedIDs)
+	}
+}
+
 func TestIdeaMessageDoesNotPublishPreparationOrEnqueueFailure(t *testing.T) {
 	for _, test := range []struct {
 		name       string

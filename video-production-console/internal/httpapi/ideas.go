@@ -123,8 +123,9 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Content   string `json:"content"`
-		AccountID string `json:"account_id"`
+		Content       string   `json:"content"`
+		AccountID     string   `json:"account_id"`
+		SourceFeedIDs []string `json:"source_feed_ids"`
 		taskModelRequest
 	}
 	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
@@ -168,7 +169,7 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := uuid.NewString()
 	task := domain.CodexTask{ID: taskID, AccountID: *account, Type: "topic_select", SkillName: "finance-topic-selector", Action: domain.ActionTopicBrainstorm, Status: domain.TaskQueued, PromptSnapshot: msg.Content, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, CreatedAt: now}
-	prepared, e := prepareAndPublishTask(r.Context(), h.repo.DB(), h.preparer, task, TaskManifestRequest{SessionID: id}, now, h.scheduler.Enqueue, nil)
+	prepared, e := prepareAndPublishTask(r.Context(), h.repo.DB(), h.preparer, task, TaskManifestRequest{SessionID: id, SourceFeedIDs: in.SourceFeedIDs}, now, h.scheduler.Enqueue, nil)
 	if e != nil {
 		var publishErr taskPublishError
 		if errors.As(e, &publishErr) {

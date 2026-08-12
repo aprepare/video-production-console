@@ -657,6 +657,51 @@ func TestTaskManifestPreparerWritesProjectlessTopicManifest(t *testing.T) {
 	}
 }
 
+func TestTaskManifestPreparerSnapshotsExplicitBaokuanSources(t *testing.T) {
+	db, accountID, _, root := setupManifestTask(t, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/channels/library/materials/bundle" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"code": 0,
+			"data": map[string]any{"videos": []any{map[string]any{
+				"record":     map[string]any{"feed_id": "14986230628414069221", "author_name": "每日说财经", "title": "认知觉醒"},
+				"transcript": map[string]any{"feed_id": "14986230628414069221", "status": "completed", "text": "完整转写正文"},
+			}}},
+		})
+	}))
+	defer server.Close()
+	preparer := &taskManifestPreparer{
+		projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db),
+		settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, BaokuanBaseURL: server.URL}}},
+		skills:   manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-topic-selector"}},
+	}
+	task := domain.CodexTask{ID: uuid.NewString(), AccountID: accountID, Action: domain.ActionTopicBrainstorm, Type: "topic_select"}
+	if err := preparer.Prepare(t.Context(), task, TaskManifestRequest{SessionID: uuid.NewString(), SourceFeedIDs: []string{"14986230628414069221"}}); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "projects", task.ID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.EngineeringInputs) != 1 || manifest.EngineeringInputs[0].Type != "baokuan_source_bundle" {
+		t.Fatalf("engineering inputs=%+v", manifest.EngineeringInputs)
+	}
+	bundle, err := os.ReadFile(manifest.EngineeringInputs[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(bundle, []byte("14986230628414069221")) || !bytes.Contains(bundle, []byte("完整转写正文")) {
+		t.Fatalf("source snapshot=%s", bundle)
+	}
+}
+
 func TestTaskManifestPreparerSnapshotsTopicCandidatesIntoCurrentProject(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, false)
 	vault := filepath.Join(root, "vault")

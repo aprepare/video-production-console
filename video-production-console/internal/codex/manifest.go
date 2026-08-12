@@ -123,6 +123,7 @@ type BuildManifestInput struct {
 	ApprovalMode      string
 	SkillSnapshot     domain.SkillSnapshot
 	NonSecretSettings ManifestSettings
+	EngineeringInputs []EngineeringInput
 }
 
 func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
@@ -187,7 +188,7 @@ func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
 		}
 		return inputs[i].Role < inputs[j].Role
 	})
-	engineeringInputs := []EngineeringInput{}
+	engineeringInputs := append([]EngineeringInput{}, in.EngineeringInputs...)
 	if strings.TrimSpace(in.NonSecretSettings.TopicCandidatesPath) != "" {
 		path, err := resolvePath(in.NonSecretSettings.TopicCandidatesPath)
 		if err != nil {
@@ -539,7 +540,7 @@ func validateManifestSchemaValues(manifest TaskManifest) error {
 		}
 	}
 	for i, input := range manifest.EngineeringInputs {
-		if input.Type != "topic_candidates" || strings.TrimSpace(input.Path) == "" {
+		if !engineeringInputTypes[input.Type] || strings.TrimSpace(input.Path) == "" {
 			return fmt.Errorf("engineering input %d is invalid", i)
 		}
 	}
@@ -615,6 +616,11 @@ func requiredDirectoryRoot(label, root string) (string, error) {
 		return "", fmt.Errorf("%s root must be a directory", label)
 	}
 	return resolved, nil
+}
+
+var engineeringInputTypes = map[string]bool{
+	"topic_candidates":      true,
+	"baokuan_source_bundle": true,
 }
 
 var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{

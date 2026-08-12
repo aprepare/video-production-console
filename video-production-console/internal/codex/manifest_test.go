@@ -259,6 +259,27 @@ func TestBuildManifestRequiresActionOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildManifestAcceptsTrustedBaokuanSourceEngineeringInputForBrainstorm(t *testing.T) {
+	root, taskID := t.TempDir(), uuid.NewString()
+	source := filepath.Join(root, "baokuan_source_bundle.json")
+	if err := os.WriteFile(source, []byte(`{"videos":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(BuildManifestInput{
+		Task: domain.CodexTask{ID: taskID}, Action: domain.ActionTopicBrainstorm,
+		OutputDir:         filepath.Join(root, "tasks", taskID, "output"),
+		SkillSnapshot:     domain.SkillSnapshot{ID: uuid.NewString()},
+		NonSecretSettings: ManifestSettings{SessionID: "session"},
+		EngineeringInputs: []EngineeringInput{{Type: "baokuan_source_bundle", Path: source}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.EngineeringInputs) != 1 || manifest.EngineeringInputs[0].Type != "baokuan_source_bundle" {
+		t.Fatalf("engineering inputs=%+v", manifest.EngineeringInputs)
+	}
+}
+
 func TestWriteManifestEnforcesManagedRootsAndAtomicNoOverwrite(t *testing.T) {
 	root := t.TempDir()
 	projectRoot := filepath.Join(root, "projects", uuid.NewString())

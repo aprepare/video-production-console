@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"video-production-console/internal/agentruntime/montageplan"
+	"video-production-console/internal/baokuan"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
@@ -34,6 +36,7 @@ type TaskManifestRequest struct {
 	MachineProfilePath   string    `json:"machine_profile_path,omitempty"`
 	ApprovalMode         string    `json:"approval_mode,omitempty"`
 	RevisionNotes        string    `json:"revision_notes,omitempty"`
+	SourceFeedIDs        []string  `json:"source_feed_ids,omitempty"`
 	PreparationStartedAt time.Time `json:"-"`
 }
 
@@ -180,6 +183,14 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 			return fmt.Errorf("snapshot topic candidates input: %w", err)
 		}
 	}
+	var engineeringInputs []codex.EngineeringInput
+	if task.Action == domain.ActionTopicBrainstorm && len(req.SourceFeedIDs) > 0 {
+		sourcePath, sourceErr := snapshotBaokuanSources(ctx, runtime.BaokuanBaseURL, projectRoot, task.ID, req.SourceFeedIDs)
+		if sourceErr != nil {
+			return fmt.Errorf("snapshot explicit baokuan sources: %w", sourceErr)
+		}
+		engineeringInputs = append(engineeringInputs, codex.EngineeringInput{Type: "baokuan_source_bundle", Path: sourcePath})
+	}
 	accountAssetsRoot := filepath.Join(runtime.DataRoot, "accounts")
 	if err := os.MkdirAll(accountAssetsRoot, 0o700); err != nil {
 		return fmt.Errorf("create account-assets root: %w", err)
@@ -188,6 +199,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		Task: task, Project: projectPtr, Inputs: inputs, Action: task.Action,
 		OutputDir:    filepath.Join(projectRoot, "tasks", task.ID, "output"),
 		ApprovalMode: req.ApprovalMode, SkillSnapshot: snapshot, NonSecretSettings: settings,
+		EngineeringInputs: engineeringInputs,
 	})
 	if err != nil {
 		return fmt.Errorf("build task manifest: %w", err)
@@ -229,6 +241,69 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 	}
 	return nil
+}
+
+const maxExplicitBaokuanSources = 20
+
+func snapshotBaokuanSources(ctx context.Context, baseURL, projectRoot, taskID string, feedIDs []string) (string, error) {
+	cleaned := make([]string, 0, len(feedIDs))
+	seen := make(map[string]struct{}, len(feedIDs))
+	for _, feedID := range feedIDs {
+		feedID = strings.TrimSpace(feedID)
+		if feedID == "" {
+			continue
+		}
+		if _, exists := seen[feedID]; exists {
+			continue
+		}
+		seen[feedID] = struct{}{}
+		cleaned = append(cleaned, feedID)
+	}
+	if len(cleaned) == 0 {
+		return "", fmt.Errorf("at least one source feed ID is required")
+	}
+	if len(cleaned) > maxExplicitBaokuanSources {
+		return "", fmt.Errorf("source feed IDs exceed %d items", maxExplicitBaokuanSources)
+	}
+	bundle, err := baokuan.NewClient(baseURL).GetMaterialBundle(ctx, baokuan.BundleRequest{FeedIDs: cleaned})
+	if err != nil {
+		return "", err
+	}
+	if len(bundle.Missing) > 0 || len(bundle.Videos) != len(cleaned) {
+		return "", fmt.Errorf("requested complete sources are unavailable")
+	}
+	returned := make(map[string]struct{}, len(bundle.Videos))
+	for _, material := range bundle.Videos {
+		record, ok := material["record"].(map[string]any)
+		feedID := ""
+		if ok {
+			feedID = strings.TrimSpace(fmt.Sprint(record["feed_id"]))
+		}
+		if _, requested := seen[feedID]; !requested {
+			return "", fmt.Errorf("baokuan returned an unexpected source")
+		}
+		if _, duplicate := returned[feedID]; duplicate {
+			return "", fmt.Errorf("baokuan returned a duplicate source")
+		}
+		returned[feedID] = struct{}{}
+		transcript, ok := material["transcript"].(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(transcript["text"])) == "" {
+			return "", fmt.Errorf("requested source transcript is unavailable")
+		}
+	}
+	data, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode source bundle: %w", err)
+	}
+	inputDir := filepath.Join(projectRoot, "tasks", taskID, "input")
+	if err := os.MkdirAll(inputDir, 0o700); err != nil {
+		return "", fmt.Errorf("create source input directory: %w", err)
+	}
+	path := filepath.Join(inputDir, "baokuan_source_bundle.json")
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return "", fmt.Errorf("write source bundle: %w", err)
+	}
+	return path, nil
 }
 
 func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task domain.CodexTask, project domain.Project) (string, error) {

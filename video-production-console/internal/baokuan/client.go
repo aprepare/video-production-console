@@ -21,7 +21,12 @@ type DependencyStatus struct {
 
 type Material map[string]any
 type Bundle struct {
-	Materials []Material `json:"materials"`
+	Videos       []Material `json:"videos,omitempty"`
+	Observations []Material `json:"observations,omitempty"`
+	Snippets     []Material `json:"snippets,omitempty"`
+	Missing      []string   `json:"missing,omitempty"`
+	// Materials keeps compatibility with the legacy proxy response shape.
+	Materials []Material `json:"materials,omitempty"`
 }
 type BundleRequest struct {
 	FeedIDs        []string `json:"feed_ids,omitempty"`
@@ -136,9 +141,22 @@ func (c *Client) GetMaterialBundle(ctx context.Context, ids BundleRequest) (Bund
 	if count > 20 {
 		return Bundle{}, fmt.Errorf("material bundle exceeds 20 items")
 	}
-	var out Bundle
-	err := c.doJSON(ctx, http.MethodPost, "/api/channels/library/materials/bundle", ids, &out)
-	return out, err
+	var out struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data Bundle `json:"data"`
+		Bundle
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/api/channels/library/materials/bundle", ids, &out); err != nil {
+		return Bundle{}, err
+	}
+	if out.Code != 0 {
+		return Bundle{}, fmt.Errorf("baokuan bundle failed: %s", strings.TrimSpace(out.Msg))
+	}
+	if len(out.Data.Videos)+len(out.Data.Observations)+len(out.Data.Snippets)+len(out.Data.Missing) > 0 {
+		return out.Data, nil
+	}
+	return out.Bundle, nil
 }
 
 func (c *Client) Health(ctx context.Context) DependencyStatus {

@@ -12,7 +12,7 @@
 
 **一句话定位：**本地视频生产控制台——Go 提供鉴权、项目/资产、Codex 任务调度、对话与实时事件；React/Vite 提供项目看板和五阶段工作台；混剪明文草稿可登记为剪映正式资产。
 
-**当前状态（2026-08-12）：**主流程具备登录、项目隔离、资产管理、Codex/桌面对话、任务进度与恢复、爆款库代理、Obsidian/Skills、混剪登记、五阶段工作台、主题与项目列折叠、配音字幕一键生成（火山 TTS 直接调用）。同行原文闭环已落地：`source_script` 上传 → `remix.standard`（`source_version_id` 绑定与活动任务幂等）→ `continuous_script`（依赖血缘）→ 解锁素材阶段。SPA 路由刷新由 `internal/webui/embed.go` 回退到 `index.html`。
+**当前状态（2026-08-12）：**主流程具备登录、项目隔离、资产管理、Codex/桌面对话、任务进度与恢复、爆款库代理、Obsidian/Skills、混剪登记、五阶段工作台、主题与项目列折叠、配音字幕一键生成（火山 TTS 直接调用）。同行原文闭环已落地：`source_script` 上传 → `remix.standard`（`source_version_id` 绑定与活动任务幂等）→ `continuous_script`（依赖血缘）→ 解锁素材阶段。选题消息支持 `source_feed_ids`：入队前从爆款库快照完整档案与转写为 `baokuan_source_bundle`，避免任务因 MCP 不可用而丢失已明确指定的来源。SPA 路由刷新由 `internal/webui/embed.go` 回退到 `index.html`。
 
 ### 1.1 近期进度快照（接手必读）
 
