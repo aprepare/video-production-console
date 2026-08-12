@@ -3,9 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -62,6 +64,103 @@ type fixedProjectModelResolver struct {
 
 func (r fixedProjectModelResolver) ResolveTaskModel(_ context.Context, _ taskmodel.Selection) (taskmodel.Selection, error) {
 	return r.want, nil
+}
+
+func TestTopicCardVersionUploadCreatesCurrentVersionAndInvalidatesDownstream(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	projects := store.NewProjectRepository(db)
+	if err := projects.CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "topic version", Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	project := projectID
+	oldPath := filepath.Join(root, "old-topic.md")
+	if err := os.WriteFile(oldPath, []byte("---\nstatus: 候选\n---\n# 旧卡\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldBytes, _ := os.ReadFile(oldPath)
+	oldHash := fmt.Sprintf("%x", sha256.Sum256(oldBytes))
+	old, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &project, Type: domain.AssetTopicCard, StorageKind: domain.StorageFile, Path: oldPath, Filename: "old-topic.md", MIMEType: "text/markdown", Size: int64(len(oldBytes)), SHA256: oldHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstreamPath := filepath.Join(root, "script.md")
+	if err := os.WriteFile(downstreamPath, []byte("script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	downstreamBytes, _ := os.ReadFile(downstreamPath)
+	if _, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &project, Type: domain.AssetContinuousScript, StorageKind: domain.StorageFile, Path: downstreamPath, Filename: "script.md", MIMEType: "text/markdown", Size: int64(len(downstreamBytes)), SHA256: fmt.Sprintf("%x", sha256.Sum256(downstreamBytes)), Dependencies: []string{old.ID}}); err != nil {
+		t.Fatal(err)
+	}
+
+	newCard := []byte("---\nstatus: 可写稿\n---\n# 新卡\n\n## 二创交接简报\n\n这是已经完成的二创交接简报。\n")
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "topic-card.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(newCard); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	handler := NewProjectsHandler(db, assets.NewService(root), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/topic-card/versions", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var got assetView
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != domain.AssetTopicCard || got.Version != 2 || got.State != domain.AssetReady {
+		t.Fatalf("asset=%+v", got)
+	}
+	current, err := store.NewAssetRepository(db).CurrentByProject(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[domain.AssetType]domain.AssetState{}
+	for _, version := range current {
+		states[version.Type] = version.State
+	}
+	if states[domain.AssetTopicCard] != domain.AssetReady || states[domain.AssetContinuousScript] != domain.AssetStale {
+		t.Fatalf("states=%v", states)
+	}
+}
+
+func TestTopicCardVersionUploadRejectsNonForwardStatus(t *testing.T) {
+	_, db, root, accountID := newProjectsTestHandler(t, "active")
+	projectID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := store.NewProjectRepository(db).CreateProject(context.Background(), domain.Project{ID: projectID, AccountID: accountID, Title: "topic version", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	project := projectID
+	oldPath := filepath.Join(root, "old-topic.md")
+	oldBytes := []byte("---\nstatus: 候选\n---\n# 旧卡\n")
+	if err := os.WriteFile(oldPath, oldBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &project, Type: domain.AssetTopicCard, StorageKind: domain.StorageFile, Path: oldPath, Filename: "old-topic.md", MIMEType: "text/markdown", Size: int64(len(oldBytes)), SHA256: fmt.Sprintf("%x", sha256.Sum256(oldBytes))}); err != nil {
+		t.Fatal(err)
+	}
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "topic-card.md")
+	_, _ = part.Write([]byte("---\nstatus: 候选\n---\n# 卡\n"))
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/topic-card/versions", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	NewProjectsHandler(db, assets.NewService(root), nil, nil).ServeHTTP(res, req)
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "topic_card_status_invalid") {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
 }
 
 func TestProjectRemixUsesDatabaseIdentityDefaultsAndIsIdempotent(t *testing.T) {

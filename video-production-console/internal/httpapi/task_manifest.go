@@ -184,7 +184,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 	}
 	var engineeringInputs []codex.EngineeringInput
-	if task.Action == domain.ActionTopicBrainstorm && len(req.SourceFeedIDs) > 0 {
+	if (task.Action == domain.ActionTopicBrainstorm || task.Action == domain.ActionRemixFromTopic) && len(req.SourceFeedIDs) > 0 {
 		sourcePath, sourceErr := snapshotBaokuanSources(ctx, runtime.BaokuanBaseURL, projectRoot, task.ID, req.SourceFeedIDs)
 		if sourceErr != nil {
 			return fmt.Errorf("snapshot explicit baokuan sources: %w", sourceErr)

@@ -58,7 +58,7 @@
 ### 3.2 端到端走一遍
 
 1. **选题（可选）**：`topic.brainstorm` 产出 `topic_candidates` 工件 → 落成 idea session 与 3–5 个候选（`internal/httpapi/ideas.go` 的 `message`）。调用方若已明确选中爆款库正式作品，可在消息请求中传 `source_feed_ids`；控制台会在入队前通过爆款库 `/materials/bundle` 读取完整档案与转写，快照为任务 `engineering_inputs` 中的 `baokuan_source_bundle`。它是可验证的正式来源，任务不再依赖 Codex 运行环境里的 MCP 重取同一作品。`topic.commit` 在 Obsidian Vault 写下选题卡，控制台再把这份**已验证的工件**提升为项目的 `topic_card` 资产（`internal/codex/runner.go:338-355`）。
-2. **文案**：上传同行原文成 `source_script` 资产，或用 `topic_card`。发起 `remix.standard` → 产出 `continuous_script`（连续文案）资产。
+2. **文案**：上传同行原文成 `source_script` 资产，或用 `topic_card`。当已登记选题卡需要从“候选”升级为“可写稿”时，使用 `POST /api/projects/{id}/topic-card/versions` 上传 Markdown 新版本；接口验证状态前进与交接简报，创建同一逻辑资产的新版本、更新项目卡片路径，并由资产依赖图把旧卡下游标记为 stale。随后发起 `remix.standard` 或 `remix.from_topic_card` → 产出 `continuous_script`（连续文案）资产。
    - 幂等：同项目已有在跑的 remix 时，请求不带 `source_version_id` 或带的是同一个版本 → 返回既有任务 `200`；带的是**不同**版本 → `409 active_remix_conflict`（`internal/httpapi/tasks.go:164-177`）。
    - 改稿有两条路：弹窗内直接改存（版本 +1，下游转 stale）；或 `remix.review` 带 `revision_notes` 让模型重写（`internal/httpapi/tasks.go:191-205`）。
 3. **素材**：`media_root` + `media_index_path` 指向本机素材库与索引（不是项目资产表）。发起 `montage.execute` 前会做**入队前严格预检**，素材缺失就根本不入队（§5.4）。

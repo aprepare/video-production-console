@@ -32,6 +32,11 @@ type AddAssetVersion struct {
 	Dependencies                     []string
 }
 
+type UpgradeTopicCardVersion struct {
+	AddAssetVersion
+	ExpectedCurrentVersionID string
+}
+
 type AssetRepository struct {
 	db     *sql.DB
 	commit func(context.Context, *sql.Conn) error
@@ -118,6 +123,64 @@ func (r *AssetRepository) AddVersion(ctx context.Context, in AddAssetVersion) (o
 	}
 	if err != nil {
 		return domain.AssetVersion{}, &CommitOutcomeError{Outcome: CommitUnknown, Err: fmt.Errorf("commit add asset version: %w", err)}
+	}
+	committed = true
+	return out, nil
+}
+
+// UpgradeTopicCard creates a new current topic-card version and updates the
+// project's compatibility path in the same transaction.
+func (r *AssetRepository) UpgradeTopicCard(ctx context.Context, in UpgradeTopicCardVersion) (out domain.AssetVersion, err error) {
+	if in.Type != domain.AssetTopicCard || in.ProjectID == nil || in.LogicalAssetID == "" || in.ExpectedCurrentVersionID == "" || in.ParentVersionID == nil || *in.ParentVersionID != in.ExpectedCurrentVersionID {
+		return out, ErrInvalidAssetInput
+	}
+	if err := validateAddAssetVersion(in.AddAssetVersion); err != nil {
+		return out, err
+	}
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return out, fmt.Errorf("begin upgrade topic card: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var current string
+	if err := conn.QueryRowContext(ctx, `SELECT current_version_id FROM asset_items WHERE id=? AND project_id=? AND account_id=? AND type=?`, in.LogicalAssetID, *in.ProjectID, in.AccountID, domain.AssetTopicCard).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+		return out, ErrInvalidAssetInput
+	} else if err != nil {
+		return out, err
+	}
+	if current != in.ExpectedCurrentVersionID {
+		return out, ErrInvalidAssetParent
+	}
+	out, err = r.addVersion(ctx, conn, in.AddAssetVersion, time.Now().UTC())
+	if err != nil {
+		return out, err
+	}
+	result, err := conn.ExecContext(ctx, `UPDATE projects SET topic_card_path=?,updated_at=? WHERE id=?`, out.Path, out.CreatedAt, *in.ProjectID)
+	if err != nil {
+		return domain.AssetVersion{}, err
+	}
+	if n, rowsErr := result.RowsAffected(); rowsErr != nil || n != 1 {
+		if rowsErr != nil {
+			return domain.AssetVersion{}, rowsErr
+		}
+		return domain.AssetVersion{}, ErrProjectNotFound
+	}
+	if r.commit != nil {
+		err = r.commit(ctx, conn)
+	} else {
+		_, err = conn.ExecContext(ctx, `COMMIT`)
+	}
+	if err != nil {
+		return domain.AssetVersion{}, &CommitOutcomeError{Outcome: CommitUnknown, Err: fmt.Errorf("commit upgrade topic card: %w", err)}
 	}
 	committed = true
 	return out, nil

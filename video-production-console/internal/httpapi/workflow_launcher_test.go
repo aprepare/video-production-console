@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +91,9 @@ func TestWorkflowTaskLauncherCreatesRemixWithWorkflowIdentityModelAndManifest(t 
 	}
 	if len(preparer.requests) != 1 || preparer.requests[0].TopicCardPath != card.Path {
 		t.Fatalf("requests=%+v", preparer.requests)
+	}
+	if !slices.Equal(preparer.requests[0].SourceFeedIDs, []string{"14986230628414069221"}) {
+		t.Fatalf("source feed IDs=%v", preparer.requests[0].SourceFeedIDs)
 	}
 	if len(scheduler.tasks) != 1 || scheduler.tasks[0].ID != task.ID {
 		t.Fatalf("scheduled=%+v", scheduler.tasks)
@@ -419,7 +424,11 @@ func workflowLauncherFixture(t *testing.T) (*sql.DB, domain.Project, domain.Asse
 	if err := store.NewProjectRepository(db).CreateProject(context.Background(), project); err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetTopicCard, Path: filepath.Join(t.TempDir(), "topic.md"), Filename: "topic.md", MIMEType: "text/markdown", SHA256: "abc"})
+	cardPath := filepath.Join(t.TempDir(), "topic.md")
+	if err := os.WriteFile(cardPath, []byte("---\nstatus: 可写稿\nsource_refs: [\"14986230628414069221\"]\n---\n# 选题\n\n## 二创交接简报\n\n完整交接。\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.NewAssetRepository(db).AddVersion(context.Background(), store.AddAssetVersion{ProjectID: &projectID, AccountID: accountID, Type: domain.AssetTopicCard, Path: cardPath, Filename: "topic.md", MIMEType: "text/markdown", SHA256: "abc"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,6 +46,8 @@ func commitOutcome(err error) CommitState {
 	return CommitNotCommitted
 }
 
+func CommitOutcomeOf(err error) CommitState { return commitOutcome(err) }
+
 type NewBackground struct {
 	ID       string
 	Path     string

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -66,6 +68,7 @@ func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, 
 	mux.HandleFunc("GET /api/projects/{id}", h.get)
 	mux.HandleFunc("DELETE /api/projects/{id}", h.delete)
 	mux.HandleFunc("POST /api/projects/{id}/assets/{type}", h.upload)
+	mux.HandleFunc("POST /api/projects/{id}/topic-card/versions", h.uploadTopicCardVersion)
 	mux.HandleFunc("POST /api/projects/{id}/move", h.move)
 	mux.HandleFunc("POST /api/projects/{id}/remix", h.startRemix)
 	mux.HandleFunc("POST /api/projects/{id}/publish", h.publish)
@@ -449,6 +452,158 @@ func (h *projectsHandler) putStepNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stepNotesView{ProjectID: saved.ProjectID, Step: saved.Step, Notes: saved.Notes, UpdatedAt: saved.UpdatedAt})
+}
+
+func (h *projectsHandler) uploadTopicCardVersion(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	project, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if h.assets == nil || h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "topic_card_version_unavailable", "Topic card versioning is unavailable.")
+		return
+	}
+	current, err := store.NewAssetRepository(h.db).CurrentByProject(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_assets_failed", "Project assets could not be read.")
+		return
+	}
+	var parent *domain.AssetVersion
+	for i := range current {
+		if current[i].Type == domain.AssetTopicCard && current[i].State == domain.AssetReady {
+			parent = &current[i]
+			break
+		}
+	}
+	if parent == nil {
+		writeError(w, http.StatusConflict, "topic_card_missing", "A ready topic card is required before creating a new version.")
+		return
+	}
+	parentPayload, err := os.ReadFile(parent.Path)
+	if err != nil || topicCardStatus(parentPayload) != "候选" {
+		writeError(w, http.StatusConflict, "topic_card_transition_invalid", "Only a candidate topic card can be upgraded to writable.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxTextAssetSize+(1<<20))
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		var large *http.MaxBytesError
+		if errors.As(err, &large) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_multipart", "The multipart form could not be read.")
+		}
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file_required", "A topic card file is required.")
+		return
+	}
+	defer file.Close()
+	payload, err := io.ReadAll(io.LimitReader(file, assets.MaxTextAssetSize+1))
+	if err != nil || int64(len(payload)) > assets.MaxTextAssetSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		return
+	}
+	if !validWritableTopicCard(payload) {
+		writeError(w, http.StatusConflict, "topic_card_status_invalid", "The new topic card must have status 可写稿 and a completed handoff brief.")
+		return
+	}
+	saved, err := h.assets.SaveProjectAsset(id, domain.AssetTopicCard, header.Filename, bytes.NewReader(payload))
+	if err != nil {
+		if errors.Is(err, assets.ErrProjectAssetTooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_asset", "The topic card must be valid UTF-8 Markdown.")
+		}
+		return
+	}
+	parentID := parent.ID
+	version, err := store.NewAssetRepository(h.db).UpgradeTopicCard(r.Context(), store.UpgradeTopicCardVersion{
+		AddAssetVersion: store.AddAssetVersion{
+			LogicalAssetID: parent.AssetID, ProjectID: &id, AccountID: project.AccountID,
+			Type: domain.AssetTopicCard, StorageKind: domain.StorageFile, Path: saved.Path,
+			Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType, Size: saved.Size, SHA256: saved.SHA256,
+			ParentVersionID: &parentID,
+		},
+		ExpectedCurrentVersionID: parent.ID,
+	})
+	if err != nil {
+		outcome := store.CommitOutcomeOf(err)
+		if outcome == store.CommitNotCommitted {
+			_ = os.Remove(saved.Path)
+		}
+		if outcome == store.CommitUnknown {
+			writeError(w, http.StatusServiceUnavailable, "topic_card_version_commit_unknown", "The topic card version may have been recorded. Refresh the project before retrying.")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidAssetParent) {
+			writeError(w, http.StatusConflict, "topic_card_version_conflict", "The topic card changed while this version was being uploaded. Refresh before retrying.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "topic_card_version_store_failed", "The topic card version could not be recorded.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, assetView{ID: version.ID, Type: version.Type, State: version.State, Filename: version.Filename, MIMEType: version.MIMEType, Size: version.Size, SHA256: version.SHA256, Version: version.Version, CreatedAt: version.CreatedAt})
+}
+
+func validWritableTopicCard(payload []byte) bool {
+	text := string(payload)
+	if topicCardStatus(payload) != "可写稿" {
+		return false
+	}
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "## 二创交接简报" {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") {
+			end = i
+			break
+		}
+	}
+	handoff := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	handoff = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(handoff, "<!--", ""), "-->", ""))
+	return handoff != "" && handoff != "待深化。" && handoff != "待深化"
+}
+
+func topicCardStatus(payload []byte) string {
+	if !utf8.Valid(payload) {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(payload), "\r\n", "\n"), "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
+		key, value, found := strings.Cut(line, ":")
+		if found && strings.TrimSpace(key) == "status" {
+			return strings.Trim(strings.TrimSpace(value), "\"'")
+		}
+	}
+	return ""
 }
 
 func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {

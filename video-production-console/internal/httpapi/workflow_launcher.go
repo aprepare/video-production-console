@@ -3,11 +3,15 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"video-production-console/internal/codex"
@@ -51,6 +55,10 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 	if in.TopicCard == nil || in.TopicCard.Type != domain.AssetTopicCard || in.TopicCard.State != domain.AssetReady || in.TopicCard.ProjectID == nil || *in.TopicCard.ProjectID != in.Project.ID || in.TopicCard.AccountID != in.Project.AccountID {
 		return domain.CodexTask{}, errors.New("ready project topic card is required")
 	}
+	sourceFeedIDs, err := topicCardSourceFeedIDs(in.TopicCard.Path)
+	if err != nil {
+		return domain.CodexTask{}, fmt.Errorf("read topic card sources: %w", err)
+	}
 	tasks := store.NewTaskRepository(l.db)
 	prepareStartedAt := in.Now
 	if prepareStartedAt.IsZero() {
@@ -73,7 +81,7 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		} else if !errors.Is(manifestErr, sql.ErrNoRows) {
 			return domain.CodexTask{}, manifestErr
 		}
-		return prepareAndPublishTask(ctx, l.db, l.preparer, existing, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}, prepareStartedAt, l.scheduler.Enqueue, nil)
+		return prepareAndPublishTask(ctx, l.db, l.preparer, existing, TaskManifestRequest{TopicCardPath: in.TopicCard.Path, SourceFeedIDs: sourceFeedIDs}, prepareStartedAt, l.scheduler.Enqueue, nil)
 	} else if !errors.Is(readErr, sql.ErrNoRows) {
 		return domain.CodexTask{}, readErr
 	}
@@ -85,7 +93,58 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 		Status: domain.TaskQueued, PromptSnapshot: "Create a remix from the approved topic card.",
 		ModelName: model.Model, ReasoningEffort: model.ReasoningEffort, CreatedAt: now,
 	}
-	return prepareAndPublishTask(ctx, l.db, l.preparer, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path}, prepareStartedAt, l.scheduler.Enqueue, nil)
+	return prepareAndPublishTask(ctx, l.db, l.preparer, task, TaskManifestRequest{TopicCardPath: in.TopicCard.Path, SourceFeedIDs: sourceFeedIDs}, prepareStartedAt, l.scheduler.Enqueue, nil)
+}
+
+func topicCardSourceFeedIDs(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	text := string(data)
+	if !utf8.Valid(data) || !strings.HasPrefix(strings.TrimSpace(text), "---") {
+		return nil, errors.New("topic card must be UTF-8 Markdown with frontmatter")
+	}
+	end := strings.Index(text[3:], "---")
+	if end < 0 {
+		return nil, errors.New("topic card frontmatter is incomplete")
+	}
+	frontmatter := text[3 : 3+end]
+	var raw string
+	for _, line := range strings.Split(frontmatter, "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if found && strings.TrimSpace(key) == "source_refs" {
+			raw = strings.TrimSpace(value)
+			break
+		}
+	}
+	if raw == "" {
+		return nil, errors.New("topic card source_refs are required")
+	}
+	var refs []string
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil, errors.New("topic card source_refs must be a JSON string array")
+	}
+	out := make([]string, 0, len(refs))
+	seen := map[string]struct{}{}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(ref, 10, 64); err != nil {
+			continue
+		}
+		if _, exists := seen[ref]; exists {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("topic card has no usable baokuan feed IDs")
+	}
+	return out, nil
 }
 
 func workflowStepTaskID(workflowID, step string) string {
