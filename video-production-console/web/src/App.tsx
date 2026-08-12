@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, RotateCcw, X } from "lucide-react";
 import { apiRequest } from "./api/client";
 import { LoginPage } from "./auth/LoginPage";
@@ -624,14 +624,18 @@ function App() {
 
   // Callers await this expecting the workbench to show post-mutation data, so
   // refetch rather than merely invalidate.
-  const loadDetail = useCallback(
-    async (project: Project) => {
+  const refreshProject = useCallback(
+    async (projectID: string) => {
       await Promise.all([
-        client.refetchQueries({ queryKey: queryKeys.project(project.id) }),
-        client.refetchQueries({ queryKey: queryKeys.tasks(project.id) }),
+        client.refetchQueries({ queryKey: queryKeys.project(projectID) }),
+        client.refetchQueries({ queryKey: queryKeys.tasks(projectID) }),
       ]);
     },
     [client],
+  );
+  const loadDetail = useCallback(
+    (project: Project) => refreshProject(project.id),
+    [refreshProject],
   );
 
   // Task websockets can fire in bursts; collapse them into one refresh.
@@ -646,6 +650,70 @@ function App() {
     },
     [loadDetail],
   );
+
+  // Writes go through mutations so react-query owns the request and the cache
+  // refresh that follows it; the per-project action lock stays because it encodes
+  // a product rule (one action per project) rather than a fetch concern.
+  // A rejected request and a rejecting server mean different things to the user,
+  // so these resolve to `ok` for an HTTP failure and only reject when the request
+  // itself could not be made. Callers keep their two distinct messages.
+  const createProjectMutation = useMutation({
+    mutationFn: async (input: { accountID: string; title: string }) => {
+      const response = await api("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: input.accountID, title: input.title }),
+      });
+      return response.ok;
+    },
+    onSuccess: async (ok) => {
+      if (!ok) return;
+      setNewProject("");
+      await client.invalidateQueries({ queryKey: queryKeys.projects() });
+    },
+  });
+
+  const startProjectTaskMutation = useMutation({
+    mutationFn: async (input: { projectID: string; body: Record<string, unknown> }) => {
+      const response = await api(`/api/projects/${input.projectID}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input.body),
+      });
+      return response.ok;
+    },
+    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
+  });
+
+  const startRemixWorkflowMutation = useMutation({
+    mutationFn: async (input: { projectID: string; body: Record<string, unknown> }) => {
+      const response = await api(`/api/projects/${input.projectID}/remix`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input.body),
+      });
+      return response.ok;
+    },
+    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
+  });
+
+  // Saving a revision bumps the asset version and marks downstream assets stale,
+  // so the refresh has to cover the project detail as well as the task list.
+  const saveContinuousScriptMutation = useMutation({
+    mutationFn: async (input: { projectID: string; content: string }) => {
+      const body = new FormData();
+      body.set(
+        "file",
+        new File([input.content], "continuous-script.txt", { type: "text/plain" }),
+      );
+      const response = await api(`/api/projects/${input.projectID}/assets/continuous_script`, {
+        method: "POST",
+        body,
+      });
+      return response.ok;
+    },
+    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
+  });
 
   useEffect(() => {
     if (detailFailed) setMessage("项目刷新暂时中断，将在下次活动时重试。");
@@ -1161,17 +1229,11 @@ function App() {
   const createProject = async (event: FormEvent) => {
     event.preventDefault();
     if (!newProject.trim() || !account) return;
-    const response = await api("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: account, title: newProject.trim() }),
+    const created = await createProjectMutation.mutateAsync({
+      accountID: account,
+      title: newProject.trim(),
     });
-    if (!response.ok) {
-      setMessage("项目创建失败。");
-      return;
-    }
-    setNewProject("");
-    await load();
+    if (!created) setMessage("项目创建失败。");
   };
   const loadSourceScriptContent = async (assetID: string): Promise<string> => {
     const response = await api(`/api/assets/${assetID}/content`);
@@ -1213,10 +1275,9 @@ function App() {
         if (selectedIDRef.current !== projectID) return;
         sourceVersionID = asset.id;
       }
-      const task = await api(`/api/projects/${projectID}/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const started = await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
           account_id: project.account_id,
           type: "remix",
           action: "remix.standard",
@@ -1226,17 +1287,16 @@ function App() {
           ...(projectTaskModel.reasoningEffort
             ? { reasoning_effort: projectTaskModel.reasoningEffort }
             : {}),
-        }),
+        },
       });
       if (selectedIDRef.current !== projectID) return;
-      if (!task.ok) {
+      if (!started) {
         setMessage("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
         await loadDetail(project);
         return;
       }
       setProjectTaskModel({ model: "", reasoningEffort: "" });
       setMessage("同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。");
-      await loadDetail(project);
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("原文保存或二创任务启动失败，请检查网络连接后重试。");
@@ -1257,10 +1317,9 @@ function App() {
     const lockKey = lockProjectAction(projectID, "montage");
     if (!lockKey) return;
     try {
-      const response = await api(`/api/projects/${projectID}/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const started = await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
           account_id: project.account_id,
           type: "montage",
           prompt,
@@ -1270,16 +1329,15 @@ function App() {
           ...(projectTaskModel.reasoningEffort
             ? { reasoning_effort: projectTaskModel.reasoningEffort }
             : {}),
-        }),
+        },
       });
-      if (!response.ok) {
+      if (!started) {
         if (selectedIDRef.current === projectID)
           setMessage("混剪任务启动失败，请检查项目素材与 Codex 配置后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
       setProjectTaskModel({ model: "", reasoningEffort: "" });
-      await loadDetail(project);
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("混剪任务启动失败，请检查网络连接后重试。");
@@ -1300,24 +1358,22 @@ function App() {
     const lockKey = lockProjectAction(projectID, "remix");
     if (!lockKey) return;
     try {
-      const response = await api(`/api/projects/${projectID}/remix`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const started = await startRemixWorkflowMutation.mutateAsync({
+        projectID,
+        body: {
           ...(projectTaskModel.model.trim() ? { model: projectTaskModel.model.trim() } : {}),
           ...(projectTaskModel.reasoningEffort
             ? { reasoning_effort: projectTaskModel.reasoningEffort }
             : {}),
-        }),
+        },
       });
-      if (!response.ok) {
+      if (!started) {
         if (selectedIDRef.current === projectID)
           setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
       setProjectTaskModel({ model: "", reasoningEffort: "" });
-      await loadDetail(project);
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("二创工作流启动失败，请检查网络连接后重试。");
@@ -1363,14 +1419,9 @@ function App() {
     const projectID = project.id;
     const lockKey = lockProjectAction(projectID, "save-continuous-script");
     if (!lockKey) return;
-    const body = new FormData();
-    body.set("file", new File([content], "continuous-script.txt", { type: "text/plain" }));
     try {
-      const response = await api(`/api/projects/${projectID}/assets/continuous_script`, {
-        method: "POST",
-        body,
-      });
-      if (!response.ok) {
+      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content });
+      if (!saved) {
         if (selectedIDRef.current === projectID)
           setMessage("连续文案保存失败，请稍后重试。");
         return;
@@ -1383,7 +1434,6 @@ function App() {
       );
       setPreviewDraft(content);
       setMessage("连续文案已保存为新版本；下游配音/字幕等可能已标记为失效。");
-      await loadDetail(project);
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("连续文案保存失败，请检查网络连接后重试。");
@@ -1403,10 +1453,9 @@ function App() {
     const lockKey = lockProjectAction(projectID, "remix-review");
     if (!lockKey) return;
     try {
-      const response = await api(`/api/projects/${projectID}/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const started = await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
           account_id: project.account_id,
           type: "remix",
           action: "remix.review",
@@ -1416,9 +1465,9 @@ function App() {
           ...(projectTaskModel.reasoningEffort
             ? { reasoning_effort: projectTaskModel.reasoningEffort }
             : {}),
-        }),
+        },
       });
-      if (!response.ok) {
+      if (!started) {
         if (selectedIDRef.current === projectID)
           setMessage("打回重做任务启动失败，请检查当前连续文案与 Codex 配置后重试。");
         return;
@@ -1427,7 +1476,6 @@ function App() {
       setReviseOpen(false);
       setProjectTaskModel({ model: "", reasoningEffort: "" });
       setMessage("已按修改要求打回 AI 重做；完成后会生成新的连续文案版本。");
-      await loadDetail(project);
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("打回重做任务启动失败，请检查网络连接后重试。");
