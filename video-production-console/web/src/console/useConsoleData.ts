@@ -6,9 +6,9 @@ type Request = (path: string, init?: RequestInit) => Promise<Response>;
 type Updater<T> = T[] | ((current: T[]) => T[]);
 
 // The console lists are fetched through react-query so concurrent callers share
-// one request and in-flight fetches are cancelled on unmount. The hook keeps its
-// original imperative surface (setAccounts/setProjects/reload) so callers that
-// apply optimistic updates continue to work; those writes go to the query cache.
+// one request and in-flight fetches are cancelled on unmount. setAccounts and
+// setProjects remain because callers apply optimistic updates; those writes go
+// to the query cache.
 export function useConsoleData<Account, Project>(request: Request, enabled = true) {
   const client = useQueryClient();
 
@@ -49,27 +49,13 @@ export function useConsoleData<Account, Project>(request: Request, enabled = tru
     [client],
   );
 
-  // Callers surface load failures themselves, so keep rejecting like the
-  // previous hand-rolled reload instead of swallowing the error into state.
-  const reload = useCallback(async () => {
-    await Promise.all([
-      client.fetchQuery({
-        queryKey: queryKeys.accounts(),
-        queryFn: ({ signal }) => read<Account[]>("/api/accounts", signal),
-      }),
-      client.fetchQuery({
-        queryKey: queryKeys.projects(),
-        queryFn: ({ signal }) => read<Project[]>("/api/projects", signal),
-      }),
-    ]);
-  }, [client, read]);
-
   return {
     accounts: accountsQuery.data ?? [],
     setAccounts,
     projects: projectsQuery.data ?? [],
     setProjects,
     loading: accountsQuery.isPending || projectsQuery.isPending,
-    reload,
+    // Callers own the wording of the failure, so report only that one happened.
+    failed: accountsQuery.isError || projectsQuery.isError,
   };
 }

@@ -389,7 +389,6 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFeedback, setSettingsFeedback] = useState("");
   const [accountFormOpen, setAccountFormOpen] = useState(false);
-  const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<PublicSettings | null>(
     null,
   );
@@ -468,17 +467,6 @@ function App() {
   }, []);
   const activeIdeaSessionID = ideaDraft ? undefined : ideaSession?.id;
   const selectedID = selected?.id ?? "";
-  const restartChangedFields = useMemo(() => {
-    if (!settings?.restart_required || !settings.active_public) return [];
-    const configured = settings.configured_public || settings.public;
-    return (Object.keys(configured) as Array<keyof PublicSettings>)
-      .filter(
-        (key) =>
-          JSON.stringify(configured[key]) !== JSON.stringify(settings.active_public?.[key]),
-      )
-      .map((key) => restartFieldLabels[key] || String(key));
-  }, [settings]);
-
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
@@ -496,19 +484,38 @@ function App() {
       }),
     [csrf],
   );
-  const { accounts, projects, setProjects, loading, reload: reloadConsoleData } =
+  const { accounts, projects, setProjects, loading, failed: consoleDataFailed } =
     useConsoleData<Account, Project>(api, authenticated === true);
   const { data: runtime = null } = useRuntimeQuery(api, authenticated === true);
 
-  const load = useCallback(async () => {
-    try {
-      const settingsResponse = await api("/api/settings");
-      await reloadConsoleData();
-      if (settingsResponse.ok) setSettings((await settingsResponse.json()) as Settings);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "控制台服务尚未连接");
-    }
-  }, [api, reloadConsoleData]);
+  const readSettings = useCallback(
+    async (signal?: AbortSignal) => {
+      const response = await api("/api/settings", { signal });
+      if (!response.ok) throw new Error("设置读取失败。");
+      return (await response.json()) as Settings;
+    },
+    [api],
+  );
+  const settingsQuery = useQuery({
+    queryKey: queryKeys.settings(),
+    enabled: authenticated === true,
+    queryFn: ({ signal }) => readSettings(signal),
+  });
+  const settings = settingsQuery.data ?? null;
+  const restartChangedFields = useMemo(() => {
+    if (!settings?.restart_required || !settings.active_public) return [];
+    const configured = settings.configured_public || settings.public;
+    return (Object.keys(configured) as Array<keyof PublicSettings>)
+      .filter(
+        (key) =>
+          JSON.stringify(configured[key]) !== JSON.stringify(settings.active_public?.[key]),
+      )
+      .map((key) => restartFieldLabels[key] || String(key));
+  }, [settings]);
+
+  useEffect(() => {
+    if (consoleDataFailed) setMessage("控制台服务尚未连接");
+  }, [consoleDataFailed]);
 
   // Hydrating the list is what makes the workbench usable: the list endpoint only
   // returns task shells, so live/recent/remix tasks are topped up with their
@@ -751,9 +758,6 @@ function App() {
       }
     })();
   }, []);
-  useEffect(() => {
-    if (authenticated) void load();
-  }, [authenticated, load]);
   useEffect(() => {
     if (!ideaOpen || !activeIdeaSessionID) return;
     const sessionID = activeIdeaSessionID;
@@ -1224,7 +1228,7 @@ function App() {
     setAccountBackground(null);
     setAccountFormOpen(false);
     setMessage("账号已创建。");
-    await load();
+    await client.invalidateQueries({ queryKey: queryKeys.accounts() });
   };
   const createProject = async (event: FormEvent) => {
     event.preventDefault();
@@ -1688,17 +1692,20 @@ function App() {
     })();
   };
   const openSettings = async () => {
-    const response = await api("/api/settings");
-    if (!response.ok) {
+    try {
+      // staleTime 0 keeps the dialog's always-refetch-on-open behaviour.
+      const next = await client.fetchQuery({
+        queryKey: queryKeys.settings(),
+        queryFn: ({ signal }) => readSettings(signal),
+        staleTime: 0,
+      });
+      setSettingsDraft({ ...next.public });
+      setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
+      setSettingsFeedback("");
+      setSettingsOpen(true);
+    } catch {
       setMessage("设置读取失败。");
-      return;
     }
-    const next = (await response.json()) as Settings;
-    setSettings(next);
-    setSettingsDraft({ ...next.public });
-    setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
-    setSettingsFeedback("");
-    setSettingsOpen(true);
   };
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault();
@@ -1713,7 +1720,7 @@ function App() {
       return;
     }
     const next = (await response.json()) as Settings;
-    setSettings(next);
+    client.setQueryData(queryKeys.settings(), next);
     setSettingsDraft({ ...next.public });
     setSecretDraft({ grok_api_key: "", pexels_api_key: "" });
     setSettingsFeedback("设置已保存。");
