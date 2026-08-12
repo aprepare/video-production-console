@@ -343,6 +343,8 @@ Set-Location web; npm remove @dnd-kit/core @dnd-kit/sortable
 
 **验收：** 清单完整，能据此判断影响面。
 
+**审计结果（2026-08-12）：** [p2-2a-json-tag-audit.md](audits/2026-08-12-p2-2a-json-tag-audit.md)。47 个字段、4 个类型、3 个文件：`domain.TaskPhaseRun` 与 `domain.TaskTimingSummary`（timing/phase 主体，前端已在消费）、`domain.RegistrationAttempt`（`retry-registration` 响应体）、`domain.ChatMessage`（`GET /api/codex/history/{id}` 的 `messages`）。全部只经 `database/sql` 列级扫描，无 `json.Unmarshal` 持久化路径，可直接改 tag；`schemas/` 无对应契约。另记：`conversation.SendReceipt`（`broker.go:53-59`）同样裸序列化，因并行任务占用 `internal/conversation/` 未在本轮处理。
+
 #### P2-2b 补齐 tag
 
 **前置依赖：** P2-2a。
