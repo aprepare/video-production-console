@@ -182,7 +182,7 @@ func projectRouteHandler(projects, tasks, narration http.Handler, taskRoutesEnab
 			tasks.ServeHTTP(w, r)
 			return
 		}
-		if narration != nil && strings.HasSuffix(r.URL.Path, "/narration") {
+		if narration != nil && strings.HasSuffix(r.URL.Path, "/narration") && !strings.Contains(r.URL.Path, "/assets/") {
 			narration.ServeHTTP(w, r)
 			return
 		}

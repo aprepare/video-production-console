@@ -254,6 +254,8 @@
 
 ### 5.6 鉴权、CSRF、限流、回环
 
+**配音路由必须精确分流**（`internal/app/app.go` 的 `projectRouteHandler`）：`POST /api/projects/{id}/narration` 进入 `narrationHandler`，负责调用语音供应商并成对登记配音与 SRT；`POST /api/projects/{id}/assets/narration` 必须留在 `projectsHandler` 的通用资产上传链路，只保存用户提供的音频。不能只用 `HasSuffix(path, "/narration")` 判断自动配音路由，否则手动上传路径也会被误分流到自动配音 mux，最终返回裸 `404 page not found`，浏览器会把连接/刷新阶段的异常泛化为网络失败。`internal/app/app_test.go` 同时覆盖两条路由，后续修改必须保证两者互不抢占。
+
 - **会话**：单管理员，登录后 7 天有效（`internal/auth/service.go:27`），库里只存 token/CSRF 的 SHA-256（`internal/security/session.go:12-24`）。会话有效性还要求 `created_at >= password_changed_at`，所以改密自动作废旧会话。口令是 SHA-256 预摘要 + bcrypt。
 - **中间件顺序**（外 → 内，`internal/app/app.go:157-170`）：`logging.RequestID` 包住**整个** mux（含静态资源）→ 路径白名单（`/api/health`、`/api/auth/*`、非 `/api/` 路径直通）→ `Protect`（会话认证，**CSRF 检查在其内部**，`internal/auth/middleware.go:50-53`）。
 - **CSRF**：双提交 cookie + `X-CSRF-Token` 头，两者都要与库里的 hash 常量时间相等；保护除 GET/HEAD/OPTIONS 外的所有方法。

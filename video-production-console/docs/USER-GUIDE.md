@@ -67,6 +67,12 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 
 ## 6. 混剪与剪映
 
+### 配音与字幕的两种入口
+
+- **自动配音**：点击工作台的「生成配音与字幕」，调用 `POST /api/projects/{id}/narration`。系统读取当前 `continuous_script`，通过已配置的火山语音服务同时生成 `narration` 和词级来源的 `subtitle_srt`。这条路径要求设置中已填写语音 API Key 与音色 ID。
+- **手动上传配音**：点击配音资产的上传入口，调用 `POST /api/projects/{id}/assets/narration`，仅登记用户选择的 `.mp3`、`.wav` 或 `.m4a` 文件（上限 200MB），不会调用语音服务，也不会自动生成字幕；SRT 仍需另行上传。
+- 两条接口相互独立：`/narration` 是自动生成动作，`/assets/narration` 是通用资产上传动作。修复或调整任一入口时，必须保留这两个路由的回归测试，避免末尾同名造成误分流。
+
 1. 准备好连续文案、配音、SRT、账号背景图。
 2. 启动混剪后，先生成受控工作区中的**明文草稿**。
 3. 再登记到本机剪映目录并做路径/哈希验证；成功后才是正式 `mix_draft` 资产。
@@ -83,6 +89,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 | 刷新项目页曾出现 404 | 使用已包含 SPA 回退的构建；访问 `http://127.0.0.1:2030` 并强制刷新 |
 | 聊天里有文案但项目不解锁 | 必须走正式任务产出 `continuous_script` |
 | 配置改了没生效 | 看设置页是否 `restart_required`，需要则重启 |
+| 手动上传配音显示网络失败 | 先确认控制台版本包含 `/assets/narration` 独立路由；该入口不依赖自动配音服务。MP3/WAV/M4A 需真实内容与扩展名匹配，且不超过 200MB |
 | 手机打不开剪映目录 | 设计限制；仅本机控制台电脑可触发 |
 | 数据库在哪 | 权威库：`video-console-data/console.db`；不要误用根目录遗留的 `video-console.db` |
 

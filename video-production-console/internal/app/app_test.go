@@ -137,6 +137,46 @@ func TestProjectRoutesAreMounted(t *testing.T) {
 	}
 }
 
+func TestManualNarrationAssetUploadStaysOnProjectAssetHandler(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}})
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/00000000-0000-0000-0000-000000000001/assets/narration", nil)
+	response := httptest.NewRecorder()
+
+	application.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"project_not_found"`) {
+		t.Fatalf("manual narration upload did not reach project asset handler; body = %q", response.Body.String())
+	}
+}
+
+func TestAutomaticNarrationGenerationStaysOnNarrationHandler(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}})
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/00000000-0000-0000-0000-000000000001/narration", nil)
+	response := httptest.NewRecorder()
+
+	application.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"project_not_found"`) {
+		t.Fatalf("automatic narration generation did not reach narration handler; body = %q", response.Body.String())
+	}
+}
+
 func TestProjectTopicCardRouteIsMountedOnTaskHandler(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
 	if err != nil {
