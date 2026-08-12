@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -309,6 +311,26 @@ func TestSelectIdeaCandidateExplicitAccountOverridesSessionAccount(t *testing.T)
 	}
 	if selected.Project.Stage != domain.StageScript {
 		t.Fatalf("response project stage=%q, want %q", selected.Project.Stage, domain.StageScript)
+	}
+	// Decoding cannot catch a casing regression here: encoding/json matches
+	// object keys case-insensitively, so a bare domain.Project (PascalCase
+	// keys) still satisfies the assertion above while the browser reads
+	// project.id and project.account_id as undefined. Assert the raw keys.
+	var rawSelection struct {
+		Project map[string]json.RawMessage `json:"project"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &rawSelection); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"id", "account_id", "title", "stage", "publication_status", "created_at"} {
+		if _, ok := rawSelection.Project[key]; !ok {
+			t.Fatalf("selection project is missing key %q; keys=%v", key, slices.Sorted(maps.Keys(rawSelection.Project)))
+		}
+	}
+	for _, key := range []string{"ID", "AccountID", "Title", "Stage", "Status"} {
+		if _, ok := rawSelection.Project[key]; ok {
+			t.Fatalf("selection project still exposes Go field name %q", key)
+		}
 	}
 	var projectAccount string
 	var projectStage domain.ProjectStage

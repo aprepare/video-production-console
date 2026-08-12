@@ -251,7 +251,7 @@ func (h *ideasHandler) selectCandidate(w http.ResponseWriter, r *http.Request) {
 		selection.TopicCandidatesPath, _ = topicCandidatesArtifactPath(r.Context(), h.repo.DB(), *c.TaskID)
 	}
 	commitTask, commitErr := enqueueTopicCommit(r.Context(), h.repo.DB(), h.scheduler, h.preparer, h.models, p, selection)
-	result := map[string]any{"project": p, "candidate": hydrateIdeaCandidates(r.Context(), h.repo.DB(), []domain.IdeaCandidate{c})[0]}
+	result := map[string]any{"project": toProjectView(p), "candidate": hydrateIdeaCandidates(r.Context(), h.repo.DB(), []domain.IdeaCandidate{c})[0]}
 	if commitErr != nil {
 		result["topic_card_task_error"] = commitErr.Error()
 	} else {
