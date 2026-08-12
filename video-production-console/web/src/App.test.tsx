@@ -46,7 +46,23 @@ test("keeps the global modal and notification layers above the mobile action bar
   expect(workbenchCss).toMatch(/\.mobile-primary-action-bar\s*\{[^}]*z-index:\s*var\(--layer-workbench-action\)/s);
   expect(appCss).toMatch(/\.modal-backdrop\s*\{[^}]*z-index:\s*var\(--layer-modal-backdrop\)/s);
   expect(appCss).toMatch(/\.modal-backdrop\s*>\s*\[role="dialog"\]\s*\{[^}]*z-index:\s*var\(--layer-modal-dialog\)/s);
-  expect(appSource.match(/role="dialog"/g)?.length).toBeGreaterThanOrEqual(5);
+  const dialogSources = [
+    "src/App.tsx",
+    "src/assets/AssetPreviewDialog.tsx",
+    "src/assets/ReviseDialog.tsx",
+    "src/settings/SettingsPanel.tsx",
+    "src/tasks/TaskDetailDialog.tsx",
+  ].map((file) => readFileSync(resolve(process.cwd(), file), "utf8"));
+  const dialogRoles = dialogSources.reduce(
+    (total, source) => total + (source.match(/role="dialog"/g)?.length || 0),
+    0,
+  );
+  expect(dialogRoles).toBeGreaterThanOrEqual(5);
+  for (const source of dialogSources) {
+    const backdrops = source.match(/className="modal-backdrop"/g)?.length || 0;
+    const roles = source.match(/role="dialog"/g)?.length || 0;
+    expect(roles).toBeGreaterThanOrEqual(backdrops);
+  }
 });
 
 test("project location parsing accepts UUID detail paths and rejects invalid paths", () => {

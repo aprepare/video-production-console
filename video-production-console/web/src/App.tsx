@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, RotateCcw, X } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { apiRequest } from "./api/client";
-import { AccountSwitcher } from "./accounts/AccountSwitcher";
+import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
+import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
-import { messageTone } from "./messageTone";
+import { ChatWorkbenchDialog } from "./chat/ChatWorkbenchDialog";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { useConsoleData } from "./console/useConsoleData";
+import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
 import { queryKeys } from "./query/keys";
 import "./App.css";
 import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
-import { TaskModelFields } from "./TaskModelFields";
 import type { TaskModelOverride } from "./taskModel";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
-import { ProjectCreateForm } from "./projects/ProjectCreateForm";
+import { accountName } from "./projects/stages";
+import { ConsoleHome } from "./shell/ConsoleHome";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
 import {
@@ -23,8 +25,6 @@ import {
   isRunningPhase,
   liveTaskStatuses,
   normalizeSemanticEvents,
-  taskEventProgress,
-  taskProgressStatus,
   taskQuestions,
   taskTimingPhases,
 } from "./tasks/task-view";
@@ -48,12 +48,6 @@ import type {
   Task,
   Theme,
 } from "./types";
-
-const historySourceLabels: Record<HistoryThread["source"], string> = {
-  desktop: "桌面版",
-  cli: "CLI",
-  task: "控制台任务",
-};
 
 function isTechnicalChatMessage(message: ChatMessage) {
   return ["event", "tool", "technical", "protocol"].includes(message.kind);
@@ -85,33 +79,12 @@ function writeProjectLocation(
 }
 
 const THEME_STORAGE_KEY = "video-production-console-theme";
-const PROJECT_COLLAPSE_LIMIT = 4;
 
 function readStoredTheme(): Theme {
   if (typeof window === "undefined") return "light";
   return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
 }
 
-const stages: Array<Project["stage"]> = [
-  "topic",
-  "script",
-  "assets",
-  "mixing",
-  "review",
-  "published",
-];
-const assetLabels: Record<string, string> = {
-  source_script: "爆款原文",
-  topic_card: "正式选题卡",
-  continuous_script: "连续文案",
-  narration: "配音",
-  subtitle_srt: "SRT 字幕",
-  account_background: "账号固定背景图",
-  audio: "配音",
-  subtitle: "SRT 字幕",
-  mix_draft: "混剪草稿",
-  final_video: "成片",
-};
 const textAssets = new Set([
   "source_script",
   "topic_card",
@@ -1934,287 +1907,67 @@ function App() {
           </div>
         </main>
       ) : (
-        <>
-      <header aria-hidden={modalLayerOpen || undefined}>
-        <div>
-          <span className="eyebrow">本机视频工作台</span>
-          <h1>视频生产控制台</h1>
-        </div>
-        <div className="status">
-          <label className="theme-control">
-            主题
-            <select
-              aria-label="选择界面主题"
-              value={theme}
-              onChange={(event) => setTheme(event.target.value as Theme)}
-            >
-              <option value="light">日间</option>
-              <option value="dark">夜间</option>
-            </select>
-          </label>
-          {runtime && (
-            <span
-              className={
-                runtime.Running >= runtime.Limit || runtime.Queued > 0
-                  ? "runtime-warning"
-                  : "runtime-state"
-              }
-            >
-              CLI {runtime.Running}/{runtime.Limit}
-              {runtime.Queued > 0 ? ` · 排队 ${runtime.Queued}` : ""}
-            </span>
-          )}
-          <button
-            className="header-button"
-            onClick={() => void openIdeaPlanner()}
-          >
-            给我选题
-          </button>
-          <button className="header-button chat-entry" onClick={() => void openGeneralChat()}>
-            Codex 对话
-          </button>
-          <button className="header-button" onClick={() => void openSettings()}>
-            设置
-          </button>
-          <button className="header-button" onClick={() => void logout()}>
-            退出
-          </button>
-        </div>
-      </header>
-      <div className="layout" aria-hidden={modalLayerOpen || undefined}>
-        <AccountSwitcher
+        <ConsoleHome
+          hidden={modalLayerOpen}
+          theme={theme}
+          onThemeChange={setTheme}
+          runtime={runtime}
+          onOpenIdeaPlanner={() => void openIdeaPlanner()}
+          onOpenConversation={() => void openGeneralChat()}
+          onOpenSettings={() => void openSettings()}
+          onLogout={() => void logout()}
           accounts={accounts}
           selectedAccountID={account}
           onSelectAccount={setAccount}
-          formOpen={accountFormOpen}
-          onToggleForm={() => setAccountFormOpen((open) => !open)}
-          onCreate={createAccount}
+          accountFormOpen={accountFormOpen}
+          onToggleAccountForm={() => setAccountFormOpen((open) => !open)}
+          onCreateAccount={createAccount}
           newAccountName={newAccount}
           onNewAccountNameChange={setNewAccount}
-          backgroundSelected={Boolean(accountBackground)}
-          onBackgroundChange={setAccountBackground}
+          accountBackgroundSelected={Boolean(accountBackground)}
+          onAccountBackgroundChange={setAccountBackground}
+          newProject={newProject}
+          onNewProjectChange={setNewProject}
+          onCreateProject={createProject}
+          message={message}
+          onDismissMessage={() => setMessage("")}
+          loading={loading}
+          projects={visible}
+          expandedStages={expandedStages}
+          onExpandedStagesChange={setExpandedStages}
+          onOpenProject={openProject}
         />
-        <main>
-          <div className="toolbar">
-            <div>
-              <div className="muted">
-                {account
-                  ? accounts.find((item) => item.id === account)?.name
-                  : "全部账号"}
-              </div>
-              <h2>视频项目</h2>
-            </div>
-            <ProjectCreateForm
-              accountSelected={Boolean(account)}
-              title={newProject}
-              onTitleChange={setNewProject}
-              onSubmit={createProject}
-            />
-          </div>
-          {message && (() => {
-            const tone = messageTone(message);
-            const urgent = tone === "danger";
-            return (
-              <div
-                className={`notice notice--${tone}`}
-                role={urgent ? "alert" : "status"}
-                aria-live={urgent ? "assertive" : "polite"}
-                aria-atomic="true"
-              >
-                {message}
-                <button onClick={() => setMessage("")}>关闭</button>
-              </div>
-            );
-          })()}
-          {loading ? (
-            <div className="empty">正在读取项目…</div>
-          ) : (
-            <>
-              <section className="project-board" aria-labelledby="project-board-title">
-                <div className="board-help">
-                  <strong id="project-board-title">项目看板</strong>
-                  <span>按生产阶段查看项目；点击项目卡片进入制作工作台。</span>
-                </div>
-                <div className="board">
-                {stages.map((stage) => (
-                  <section className={`column column--${stage}`} key={stage}>
-                    <div className="column-head">
-                      <h3>{stageLabel(stage)}</h3>
-                      <b>
-                        {
-                          visible.filter((project) => project.stage === stage)
-                            .length
-                        }
-                      </b>
-                    </div>
-                    {(() => {
-                      const stageProjects = visible.filter((project) => project.stage === stage);
-                      const expanded = expandedStages.has(stage);
-                      const shownProjects = expanded
-                        ? stageProjects
-                        : stageProjects.slice(0, PROJECT_COLLAPSE_LIMIT);
-                      return (
-                        <>
-                          {shownProjects.map((project) => (
-                            <button
-                              className="project"
-                              key={project.id}
-                              onClick={() => openProject(project)}
-                            >
-                              <strong>{project.title}</strong>
-                              <small>
-                                {projectStageHint(project.stage)}
-                              </small>
-                              <div className="project-foot">
-                                <span>{accountName(project.account_id, accounts)}</span>
-                                <span>{formatDate(project.updated_at)}</span>
-                              </div>
-                            </button>
-                          ))}
-                          {stageProjects.length > PROJECT_COLLAPSE_LIMIT ? (
-                            <button
-                              type="button"
-                              className="column-toggle"
-                              aria-expanded={expanded}
-                              onClick={() =>
-                                setExpandedStages((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(stage)) next.delete(stage);
-                                  else next.add(stage);
-                                  return next;
-                                })
-                              }
-                            >
-                              {expanded
-                                ? "收起项目"
-                                : `展开剩余 ${stageProjects.length - PROJECT_COLLAPSE_LIMIT} 个项目`}
-                            </button>
-                          ) : null}
-                        </>
-                      );
-                    })()}
-
-                  </section>
-                ))}
-                </div>
-              </section>
-            </>
-          )}
-        </main>
-      </div>
-        </>
       )}
       {preview && (
-        <div className="modal-backdrop" onClick={() => setPreview(null)}>
-          <section
-            className="preview-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="preview-dialog-title"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-head">
-              <div>
-                <span className="muted">
-                  {assetLabels[preview.asset.type] || preview.asset.type}
-                </span>
-                <h2 id="preview-dialog-title">{preview.asset.filename}</h2>
-              </div>
-              <button className="close" aria-label="关闭素材预览" onClick={() => setPreview(null)}>
-                <X size={20} aria-hidden="true" />
-              </button>
-            </div>
-            {preview.asset.type === "continuous_script" ? (
-              <>
-                <textarea
-                  className="asset-editor"
-                  aria-label="连续文案正文"
-                  value={previewDraft}
-                  onChange={(event) => setPreviewDraft(event.target.value)}
-                />
-                <div className="asset-editor-actions">
-                  <button
-                    type="button"
-                    className="asset-editor-save"
-                    onClick={() => void saveContinuousScript(previewDraft.trim())}
-                    disabled={
-                      !previewDraft.trim()
-                      || previewDraft === preview.text
-                      || selectedPendingActions.includes("save-continuous-script")
-                    }
-                    aria-busy={selectedPendingActions.includes("save-continuous-script")}
-                  >
-                    {selectedPendingActions.includes("save-continuous-script") ? "正在保存…" : "保存修改"}
-                  </button>
-                  <button
-                    type="button"
-                    className="asset-editor-revise"
-                    onClick={() => {
-                      setPreview(null);
-                      openReviseDialog();
-                    }}
-                  >
-                    <RotateCcw size={15} aria-hidden="true" />
-                    打回重做
-                  </button>
-                </div>
-              </>
-            ) : (
-              <pre className="asset-text">{preview.text}</pre>
-            )}
-          </section>
-        </div>
+        <AssetPreviewDialog
+          preview={preview}
+          draft={previewDraft}
+          onDraftChange={setPreviewDraft}
+          saving={selectedPendingActions.includes("save-continuous-script")}
+          onClose={() => setPreview(null)}
+          onSave={(content) => void saveContinuousScript(content)}
+          onRevise={() => {
+            setPreview(null);
+            openReviseDialog();
+          }}
+        />
       )}
       {reviseOpen && (
-        <div className="modal-backdrop" onClick={() => setReviseOpen(false)}>
-          <section
-            className="preview-modal revise-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="revise-dialog-title"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-head">
-              <div>
-                <span className="muted">连续文案</span>
-                <h2 id="revise-dialog-title">打回重做</h2>
-              </div>
-              <button className="close" aria-label="关闭打回重做" onClick={() => setReviseOpen(false)}>
-                <X size={20} aria-hidden="true" />
-              </button>
-            </div>
-            <label className="revise-modal__notes">
-              修改要求
-              <textarea
-                aria-label="二创修改要求"
-                value={reviseNotes}
-                onChange={(event) => setReviseNotes(event.target.value)}
-                placeholder="例如：开场更口语、缩短前 20 秒、少用排比…"
-              />
-            </label>
-            <TaskModelFields
-              value={projectTaskModel}
-              onChange={setProjectTaskModel}
-              defaults={settings?.public}
-              labelPrefix="打回"
-            />
-            <button
-              type="button"
-              className="revise-modal__submit"
-              onClick={() => void startRemixReview(reviseNotes)}
-              disabled={
-                !reviseNotes.trim()
-                || detail?.assets.continuous_script?.state !== "ready"
-                || selectedPendingActions.includes("remix-review")
-              }
-              aria-busy={selectedPendingActions.includes("remix-review")}
-            >
-              {selectedPendingActions.includes("remix-review") ? "正在打回重做…" : "打回重做"}
-            </button>
-          </section>
-        </div>
+        <ReviseDialog
+          notes={reviseNotes}
+          onNotesChange={setReviseNotes}
+          taskModel={projectTaskModel}
+          onTaskModelChange={setProjectTaskModel}
+          taskModelDefaults={settings?.public}
+          submitDisabled={
+            !reviseNotes.trim()
+            || detail?.assets.continuous_script?.state !== "ready"
+            || selectedPendingActions.includes("remix-review")
+          }
+          submitting={selectedPendingActions.includes("remix-review")}
+          onClose={() => setReviseOpen(false)}
+          onSubmit={(notes) => void startRemixReview(notes)}
+        />
       )}
       {settingsOpen && settingsDraft && (
         <SettingsPanel
@@ -2232,333 +1985,53 @@ function App() {
         />
       )}
       {ideaOpen && ideaSession && (
-        <div className="modal-backdrop">
-          <section
-            className="preview-modal idea-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="idea-dialog-title"
-            tabIndex={-1}
-          >
-            <div className="modal-head">
-              <div>
-                <span className="muted">
-                  选题规划 ·{" "}
-                  {ideaSession.account_id
-                    ? accountName(ideaSession.account_id, accounts)
-                    : "未指定账号"}
-                </span>
-                <h2 id="idea-dialog-title">{ideaSession.title}</h2>
-              </div>
-              <div className="idea-head-actions">
-                <label className="idea-account-control">
-                  <span>选题账号</span>
-                  <select
-                    aria-label="选题账号"
-                    value={ideaSession.account_id || ""}
-                    onChange={(event) =>
-                      setIdeaSession({
-                        ...ideaSession,
-                        account_id: event.target.value || undefined,
-                      })
-                    }
-                  >
-                    <option value="">请选择账号</option>
-                    {accounts.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button className="close" aria-label="关闭选题规划" onClick={() => setIdeaOpen(false)}>
-                  <X size={20} aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-            <div className="idea-workspace">
-              <nav className="idea-conversations" aria-label="选题对话">
-                <button
-                  className="idea-new-conversation"
-                  onClick={() => void createIdeaConversation()}
-                >
-                  新建对话
-                </button>
-                <div className="idea-conversation-list">
-                  {ideaDraft && ideaSession ? (
-                    <div className="idea-conversation-item selected">
-                      <button
-                        className="idea-conversation-select selected"
-                        onClick={() => setIdeaSession(ideaSession)}
-                      >
-                        <strong>新选题规划</strong>
-                        <small>未发送</small>
-                      </button>
-                    </div>
-                  ) : null}
-                  {ideaSessions.map((session) => (
-                    <div className="idea-conversation-item" key={session.id}>
-                      <button
-                        className={`idea-conversation-select ${session.id === ideaSession.id ? "selected" : ""}`}
-                        onClick={() => void switchIdeaConversation(session)}
-                      >
-                        <strong>{session.title}</strong>
-                        <small>{session.status === "planning" ? "规划中" : session.status}</small>
-                      </button>
-                      <button
-                        className="idea-delete-conversation"
-                        aria-label={`删除对话 ${session.title}`}
-                        title="删除对话"
-                        onClick={() => void deleteIdeaConversation(session)}
-                      >
-                        <X size={16} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </nav>
-              <div className="idea-current-conversation">
-                <div className="idea-messages">
-                  {ideaSession.messages?.map((item) => (
-                    <div className={`idea-message ${item.role}`} key={item.id}>
-                      <b>{item.role === "user" ? "你" : "Codex"}</b>
-                      <p>{item.content}</p>
-                    </div>
-                  ))}
-                  {!ideaSession.messages?.length && (
-                    <p className="muted">
-                      告诉我你想做的财经方向、受众或近期关注的问题。
-                    </p>
-                  )}
-                </div>
-                {ideaSession.messages?.length && !ideaSession.candidates?.length ? (
-                  <section className="idea-pending" aria-live="polite">
-                    <div className="idea-progress-head">
-                      <span
-                        className={`idea-progress-dot ${ideaTask?.status || "queued"}`}
-                      />
-                      <strong>
-                        {ideaTask
-                          ? taskProgressStatus(ideaTask)
-                          : "已发送，正在等待 Codex 启动"}
-                      </strong>
-                    </div>
-                    {ideaTask?.events?.length ? (
-                      <ol className="idea-progress-events">
-                        {ideaTask.events
-                          .slice(-3)
-                          .reverse()
-                          .map((item, index) => (
-                            <li key={item.id || `${item.sequence || 0}-${index}`}>
-                              {taskEventProgress(item)}
-                            </li>
-                          ))}
-                      </ol>
-                    ) : (
-                      <p className="idea-progress-note">
-                        会自动刷新，无需停留在这个窗口。
-                      </p>
-                    )}
-                  </section>
-                ) : null}
-                {ideaSession.candidates?.length ? (
-                  <div className="idea-candidates">
-                    <h3>候选题</h3>
-                    {ideaSession.candidates.map((candidate) => (
-                      <article key={candidate.id}>
-                        <div>
-                          <strong>{candidate.title}</strong>
-                          <p>{candidate.summary}</p>
-                        </div>
-                        <button
-                          disabled={!!ideaCreatingProject}
-                          onClick={() => void selectIdeaCandidate(candidate)}
-                        >
-                          {ideaCreatingProject === candidate.id ? "创建中…" : "确认并建项目"}
-                        </button>
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
-                <form className="idea-compose" onSubmit={sendIdeaMessage}>
-                  <TaskModelFields
-                    value={ideaTaskModel}
-                    onChange={setIdeaTaskModel}
-                    defaults={settings?.public}
-                    labelPrefix="选题"
-                  />
-                  <label htmlFor="idea-message-input">发送选题消息</label>
-                  <input
-                    id="idea-message-input"
-                    autoFocus
-                    value={ideaInput}
-                    onChange={(event) => setIdeaInput(event.target.value)}
-                    placeholder="输入你的想法或追问"
-                  />
-                  <button disabled={!ideaInput.trim()}>发送</button>
-                </form>
-              </div>
-            </div>
-          </section>
-        </div>
+        <IdeaPlannerDialog
+          session={ideaSession}
+          onSessionChange={setIdeaSession}
+          sessions={ideaSessions}
+          draft={Boolean(ideaDraft)}
+          accounts={accounts}
+          task={ideaTask}
+          creatingProject={ideaCreatingProject}
+          input={ideaInput}
+          onInputChange={setIdeaInput}
+          taskModel={ideaTaskModel}
+          onTaskModelChange={setIdeaTaskModel}
+          taskModelDefaults={settings?.public}
+          onClose={() => setIdeaOpen(false)}
+          onCreateConversation={() => void createIdeaConversation()}
+          onSwitchConversation={(session) => void switchIdeaConversation(session)}
+          onDeleteConversation={(session) => void deleteIdeaConversation(session)}
+          onSelectCandidate={(candidate) => void selectIdeaCandidate(candidate)}
+          onSubmit={sendIdeaMessage}
+        />
       )}
       {chatOpen && (
-        <div className="modal-backdrop chat-backdrop" onClick={() => setChatOpen(false)}>
-          <section
-            className="chat-workbench"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="chat-dialog-title"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <aside className="chat-session-rail">
-              <div className="chat-rail-head">
-                <div>
-                  <strong>Codex 对话</strong>
-                  <small>项目内沟通与本机历史</small>
-                </div>
-                <button className="chat-create-primary" disabled={chatCreating} onClick={() => { setChatCreationSource("console"); void createGeneralChat("console"); }}>
-                  {chatCreating && chatCreationSource === "console" ? "创建中…" : "新建对话"}
-                </button>
-                <button className="chat-create-secondary" disabled={chatCreating} onClick={() => { setChatCreationSource("desktop"); void createGeneralChat("desktop"); }}>
-                  {chatCreating && chatCreationSource === "desktop" ? "创建中…" : "在桌面版新建"}
-                </button>
-              </div>
-              <section className="chat-rail-section chat-current-sessions" aria-label="当前对话">
-                <div className="chat-rail-section__head">
-                  <strong>当前对话</strong>
-                  <small>{chatSessions.length} 个</small>
-                </div>
-                <div className="chat-session-list">
-                  {chatSessions.map((session) => (
-                    <div className="chat-session-item" key={session.id}>
-                      <button
-                        className={chatDetail?.session.id === session.id ? "selected" : ""}
-                        onClick={() => void loadChatSession(session)}
-                      >
-                        <strong>{session.title}</strong>
-                        <small>{session.source === "desktop" ? "桌面版" : "控制台"} · {session.status === "running" ? "处理中" : "可继续"}</small>
-                      </button>
-                      <button
-                        className="chat-session-delete"
-                        aria-label={`删除对话 ${session.title}`}
-                        onClick={() => void deleteChatSession(session)}
-                      >
-                        <X size={16} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                  {!chatSessions.length ? <p className="chat-rail-empty">还没有当前对话</p> : null}
-                </div>
-              </section>
-              <section className="chat-rail-section chat-history-section" aria-label="本机历史">
-                <div className="history-rail-head">
-                  <div>
-                    <strong>本机历史</strong>
-                    <small>最近 {settings?.public.codex_history_limit || 10} 条</small>
-                  </div>
-                  <select
-                    aria-label="筛选本机历史来源"
-                    value={historySource}
-                    onChange={(event) => {
-                      const source = event.target.value;
-                      setHistorySource(source);
-                      void refreshHistory(source);
-                    }}
-                  >
-                    <option value="">全部</option>
-                    <option value="desktop">桌面版</option>
-                    <option value="cli">CLI</option>
-                    <option value="task">任务</option>
-                  </select>
-                </div>
-                <div className="history-thread-list">
-                  {historyThreads.map((thread) => (
-                    <article key={`${thread.source}-${thread.id}`}>
-                      <strong>{thread.title || "未命名会话"}</strong>
-                      <small>{historySourceLabels[thread.source] || "本机任务"} · {formatDate(thread.recency)}</small>
-                      {thread.preview ? <p>{thread.preview}</p> : null}
-                      <div>
-                        <button
-                          disabled={thread.active}
-                          title={thread.active ? "该会话正在别处运行" : "恢复原来的 Codex 会话"}
-                          onClick={() => void applyHistoryThread(thread, "resume")}
-                        >
-                          继续
-                        </button>
-                        <button className="history-fork" onClick={() => void applyHistoryThread(thread, "fork")}>
-                          复制
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                  {!historyThreads.length && <p className="chat-rail-empty">暂无可接入的本机历史</p>}
-                </div>
-                <p className="history-inline-help">“继续”接回原会话；“复制”会新建副本，不影响原会话。</p>
-              </section>
-            </aside>
-            <div className="chat-main">
-              <div className="chat-main-head">
-                <div>
-                  <span className="eyebrow">{chatDetail?.session.source === "desktop" ? "桌面版会话" : "控制台会话"}</span>
-                  <h2 id="chat-dialog-title">{chatDetail?.session.title || "新建一个 Codex 对话"}</h2>
-                  {chatDetail?.session ? (
-                    <p className="chat-session-meta">
-                      {chatDetail.session.status === "running" ? "Codex 正在处理" : "可以继续对话"}
-                      {chatDetail.session.model ? ` · ${chatDetail.session.model}` : ""}
-                      {chatDetail.session.reasoning_effort ? ` · ${chatDetail.session.reasoning_effort}` : ""}
-                    </p>
-                  ) : null}
-                </div>
-                <button className="close" aria-label="关闭 Codex 对话" onClick={() => setChatOpen(false)}>
-                  <X size={20} aria-hidden="true" />
-                </button>
-              </div>
-              <div className="chat-messages" aria-live="polite">
-                {visibleChatMessages.map((item, index) => (
-                  <article className={`chat-bubble ${item.role}`} key={item.id || `${item.role}-${item.created_at}-${index}`}>
-                    <b>{item.role === "user" ? "你" : "Codex"}</b>
-                    <p>{item.content}</p>
-                    {item.role === "user" && item.delivery_status === "queued" ? <small>已排队</small> : null}
-                  </article>
-                ))}
-                {!visibleChatMessages.length && !technicalChatMessages.length && (
-                  <div className="chat-empty">
-                    <strong>直接告诉 Codex 你要处理什么</strong>
-                    <p>任务运行中也可以继续发送补充要求；系统会自动引导当前任务或排入下一轮。</p>
-                  </div>
-                )}
-                {technicalChatMessages.length ? (
-                  <details className="chat-technical">
-                    <summary>技术记录（{technicalChatMessages.length}）</summary>
-                    {technicalChatMessages.map((item, index) => (
-                      <pre key={item.id || `${item.kind}-${item.created_at}-${index}`}>{item.content}</pre>
-                    ))}
-                  </details>
-                ) : null}
-              </div>
-              <form className="chat-compose" onSubmit={sendChatMessage}>
-                <div className="chat-compose__inner">
-                  {chatDetail?.session.status === "running" ? (
-                    <p className="chat-compose-note">Codex 正在处理。现在发送会作为补充要求送入当前任务。</p>
-                  ) : null}
-                  <label htmlFor="chat-compose-input">发送消息</label>
-                  <textarea
-                    id="chat-compose-input"
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    placeholder="描述你要调整的内容或补充要求"
-                    rows={3}
-                  />
-                  <button disabled={!chatInput.trim() || chatSending || !chatDetail}>
-                    {chatSending ? "发送中" : "发送"}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </section>
-        </div>
+        <ChatWorkbenchDialog
+          detail={chatDetail}
+          sessions={chatSessions}
+          visibleMessages={visibleChatMessages}
+          technicalMessages={technicalChatMessages}
+          creating={chatCreating}
+          creationSource={chatCreationSource}
+          onCreationSourceChange={setChatCreationSource}
+          onCreate={(source) => void createGeneralChat(source)}
+          onSelectSession={(session) => void loadChatSession(session)}
+          onDeleteSession={(session) => void deleteChatSession(session)}
+          settings={settings}
+          historySource={historySource}
+          onHistorySourceChange={(source) => {
+            setHistorySource(source);
+            void refreshHistory(source);
+          }}
+          historyThreads={historyThreads}
+          onApplyHistoryThread={(thread, mode) => void applyHistoryThread(thread, mode)}
+          input={chatInput}
+          onInputChange={setChatInput}
+          sending={chatSending}
+          onClose={() => setChatOpen(false)}
+          onSubmit={sendChatMessage}
+        />
       )}
       {taskOpen && (
         <TaskDetailDialog
@@ -2582,45 +2055,4 @@ function App() {
   );
 }
 
-function stageLabel(stage: Project["stage"]) {
-  return (
-    (
-      {
-        topic: "选题准备",
-        script: "文案制作",
-        assets: "配音字幕",
-        mixing: "混剪制作",
-        review: "成片审核",
-        published: "已发布",
-      } as Record<string, string>
-    )[stage] || stage
-  );
-}
-function projectStageHint(stage: Project["stage"]) {
-  return (
-    (
-      {
-        topic: "正在确定选题或生成选题卡",
-        script: "选题卡已就绪，正在制作文案",
-        assets: "文案已登记，正在准备配音和 SRT",
-        mixing: "配音和 SRT 已齐，正在制作混剪",
-        review: "检查发布文案并确认发布状态",
-        published: "已经发布",
-      } as Record<string, string>
-    )[stage] || stage
-  );
-}
-function accountName(id: string, accounts: Account[]) {
-  return accounts.find((account) => account.id === id)?.name || "未分配";
-}
-function formatDate(value?: string) {
-  return value
-    ? new Date(value).toLocaleString("zh-CN", {
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "暂无";
-}
 export default App;
