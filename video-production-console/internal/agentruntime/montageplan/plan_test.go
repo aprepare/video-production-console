@@ -173,7 +173,8 @@ func TestFitShotToClipNeverExceedsSourceDuration(t *testing.T) {
 }
 
 func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
-	short := buildSFXPlacements(25)
+	library := defaultMontageResources().SFX
+	short := buildSFXPlacements(25, library)
 	if len(short) != 1 {
 		t.Fatalf("short sfx count = %d", len(short))
 	}
@@ -181,7 +182,7 @@ func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
 		t.Fatalf("short opening = %#v", short[0])
 	}
 
-	long := buildSFXPlacements(293.832)
+	long := buildSFXPlacements(293.832, library)
 	if n := len(long); n < 3 || n > 5 {
 		t.Fatalf("long sfx count = %d", n)
 	}
@@ -201,6 +202,190 @@ func TestBuildSFXPlacementsMatchesLongFormValidator(t *testing.T) {
 			t.Fatalf("placement %d db = %v", i, item["db"])
 		}
 		prev = start
+	}
+}
+
+func TestBuildSFXPlacementsStaysValidWithShortConfiguredLibrary(t *testing.T) {
+	library := []verifiedSFX{
+		{Name: "开场", EffectID: "1", ResourceID: "2", CacheKey: "sfx_open_custom"},
+		{Name: "过渡", EffectID: "3", ResourceID: "4", CacheKey: "sfx_mid_custom"},
+	}
+	long := buildSFXPlacements(293.832, library)
+	if n := len(long); n < 3 || n > 5 {
+		t.Fatalf("long sfx count = %d", n)
+	}
+	if long[0]["cache_key"] != "sfx_open_custom" || long[0]["start_s"].(float64) != 0 {
+		t.Fatalf("opening = %#v", long[0])
+	}
+	prev := -sfxMinGapSeconds
+	for i, item := range long {
+		start := item["start_s"].(float64)
+		if start-prev < sfxMinGapSeconds {
+			t.Fatalf("placement %d gap too small: %v -> %v", i, prev, start)
+		}
+		if item["cache_key"] != library[i%len(library)].CacheKey {
+			t.Fatalf("placement %d cache_key = %v", i, item["cache_key"])
+		}
+		prev = start
+	}
+	if got := buildSFXPlacements(25, nil); len(got) != 1 || got[0]["cache_key"] != "sfx_opening_hit" {
+		t.Fatalf("empty library must fall back to built-in: %#v", got)
+	}
+}
+
+// planFixture writes the inputs Build needs and returns the manifest and plan paths.
+func planFixture(t *testing.T, profilePath string) (manifestPath, planPath, clipPath string) {
+	t.Helper()
+	root := t.TempDir()
+	mediaRoot := filepath.Join(root, "media")
+	clipPath = filepath.Join(mediaRoot, "clip.mp4")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clipPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "media_index.json")
+	rawIndex, _ := json.Marshal([]map[string]any{{
+		"id": "clip-001", "category": "Nature_Landscape",
+		"relative_path": "clip.mp4", "duration_seconds": 20,
+	}})
+	if err := os.WriteFile(indexPath, rawIndex, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	narration := filepath.Join(root, "narration.mp3")
+	background := filepath.Join(root, "bg.png")
+	for _, path := range []string{narration, background} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taskID := "task-abcdef123456"
+	settings := map[string]string{
+		"media_root": mediaRoot, "media_index_path": indexPath,
+		"draft_display_name": "天中观局_房贷困境反思_a4b031",
+	}
+	if profilePath != "" {
+		settings["machine_profile_path"] = profilePath
+	}
+	manifestPath = filepath.Join(root, "task_manifest.json")
+	rawManifest, _ := json.Marshal(map[string]any{
+		"task_id": taskID, "job_id": taskID, "action": "montage.execute",
+		"output_dir": filepath.Join(root, "output"),
+		"inputs": []map[string]string{
+			{"role": "narration", "path": narration},
+			{"role": "account_background", "path": background},
+		},
+		"non_secret_settings": settings,
+	})
+	if err := os.WriteFile(manifestPath, rawManifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return manifestPath, filepath.Join(root, "output", "production_plan.json"), clipPath
+}
+
+func buildPlanJSON(t *testing.T, profilePath string) map[string]any {
+	t.Helper()
+	manifestPath, planPath, _ := planFixture(t, profilePath)
+	if err := Build(Options{
+		ManifestPath: manifestPath,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 25.0, nil },
+	}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func TestBuildKeepsBuiltInResourcesWithoutConfig(t *testing.T) {
+	for name, profile := range map[string]string{
+		"no machine profile":       "",
+		"profile without montage":  `{"python_binary":"python"}`,
+		"profile with empty block": `{"montage_resources":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			profilePath := ""
+			if profile != "" {
+				profilePath = writeProfile(t, profile)
+			}
+			plan := buildPlanJSON(t, profilePath)
+			shot := plan["timeline"].([]any)[0].(map[string]any)
+			if shot["transition"] != "叠化" || shot["transition_effect_id"] != "322577" ||
+				shot["transition_resource_id"] != "6724845717472416269" ||
+				shot["transition_duration_s"].(float64) != 0.466666 {
+				t.Fatalf("transition = %#v", shot)
+			}
+			audio := plan["audio"].(map[string]any)
+			bgm := audio["bgm"].(map[string]any)
+			if bgm["name"] != "EXTA$Y+ (Remake)" || bgm["music_id"] != "7223314484093405186" ||
+				bgm["resource_id"] != "7223314484093405186" || bgm["cache_key"] != "bgm_extasy_remake" ||
+				bgm["linear_volume"].(float64) != 0.1593 || bgm["loop_every_s"].(float64) != 194.4 ||
+				bgm["required"] != true {
+				t.Fatalf("bgm = %#v", bgm)
+			}
+			sfx := audio["sfx"].([]any)
+			if len(sfx) != 1 {
+				t.Fatalf("sfx count = %d", len(sfx))
+			}
+			opening := sfx[0].(map[string]any)
+			if opening["cache_key"] != "sfx_opening_hit" || opening["effect_id"] != "7132789318354996487" ||
+				opening["name"] != "综艺开头-咚（空旷）" || opening["start_s"].(float64) != 0 {
+				t.Fatalf("opening sfx = %#v", opening)
+			}
+		})
+	}
+}
+
+func TestBuildUsesConfiguredMontageResources(t *testing.T) {
+	profilePath := writeProfile(t, `{
+      "montage_resources": {
+        "transition": {"name": "闪黑", "effect_id": "999", "resource_id": "888", "duration_s": 0.6},
+        "sfx": [{"name": "开场", "effect_id": "1", "resource_id": "2", "cache_key": "sfx_open_custom"}],
+        "bgm": {"name": "Other Track", "music_id": "111", "resource_id": "222", "cache_key": "bgm_other", "linear_volume": 0.2, "loop_every_s": 120.5, "required": false}
+      }
+    }`)
+	plan := buildPlanJSON(t, profilePath)
+	shot := plan["timeline"].([]any)[0].(map[string]any)
+	if shot["transition"] != "闪黑" || shot["transition_effect_id"] != "999" ||
+		shot["transition_resource_id"] != "888" || shot["transition_duration_s"].(float64) != 0.6 {
+		t.Fatalf("transition = %#v", shot)
+	}
+	audio := plan["audio"].(map[string]any)
+	bgm := audio["bgm"].(map[string]any)
+	if bgm["name"] != "Other Track" || bgm["cache_key"] != "bgm_other" ||
+		bgm["linear_volume"].(float64) != 0.2 || bgm["loop_every_s"].(float64) != 120.5 || bgm["required"] != false {
+		t.Fatalf("bgm = %#v", bgm)
+	}
+	opening := audio["sfx"].([]any)[0].(map[string]any)
+	if opening["cache_key"] != "sfx_open_custom" || opening["effect_id"] != "1" || opening["name"] != "开场" {
+		t.Fatalf("opening sfx = %#v", opening)
+	}
+}
+
+func TestBuildRejectsMalformedMontageResources(t *testing.T) {
+	profilePath := writeProfile(t, `{"media_root":"x","montage_resources":{"sfx":[{"name":"x","resource_id":"2"}]}}`)
+	manifestPath, planPath, _ := planFixture(t, profilePath)
+	err := Build(Options{
+		ManifestPath: manifestPath,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 25.0, nil },
+	})
+	if err == nil {
+		t.Fatal("incomplete montage resources must fail the build")
+	}
+	if !strings.Contains(err.Error(), "sfx[0]") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(planPath); !os.IsNotExist(statErr) {
+		t.Fatalf("plan must not be written: %v", statErr)
 	}
 }
 

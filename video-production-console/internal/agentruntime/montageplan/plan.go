@@ -15,10 +15,6 @@ import (
 )
 
 const (
-	transitionDuration = 0.466666
-	transitionEffectID = "322577"
-	transitionResID    = "6724845717472416269"
-	bgmLoopSeconds     = 194.4
 	sfxMinGapSeconds   = 12.0
 	sfxLongFormSeconds = 240.0
 )
@@ -29,28 +25,6 @@ type verifiedSFX struct {
 	ResourceID string
 	CacheKey   string
 }
-
-var (
-	sfxOpening = verifiedSFX{
-		Name: "综艺开头-咚（空旷）", EffectID: "7132789318354996487",
-		ResourceID: "7132789318354996487", CacheKey: "sfx_opening_hit",
-	}
-	sfxLibrary = []verifiedSFX{
-		sfxOpening,
-		{
-			Name: "水滴", EffectID: "6924829910603287822",
-			ResourceID: "6924829910603287822", CacheKey: "sfx_water_drop",
-		},
-		{
-			Name: "“呼”的转场音效", EffectID: "6896679799100656904",
-			ResourceID: "6896679799100656904", CacheKey: "sfx_whoosh",
-		},
-		{
-			Name: "综艺咚", EffectID: "7072236855973924103",
-			ResourceID: "7072236855973924103", CacheKey: "sfx_conclusion_hit",
-		},
-	}
-)
 
 // DurationFunc measures narration length in seconds.
 type DurationFunc func(path string) (float64, error)
@@ -162,6 +136,10 @@ func Build(opts Options) error {
 	if mediaRoot == "" || mediaIndex == "" {
 		return fmt.Errorf("media_root and media_index_path are required")
 	}
+	resources, err := loadMontageResources(profilePath)
+	if err != nil {
+		return err
+	}
 
 	clips, err := sampleMedia(mediaIndex, mediaRoot, limit, manifest.TaskID, false)
 	if err != nil {
@@ -175,7 +153,7 @@ func Build(opts Options) error {
 	// draft_display_name is for Jianying draft folder naming (includes account).
 	// On-screen title/subtitle must use only the content label, never the account.
 	title, subtitle := titlePair(onScreenTitleSource(manifest.NonSecretSettings.DraftDisplayName))
-	timeline := buildTimeline(duration, clips)
+	timeline := buildTimeline(duration, clips, resources.Transition)
 	plan := map[string]any{
 		"plan_version":       "1.0",
 		"status":             "approved",
@@ -205,11 +183,8 @@ func Build(opts Options) error {
 		"timeline": timeline,
 		"audio": map[string]any{
 			"narration": map[string]any{"path": narration, "db": 5, "start_s": 0},
-			"bgm": map[string]any{
-				"name": "EXTA$Y+ (Remake)", "music_id": "7223314484093405186", "resource_id": "7223314484093405186",
-				"cache_key": "bgm_extasy_remake", "linear_volume": 0.1593, "loop_every_s": bgmLoopSeconds, "required": true,
-			},
-			"sfx": buildSFXPlacements(duration),
+			"bgm":       bgmPlacement(resources.BGM),
+			"sfx":       buildSFXPlacements(duration, resources.SFX),
 		},
 		"graphics": map[string]any{
 			"title":          map[string]any{"text": title, "chars_min": 6, "chars_max": 8, "size_min": 16, "y": 0.6, "full_duration": true},
@@ -250,9 +225,22 @@ func nullIfEmpty(path string) any {
 	return path
 }
 
+func bgmPlacement(bgm bgmResource) map[string]any {
+	return map[string]any{
+		"name": bgm.Name, "music_id": bgm.MusicID, "resource_id": bgm.ResourceID,
+		"cache_key": bgm.CacheKey, "linear_volume": bgm.LinearVolume,
+		"loop_every_s": bgm.LoopEveryS, "required": bgm.Required,
+	}
+}
+
 // buildSFXPlacements emits verified SFX that satisfy jianying-montage-draft validate-plan:
 // opening hit at 0s, optional mid/end hits for >=240s videos (3-5 total, >=12s apart).
-func buildSFXPlacements(duration float64) []map[string]any {
+// library[0] is the opening hit; a shorter library is reused cyclically so the
+// long-form count stays inside 3-5.
+func buildSFXPlacements(duration float64, library []verifiedSFX) []map[string]any {
+	if len(library) == 0 {
+		library = defaultMontageResources().SFX
+	}
 	count := 1
 	if duration >= sfxLongFormSeconds {
 		count = 4
@@ -268,8 +256,8 @@ func buildSFXPlacements(duration float64) []map[string]any {
 		if count > 5 {
 			count = 5
 		}
-		if count > len(sfxLibrary) {
-			count = len(sfxLibrary)
+		if count > len(library) {
+			count = len(library)
 		}
 	}
 
@@ -310,10 +298,8 @@ func buildSFXPlacements(duration float64) []map[string]any {
 
 	out := make([]map[string]any, 0, len(starts))
 	for i, start := range starts {
-		item := sfxLibrary[i%len(sfxLibrary)]
-		if i == 0 {
-			item = sfxOpening
-		}
+		// starts[0] is 0s, so the first placement is always library[0].
+		item := library[i%len(library)]
 		out = append(out, map[string]any{
 			"name":        item.Name,
 			"effect_id":   item.EffectID,
@@ -495,7 +481,7 @@ func isScenic(category string) bool {
 	return strings.Contains(lower, "nature") || strings.Contains(lower, "landscape") || strings.Contains(lower, "scenery") || strings.Contains(lower, "architecture") || strings.Contains(lower, "building")
 }
 
-func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
+func buildTimeline(duration float64, clips []mediaItem, transition transitionResource) []map[string]any {
 	shots := make([]map[string]any, 0, 32)
 	cursor := 0.0
 	shotNo := 1
@@ -564,10 +550,10 @@ func buildTimeline(duration float64, clips []mediaItem) []map[string]any {
 			"opacity":                0.5,
 			"source_audio_muted":     true,
 			"visual_action":          "缓慢推进或保持稳定",
-			"transition":             "叠化",
-			"transition_effect_id":   transitionEffectID,
-			"transition_resource_id": transitionResID,
-			"transition_duration_s":  transitionDuration,
+			"transition":             transition.Name,
+			"transition_effect_id":   transition.EffectID,
+			"transition_resource_id": transition.ResourceID,
+			"transition_duration_s":  transition.DurationS,
 		})
 		cursor = end
 		shotNo++

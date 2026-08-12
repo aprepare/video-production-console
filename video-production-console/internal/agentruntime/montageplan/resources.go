@@ -9,7 +9,34 @@ import (
 	"strings"
 )
 
-const transitionName = "叠化"
+// Built-in verified Jianying identities. They stay the effective defaults so a
+// machine profile without montage resources renders exactly as before.
+const (
+	transitionName     = "叠化"
+	transitionEffectID = "322577"
+	transitionResID    = "6724845717472416269"
+	transitionDuration = 0.466666
+	bgmLoopSeconds     = 194.4
+)
+
+var defaultSFXLibrary = []verifiedSFX{
+	{
+		Name: "综艺开头-咚（空旷）", EffectID: "7132789318354996487",
+		ResourceID: "7132789318354996487", CacheKey: "sfx_opening_hit",
+	},
+	{
+		Name: "水滴", EffectID: "6924829910603287822",
+		ResourceID: "6924829910603287822", CacheKey: "sfx_water_drop",
+	},
+	{
+		Name: "“呼”的转场音效", EffectID: "6896679799100656904",
+		ResourceID: "6896679799100656904", CacheKey: "sfx_whoosh",
+	},
+	{
+		Name: "综艺咚", EffectID: "7072236855973924103",
+		ResourceID: "7072236855973924103", CacheKey: "sfx_conclusion_hit",
+	},
+}
 
 // montageResources holds the verified Jianying asset identities a plan needs.
 // Every field has a built-in default, so a machine profile may override only
@@ -47,7 +74,7 @@ func defaultMontageResources() montageResources {
 			ResourceID: transitionResID,
 			DurationS:  transitionDuration,
 		},
-		SFX: append([]verifiedSFX(nil), sfxLibrary...),
+		SFX: append([]verifiedSFX(nil), defaultSFXLibrary...),
 		BGM: bgmResource{
 			Name:         "EXTA$Y+ (Remake)",
 			MusicID:      "7223314484093405186",
