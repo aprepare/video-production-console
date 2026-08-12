@@ -79,6 +79,7 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onUpload: vi.fn(),
     onSaveSourceScript: vi.fn(),
     onReviseContinuousScript: vi.fn(),
+    onGenerateNarration: vi.fn(),
     taskModel: { model: "", reasoningEffort: "" },
     onTaskModelChange: vi.fn(),
     taskModelDefaults: {
@@ -161,6 +162,46 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(props.onUpload).toHaveBeenCalledWith("narration", expect.any(File));
   fireEvent.click(screen.getByRole("button", { name: "查看连续文案" }));
   expect(props.onViewAsset).toHaveBeenCalledWith(expect.objectContaining({ type: "continuous_script" }));
+});
+
+test("generates narration and subtitles from the assets stage once the continuous script is ready", () => {
+  const props = renderWorkbench();
+
+  const generate = screen.getByRole<HTMLButtonElement>("button", { name: "生成配音与字幕" });
+  expect(generate.disabled).toBe(false);
+  fireEvent.click(generate);
+
+  expect(props.onGenerateNarration).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(false);
+  expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").disabled).toBe(false);
+});
+
+test("disables narration generation with a stated reason while the continuous script is missing", () => {
+  const detail = fixture();
+  delete detail.assets.continuous_script;
+  detail.missing_assets = ["continuous_script", "subtitle_srt"];
+  const props = renderWorkbench(detail);
+
+  const generate = screen.getByRole<HTMLButtonElement>("button", { name: /生成配音与字幕/ });
+  expect(generate.disabled).toBe(true);
+  expect(generate.getAttribute("title")).toContain("连续文案");
+  expect(generate.getAttribute("aria-label")).toContain("连续文案");
+  fireEvent.click(generate);
+  expect(props.onGenerateNarration).not.toHaveBeenCalled();
+  expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(false);
+});
+
+test("marks both narration and subtitle cards as generating while the request is pending", () => {
+  const props = workbenchProps();
+  props.pendingActions = ["generate-narration"];
+  const { container } = render(<ProjectWorkbench {...props} />);
+
+  const generate = screen.getByRole<HTMLButtonElement>("button", { name: "正在生成配音与字幕" });
+  expect(generate.disabled).toBe(true);
+  expect(generate.getAttribute("aria-busy")).toBe("true");
+  expect(generate.textContent).toContain("正在生成…");
+  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(2);
+  expect(screen.getAllByText("生成中")).toHaveLength(2);
 });
 
 test("shows the current registered Jianying display name while keeping storage identity in collapsed technical details", () => {

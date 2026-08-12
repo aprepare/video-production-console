@@ -918,6 +918,7 @@ function App() {
           onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
           loadSourceScriptContent={projectActions.loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
+          onGenerateNarration={() => void projectActions.generateNarration()}
           taskModel={projectActions.taskModel}
           onTaskModelChange={(value) => projectActions.setTaskModel(value)}
           taskModelDefaults={settings?.public}

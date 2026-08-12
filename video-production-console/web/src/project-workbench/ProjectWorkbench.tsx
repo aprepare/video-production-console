@@ -38,6 +38,7 @@ export type ProjectWorkbenchProps = {
   onSaveSourceScript: (content: string) => void;
   loadSourceScriptContent?: (assetID: string) => Promise<string>;
   onReviseContinuousScript?: () => void;
+  onGenerateNarration?: () => void;
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults?: TaskModelDefaults;
@@ -446,6 +447,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
           onReviseContinuousScript={props.onReviseContinuousScript}
+          onGenerateNarration={props.onGenerateNarration}
           pendingActions={props.pendingActions}
           uploadRequest={uploadRequest}
         />

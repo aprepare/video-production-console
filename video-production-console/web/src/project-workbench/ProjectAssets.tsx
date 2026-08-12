@@ -8,6 +8,7 @@ import {
   Image,
   RotateCcw,
   Upload,
+  WandSparkles,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useEffect, useRef } from "react";
@@ -57,7 +58,8 @@ const assetDefinitions: Array<{
   },
 ];
 
-function assetState(asset?: ProjectAsset) {
+function assetState(asset?: ProjectAsset, generating = false) {
+  if (generating) return { label: "生成中", className: "generating" };
   if (!asset) return { label: "缺失", className: "missing" };
   if (asset.state === "ready") return { label: "存在", className: "ready" };
   if (asset.state === "generating") return { label: "生成中", className: "generating" };
@@ -71,6 +73,7 @@ type ProjectAssetsProps = {
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onReviseContinuousScript?: () => void;
+  onGenerateNarration?: () => void;
   pendingActions: string[];
   uploadRequest: AssetUploadRequest;
 };
@@ -82,6 +85,7 @@ export function ProjectAssets({
   onReplaceBackground,
   onViewAsset,
   onReviseContinuousScript,
+  onGenerateNarration,
   pendingActions,
   uploadRequest,
 }: ProjectAssetsProps) {
@@ -93,6 +97,13 @@ export function ProjectAssets({
   }, [uploadRequest]);
 
   const isPending = (_type: ProjectAssetUploadType) => pendingActions.length > 0;
+  const narrationGenerating = pendingActions.includes("generate-narration");
+  const continuousScriptReady = detail.assets.continuous_script?.state === "ready";
+  const narrationDisabledReason = !continuousScriptReady
+    ? "连续文案尚未就绪，请先备好连续文案"
+    : pendingActions.length && !narrationGenerating
+      ? "当前项目还有其他操作在进行中"
+      : "";
   const backgroundState = assetState(detail.background_reference || undefined);
   const readyAssetCount = assetDefinitions.reduce((count, definition) => (
     detail.assets[definition.type]?.state === "ready" ? count + 1 : count
@@ -121,7 +132,9 @@ export function ProjectAssets({
       <div className="project-assets__list">
         {assetDefinitions.map((definition) => {
           const asset = detail.assets[definition.type];
-          const state = assetState(asset);
+          const generating = narrationGenerating
+            && (definition.type === "narration" || definition.type === "subtitle_srt");
+          const state = assetState(asset, generating);
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
           const draftDisplayName = isRegisteredDraft
@@ -174,6 +187,23 @@ export function ProjectAssets({
                   <button type="button" onClick={onReviseContinuousScript} aria-label="打回重做连续文案">
                     <RotateCcw size={15} aria-hidden="true" />
                     重做
+                  </button>
+                ) : null}
+                {definition.type === "narration" && onGenerateNarration ? (
+                  <button
+                    type="button"
+                    onClick={onGenerateNarration}
+                    disabled={Boolean(narrationDisabledReason) || narrationGenerating}
+                    aria-busy={narrationGenerating}
+                    title={narrationDisabledReason || "调用火山语音一次生成配音与 SRT 字幕"}
+                    aria-label={narrationGenerating
+                      ? "正在生成配音与字幕"
+                      : narrationDisabledReason
+                        ? `生成配音与字幕（${narrationDisabledReason}）`
+                        : "生成配音与字幕"}
+                  >
+                    <WandSparkles size={15} aria-hidden="true" />
+                    {narrationGenerating ? "正在生成…" : "生成配音与字幕"}
                   </button>
                 ) : null}
                 {definition.manualUpload ? (

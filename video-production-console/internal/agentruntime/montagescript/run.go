@@ -54,10 +54,12 @@ func Run(opts Options) error {
 	durationFn := opts.Duration
 	if durationFn == nil {
 		durationFn = func(path string) (float64, error) {
-			if value, err := montageplan.ProbeDuration(path); err == nil {
+			// Prefer AudioMaterial microseconds so plan duration matches the
+			// draft backend; ffprobe float seconds can disagree by hundreds of µs.
+			if value, err := probeDurationViaSkill(python, skillRoot, path); err == nil {
 				return value, nil
 			}
-			return probeDurationViaSkill(python, skillRoot, path)
+			return montageplan.ProbeDuration(path)
 		}
 	}
 
@@ -101,8 +103,8 @@ func Run(opts Options) error {
 }
 
 func probeDurationViaSkill(pythonBinary, skillRoot, audioPath string) (float64, error) {
-	// Prefer pyJianYingDraft/AudioMaterial duration so project_duration_s matches
-	// the same microsecond length the draft backend will enforce.
+	// AudioMaterial reports integer microseconds; dividing yields the plan seconds
+	// that DeterministicDraftBackend will re-resolve from the same material.
 	code := "" +
 		"import sys\n" +
 		"path = sys.argv[1]\n" +

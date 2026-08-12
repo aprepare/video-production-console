@@ -176,6 +176,35 @@ func TestSettingsHTTPRejectsUnknownOrOversizedInputsWithoutEcho(t *testing.T) {
 	}
 }
 
+func TestSettingsHTTPVolcSpeechIDsRoundTripWhileTheKeyStaysMasked(t *testing.T) {
+	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{})
+	public.VolcSpeechSpeakerID = "S_volc_speaker"
+	public.VolcSpeechResourceID = "seed-icl-2.0"
+	body, err := json.Marshal(map[string]any{
+		"public":  public,
+		"secrets": map[string]string{consoleSettings.SecretVolcSpeechAPIKey: "secret-value"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	assertNoSecretHTTPMaterial(t, recorder.Body.String())
+	var view consoleSettings.View
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.VolcSpeechSpeakerID != public.VolcSpeechSpeakerID || view.Public.VolcSpeechResourceID != public.VolcSpeechResourceID {
+		t.Fatalf("HTTP round trip=%+v", view.Public)
+	}
+	if !view.Secrets[consoleSettings.SecretVolcSpeechAPIKey].Configured || view.Secrets[consoleSettings.SecretVolcSpeechAPIKey].Masked == "" {
+		t.Fatalf("masked view=%+v", view.Secrets)
+	}
+}
+
 func newSettingsHTTPTest(t *testing.T, options consoleSettings.Options) (http.Handler, *sql.DB, domain.PublicSettings) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))

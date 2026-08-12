@@ -709,6 +709,60 @@ func TestCodexTaskProjectRootRequiresRestart(t *testing.T) {
 	}
 }
 
+func TestSettingsVolcSpeechKeepsAPIKeyOutOfTheViewAndPublishesTheIDs(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.VolcSpeechSpeakerID = "S_volc_speaker"
+	public.VolcSpeechResourceID = "seed-icl-2.0"
+	view, err := service.Update(t.Context(), public, map[string]string{SecretVolcSpeechAPIKey: "volc-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.VolcSpeechSpeakerID != public.VolcSpeechSpeakerID || view.Public.VolcSpeechResourceID != public.VolcSpeechResourceID {
+		t.Fatalf("public volc speech settings=%+v", view.Public)
+	}
+	if !view.Secrets[SecretVolcSpeechAPIKey].Configured || view.Secrets[SecretVolcSpeechAPIKey].Masked == "" {
+		t.Fatalf("secret status=%+v", view.Secrets)
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("volc-value")) {
+		t.Fatalf("HTTP view leaked the Volcengine key: %s", raw)
+	}
+
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.VolcSpeechAPIKey != "volc-value" || runtime.VolcSpeechSpeakerID != public.VolcSpeechSpeakerID || runtime.VolcSpeechResourceID != public.VolcSpeechResourceID {
+		t.Fatalf("runtime=%+v", runtime)
+	}
+	runtimeJSON, err := json.Marshal(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(runtimeJSON, []byte("volc-value")) {
+		t.Fatalf("runtime JSON leaked the Volcengine key: %s", runtimeJSON)
+	}
+}
+
+// The narration feature is optional, so an unconfigured voice must never block
+// an unrelated settings save.
+func TestSettingsAcceptEmptyVolcSpeechIDs(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	view, err := service.Update(t.Context(), public, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.VolcSpeechSpeakerID != "" || view.Public.VolcSpeechResourceID != "" {
+		t.Fatalf("empty volc speech settings=%+v", view.Public)
+	}
+	if view.Secrets[SecretVolcSpeechAPIKey].Configured || view.Secrets[SecretVolcSpeechAPIKey].Masked != "" {
+		t.Fatalf("unconfigured secret status=%+v", view.Secrets[SecretVolcSpeechAPIKey])
+	}
+}
+
 func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *fakeProtector, domain.PublicSettings) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))

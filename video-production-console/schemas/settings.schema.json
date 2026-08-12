@@ -41,7 +41,9 @@
         "app_server_enabled",
         "codex_workspace_roots",
         "codex_task_project_root",
-        "codex_history_limit"
+        "codex_history_limit",
+        "volc_speech_speaker_id",
+        "volc_speech_resource_id"
       ],
       "properties": {
         "listen_addr": {
@@ -87,7 +89,9 @@
           "items": { "$ref": "#/$defs/absolutePath" }
         },
         "codex_task_project_root": { "$ref": "#/$defs/optionalAbsolutePath" },
-        "codex_history_limit": { "type": "integer", "minimum": 5, "maximum": 50 }
+        "codex_history_limit": { "type": "integer", "minimum": 5, "maximum": 50 },
+        "volc_speech_speaker_id": { "type": "string", "maxLength": 256 },
+        "volc_speech_resource_id": { "type": "string", "maxLength": 256 }
       }
     },
     "secretInput": {
@@ -95,7 +99,8 @@
       "additionalProperties": false,
       "properties": {
         "grok_api_key": { "type": "string", "maxLength": 16384 },
-        "pexels_api_key": { "type": "string", "maxLength": 16384 }
+        "pexels_api_key": { "type": "string", "maxLength": 16384 },
+        "volc_speech_api_key": { "type": "string", "maxLength": 16384 }
       }
     },
     "secretStatus": {
@@ -120,10 +125,11 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "pexels_api_key"],
+      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
-        "pexels_api_key": { "$ref": "#/$defs/secretStatus" }
+        "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
+        "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" }
       }
     },
     "settingsUpdate": {

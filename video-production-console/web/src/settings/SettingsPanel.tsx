@@ -17,6 +17,8 @@ const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["media_root", "媒体素材目录", "本地媒体根目录"],
   ["jianying_root", "剪映草稿目录", "剪映草稿根目录"],
   ["machine_profile_path", "混剪机器配置", "machine profile JSON 文件"],
+  ["volc_speech_speaker_id", "火山音色 ID", "复刻音色 ID"],
+  ["volc_speech_resource_id", "火山语音资源 ID", "seed-icl-2.0"],
 ];
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
@@ -37,9 +39,17 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   codex_workspace_roots: "Codex 工作目录白名单",
   codex_default_model: "默认模型",
   codex_default_reasoning_effort: "默认推理强度",
+  volc_speech_speaker_id: "火山音色 ID",
+  volc_speech_resource_id: "火山语音资源 ID",
 };
 
-type SecretDraft = { grok_api_key: string; pexels_api_key: string };
+type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string };
+
+const secretFields: Array<[keyof SecretDraft, string]> = [
+  ["grok_api_key", "Grok API 密钥"],
+  ["pexels_api_key", "Pexels API 密钥"],
+  ["volc_speech_api_key", "火山语音 API Key"],
+];
 
 type SettingsPanelProps = {
   settings: Settings | null;
@@ -210,9 +220,9 @@ export function SettingsPanel({
           </label>
         ))}
         <div className="secret-grid">
-          {(["grok_api_key", "pexels_api_key"] as const).map((key) => (
+          {secretFields.map(([key, label]) => (
             <label className="settings-field" key={key}>
-              {key === "grok_api_key" ? "Grok API 密钥" : "Pexels API 密钥"}
+              {label}
               <small>
                 {settings?.secrets[key]?.configured ? "已配置，输入新值才会替换" : "未配置"}
               </small>

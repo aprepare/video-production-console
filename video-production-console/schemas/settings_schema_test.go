@@ -21,7 +21,8 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	secretInput := definitions["secretInput"].(map[string]any)
 	properties := secretInput["properties"].(map[string]any)
-	for _, key := range []string{"grok_api_key", "pexels_api_key"} {
+	secretKeys := []string{"grok_api_key", "pexels_api_key", "volc_speech_api_key"}
+	for _, key := range secretKeys {
 		property, ok := properties[key].(map[string]any)
 		if !ok || property["maxLength"] != float64(16<<10) {
 			t.Fatalf("%s schema=%v", key, property)
@@ -29,5 +30,17 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	if secretInput["additionalProperties"] != false {
 		t.Fatal("secret input permits unknown keys")
+	}
+	// Every masked secret is always reported, so the view must require them all.
+	secretView := definitions["secretView"].(map[string]any)
+	required := map[string]bool{}
+	for _, key := range secretView["required"].([]any) {
+		required[key.(string)] = true
+	}
+	viewProperties := secretView["properties"].(map[string]any)
+	for _, key := range secretKeys {
+		if !required[key] || viewProperties[key] == nil {
+			t.Fatalf("%s missing from the secret view", key)
+		}
 	}
 }

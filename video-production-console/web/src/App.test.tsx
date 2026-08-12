@@ -229,6 +229,41 @@ test("the project workbench starts mixing through the formal montage task API", 
   expect(JSON.stringify(requests[0].body)).not.toContain("spoken");
 });
 
+test("the assets stage generates narration and subtitles through the project narration endpoint", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "配音项目", stage: "assets" };
+  const requests: Array<{ path: string; method: string; body: unknown }> = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({
+      project,
+      assets: { continuous_script: testAsset("continuous_script") },
+      background_reference: testAsset("account_background"),
+      missing_assets: ["narration", "subtitle_srt"],
+    });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/narration` && method === "POST") {
+      requests.push({ path, method, body: init?.body });
+      return json({
+        narration: testAsset("narration"),
+        subtitle_srt: testAsset("subtitle_srt"),
+        captions: 12,
+        duration_seconds: 43.216,
+        billed_characters: 220,
+        warnings: ["caption 3 reads at 9.8 units/s"],
+      }, 201);
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "生成配音与字幕" }));
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toMatchObject({ path: `/api/projects/${routedProjectID}/narration`, method: "POST" });
+  expect(requests[0].body).toBeUndefined();
+  expect(await screen.findByText("配音与字幕已生成，但有 1 条提醒，建议打开字幕确认。")).toBeTruthy();
+});
+
 test("the published action posts the project publish endpoint", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "待确认项目", stage: "review" };
   const requests: string[] = [];

@@ -87,7 +87,13 @@ func New(options Options) *App {
 		taskResultsHandler := httpapi.NewTaskResultsHandler(store.NewTaskRepository(options.DB))
 		montageHandler := httpapi.NewMontageHandler(options.MontageRetryer)
 		completionRetryHandler := httpapi.NewCompletionRetryHandler(options.CompletionRetryer)
-		mux.Handle("/api/projects/", projectRouteHandler(projects, tasksHandler, options.Scheduler != nil))
+		narrationOptions := httpapi.NarrationHandlerOptions{}
+		if options.Settings != nil {
+			narrationOptions.Runtime = options.Settings
+			narrationOptions.Produce = httpapi.NewVolcengineProducer(options.Settings)
+		}
+		narrationHandler := httpapi.NewNarrationHandler(options.DB, assetService, narrationOptions)
+		mux.Handle("/api/projects/", projectRouteHandler(projects, tasksHandler, narrationHandler, options.Scheduler != nil))
 		tasks := store.NewTaskRepository(options.DB)
 		hub := options.Realtime
 		if hub == nil {
@@ -170,10 +176,14 @@ func New(options Options) *App {
 	}))}
 }
 
-func projectRouteHandler(projects, tasks http.Handler, taskRoutesEnabled bool) http.Handler {
+func projectRouteHandler(projects, tasks, narration http.Handler, taskRoutesEnabled bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if taskRoutesEnabled && (strings.HasSuffix(r.URL.Path, "/tasks") || strings.HasSuffix(r.URL.Path, "/topic-card")) {
 			tasks.ServeHTTP(w, r)
+			return
+		}
+		if narration != nil && strings.HasSuffix(r.URL.Path, "/narration") {
+			narration.ServeHTTP(w, r)
 			return
 		}
 		projects.ServeHTTP(w, r)

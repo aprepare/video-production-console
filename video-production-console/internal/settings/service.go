@@ -28,8 +28,10 @@ import (
 )
 
 const (
-	SecretGrokAPIKey     = "grok_api_key"
-	SecretPexelsAPIKey   = "pexels_api_key"
+	SecretGrokAPIKey       = "grok_api_key"
+	SecretPexelsAPIKey     = "pexels_api_key"
+	SecretVolcSpeechAPIKey = "volc_speech_api_key"
+
 	secretMask           = "********"
 	probeTimeout         = 5 * time.Second
 	maxProbeBodySize     = 64 << 10
@@ -42,7 +44,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -105,9 +107,10 @@ type View struct {
 // and must never be used as an HTTP response or task snapshot.
 type Runtime struct {
 	domain.PublicSettings
-	GrokAPIKey     string           `json:"-"`
-	PexelsAPIKey   string           `json:"-"`
-	SecretVersions map[string]int64 `json:"-"`
+	GrokAPIKey       string           `json:"-"`
+	PexelsAPIKey     string           `json:"-"`
+	VolcSpeechAPIKey string           `json:"-"`
+	SecretVersions   map[string]int64 `json:"-"`
 }
 
 type HealthStatus string
@@ -378,6 +381,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.GrokAPIKey = value
 		case SecretPexelsAPIKey:
 			runtime.PexelsAPIKey = value
+		case SecretVolcSpeechAPIKey:
+			runtime.VolcSpeechAPIKey = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -643,6 +648,8 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"codex_workspace_roots":   string(workspaceRoots),
 		"codex_task_project_root": value.CodexTaskProjectRoot,
 		"codex_history_limit":     strconv.Itoa(historyLimit),
+		"volc_speech_speaker_id":  value.VolcSpeechSpeakerID,
+		"volc_speech_resource_id": value.VolcSpeechResourceID,
 	}
 }
 
@@ -676,6 +683,8 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		MachineProfilePath: values["machine_profile_path"],
 		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots,
 		CodexTaskProjectRoot: values["codex_task_project_root"], CodexHistoryLimit: historyLimit,
+		VolcSpeechSpeakerID:  values["volc_speech_speaker_id"],
+		VolcSpeechResourceID: values["volc_speech_resource_id"],
 	}
 }
 

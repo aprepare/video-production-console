@@ -3,10 +3,23 @@ import type { FormEvent, RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query/keys";
 import type { TaskModelOverride } from "../taskModel";
-import type { Asset, Project, ProjectDetail } from "../types";
+import type { Asset, NarrationGeneration, Project, ProjectDetail } from "../types";
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+// Narration failures carry a ready-to-read Chinese message from the server;
+// only a body the browser could not parse falls back to a generic line.
+async function backendMessage(response: Response, fallback: string) {
+  try {
+    const payload = (await response.json()) as { message?: string };
+    const message = payload.message?.trim();
+    if (message) return message;
+  } catch {
+    /* ignore non-JSON bodies */
+  }
+  return fallback;
 }
 
 type ProjectActionsOptions = {
@@ -130,6 +143,24 @@ export function useProjectActions({
       return response.ok;
     },
     onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
+  });
+
+  // One call produces both the narration audio and the SRT, so the refresh has to
+  // land before the caller reports success on either card.
+  const generateNarrationMutation = useMutation({
+    mutationFn: async (input: { projectID: string }) => {
+      const response = await api(`/api/projects/${input.projectID}/narration`, {
+        method: "POST",
+      });
+      if (!response.ok)
+        return {
+          ok: false as const,
+          message: await backendMessage(response, "配音与字幕生成失败，请稍后重试。"),
+        };
+      const result = (await response.json()) as NarrationGeneration;
+      return { ok: true as const, result };
+    },
+    onSuccess: (outcome, input) => (outcome.ok ? refreshProject(input.projectID) : undefined),
   });
 
   const modelOverrideBody = () => ({
@@ -376,6 +407,37 @@ export function useProjectActions({
     }
   };
 
+  const generateNarration = async () => {
+    if (!selected) return;
+    const project = selected;
+    const projectID = project.id;
+    if (detail?.project.id !== projectID || detail.assets.continuous_script?.state !== "ready") {
+      setMessage("请先备好连续文案，再生成配音与字幕。");
+      return;
+    }
+    const lockKey = lockAction(projectID, "generate-narration");
+    if (!lockKey) return;
+    try {
+      const outcome = await generateNarrationMutation.mutateAsync({ projectID });
+      if (selectedIDRef.current !== projectID) return;
+      if (!outcome.ok) {
+        setMessage(outcome.message);
+        return;
+      }
+      const warnings = outcome.result.warnings?.length || 0;
+      setMessage(
+        warnings
+          ? `配音与字幕已生成，但有 ${warnings} 条提醒，建议打开字幕确认。`
+          : "配音与字幕已生成，可继续下一步。",
+      );
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("配音与字幕生成失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
   const uploadAsset = async (type: "narration" | "subtitle_srt", file: File) => {
     if (!selected) return;
     const project = selected;
@@ -500,6 +562,7 @@ export function useProjectActions({
     publishProject,
     saveContinuousScript,
     startRemixReview,
+    generateNarration,
     uploadAsset,
     replaceBackground,
     deleteProject,

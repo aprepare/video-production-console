@@ -23,6 +23,15 @@ export type Project = Omit<ProjectSummary, "stage"> & {
 
 export type Asset = ProjectAsset;
 
+export type NarrationGeneration = {
+  narration: Asset;
+  subtitle_srt: Asset;
+  captions?: number;
+  duration_seconds?: number;
+  billed_characters?: number;
+  warnings?: string[];
+};
+
 export type TaskPhaseRun = {
   id?: string;
   task_id?: string;
@@ -82,6 +91,8 @@ export type PublicSettings = {
   codex_history_limit: number;
   codex_default_model: string;
   codex_default_reasoning_effort: ReasoningEffort;
+  volc_speech_speaker_id: string;
+  volc_speech_resource_id: string;
 };
 
 export type Settings = {

@@ -221,18 +221,10 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 	current := map[string]assetView{}
 	history := map[string][]assetView{}
 	available := map[domain.AssetType]bool{}
-	latest := map[string]domain.Asset{}
 	for _, a := range all {
-		v := toAssetView(a)
-		history[string(a.Type)] = append(history[string(a.Type)], v)
-		key := string(a.Type)
-		if previous, ok := latest[key]; !ok ||
-			a.Version > previous.Version ||
-			a.Version == previous.Version && (a.CreatedAt.After(previous.CreatedAt) ||
-				a.CreatedAt.Equal(previous.CreatedAt) && a.ID > previous.ID) {
-			latest[key] = a
-		}
+		history[string(a.Type)] = append(history[string(a.Type)], toAssetView(a))
 	}
+	latest := latestAssetsByType(all)
 	for _, a := range latest {
 		current[string(a.Type)] = toAssetView(a)
 		if a.Status != string(domain.AssetReady) {
@@ -670,6 +662,24 @@ func validStage(s domain.ProjectStage) bool {
 	}
 	return false
 }
+
+// latestAssetsByType picks the current version of each asset type. Version wins
+// first; equal versions are broken by creation time and then by ID so the choice
+// is stable regardless of the order the rows arrive in.
+func latestAssetsByType(all []domain.Asset) map[string]domain.Asset {
+	latest := make(map[string]domain.Asset, len(all))
+	for _, a := range all {
+		key := string(a.Type)
+		if previous, ok := latest[key]; !ok ||
+			a.Version > previous.Version ||
+			a.Version == previous.Version && (a.CreatedAt.After(previous.CreatedAt) ||
+				a.CreatedAt.Equal(previous.CreatedAt) && a.ID > previous.ID) {
+			latest[key] = a
+		}
+	}
+	return latest
+}
+
 func uploadableType(t domain.AssetType) bool {
 	switch t {
 	case domain.AssetSourceScript,
