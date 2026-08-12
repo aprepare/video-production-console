@@ -29,6 +29,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/history"
 	"video-production-console/internal/httpapi"
+	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
@@ -51,6 +52,7 @@ var codexSecretEnvironmentKeys = []string{
 var lookPathPi = exec.LookPath
 
 func main() {
+	logging.Init(os.LookupEnv)
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "version") {
 		fmt.Println(buildinfo.String())
 		return
