@@ -7,9 +7,11 @@ import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
 import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
 import { ChatWorkbenchDialog } from "./chat/ChatWorkbenchDialog";
+import { useChatWorkbench } from "./chat/useChatWorkbench";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { useConsoleData } from "./console/useConsoleData";
 import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
+import { useIdeaPlanner } from "./idea/useIdeaPlanner";
 import { queryKeys } from "./query/keys";
 import "./App.css";
 import "./idea.css";
@@ -33,14 +35,7 @@ import type { ProjectDetail as WorkbenchProjectDetail } from "./project-workbenc
 import type {
   Account,
   Asset,
-  ChatDetail,
-  ChatMessage,
-  ChatSession,
   DirectoryManifest,
-  HistoryThread,
-  IdeaCandidate,
-  IdeaSession,
-  IdeaSessionDetail,
   Project,
   ProjectDetail,
   PublicSettings,
@@ -48,10 +43,6 @@ import type {
   Task,
   Theme,
 } from "./types";
-
-function isTechnicalChatMessage(message: ChatMessage) {
-  return ["event", "tool", "technical", "protocol"].includes(message.kind);
-}
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
@@ -127,35 +118,13 @@ function App() {
     grok_api_key: "",
     pexels_api_key: "",
   });
-  const [ideaOpen, setIdeaOpen] = useState(false);
-  const [ideaSession, setIdeaSession] = useState<IdeaSession | null>(null);
-  const [ideaSessions, setIdeaSessions] = useState<IdeaSession[]>([]);
-  const [ideaDraft, setIdeaDraft] = useState(false);
-  const [ideaTask, setIdeaTask] = useState<Task | null>(null);
-  const [ideaInput, setIdeaInput] = useState("");
-  const [ideaCreatingProject, setIdeaCreatingProject] = useState("");
-  const [ideaRefreshRevision, setIdeaRefreshRevision] = useState(0);
   const [projectTaskModel, setProjectTaskModel] = useState<TaskModelOverride>({
-    model: "",
-    reasoningEffort: "",
-  });
-  const [ideaTaskModel, setIdeaTaskModel] = useState<TaskModelOverride>({
     model: "",
     reasoningEffort: "",
   });
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [chatCreating, setChatCreating] = useState(false);
-  const [chatCreationSource, setChatCreationSource] = useState<"console" | "desktop">("console");
-  const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null);
-  const [chatInput, setChatInput] = useState("");
-  const [chatSending, setChatSending] = useState(false);
-  const [chatRefreshRevision, setChatRefreshRevision] = useState(0);
-  const [historyThreads, setHistoryThreads] = useState<HistoryThread[]>([]);
-  const [historySource, setHistorySource] = useState("");
   const [directoryManifest, setDirectoryManifest] = useState<DirectoryManifest | null>(null);
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
@@ -167,12 +136,6 @@ function App() {
   const detailRefreshTimerRef = useRef<number | null>(null);
   const taskCacheRef = useRef(new Map<string, Task>());
   const taskOpenIDRef = useRef("");
-  const chatSessionIDRef = useRef("");
-  const chatGenerationRef = useRef(0);
-  const chatAbortRef = useRef<AbortController | null>(null);
-  const ideaSessionIDRef = useRef("");
-  const ideaGenerationRef = useRef(0);
-  const ideaAbortRef = useRef<AbortController | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogWasOpenRef = useRef(false);
   const activeDialogRef = useRef<HTMLElement | null>(null);
@@ -196,7 +159,6 @@ function App() {
       window.clearTimeout(detailRefreshTimerRef.current);
     setSelected(null);
   }, []);
-  const activeIdeaSessionID = ideaDraft ? undefined : ideaSession?.id;
   const selectedID = selected?.id ?? "";
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -233,6 +195,34 @@ function App() {
     queryFn: ({ signal }) => readSettings(signal),
   });
   const settings = settingsQuery.data ?? null;
+
+  const accountIDs = useMemo(() => accounts.map((item) => item.id), [accounts]);
+  const idea = useIdeaPlanner({
+    api,
+    account,
+    accountIDs,
+    setMessage,
+    onProjectCreated: (project, topicCardTaskError) => {
+      setProjects((current) => [
+        project,
+        ...current.filter((item) => item.id !== project.id),
+      ]);
+      setAccount(project.account_id);
+      setMessage(
+        topicCardTaskError
+          ? `项目已创建，但正式选题卡任务未启动：${topicCardTaskError}`
+          : `项目已创建到“${accountName(project.account_id, accounts)}”，正在把正式选题卡写入 Obsidian。`,
+      );
+      openProject(project);
+    },
+  });
+  const { open: ideaOpen, setOpen: setIdeaOpen } = idea;
+  const chat = useChatWorkbench({
+    api,
+    historyLimit: settings?.public.codex_history_limit || 10,
+    setMessage,
+  });
+  const { open: chatOpen, setOpen: setChatOpen } = chat;
 
   useEffect(() => {
     if (consoleDataFailed) setMessage("控制台服务尚未连接");
@@ -479,94 +469,6 @@ function App() {
       }
     })();
   }, []);
-  useEffect(() => {
-    if (!ideaOpen || !activeIdeaSessionID) return;
-    const sessionID = activeIdeaSessionID;
-    ideaSessionIDRef.current = sessionID;
-    const generation = ++ideaGenerationRef.current;
-    ideaAbortRef.current?.abort();
-    const controller = new AbortController();
-    ideaAbortRef.current = controller;
-    let timer: number | undefined;
-    let stopped = false;
-    const refresh = async () => {
-      try {
-        const response = await api(`/api/ideas/${sessionID}`, { signal: controller.signal });
-        if (!response.ok) return;
-        const next = (await response.json()) as IdeaSessionDetail;
-        if (
-          stopped ||
-          generation !== ideaGenerationRef.current ||
-          ideaSessionIDRef.current !== sessionID ||
-          next.session.id !== sessionID
-        ) return;
-        const messages = next.messages || [];
-        setIdeaSession({ ...next.session, messages, candidates: next.candidates || [] });
-        const taskID = [...messages].reverse().find((item) => item.task_id)?.task_id;
-        if (!taskID) {
-          setIdeaTask(null);
-          return;
-        }
-        const taskResponse = await api(`/api/tasks/${taskID}`, { signal: controller.signal });
-        if (
-          taskResponse.ok &&
-          !stopped &&
-          generation === ideaGenerationRef.current &&
-          ideaSessionIDRef.current === sessionID
-        ) setIdeaTask((await taskResponse.json()) as Task);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          // Keep the last stable conversation visible; the next poll retries.
-        }
-      } finally {
-        if (!stopped && !controller.signal.aborted)
-          timer = window.setTimeout(() => void refresh(), 3500);
-      }
-    };
-    void refresh();
-    return () => {
-      stopped = true;
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [api, ideaOpen, activeIdeaSessionID, ideaRefreshRevision]);
-  useEffect(() => {
-    if (!chatOpen || !chatDetail?.session.id) return;
-    const sessionID = chatDetail.session.id;
-    chatSessionIDRef.current = sessionID;
-    const generation = ++chatGenerationRef.current;
-    chatAbortRef.current?.abort();
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
-    let stopped = false;
-    let timer: number | undefined;
-    const refresh = async () => {
-      try {
-        const response = await api(`/api/chat/sessions/${sessionID}`, { signal: controller.signal });
-        if (!response.ok) return;
-        const next = (await response.json()) as ChatDetail;
-        if (
-          !stopped &&
-          generation === chatGenerationRef.current &&
-          chatSessionIDRef.current === sessionID &&
-          next.session.id === sessionID
-        ) setChatDetail(next);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          // Keep the last stable messages; the next poll retries.
-        }
-      } finally {
-        if (!stopped && !controller.signal.aborted)
-          timer = window.setTimeout(() => void refresh(), 2500);
-      }
-    };
-    void refresh();
-    return () => {
-      stopped = true;
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [api, chatOpen, chatDetail?.session.id, chatRefreshRevision]);
   useEffect(() => {
     if (!selected || !activeTaskIDs) return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -853,10 +755,8 @@ function App() {
         }
       });
     };
-  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, settingsOpen, taskOpen]);
+  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setChatOpen, setIdeaOpen, settingsOpen, taskOpen]);
   useEffect(() => () => {
-    chatAbortRef.current?.abort();
-    ideaAbortRef.current?.abort();
     taskRestoreAbortRef.current?.abort();
     if (detailRefreshTimerRef.current !== null)
       window.clearTimeout(detailRefreshTimerRef.current);
@@ -1459,404 +1359,8 @@ function App() {
       />
     );
 
-  const createIdeaConversation = () => {
-    ideaSessionIDRef.current = "";
-    ideaGenerationRef.current += 1;
-    ideaAbortRef.current?.abort();
-    const planningAccount = account || accounts[0]?.id || undefined;
-    setIdeaDraft(true);
-    setIdeaSession({
-      id: "draft",
-      account_id: planningAccount,
-      title: "新选题规划",
-      status: "planning",
-      messages: [],
-      candidates: [],
-    });
-    setIdeaTask(null);
-    setIdeaInput("");
-    setIdeaOpen(true);
-  };
-  const openIdeaPlanner = async () => {
-    const sessionsResponse = await api("/api/ideas");
-    if (sessionsResponse.ok) {
-      const payload = await sessionsResponse.json();
-      const sessions = Array.isArray(payload) ? (payload as IdeaSession[]) : [];
-      const planningAccount = account || accounts[0]?.id || "";
-      const accountSessions = planningAccount
-        ? sessions.filter((session) => session.account_id === planningAccount)
-        : sessions;
-      setIdeaSessions(accountSessions);
-      const existing =
-        accountSessions.find((session) => session.id === ideaSession?.id) ||
-        accountSessions[0];
-      if (existing) {
-        setIdeaDraft(false);
-        setIdeaSession(existing);
-        setIdeaOpen(true);
-        await refreshIdea(existing.id);
-        return;
-      }
-    }
-    createIdeaConversation();
-  };
-  const refreshIdea = async (id: string) => {
-    ideaSessionIDRef.current = id;
-    const generation = ++ideaGenerationRef.current;
-    ideaAbortRef.current?.abort();
-    const controller = new AbortController();
-    ideaAbortRef.current = controller;
-    try {
-      const response = await api(`/api/ideas/${id}`, { signal: controller.signal });
-      if (!response.ok) return;
-      const next = (await response.json()) as IdeaSessionDetail;
-      if (
-        controller.signal.aborted ||
-        generation !== ideaGenerationRef.current ||
-        ideaSessionIDRef.current !== id ||
-        next.session.id !== id
-      ) return;
-      const messages = next.messages || [];
-      setIdeaSession({ ...next.session, messages, candidates: next.candidates || [] });
-      setIdeaDraft(false);
-      setIdeaSessions((current) =>
-        current.map((session) => session.id === next.session.id ? next.session : session),
-      );
-      const taskID = [...messages].reverse().find((message) => message.task_id)?.task_id;
-      if (!taskID) {
-        setIdeaTask(null);
-        setIdeaRefreshRevision((value) => value + 1);
-        return;
-      }
-      const taskResponse = await api(`/api/tasks/${taskID}`, { signal: controller.signal });
-      if (
-        taskResponse.ok &&
-        generation === ideaGenerationRef.current &&
-        ideaSessionIDRef.current === id
-      ) setIdeaTask((await taskResponse.json()) as Task);
-      if (generation === ideaGenerationRef.current && ideaSessionIDRef.current === id)
-        setIdeaRefreshRevision((value) => value + 1);
-    } catch (error) {
-      if (!isAbortError(error)) setMessage("选题对话暂时无法刷新，请稍后重试。");
-    }
-  };
-  const switchIdeaConversation = async (session: IdeaSession) => {
-    ideaSessionIDRef.current = session.id;
-    setIdeaDraft(false);
-    setIdeaSession(session);
-    setIdeaTask(null);
-    setIdeaInput("");
-    await refreshIdea(session.id);
-  };
-  const sendIdeaMessage = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!ideaSession || !ideaInput.trim()) return;
-    const sessionSnapshot = ideaSession;
-    const content = ideaInput.trim();
-    setIdeaInput("");
-    let sessionID = sessionSnapshot.id;
-    let createdSessionID = "";
-    if (ideaDraft) {
-      const createResponse = await api("/api/ideas", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          account_id: sessionSnapshot.account_id || account || undefined,
-          title: sessionSnapshot.title,
-        }),
-      });
-      if (!createResponse.ok) {
-        setMessage("选题会话创建失败");
-        setIdeaInput(content);
-        return;
-      }
-      const created = (await createResponse.json()) as IdeaSession;
-      sessionID = created.id;
-      ideaSessionIDRef.current = created.id;
-      createdSessionID = created.id;
-      setIdeaDraft(false);
-      setIdeaSession({ ...created, messages: [], candidates: [] });
-      setIdeaSessions((current) => [created, ...current]);
-    }
-    const response = await api(`/api/ideas/${sessionID}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content,
-        account_id: sessionSnapshot.account_id || account || undefined,
-        ...(ideaTaskModel.model.trim() ? { model: ideaTaskModel.model.trim() } : {}),
-        ...(ideaTaskModel.reasoningEffort
-          ? { reasoning_effort: ideaTaskModel.reasoningEffort }
-          : {}),
-      }),
-    });
-    if (!response.ok) {
-      if (ideaSessionIDRef.current !== sessionID) return;
-      let errorMessage = "选题消息发送失败";
-      try {
-        const payload = (await response.json()) as {
-          code?: string;
-          message?: string;
-        };
-        if (payload.message) {
-          errorMessage = `${errorMessage}：${payload.message}`;
-        } else if (payload.code) {
-          errorMessage = `${errorMessage}（${payload.code}）`;
-        }
-      } catch {
-        // Keep the generic message when the server did not return JSON.
-      }
-      if (createdSessionID) {
-        await api(`/api/ideas/${createdSessionID}`, { method: "DELETE" });
-        setIdeaDraft(true);
-        setIdeaSession({ ...sessionSnapshot, id: "draft", messages: [], candidates: [] });
-        setIdeaSessions((current) => current.filter((item) => item.id !== createdSessionID));
-      }
-      setMessage(errorMessage);
-      setIdeaInput(content);
-      return;
-    }
-    setIdeaTaskModel({ model: "", reasoningEffort: "" });
-    if (ideaSessionIDRef.current === sessionID) await refreshIdea(sessionID);
-  };
-  const deleteIdeaConversation = async (session: IdeaSession) => {
-    if (session.id === "draft") {
-      createIdeaConversation();
-      return;
-    }
-    if (!window.confirm(`确定删除“${session.title}”吗？删除后无法恢复。`)) return;
-    const response = await api(`/api/ideas/${session.id}`, { method: "DELETE" });
-    if (!response.ok) {
-      setMessage(response.status === 409 ? "该对话仍有运行中的任务，暂时不能删除" : "对话删除失败");
-      return;
-    }
-    const remaining = ideaSessions.filter((item) => item.id !== session.id);
-    setIdeaSessions(remaining);
-    if (ideaSession?.id !== session.id) return;
-    if (remaining.length) {
-      await switchIdeaConversation(remaining[0]);
-    } else {
-      createIdeaConversation();
-    }
-  };
-  const selectIdeaCandidate = async (candidate: IdeaCandidate) => {
-    if (!ideaSession || ideaCreatingProject) return;
-    const sessionID = ideaSession.id;
-    setIdeaCreatingProject(candidate.id);
-    try {
-      const response = await api(`/api/ideas/${sessionID}/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          candidate_id: candidate.id,
-          // The current sidebar account is the user's confirmation-time
-          // choice and must override the account remembered by the planner.
-          account_id: ideaSession.account_id || account || undefined,
-        }),
-      });
-      if (!response.ok) {
-        let reason = "候选题确认失败";
-        try {
-          const payload = (await response.json()) as { message?: string };
-          if (payload.message) reason = payload.message;
-        } catch {
-          // Keep the concise fallback.
-        }
-        setMessage(reason);
-        return;
-      }
-      const result = (await response.json()) as {
-        project?: Project;
-        topic_card_task_error?: string;
-      };
-      if (ideaSessionIDRef.current !== sessionID) return;
-      if (result.project) {
-        setProjects((current) => [
-          result.project!,
-          ...current.filter((item) => item.id !== result.project!.id),
-        ]);
-        setIdeaOpen(false);
-        setAccount(result.project.account_id);
-        setMessage(
-          result.topic_card_task_error
-            ? `项目已创建，但正式选题卡任务未启动：${result.topic_card_task_error}`
-            : `项目已创建到“${accountName(result.project.account_id, accounts)}”，正在把正式选题卡写入 Obsidian。`,
-        );
-        openProject(result.project);
-      } else await refreshIdea(sessionID);
-    } finally {
-      setIdeaCreatingProject("");
-    }
-  };
-
-  const loadChatSession = async (session: ChatSession) => {
-    const sessionID = session.id;
-    chatSessionIDRef.current = sessionID;
-    const generation = ++chatGenerationRef.current;
-    chatAbortRef.current?.abort();
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
-    try {
-      const response = await api(`/api/chat/sessions/${sessionID}`, { signal: controller.signal });
-      if (!response.ok) {
-        setMessage("实时 Codex 对话服务暂时不可用，请检查设置页状态。");
-        return;
-      }
-      const next = (await response.json()) as ChatDetail;
-      if (
-        !controller.signal.aborted &&
-        generation === chatGenerationRef.current &&
-        chatSessionIDRef.current === sessionID &&
-        next.session.id === sessionID
-      ) {
-        setChatDetail(next);
-        setChatRefreshRevision((value) => value + 1);
-      }
-    } catch (error) {
-      if (!isAbortError(error) && chatSessionIDRef.current === sessionID)
-        setMessage("对话暂时离线，已保留当前消息。");
-    }
-  };
-
-  const createGeneralChat = async (source: "console" | "desktop" = chatCreationSource) => {
-    if (chatCreating) return;
-    setChatCreating(true);
-    setMessage("正在创建 Codex 对话，请稍候……");
-    try {
-      const response = await api("/api/chat/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "general",
-          title: `${source === "desktop" ? "桌面版" : "控制台"}对话 ${new Date().toLocaleDateString("zh-CN")}`,
-          source,
-          skill_names: [],
-        }),
-      });
-      if (!response.ok) {
-        const failure = (await response.json().catch(() => null)) as
-          | { code?: string; message?: string }
-          | null;
-        if (response.status === 404) {
-          setMessage("实时 Codex 对话服务尚未在本次启动中加载。请重启控制台后再试。");
-        } else if (failure?.message) {
-          setMessage(`新建 Codex 对话失败：${failure.message}`);
-        } else {
-          setMessage("新建 Codex 对话失败，请稍后重试。");
-        }
-        return;
-      }
-      const created = (await response.json()) as ChatSession;
-      setChatSessions((current) => [created, ...current]);
-      await loadChatSession(created);
-      setMessage(`${source === "desktop" ? "桌面版" : "控制台"} Codex 对话已创建，可以开始发送消息。`);
-    } catch {
-      setMessage("新建 Codex 对话失败：控制台暂时无法连接 Codex 服务。");
-    } finally {
-      setChatCreating(false);
-    }
-  };
-
-  const openGeneralChat = async () => {
-    setChatOpen(true);
-    const response = await api("/api/chat/sessions");
-    if (!response.ok) {
-      setMessage("Codex 对话服务尚未启用。");
-      return;
-    }
-    const sessions = (await response.json()) as ChatSession[];
-    setChatSessions(sessions);
-    const historyLimit = settings?.public.codex_history_limit || 10;
-    const historyResponse = await api(`/api/codex/history?limit=${historyLimit}`);
-    if (historyResponse.ok) setHistoryThreads((await historyResponse.json()) as HistoryThread[]);
-    const active = sessions.find((item) => item.id === chatDetail?.session.id) || sessions[0];
-    if (active) await loadChatSession(active);
-    else await createGeneralChat();
-  };
-
-  const refreshHistory = async (source = historySource) => {
-    const limit = settings?.public.codex_history_limit || 10;
-    const suffix = source ? `&source=${encodeURIComponent(source)}` : "";
-    const response = await api(`/api/codex/history?limit=${limit}${suffix}`);
-    if (response.ok) setHistoryThreads((await response.json()) as HistoryThread[]);
-  };
-
-  const applyHistoryThread = async (thread: HistoryThread, mode: "resume" | "fork") => {
-    const response = await api(`/api/codex/history/${encodeURIComponent(thread.id)}/${mode}`, { method: "POST" });
-    if (!response.ok) {
-      setMessage(
-        response.status === 409
-          ? "原会话正在桌面端运行，请选择“复制到控制台”。"
-          : "历史对话接入失败，请检查实时 Codex 对话服务状态。",
-      );
-      return;
-    }
-    const session = (await response.json()) as ChatSession;
-    setChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
-    await loadChatSession(session);
-    await refreshHistory();
-  };
-
-  const sendChatMessage = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!chatDetail || !chatInput.trim() || chatSending) return;
-    const sessionID = chatSessionIDRef.current || chatDetail.session.id;
-    if (sessionID !== chatDetail.session.id) return;
-    const sessionSnapshot = chatDetail.session;
-    const content = chatInput.trim();
-    setChatInput("");
-    setChatSending(true);
-    try {
-      const response = await api(`/api/chat/sessions/${sessionID}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: content,
-          delivery: "auto",
-          client_key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
-        }),
-      });
-      if (!response.ok) {
-        setMessage("消息发送失败，请查看实时 Codex 对话服务状态。");
-        setChatInput(content);
-        return;
-      }
-      if (chatSessionIDRef.current === sessionID) await loadChatSession(sessionSnapshot);
-    } catch (error) {
-      if (!isAbortError(error) && chatSessionIDRef.current === sessionID) {
-        setMessage("消息发送失败，已保留输入内容。");
-        setChatInput(content);
-      }
-    } finally {
-      setChatSending(false);
-    }
-  };
-
-  const deleteChatSession = async (session: ChatSession) => {
-    if (!window.confirm(`删除对话“${session.title}”吗？这只删除控制台映射，不会终止正在运行的 Codex。`)) return;
-    const response = await api(`/api/chat/sessions/${session.id}`, { method: "DELETE" });
-    if (!response.ok) {
-      setMessage("删除对话失败。");
-      return;
-    }
-    const remaining = chatSessions.filter((item) => item.id !== session.id);
-    setChatSessions(remaining);
-    if (chatSessionIDRef.current !== session.id) return;
-    if (remaining.length) await loadChatSession(remaining[0]);
-    else {
-      chatSessionIDRef.current = "";
-      chatGenerationRef.current += 1;
-      chatAbortRef.current?.abort();
-      setChatDetail(null);
-    }
-  };
-
-  const visibleChatMessages =
-    chatDetail?.messages.filter((item) => !isTechnicalChatMessage(item)) || [];
-  const technicalChatMessages =
-    chatDetail?.messages.filter(isTechnicalChatMessage) || [];
   const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || ideaOpen || chatOpen || taskOpen,
+    preview || reviseOpen || settingsOpen || idea.open || chatOpen || taskOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -1891,7 +1395,7 @@ function App() {
           taskModelDefaults={settings?.public}
           onReplaceBackground={(file) => void replaceProjectBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
-          onOpenConversation={() => void openGeneralChat()}
+          onOpenConversation={() => void chat.openWorkbench()}
           onOpenTask={(task) => openTask(task as Task)}
           pendingActions={selectedPendingActions}
         />
@@ -1912,8 +1416,8 @@ function App() {
           theme={theme}
           onThemeChange={setTheme}
           runtime={runtime}
-          onOpenIdeaPlanner={() => void openIdeaPlanner()}
-          onOpenConversation={() => void openGeneralChat()}
+          onOpenIdeaPlanner={() => void idea.openPlanner()}
+          onOpenConversation={() => void chat.openWorkbench()}
           onOpenSettings={() => void openSettings()}
           onLogout={() => void logout()}
           accounts={accounts}
@@ -1984,53 +1488,53 @@ function App() {
           onSubmit={saveSettings}
         />
       )}
-      {ideaOpen && ideaSession && (
+      {ideaOpen && idea.session && (
         <IdeaPlannerDialog
-          session={ideaSession}
-          onSessionChange={setIdeaSession}
-          sessions={ideaSessions}
-          draft={Boolean(ideaDraft)}
+          session={idea.session}
+          onSessionChange={idea.setSession}
+          sessions={idea.sessions}
+          draft={Boolean(idea.draft)}
           accounts={accounts}
-          task={ideaTask}
-          creatingProject={ideaCreatingProject}
-          input={ideaInput}
-          onInputChange={setIdeaInput}
-          taskModel={ideaTaskModel}
-          onTaskModelChange={setIdeaTaskModel}
+          task={idea.task}
+          creatingProject={idea.creatingProject}
+          input={idea.input}
+          onInputChange={idea.setInput}
+          taskModel={idea.taskModel}
+          onTaskModelChange={idea.setTaskModel}
           taskModelDefaults={settings?.public}
           onClose={() => setIdeaOpen(false)}
-          onCreateConversation={() => void createIdeaConversation()}
-          onSwitchConversation={(session) => void switchIdeaConversation(session)}
-          onDeleteConversation={(session) => void deleteIdeaConversation(session)}
-          onSelectCandidate={(candidate) => void selectIdeaCandidate(candidate)}
-          onSubmit={sendIdeaMessage}
+          onCreateConversation={() => void idea.createConversation()}
+          onSwitchConversation={(session) => void idea.switchConversation(session)}
+          onDeleteConversation={(session) => void idea.deleteConversation(session)}
+          onSelectCandidate={(candidate) => void idea.selectCandidate(candidate)}
+          onSubmit={idea.sendMessage}
         />
       )}
       {chatOpen && (
         <ChatWorkbenchDialog
-          detail={chatDetail}
-          sessions={chatSessions}
-          visibleMessages={visibleChatMessages}
-          technicalMessages={technicalChatMessages}
-          creating={chatCreating}
-          creationSource={chatCreationSource}
-          onCreationSourceChange={setChatCreationSource}
-          onCreate={(source) => void createGeneralChat(source)}
-          onSelectSession={(session) => void loadChatSession(session)}
-          onDeleteSession={(session) => void deleteChatSession(session)}
+          detail={chat.detail}
+          sessions={chat.sessions}
+          visibleMessages={chat.visibleMessages}
+          technicalMessages={chat.technicalMessages}
+          creating={chat.creating}
+          creationSource={chat.creationSource}
+          onCreationSourceChange={chat.setCreationSource}
+          onCreate={(source) => void chat.createSession(source)}
+          onSelectSession={(session) => void chat.loadSession(session)}
+          onDeleteSession={(session) => void chat.deleteSession(session)}
           settings={settings}
-          historySource={historySource}
+          historySource={chat.historySource}
           onHistorySourceChange={(source) => {
-            setHistorySource(source);
-            void refreshHistory(source);
+            chat.setHistorySource(source);
+            void chat.refreshHistory(source);
           }}
-          historyThreads={historyThreads}
-          onApplyHistoryThread={(thread, mode) => void applyHistoryThread(thread, mode)}
-          input={chatInput}
-          onInputChange={setChatInput}
-          sending={chatSending}
+          historyThreads={chat.historyThreads}
+          onApplyHistoryThread={(thread, mode) => void chat.applyHistoryThread(thread, mode)}
+          input={chat.input}
+          onInputChange={chat.setInput}
+          sending={chat.sending}
           onClose={() => setChatOpen(false)}
-          onSubmit={sendChatMessage}
+          onSubmit={chat.sendMessage}
         />
       )}
       {taskOpen && (
