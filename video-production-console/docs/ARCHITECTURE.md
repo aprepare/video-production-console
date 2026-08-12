@@ -274,7 +274,7 @@
 
 **machine profile** 是一个设置键 `machine_profile_path` 指向的本机 JSON，声明 `python_binary` 与 `jianying_root`（也可承载混剪资源覆盖，见 §5.4）。启动时它为空会**整体禁用混剪登记**（`cmd/console/main.go:188`、`:216`）；否则解析成 `TrustedRuntime` 并**固定其 SHA-256**，之后每个任务在登记前都要比对路径与哈希（`internal/montage/coordinator.go:75-120`、`:492-503`）。
 
-`python_binary` 同时约束混剪的**生成阶段和登记阶段**：控制台构造 `montage-script-run` 子进程时会读取 machine profile，把解析后的 Python 绝对路径通过 `--python-binary` 传入自调用子命令；子命令再将它交给 `montagescript.Run`。不能只在登记协调器中读取该字段，否则生成阶段会回退到进程 `PATH` 里的 `python`，可能误用 Hermes 虚拟环境并报 `No module named 'pyJianYingDraft'`，即使 machine profile 指向的 Python 已正确安装模块。
+`python_binary` 同时约束混剪的**生成阶段和登记阶段**：控制台构造 `montage-script-run` 子进程时会读取 machine profile，把解析后的 Python 绝对路径通过 `--python-binary` 传入自调用子命令；子命令再将它交给 `montagescript.Run`。不能只在登记协调器中读取该字段，否则生成阶段会回退到进程 `PATH` 里的 `python`，可能误用 Hermes 虚拟环境并报 `No module named 'pyJianYingDraft'`，即使 machine profile 指向的 Python 已正确安装模块。登记/重命名子进程还会显式移除父进程继承的 `PYTHONPATH`/`PYTHONHOME`：Hermes 启动环境可能把自身 venv 注入 `PYTHONPATH`，若原样传给 Anaconda Python，会优先加载 Hermes venv 中不匹配的 Pillow，出现 `cannot import name '_imaging' from 'PIL'`。
 
 ### 5.8 存储与迁移
 

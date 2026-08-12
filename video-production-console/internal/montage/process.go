@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 )
 
 type ExecRunner struct{}
@@ -15,6 +17,7 @@ func (ExecRunner) Run(ctx context.Context, spec CommandSpec, limit int64) (Comma
 	}
 	command := exec.CommandContext(ctx, spec.Program, spec.Args...)
 	command.Dir = spec.Dir
+	command.Env = environmentWithoutPythonPath(os.Environ())
 	stdout, stderr := &boundedBuffer{limit: limit}, &boundedBuffer{limit: limit}
 	command.Stdout, command.Stderr = stdout, stderr
 	err := command.Run()
@@ -29,6 +32,18 @@ func (ExecRunner) Run(ctx context.Context, spec CommandSpec, limit int64) (Comma
 		return result, nil
 	}
 	return result, err
+}
+
+func environmentWithoutPythonPath(environment []string) []string {
+	out := make([]string, 0, len(environment)+2)
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "PYTHONPATH") || strings.EqualFold(key, "PYTHONHOME") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 }
 
 type boundedBuffer struct {
