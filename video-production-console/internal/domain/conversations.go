@@ -135,17 +135,17 @@ type ChatCompletionInbox struct {
 }
 
 type SemanticEvent struct {
-	ID        string
-	SessionID *string
-	TaskID    *string
-	Sequence  int64
-	Kind      string
-	Phase     string
-	Level     string
-	Title     string
-	Detail    string
-	RawJSON   string
-	CreatedAt time.Time
+	ID        string    `json:"id"`
+	SessionID *string   `json:"session_id"`
+	TaskID    *string   `json:"task_id"`
+	Sequence  int64     `json:"sequence"`
+	Kind      string    `json:"kind"`
+	Phase     string    `json:"phase"`
+	Level     string    `json:"level"`
+	Title     string    `json:"title"`
+	Detail    string    `json:"detail"`
+	RawJSON   string    `json:"raw_json"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type ThreadLease struct {

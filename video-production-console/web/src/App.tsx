@@ -268,9 +268,9 @@ function taskMessageContent(content: string) {
 }
 
 function taskEventProgress(event: TaskEvent) {
-  const kind = event.kind || event.Kind || "";
-  const displayText = event.display_text || event.DisplayText || "";
-  const raw = event.raw_json || event.RawJSON || "";
+  const kind = event.kind || "";
+  const displayText = event.display_text || "";
+  const raw = event.raw_json || "";
   if (displayText) return taskMessageContent(displayText);
   if (/baokuan_search_materials/i.test(raw)) return "正在检索爆款库素材";
   if (/baokuan_list_snippets/i.test(raw)) return "正在筛选可借鉴的爆款片段";
@@ -303,14 +303,14 @@ function taskProgressStatus(task: Task) {
 
 function normalizeSemanticEvents(events: SemanticEvent[]) {
   return events.map((event) => ({
-    id: event.id || event.ID || "",
-    sequence: event.sequence ?? event.Sequence ?? 0,
-    kind: event.kind || event.Kind || "",
-    phase: event.phase || event.Phase || "",
-    level: event.level || event.Level || "",
-    title: (event.title || event.Title || "").trim(),
-    detail: event.detail || event.Detail || "",
-    created_at: event.created_at || event.CreatedAt || "",
+    id: event.id || "",
+    sequence: event.sequence ?? 0,
+    kind: event.kind || "",
+    phase: event.phase || "",
+    level: event.level || "",
+    title: (event.title || "").trim(),
+    detail: event.detail || "",
+    created_at: event.created_at || "",
   }));
 }
 
@@ -3150,7 +3150,7 @@ function App() {
                 <h3>阶段耗时</h3>
                 {taskOpen.timing_summary ? (
                   <p className="task-timing-summary">
-                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms", "TotalMS") || taskElapsedMS(taskOpen, timingNow))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms", "PreparationMS"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms", "QueueMS"))}{(taskOpen.timing_summary.queue_estimated ?? taskOpen.timing_summary.QueueEstimated) ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms", "ExecutionMS"))}
+                    总计 {formatDuration(timingValue(taskOpen.timing_summary, "total_ms") || taskElapsedMS(taskOpen, timingNow))} · 准备 {formatDuration(timingValue(taskOpen.timing_summary, "preparation_ms"))} · 队列 {formatDuration(timingValue(taskOpen.timing_summary, "queue_ms"))}{taskOpen.timing_summary.queue_estimated ? "（边界估算）" : ""} · 执行 {formatDuration(timingValue(taskOpen.timing_summary, "execution_ms"))}
                   </p>
                 ) : (
                   <p className="task-timing-summary">
@@ -3159,13 +3159,13 @@ function App() {
                 )}
                 <ul className="task-timing-list">
                   {taskTimingPhases(taskOpen).map((phase, index) => {
-                    const phaseID = phaseStringValue(phase, "id", "ID");
-                    const phaseKey = phaseStringValue(phase, "phase_key", "PhaseKey");
-                    const state = phaseStringValue(phase, "state", "State");
+                    const phaseID = phaseStringValue(phase, "id");
+                    const phaseKey = phaseStringValue(phase, "phase_key");
+                    const state = phaseStringValue(phase, "state");
                     const duration = phaseDurationMS(phase, timingNow);
                     return (
                       <li key={phaseID || `${phaseKey}-${index}`}>
-                        <strong>{phaseStringValue(phase, "display_name", "DisplayName") || phaseKey || "未命名阶段"}</strong>
+                        <strong>{phaseStringValue(phase, "display_name") || phaseKey || "未命名阶段"}</strong>
                         <span>{taskPhaseStateLabels[state] || state || "暂无状态"}</span>
                         <time aria-label={state === "running" ? "运行时长" : "阶段耗时"}>
                           {formatDuration(duration)}
@@ -3174,7 +3174,7 @@ function App() {
                     );
                   })}
                 </ul>
-                {(taskOpen.timing_summary?.legacy_without_phases ?? taskOpen.timing_summary?.LegacyWithoutPhases) ? <p className="muted">该任务没有已持久化的阶段运行记录，不能据此判定阶段是否开始。</p> : null}
+                {taskOpen.timing_summary?.legacy_without_phases ? <p className="muted">该任务没有已持久化的阶段运行记录，不能据此判定阶段是否开始。</p> : null}
               </section>
             ) : null}
             {taskOpen.prompt_snapshot && (
@@ -3209,7 +3209,7 @@ function App() {
                 <summary>技术诊断（{taskOpen.events.length}）</summary>
                 {taskOpen.events.map((item, index) => (
                   <p className="event" key={item.id || `${item.sequence || 0}-${index}`}>
-                    {item.display_text || item.DisplayText || "技术事件"}
+                    {item.display_text || "技术事件"}
                   </p>
                 ))}
               </details>
@@ -3257,42 +3257,31 @@ function App() {
 }
 
 type TimingNumberKey = "total_ms" | "preparation_ms" | "queue_ms" | "execution_ms";
-type TimingLegacyNumberKey = "TotalMS" | "PreparationMS" | "QueueMS" | "ExecutionMS";
 type PhaseStringKey = "id" | "phase_key" | "display_name" | "state" | "started_at";
-type PhaseLegacyStringKey = "ID" | "PhaseKey" | "DisplayName" | "State" | "StartedAt";
 
-function timingValue(
-  summary: TaskTimingSummary | undefined,
-  key: TimingNumberKey,
-  legacy: TimingLegacyNumberKey,
-) {
-  const value = summary?.[key] ?? summary?.[legacy];
+function timingValue(summary: TaskTimingSummary | undefined, key: TimingNumberKey) {
+  const value = summary?.[key];
   return typeof value === "number" ? value : 0;
 }
-function phaseStringValue(
-  phase: TaskPhaseRun,
-  key: PhaseStringKey,
-  legacy: PhaseLegacyStringKey,
-) {
-  const value = phase[key] ?? phase[legacy];
+function phaseStringValue(phase: TaskPhaseRun, key: PhaseStringKey) {
+  const value = phase[key];
   return typeof value === "string" ? value : "";
 }
 function taskTimingPhases(task: Task) {
   if (task.timing_runs?.length) return task.timing_runs;
-  return task.timing_summary?.phases || task.timing_summary?.Phases || [];
+  return task.timing_summary?.phases || [];
 }
 function isRunningPhase(phase: TaskPhaseRun) {
-  return phaseStringValue(phase, "state", "State") === "running";
+  return phaseStringValue(phase, "state") === "running";
 }
 function phaseDurationMS(phase: TaskPhaseRun, now: number) {
-  const persisted = phase.duration_ms ?? phase.DurationMS;
-  if (typeof persisted === "number") return persisted;
+  if (typeof phase.duration_ms === "number") return phase.duration_ms;
   if (!isRunningPhase(phase)) return undefined;
-  const startedAt = Date.parse(phaseStringValue(phase, "started_at", "StartedAt"));
+  const startedAt = Date.parse(phaseStringValue(phase, "started_at"));
   return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined;
 }
 function taskElapsedMS(task: Task, now: number) {
-  const summaryTotal = timingValue(task.timing_summary, "total_ms", "TotalMS");
+  const summaryTotal = timingValue(task.timing_summary, "total_ms");
   if (summaryTotal > 0) return summaryTotal;
   const finishedAt = Date.parse(task.finished_at || "");
   const startedAt = Date.parse(task.started_at || task.created_at || "");

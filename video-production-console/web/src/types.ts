@@ -23,8 +23,6 @@ export type Project = Omit<ProjectSummary, "stage"> & {
 
 export type Asset = ProjectAsset;
 
-// The PascalCase twins mirror responses that still serialize Go field names.
-// They disappear once the backend emits snake_case everywhere (工单 P2-2).
 export type TaskPhaseRun = {
   id?: string;
   task_id?: string;
@@ -37,17 +35,6 @@ export type TaskPhaseRun = {
   running_at?: string;
   finished_at?: string;
   duration_ms?: number;
-  ID?: string;
-  TaskID?: string;
-  PhaseKey?: string;
-  DisplayName?: string;
-  Attempt?: number;
-  Source?: string;
-  State?: string;
-  StartedAt?: string;
-  RunningAt?: string;
-  FinishedAt?: string;
-  DurationMS?: number;
 };
 
 export type TaskTimingSummary = {
@@ -59,14 +46,6 @@ export type TaskTimingSummary = {
   queue_estimated?: boolean;
   legacy_without_phases?: boolean;
   phases?: TaskPhaseRun[];
-  TaskID?: string;
-  TotalMS?: number;
-  PreparationMS?: number;
-  QueueMS?: number;
-  ExecutionMS?: number;
-  QueueEstimated?: boolean;
-  LegacyWithoutPhases?: boolean;
-  Phases?: TaskPhaseRun[];
 };
 
 export type Task = WorkbenchProjectTask & {
