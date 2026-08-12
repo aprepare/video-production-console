@@ -183,6 +183,18 @@ func receiveEnsure(t *testing.T, done <-chan ensureResult) ensureResult {
 	}
 }
 
+// waitForAttemptJoin blocks until a second caller has parked on the in-flight
+// start attempt.
+func waitForAttemptJoin(t *testing.T, manager *Manager) {
+	t.Helper()
+	eventually(t, func() bool {
+		manager.mu.Lock()
+		attempt := manager.starting
+		manager.mu.Unlock()
+		return attempt != nil && attempt.joined.Load() > 0
+	})
+}
+
 func eventually(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -273,6 +285,10 @@ func TestManagerCanceledInitializationFailsAllWaitersAndCleansUp(t *testing.T) {
 	process := factory.waitForProcess(t)
 	_ = process.readEnvelope(t)
 	second := beginEnsure(manager)
+	// Cancelling before the second caller has joined the in-flight attempt made
+	// this test flaky: finishAttempt clears m.starting, so a late arrival starts
+	// a brand-new attempt and blocks forever on an initialize nobody answers.
+	waitForAttemptJoin(t, manager)
 	cancel()
 
 	firstResult := receiveEnsure(t, first)

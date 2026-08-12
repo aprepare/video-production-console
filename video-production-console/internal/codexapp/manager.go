@@ -97,6 +97,11 @@ type startAttempt struct {
 	cancel context.CancelFunc
 	client *Client
 	err    error
+	// joined counts callers that attached to this in-flight attempt instead of
+	// starting their own. It only ever grows, so observing it is a reliable
+	// "the caller is now parked" signal for tests that must cancel an attempt
+	// after a second waiter has joined it.
+	joined atomic.Int64
 }
 
 type processInstance struct {
@@ -193,6 +198,7 @@ func (m *Manager) Ensure(ctx context.Context) (*Client, error) {
 }
 
 func waitForAttempt(ctx context.Context, attempt *startAttempt) (*Client, error) {
+	attempt.joined.Add(1)
 	select {
 	case <-attempt.done:
 		return attempt.client, attempt.err
