@@ -51,6 +51,24 @@ func TestImageProjectsHTTPRegenerationKeepsOldImageOnFailureAndRemovesItOnSucces
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("old image missing after initial generation: %v", err)
 	}
+	_, currentItems, err := store.NewImageProjectRepository(db).Get(t.Context(), detail.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noChangeBody, err := json.Marshal(map[string]string{"source_text": currentItems[0].SourceText, "title": currentItems[0].Title, "prompt": currentItems[0].Prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noChangeRequest := httptest.NewRequest(http.MethodPatch, "/api/image-projects/"+detail.Project.ID+"/items/"+detail.Items[0].ID, strings.NewReader(string(noChangeBody)))
+	noChangeRequest.Header.Set("Content-Type", "application/json")
+	noChange := httptest.NewRecorder()
+	handler.ServeHTTP(noChange, noChangeRequest)
+	if err := json.Unmarshal(noChange.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Items[0].Status != "ready" {
+		t.Fatalf("unchanged save invalidated ready image: %+v", detail.Items[0])
+	}
 
 	failing := NewImageProjectsHandler(db, runtime, imageGeneratorStub{err: errors.New("vendor unavailable")})
 	failed := httptest.NewRecorder()
