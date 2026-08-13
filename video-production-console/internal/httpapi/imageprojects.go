@@ -302,6 +302,12 @@ func (h *imageProjectsHandler) download(w http.ResponseWriter, r *http.Request) 
 		h.writeReadError(w, err)
 		return
 	}
+	for _, item := range items {
+		if item.Status != "ready" || item.ImagePath == nil || item.MIMEType == nil {
+			writeError(w, http.StatusConflict, "image_project_incomplete", "All images must be ready before downloading.")
+			return
+		}
+	}
 	temporary, err := os.CreateTemp("", "image-project-*.zip")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "image_archive_failed", "The image archive could not be created.")
@@ -315,24 +321,40 @@ func (h *imageProjectsHandler) download(w http.ResponseWriter, r *http.Request) 
 	manifestItems := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		entry := map[string]any{"sequence": item.Sequence, "title": item.Title, "source_text": item.SourceText, "prompt": item.Prompt, "status": item.Status, "width": item.Width, "height": item.Height}
-		if item.Status == "ready" && item.ImagePath != nil && item.MIMEType != nil {
-			filename := fmt.Sprintf("%03d_%s%s", item.Sequence, safeImageName(item.Title), extensionForMIME(*item.MIMEType))
-			file, openErr := os.Open(*item.ImagePath)
-			if openErr == nil {
-				info, statErr := file.Stat()
-				if statErr == nil && info.Size() <= maxImageArchiveEntrySize && archiveInputSize+info.Size() <= maxArchiveInputSize {
-					writer, createErr := archive.Create(filename)
-					if createErr == nil {
-						_, copyErr := io.Copy(writer, io.LimitReader(file, maxImageArchiveEntrySize+1))
-						if copyErr == nil {
-							archiveInputSize += info.Size()
-							entry["filename"] = filename
-						}
-					}
-				}
-				_ = file.Close()
-			}
+		filename := fmt.Sprintf("%03d_%s%s", item.Sequence, safeImageName(item.Title), extensionForMIME(*item.MIMEType))
+		file, openErr := os.Open(*item.ImagePath)
+		if openErr != nil {
+			_ = archive.Close()
+			_ = temporary.Close()
+			writeError(w, http.StatusConflict, "image_archive_source_missing", "A generated image is missing.")
+			return
 		}
+		info, statErr := file.Stat()
+		if statErr != nil || info.Size() > maxImageArchiveEntrySize || archiveInputSize+info.Size() > maxArchiveInputSize {
+			_ = file.Close()
+			_ = archive.Close()
+			_ = temporary.Close()
+			writeError(w, http.StatusRequestEntityTooLarge, "image_archive_too_large", "The image archive is too large.")
+			return
+		}
+		writer, createErr := archive.Create(filename)
+		if createErr != nil {
+			_ = file.Close()
+			_ = archive.Close()
+			_ = temporary.Close()
+			writeError(w, http.StatusInternalServerError, "image_archive_failed", "The image archive could not be created.")
+			return
+		}
+		_, copyErr := io.Copy(writer, io.LimitReader(file, maxImageArchiveEntrySize+1))
+		_ = file.Close()
+		if copyErr != nil {
+			_ = archive.Close()
+			_ = temporary.Close()
+			writeError(w, http.StatusInternalServerError, "image_archive_failed", "The image archive could not be created.")
+			return
+		}
+		archiveInputSize += info.Size()
+		entry["filename"] = filename
 		manifestItems = append(manifestItems, entry)
 	}
 	manifest, _ := json.MarshalIndent(map[string]any{"project": project, "items": manifestItems}, "", "  ")
