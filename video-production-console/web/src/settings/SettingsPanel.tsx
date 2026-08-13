@@ -25,6 +25,17 @@ const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["volc_speech_resource_id", "火山语音资源 ID", "seed-icl-2.0"],
 ];
 
+// 素材库（混剪媒体智能库）设置组：目录、FFmpeg 与分析模型。
+const mediaLibraryFields: Array<[PublicStringSettingKey, string, string]> = [
+  ["media_catalog_path", "素材库目录", "媒体素材目录内的 catalog.db 路径"],
+  ["ffmpeg_path", "FFmpeg 路径", "ffmpeg 可执行文件路径"],
+  ["ffprobe_path", "FFprobe 路径", "ffprobe 可执行文件路径"],
+  ["vision_base_url", "视觉分析服务地址", "OpenAI 兼容 Base URL"],
+  ["vision_model", "视觉分析模型", "用于镜头画面理解"],
+  ["embedding_base_url", "向量服务地址", "OpenAI 兼容 Base URL"],
+  ["embedding_model", "向量模型", "用于镜头语义检索"],
+];
+
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   listen_addr: "监听地址",
   data_root: "数据目录",
@@ -49,9 +60,28 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   codex_default_reasoning_effort: "默认推理强度",
   volc_speech_speaker_id: "火山音色 ID",
   volc_speech_resource_id: "火山语音资源 ID",
+  media_catalog_path: "素材库目录",
+  ffmpeg_path: "FFmpeg 路径",
+  ffprobe_path: "FFprobe 路径",
+  vision_base_url: "视觉分析服务地址",
+  vision_model: "视觉分析模型",
+  embedding_base_url: "向量服务地址",
+  embedding_model: "向量模型",
+  pexels_api_base_url: "Pexels API 地址",
+  pixabay_api_base_url: "Pixabay API 地址",
+  max_external_results_per_query: "外部搜索单次结果上限",
 };
 
-type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string; image_api_key: string; image_text_api_key: string };
+type SecretDraft = {
+  grok_api_key: string;
+  pexels_api_key: string;
+  volc_speech_api_key: string;
+  image_api_key: string;
+  image_text_api_key: string;
+  vision_api_key: string;
+  embedding_api_key: string;
+  pixabay_api_key: string;
+};
 
 const secretFields: Array<[keyof SecretDraft, string]> = [
   ["grok_api_key", "Grok API 密钥"],
@@ -59,6 +89,9 @@ const secretFields: Array<[keyof SecretDraft, string]> = [
   ["volc_speech_api_key", "火山语音 API Key"],
   ["image_api_key", "生图 API Key"],
   ["image_text_api_key", "图文文本模型 API Key"],
+  ["vision_api_key", "视觉分析 API Key"],
+  ["embedding_api_key", "向量模型 API Key"],
+  ["pixabay_api_key", "Pixabay API 密钥"],
 ];
 
 const imageStyles = [
@@ -245,6 +278,18 @@ export function SettingsPanel({
           />
         </label>
         {settingFields.map(([key, label, placeholder]) => (
+          <label className="settings-field" key={key}>
+            {label}
+            <input
+              value={draft[key] || ""}
+              placeholder={placeholder}
+              onChange={(event) => onDraftChange({ ...draft, [key]: event.target.value })}
+            />
+          </label>
+        ))}
+        <h3 className="settings-group-title">素材库</h3>
+        <p className="settings-note">混剪素材智能库：目录建库、FFmpeg 探测与镜头分析模型。</p>
+        {mediaLibraryFields.map(([key, label, placeholder]) => (
           <label className="settings-field" key={key}>
             {label}
             <input

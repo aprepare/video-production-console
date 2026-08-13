@@ -46,6 +46,9 @@ type Options struct {
 	CompletionRetryer httpapi.CompletionRetryer
 	DesktopOpener     assets.DesktopOpener
 	RemixCoordinator  httpapi.RemixCoordinator
+	// MediaCatalog overrides the default settings-backed catalog service;
+	// tests inject fakes through it.
+	MediaCatalog httpapi.CatalogService
 }
 
 // App is the HTTP application.
@@ -108,6 +111,11 @@ func New(options Options) *App {
 			imageProjectsHandler := httpapi.NewImageProjectsHandler(options.DB, options.Settings, imageproject.NewClient(nil))
 			mux.Handle("/api/image-projects", imageProjectsHandler)
 			mux.Handle("/api/image-projects/", imageProjectsHandler)
+			catalogService := options.MediaCatalog
+			if catalogService == nil {
+				catalogService = newMediaCatalogService(options.Settings)
+			}
+			mux.Handle("/api/media-catalog/", httpapi.NewMediaCatalogHandler(catalogService))
 		}
 		if options.Skills != nil {
 			skillsHandler := httpapi.NewSkillsHandler(options.Skills)

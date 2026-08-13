@@ -4,6 +4,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query/keys";
 import type { PublicSettings, Settings } from "../types";
 
+const emptySecretDraft = {
+  grok_api_key: "",
+  pexels_api_key: "",
+  volc_speech_api_key: "",
+  image_api_key: "",
+  image_text_api_key: "",
+  vision_api_key: "",
+  embedding_api_key: "",
+  pixabay_api_key: "",
+};
+
 type SettingsDialogOptions = {
   api: (path: string, init?: RequestInit) => Promise<Response>;
   readSettings: (signal?: AbortSignal) => Promise<Settings>;
@@ -15,13 +26,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState<PublicSettings | null>(null);
-  const [secretDraft, setSecretDraft] = useState({
-    grok_api_key: "",
-    pexels_api_key: "",
-    volc_speech_api_key: "",
-    image_api_key: "",
-    image_text_api_key: "",
-  });
+  const [secretDraft, setSecretDraft] = useState(emptySecretDraft);
 
   const openDialog = async () => {
     try {
@@ -32,7 +37,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
         staleTime: 0,
       });
       setDraft({ ...next.public });
-      setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "", image_text_api_key: "" });
+      setSecretDraft({ ...emptySecretDraft });
       setFeedback("");
       setOpen(true);
     } catch {
@@ -55,7 +60,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
     const next = (await response.json()) as Settings;
     client.setQueryData(queryKeys.settings(), next);
     setDraft({ ...next.public });
-    setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "", image_text_api_key: "" });
+    setSecretDraft({ ...emptySecretDraft });
     setFeedback("设置已保存。");
   };
 

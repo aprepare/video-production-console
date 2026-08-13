@@ -20,6 +20,7 @@ type ConsoleHomeProps = {
   onThemeChange: (theme: Theme) => void;
   runtime: RuntimeState | null | undefined;
   onOpenIdeaPlanner: () => void;
+  onOpenMediaLibrary: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
   accounts: Account[];
@@ -52,6 +53,7 @@ export function ConsoleHome({
   onThemeChange,
   runtime,
   onOpenIdeaPlanner,
+  onOpenMediaLibrary,
   onOpenSettings,
   onLogout,
   accounts,
@@ -117,6 +119,9 @@ export function ConsoleHome({
           )}
           <button className="header-button" onClick={onOpenIdeaPlanner}>
             给我选题
+          </button>
+          <button className="header-button" onClick={onOpenMediaLibrary}>
+            素材库
           </button>
           <button className="header-button" onClick={onOpenSettings}>
             设置

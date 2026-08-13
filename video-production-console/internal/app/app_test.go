@@ -15,6 +15,7 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/httpapi"
 	"video-production-console/internal/logging"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
@@ -279,6 +280,161 @@ func TestImageProjectRoutesRequireAuthentication(t *testing.T) {
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+// conflictCatalogService accepts the first StartIndex and reports every later
+// one as an active-job conflict, mirroring the single-global-job rule.
+type conflictCatalogService struct{ started int }
+
+func (s *conflictCatalogService) Status(context.Context) (httpapi.CatalogStatus, error) {
+	return httpapi.CatalogStatus{State: "idle"}, nil
+}
+
+func (s *conflictCatalogService) Sources(context.Context, httpapi.CatalogSourceFilter) (httpapi.CatalogSourcesPage, error) {
+	return httpapi.CatalogSourcesPage{}, nil
+}
+
+func (s *conflictCatalogService) StartIndex(context.Context) (httpapi.CatalogStatus, error) {
+	s.started++
+	if s.started > 1 {
+		return httpapi.CatalogStatus{}, httpapi.ErrCatalogJobActive
+	}
+	return httpapi.CatalogStatus{State: "scanning", ActiveJob: &httpapi.CatalogActiveJob{ID: "job-1", Phase: "scanning"}}, nil
+}
+
+func (s *conflictCatalogService) RetrySource(context.Context, string) (httpapi.CatalogStatus, error) {
+	return httpapi.CatalogStatus{State: "idle"}, nil
+}
+
+func (s *conflictCatalogService) Providers(context.Context) (httpapi.CatalogProviders, error) {
+	return httpapi.CatalogProviders{Providers: []httpapi.CatalogProviderStatus{}}, nil
+}
+
+func (s *conflictCatalogService) Search(context.Context, httpapi.CatalogSearchQuery) (httpapi.CatalogSearchPage, error) {
+	return httpapi.CatalogSearchPage{Assets: []httpapi.CatalogRemoteAsset{}}, nil
+}
+
+func (s *conflictCatalogService) Import(context.Context, httpapi.CatalogImportRequest) (httpapi.CatalogImportResult, error) {
+	return httpapi.CatalogImportResult{}, nil
+}
+
+func TestMediaCatalogRoutesAreMountedNextToSettings(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, Settings: settings})
+
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/media-catalog/status", nil))
+
+	// Settings exist but no catalog path is configured, so the mounted route
+	// must answer with the explicit error code instead of falling through.
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"catalog_not_configured"`) {
+		t.Fatalf("body = %q, want catalog_not_configured", response.Body.String())
+	}
+}
+
+func TestMediaCatalogRoutesAreNotMountedWithoutSettings(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}})
+
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/media-catalog/status", nil))
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `<div id="root"></div>`) {
+		t.Fatalf("route should fall through to the embedded console; status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestMediaCatalogSecondIndexRequestConflicts(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
+	catalog := &conflictCatalogService{}
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, Settings: settings, MediaCatalog: catalog})
+
+	first := httptest.NewRecorder()
+	application.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/api/media-catalog/index", nil))
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first status = %d, body = %s", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	application.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/api/media-catalog/index", nil))
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second status = %d, body = %s", second.Code, second.Body.String())
+	}
+	if !strings.Contains(second.Body.String(), `"code":"catalog_job_active"`) {
+		t.Fatalf("second body = %q", second.Body.String())
+	}
+}
+
+func TestMediaCatalogGetUsesSessionAndPostRequiresCSRF(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	login, err := auth.Login(context.Background(), "123321", "127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
+	catalog := &conflictCatalogService{}
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth, Settings: settings, MediaCatalog: catalog})
+
+	// Without a session every catalog route is rejected.
+	anonymous := httptest.NewRecorder()
+	application.Handler().ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/api/media-catalog/status", nil))
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous status = %d, body = %s", anonymous.Code, anonymous.Body.String())
+	}
+
+	// GET needs the session only; the CSRF token is not required.
+	read := httptest.NewRequest(http.MethodGet, "/api/media-catalog/status", nil)
+	read.AddCookie(&http.Cookie{Name: consoleauth.SessionCookieName, Value: login.Token})
+	readResponse := httptest.NewRecorder()
+	application.Handler().ServeHTTP(readResponse, read)
+	if readResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", readResponse.Code, readResponse.Body.String())
+	}
+
+	// POST without the CSRF header must be rejected by the shared middleware.
+	blocked := httptest.NewRequest(http.MethodPost, "/api/media-catalog/index", nil)
+	blocked.AddCookie(&http.Cookie{Name: consoleauth.SessionCookieName, Value: login.Token})
+	blockedResponse := httptest.NewRecorder()
+	application.Handler().ServeHTTP(blockedResponse, blocked)
+	if blockedResponse.Code != http.StatusForbidden {
+		t.Fatalf("POST without CSRF status = %d, body = %s", blockedResponse.Code, blockedResponse.Body.String())
+	}
+
+	// A full session + CSRF pair reaches the handler.
+	allowed := httptest.NewRequest(http.MethodPost, "/api/media-catalog/index", nil)
+	allowed.AddCookie(&http.Cookie{Name: consoleauth.SessionCookieName, Value: login.Token})
+	allowed.AddCookie(&http.Cookie{Name: consoleauth.CSRFCookieName, Value: login.CSRF})
+	allowed.Header.Set(consoleauth.CSRFHeader, login.CSRF)
+	allowedResponse := httptest.NewRecorder()
+	application.Handler().ServeHTTP(allowedResponse, allowed)
+	if allowedResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST with CSRF status = %d, body = %s", allowedResponse.Code, allowedResponse.Body.String())
 	}
 }
 

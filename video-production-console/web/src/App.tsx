@@ -8,6 +8,7 @@ import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { ImageModeWorkbench } from "./image-mode/ImageModeWorkbench";
+import { MediaLibraryPanel } from "./media-library/MediaLibraryPanel";
 import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
 import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
@@ -109,6 +110,7 @@ function App() {
   const [reviseOpen, setReviseOpen] = useState(false);
   const [reviseNotes, setReviseNotes] = useState("");
   const [accountFormOpen, setAccountFormOpen] = useState(false);
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
@@ -881,7 +883,7 @@ function App() {
     );
 
   const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || idea.open || taskOpen,
+    preview || reviseOpen || settingsOpen || idea.open || taskOpen || mediaLibraryOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -970,6 +972,7 @@ function App() {
           onThemeChange={setTheme}
           runtime={runtime}
           onOpenIdeaPlanner={() => void idea.openPlanner()}
+          onOpenMediaLibrary={() => setMediaLibraryOpen(true)}
           onOpenSettings={() => void settingsPanel.openDialog()}
           onLogout={() => void logout()}
           accounts={accounts}
@@ -1026,6 +1029,9 @@ function App() {
           onClose={() => setReviseOpen(false)}
           onSubmit={(notes) => void projectActions.startRemixReview(notes)}
         />
+      )}
+      {mediaLibraryOpen && (
+        <MediaLibraryPanel api={api} onClose={() => setMediaLibraryOpen(false)} />
       )}
       {settingsOpen && settingsPanel.draft && (
         <SettingsPanel

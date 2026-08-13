@@ -99,6 +99,16 @@ export type PublicSettings = {
   codex_default_reasoning_effort: ReasoningEffort;
   volc_speech_speaker_id: string;
   volc_speech_resource_id: string;
+  media_catalog_path: string;
+  ffmpeg_path: string;
+  ffprobe_path: string;
+  vision_base_url: string;
+  vision_model: string;
+  embedding_base_url: string;
+  embedding_model: string;
+  pexels_api_base_url: string;
+  pixabay_api_base_url: string;
+  max_external_results_per_query: number;
 };
 
 export type Settings = {
