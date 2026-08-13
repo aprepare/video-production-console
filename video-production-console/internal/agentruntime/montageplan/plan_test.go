@@ -131,7 +131,13 @@ func TestMediaSelectionVariesByTaskAndPreflightRejectsMissing(t *testing.T) {
 		}
 	}
 	openings := map[string]bool{one[0].ID: true}
-	for _, seed := range []string{"task-two", "task-three", "task-four"} {
+	// Eight extra seeds keep the flake odds negligible: the rank hash mixes in
+	// the per-run temp dir, so with too few samples all seeds can collide on
+	// one opening (~1.6% with three) and fail this assertion spuriously.
+	for _, seed := range []string{
+		"task-two", "task-three", "task-four", "task-five",
+		"task-six", "task-seven", "task-eight", "task-nine",
+	} {
 		clips, err := sampleMedia(indexPath, root, 4, seed, false)
 		if err != nil {
 			t.Fatal(err)
@@ -169,6 +175,50 @@ func TestFitShotToClipNeverExceedsSourceDuration(t *testing.T) {
 	in, out, speed, length = fitShotToClip(8, 6)
 	if speed != 1.0 || out > 6+0.001 || length > 6+0.001 || length != out-in {
 		t.Fatalf("short clip fit = in=%v out=%v speed=%v length=%v", in, out, speed, length)
+	}
+}
+
+func TestBuildTimelineKeepsSlotAlignmentForMovieAndImage(t *testing.T) {
+	clips := []mediaItem{
+		{ID: "movie-1", Kind: mediaKindMovie, Category: "office", DurationSeconds: 300,
+			SourceInSeconds: 40, SourceOutSeconds: 46, ShotID: "shot-1", AbsPath: "m.mp4"},
+		{ID: "image-1", Kind: mediaKindImage, Category: "ledger", AbsPath: "i.png"},
+		{ID: "broll-1", Kind: mediaKindBroll, Category: "Nature_Landscape", DurationSeconds: 20, AbsPath: "b1.mp4"},
+		{ID: "broll-2", Kind: mediaKindBroll, Category: "Architecture", DurationSeconds: 20, AbsPath: "b2.mp4"},
+	}
+	shots := buildTimeline(25, clips, defaultMontageResources().Transition)
+	if len(shots) != len(clips) {
+		t.Fatalf("shot count = %d, want %d (selection must not wrap around)", len(shots), len(clips))
+	}
+	cursor := 0.0
+	for i, shot := range shots {
+		if shot["source_id"] != clips[i].ID {
+			t.Fatalf("shot %d source_id = %v, want %q", i, shot["source_id"], clips[i].ID)
+		}
+		if start := shot["start_s"].(float64); start != cursor {
+			t.Fatalf("shot %d start_s = %v, want %v", i, start, cursor)
+		}
+		cursor = shot["end_s"].(float64)
+	}
+	if cursor != 25 {
+		t.Fatalf("timeline ends at %v, want 25", cursor)
+	}
+	// The 6s movie window fills the 7s slot by slowing down instead of
+	// shrinking the slot; source_in/out stay in full-source coordinates.
+	movie := shots[0]
+	if movie["source_in_s"].(float64) != 40 || movie["source_out_s"].(float64) != 46 {
+		t.Fatalf("movie shot window = %v..%v, want 40..46", movie["source_in_s"], movie["source_out_s"])
+	}
+	if speed := movie["playback_speed"].(float64); speed <= 0 || speed >= 1 {
+		t.Fatalf("movie playback_speed = %v, want a slow-down inside (0,1)", speed)
+	}
+	if movie["end_s"].(float64) != 7 {
+		t.Fatalf("movie shot must keep the 7s slot, end_s = %v", movie["end_s"])
+	}
+	image := shots[1]
+	if image["source_in_s"].(float64) != 0 || image["source_out_s"].(float64) != 7 ||
+		image["playback_speed"].(float64) != 1.0 {
+		t.Fatalf("image shot = %#v", image)
 	}
 }
 

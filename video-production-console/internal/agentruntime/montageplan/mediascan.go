@@ -96,11 +96,24 @@ func readMediaScan(r io.Reader, mediaRoot string, stopOnMissing bool) *mediaScan
 			scan.err = err
 			return scan
 		}
-		// 8s timeline @ 1.1x needs 8.8s source; keep a 1s lead-in margin when possible.
-		if item.ID == "" || item.RelativePath == "" || item.DurationSeconds < 10 {
+		if item.ID == "" || item.RelativePath == "" {
 			continue
 		}
-		item.AbsPath = filepath.Join(mediaRoot, filepath.FromSlash(item.RelativePath))
+		if err := normalizeMediaItem(&item); err != nil {
+			scan.err = err
+			return scan
+		}
+		// The 10s source floor only applies to video kinds; images have no
+		// intrinsic duration and stay usable at duration_seconds=0.
+		if item.Kind != mediaKindImage && item.DurationSeconds < minVideoSourceSeconds {
+			continue
+		}
+		abs, err := resolveMediaPath(mediaRoot, item.RelativePath)
+		if err != nil {
+			scan.err = err
+			return scan
+		}
+		item.AbsPath = abs
 		info, err := statMediaFile(item.AbsPath)
 		usable := err == nil && info.Mode().IsRegular()
 		scan.rows = append(scan.rows, scannedMedia{item: item, usable: usable})

@@ -55,14 +55,6 @@ type manifestFile struct {
 	} `json:"non_secret_settings"`
 }
 
-type mediaItem struct {
-	ID              string  `json:"id"`
-	Category        string  `json:"category"`
-	RelativePath    string  `json:"relative_path"`
-	DurationSeconds float64 `json:"duration_seconds"`
-	AbsPath         string  `json:"-"`
-}
-
 // Build writes an approved production_plan.json for console montage.execute.
 func Build(opts Options) error {
 	if strings.TrimSpace(opts.ManifestPath) == "" || strings.TrimSpace(opts.PlanPath) == "" {
@@ -148,12 +140,26 @@ func Build(opts Options) error {
 	if len(clips) == 0 {
 		return fmt.Errorf("media index produced no usable clips")
 	}
+	candidates := make([]rankedCandidate, 0, len(clips))
+	for _, clip := range clips {
+		candidates = append(candidates, rankedCandidate{Item: clip})
+	}
+	// Quota warnings stay out of the v1 plan JSON by contract; callers that
+	// need them observe selectTimeline directly.
+	selection, _, err := selectTimeline(candidates, duration, manifest.TaskID, movieMixPolicy())
+	if err != nil {
+		return err
+	}
+	ordered := make([]mediaItem, 0, len(selection))
+	for _, planned := range selection {
+		ordered = append(ordered, planned.Item)
+	}
 
 	workspace := filepath.Join(manifest.OutputDir, "workspace", manifest.JobID)
 	// draft_display_name is for Jianying draft folder naming (includes account).
 	// On-screen title/subtitle must use only the content label, never the account.
 	title, subtitle := titlePair(onScreenTitleSource(manifest.NonSecretSettings.DraftDisplayName))
-	timeline := buildTimeline(duration, clips, resources.Transition)
+	timeline := buildTimeline(duration, ordered, resources.Transition)
 	plan := map[string]any{
 		"plan_version":       "1.0",
 		"status":             "approved",
@@ -374,8 +380,9 @@ func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict boo
 	if err != nil {
 		return nil, err
 	}
-	preferred := make([]mediaItem, 0, limit)
-	fallback := make([]mediaItem, 0, limit)
+	// Every usable row joins one shared pool: broll, movie shots and images
+	// mix immediately, and the quota selector decides the final balance.
+	pool := make([]mediaItem, 0, len(scan.rows))
 	for _, row := range scan.rows {
 		if !row.usable {
 			// An unusable row always precedes the error that ended the scan,
@@ -385,18 +392,10 @@ func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict boo
 			}
 			continue
 		}
-		if isScenic(row.item.Category) {
-			preferred = append(preferred, row.item)
-		} else {
-			fallback = append(fallback, row.item)
-		}
+		pool = append(pool, row.item)
 	}
 	if scan.err != nil {
 		return nil, scan.err
-	}
-	pool := preferred
-	if len(pool) == 0 {
-		pool = fallback
 	}
 	// A task-specific stable order keeps retries reproducible while preventing
 	// every video from starting at the first rows of media_index.json.
@@ -445,13 +444,6 @@ func ValidateMediaLibrary(indexPath, mediaRoot, profilePath string) error {
 	return nil
 }
 
-func isScenic(category string) bool {
-	// Prefer Nature_Landscape. City_Traffic often requires title keyword rules
-	// in the draft validator and is unsafe for deterministic planning.
-	lower := strings.ToLower(strings.TrimSpace(category))
-	return strings.Contains(lower, "nature") || strings.Contains(lower, "landscape") || strings.Contains(lower, "scenery") || strings.Contains(lower, "architecture") || strings.Contains(lower, "building")
-}
-
 func buildTimeline(duration float64, clips []mediaItem, transition transitionResource) []map[string]any {
 	shots := make([]map[string]any, 0, 32)
 	cursor := 0.0
@@ -498,7 +490,37 @@ func buildTimeline(duration float64, clips []mediaItem, transition transitionRes
 		}
 		clip := clips[clipIdx%len(clips)]
 		clipIdx++
-		sourceIn, sourceOut, speed, length := fitShotToClip(length, clip.DurationSeconds)
+		var sourceIn, sourceOut, speed float64
+		sourceDuration := clip.DurationSeconds
+		switch {
+		case clip.Kind == mediaKindImage:
+			// A still image has no intrinsic duration: it fills the slot at
+			// 1.0x and its indexed duration (usually 0) is reported as-is so
+			// the tail-absorb clamp treats it as unbounded.
+			sourceIn, sourceOut, speed = 0, roundSFXStart(length), 1.0
+		case clip.hasShotRange():
+			// Movie shots consume only their [in, out] window; offsets keep
+			// source_in/out in full-source coordinates and the clamp boundary
+			// at the shot's end.
+			if avail := clip.availableSeconds(); avail+1e-9 < length {
+				// The whole shot window is shorter than the slot. Shrinking
+				// the slot would drift away from the quota selector's plan
+				// and wrap around the selection, so slow the shot to fill
+				// the slot instead.
+				sourceIn = roundSFXStart(clip.SourceInSeconds)
+				sourceOut = roundSFXStart(clip.SourceOutSeconds)
+				speed = roundSFXStart(avail / length)
+			} else {
+				in, out, sp, fitted := fitShotToClip(length, avail)
+				length = fitted
+				sourceIn = roundSFXStart(in + clip.SourceInSeconds)
+				sourceOut = roundSFXStart(out + clip.SourceInSeconds)
+				speed = sp
+			}
+			sourceDuration = clip.SourceOutSeconds
+		default:
+			sourceIn, sourceOut, speed, length = fitShotToClip(length, clip.DurationSeconds)
+		}
 		reason := "后段风景/建筑类镜头轮询，保持画面节奏稳定"
 		if cursor < 30 {
 			reason = "前30秒语义匹配旁白开场，选用时长充足的本地镜头"
@@ -513,7 +535,7 @@ func buildTimeline(duration float64, clips []mediaItem, transition transitionRes
 			"source_path":            clip.AbsPath,
 			"source_origin":          "local_index",
 			"selection_reason":       reason,
-			"source_duration_s":      clip.DurationSeconds,
+			"source_duration_s":      sourceDuration,
 			"source_in_s":            sourceIn,
 			"source_out_s":           sourceOut,
 			"playback_speed":         speed,

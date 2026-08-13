@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -201,6 +202,81 @@ func TestMediaScanCacheKeepsStrictAndNonStrictSemantics(t *testing.T) {
 		t.Fatalf("non-strict sampling after failed preflight: %v", err)
 	}
 	assertSameIDs(t, sortedMediaIDs(clips), []string{"a", "b"})
+}
+
+func TestReadMediaScanDecodesLegacyAndTypedRows(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"broll/a.mp4", "movies/m.mp4", "images/ledger.png", "images/chart.png", "short.mp4"} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(rel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := `[
+	  {"id":"legacy","category":"Nature_Landscape","relative_path":"broll/a.mp4","duration_seconds":20},
+	  {"id":"movie-1","kind":"movie","category":"office","relative_path":"movies/m.mp4","duration_seconds":300,"source_in_seconds":40,"source_out_seconds":46,"shot_id":"shot-1"},
+	  {"id":"image-1","kind":"image","category":"ledger","relative_path":"images/ledger.png","duration_seconds":0},
+	  {"id":"chart-1","kind":"chart","category":"data","relative_path":"images/chart.png","duration_seconds":0},
+	  {"id":"short","category":"Nature_Landscape","relative_path":"short.mp4","duration_seconds":5}
+	]`
+	scan := readMediaScan(strings.NewReader(index), root, false)
+	if scan.err != nil {
+		t.Fatalf("scan err: %v", scan.err)
+	}
+	byID := map[string]mediaItem{}
+	for _, row := range scan.rows {
+		if !row.usable {
+			t.Fatalf("row %q must be usable", row.item.ID)
+		}
+		byID[row.item.ID] = row.item
+	}
+	legacy, ok := byID["legacy"]
+	if !ok || legacy.Kind != mediaKindBroll {
+		t.Fatalf("legacy row must default to kind=broll, got %#v", legacy)
+	}
+	movie, ok := byID["movie-1"]
+	if !ok || movie.Kind != mediaKindMovie {
+		t.Fatalf("movie row missing or wrong kind: %#v", movie)
+	}
+	if movie.SourceInSeconds != 40 || movie.SourceOutSeconds != 46 || movie.ShotID != "shot-1" {
+		t.Fatalf("movie row must keep shot fields: %#v", movie)
+	}
+	image, ok := byID["image-1"]
+	if !ok || image.Kind != mediaKindImage {
+		t.Fatalf("image row must not be filtered by the 10s video floor: %#v", byID)
+	}
+	chart, ok := byID["chart-1"]
+	if !ok || chart.Kind != mediaKindImage || chart.Subtype != "chart" {
+		t.Fatalf("chart input must normalize to kind=image with subtype=chart: %#v", chart)
+	}
+	if _, ok := byID["short"]; ok {
+		t.Fatal("videos below the 10s floor must still be filtered")
+	}
+
+	// Rejections: unknown kind, absolute relative_path, .. escape.
+	for name, row := range map[string]string{
+		"unknown kind":  `[{"id":"x","kind":"hologram","category":"c","relative_path":"broll/a.mp4","duration_seconds":20}]`,
+		"absolute path": `[{"id":"x","category":"c","relative_path":"` + strings.ReplaceAll(filepath.Join(root, "broll", "a.mp4"), `\`, `\\`) + `","duration_seconds":20}]`,
+		"dotdot escape": `[{"id":"x","category":"c","relative_path":"../outside.mp4","duration_seconds":20}]`,
+	} {
+		scan := readMediaScan(strings.NewReader(row), root, false)
+		if scan.err == nil {
+			t.Fatalf("%s must be rejected", name)
+		}
+	}
+
+	// A non-regular file (directory) is unusable and fails the strict pass.
+	dirIndex := `[{"id":"dir","category":"c","relative_path":"broll","duration_seconds":20}]`
+	scan = readMediaScan(strings.NewReader(dirIndex), root, true)
+	if scan.err != nil {
+		t.Fatalf("directory row must be reported via usable flag, not scan err: %v", scan.err)
+	}
+	if len(scan.rows) != 1 || scan.rows[0].usable {
+		t.Fatalf("directory row must be unusable: %#v", scan.rows)
+	}
 }
 
 func TestMediaScanCacheIsConcurrencySafe(t *testing.T) {
