@@ -30,11 +30,14 @@ type verifiedSFX struct {
 type DurationFunc func(path string) (float64, error)
 
 // Options configures deterministic plan generation.
+// CaptionMode and MixPreset only affect BuildV2; Build (v1) ignores them.
 type Options struct {
 	ManifestPath string
 	PlanPath     string
 	Duration     DurationFunc
 	MediaLimit   int
+	CaptionMode  CaptionMode
+	MixPreset    string
 }
 
 type manifestFile struct {
@@ -55,10 +58,27 @@ type manifestFile struct {
 	} `json:"non_secret_settings"`
 }
 
-// Build writes an approved production_plan.json for console montage.execute.
-func Build(opts Options) error {
+// planContext carries everything both plan builders derive from Options and
+// the task manifest before they diverge into v1 or v2 output.
+type planContext struct {
+	manifest   manifestFile
+	narration  string
+	background string
+	scriptPath string
+	srtPath    string
+	duration   float64
+	mediaRoot  string
+	mediaIndex string
+	resources  montageResources
+	limit      int
+}
+
+// loadPlanContext validates the options, decodes the manifest, measures the
+// narration and resolves media paths plus verified resources. It is shared by
+// Build (v1) and BuildV2 and must keep v1 behaviour exactly.
+func loadPlanContext(opts Options) (*planContext, error) {
 	if strings.TrimSpace(opts.ManifestPath) == "" || strings.TrimSpace(opts.PlanPath) == "" {
-		return fmt.Errorf("manifest and plan paths are required")
+		return nil, fmt.Errorf("manifest and plan paths are required")
 	}
 	durationFn := opts.Duration
 	if durationFn == nil {
@@ -71,15 +91,15 @@ func Build(opts Options) error {
 
 	raw, err := os.ReadFile(opts.ManifestPath)
 	if err != nil {
-		return fmt.Errorf("read manifest: %w", err)
+		return nil, fmt.Errorf("read manifest: %w", err)
 	}
 	raw = stripBOM(raw)
 	var manifest manifestFile
 	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return fmt.Errorf("decode manifest: %w", err)
+		return nil, fmt.Errorf("decode manifest: %w", err)
 	}
 	if manifest.TaskID == "" || manifest.TaskID != manifest.JobID {
-		return fmt.Errorf("manifest task_id must equal job_id")
+		return nil, fmt.Errorf("manifest task_id must equal job_id")
 	}
 	roles := map[string]string{}
 	for _, input := range manifest.Inputs {
@@ -93,21 +113,19 @@ func Build(opts Options) error {
 	}
 	narration := roles["narration"]
 	if narration == "" {
-		return fmt.Errorf("manifest missing narration input")
+		return nil, fmt.Errorf("manifest missing narration input")
 	}
 	background := roles["account_background"]
 	if background == "" {
-		return fmt.Errorf("manifest missing account_background input")
+		return nil, fmt.Errorf("manifest missing account_background input")
 	}
-	scriptPath := roles["continuous_script"]
-	srtPath := roles["subtitle_srt"]
 
 	duration, err := durationFn(narration)
 	if err != nil {
-		return fmt.Errorf("measure narration duration: %w", err)
+		return nil, fmt.Errorf("measure narration duration: %w", err)
 	}
 	if duration <= 0.5 {
-		return fmt.Errorf("narration duration must be positive")
+		return nil, fmt.Errorf("narration duration must be positive")
 	}
 
 	profilePath := strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath)
@@ -116,7 +134,7 @@ func Build(opts Options) error {
 	if profilePath != "" {
 		profileRoot, profileIndex, err := readProfilePaths(profilePath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if mediaRoot == "" {
 			mediaRoot = profileRoot
@@ -126,14 +144,43 @@ func Build(opts Options) error {
 		}
 	}
 	if mediaRoot == "" || mediaIndex == "" {
-		return fmt.Errorf("media_root and media_index_path are required")
+		return nil, fmt.Errorf("media_root and media_index_path are required")
 	}
 	resources, err := loadMontageResources(profilePath)
 	if err != nil {
+		return nil, err
+	}
+	return &planContext{
+		manifest:   manifest,
+		narration:  narration,
+		background: background,
+		scriptPath: roles["continuous_script"],
+		srtPath:    roles["subtitle_srt"],
+		duration:   duration,
+		mediaRoot:  mediaRoot,
+		mediaIndex: mediaIndex,
+		resources:  resources,
+		limit:      limit,
+	}, nil
+}
+
+// Build writes an approved production_plan.json for console montage.execute.
+func Build(opts Options) error {
+	ctx, err := loadPlanContext(opts)
+	if err != nil {
 		return err
 	}
+	manifest := ctx.manifest
+	narration := ctx.narration
+	background := ctx.background
+	scriptPath := ctx.scriptPath
+	srtPath := ctx.srtPath
+	duration := ctx.duration
+	mediaRoot := ctx.mediaRoot
+	mediaIndex := ctx.mediaIndex
+	resources := ctx.resources
 
-	clips, err := sampleMedia(mediaIndex, mediaRoot, limit, manifest.TaskID, false)
+	clips, err := sampleMedia(mediaIndex, mediaRoot, ctx.limit, manifest.TaskID, false)
 	if err != nil {
 		return err
 	}
