@@ -161,6 +161,16 @@ test("clicking a project pushes a durable project path", async () => {
   expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
 });
 
+test("the standalone Codex conversation entry is not exposed", async () => {
+  const fixture = routedProjectFetch();
+  vi.stubGlobal("fetch", fixture.fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Codex 对话" })).toBeNull();
+});
+
 test("a direct project path restores the same project", async () => {
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   const fixture = routedProjectFetch();
@@ -176,7 +186,7 @@ test("a direct project path restores the same project", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("button", { name: "先粘贴同行原文" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
-  expect(screen.getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Codex 对话摘要" })).toBeNull();
   for (const phrase of ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"]) {
     expect(screen.queryByText(phrase, { exact: false })).toBeNull();
   }

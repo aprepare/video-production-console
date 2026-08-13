@@ -223,6 +223,10 @@ Codex ran out of room in the model's context window
 - 不要删除 `video-console-data/`、剪映正式草稿或保留的明文工作区；
 - 不要用 `git reset/checkout/restore/stash/clean` 处理运行问题。
 
+## 7.1 独立 Codex 对话已移除
+
+首页、项目工作台和本机历史不再提供独立 Codex 对话。生产任务追问统一在任务详情回答；正式任务仍可通过 App Server/composite scheduler 恢复。排障时不要因为看不到独立对话入口就关闭 `app_server_enabled`，否则可能影响正在运行任务的交互、恢复和完成处理。
+
 ## 8. 修复后的验证门槛
 
 涉及上述链路的修复，至少执行：

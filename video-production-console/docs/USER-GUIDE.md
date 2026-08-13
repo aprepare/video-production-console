@@ -16,7 +16,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 
 4. 浏览器访问 `http://127.0.0.1:2030`。
 5. 首次登录后立即修改密码。
-6. 在「设置」中配置 Obsidian Vault、选题卡目录、Skills 根目录、剪映 machine profile / 媒体路径等。路径、App Server、模型/密钥类配置保存后可能提示需重启。
+6. 在「设置」中配置 Obsidian Vault、选题卡目录、Skills 根目录、剪映 machine profile / 媒体路径等。路径、任务实时交互服务、模型/密钥类配置保存后可能提示需重启。
 
 ### 局域网访问
 
@@ -43,7 +43,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 
 ## 4. 同行原文二创（推荐主路径）
 
-普通 Codex 对话**不会**写入项目资产，也**不会**解锁下一步。
+控制台不再提供独立 Codex 对话或本机历史入口。文案必须通过正式项目任务产出，才能写入项目资产并解锁下一步。
 
 正确流程：
 
@@ -89,7 +89,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 | 现象 | 处理 |
 |---|---|
 | 刷新项目页曾出现 404 | 使用已包含 SPA 回退的构建；访问 `http://127.0.0.1:2030` 并强制刷新 |
-| 聊天里有文案但项目不解锁 | 必须走正式任务产出 `continuous_script` |
+| 外部聊天里有文案但项目不解锁 | 必须走正式任务产出 `continuous_script` |
 | 配置改了没生效 | 看设置页是否 `restart_required`，需要则重启 |
 | 手动上传配音显示网络失败 | 先确认控制台版本包含 `/assets/narration` 独立路由；该入口不依赖自动配音服务。MP3/WAV/M4A 需真实内容与扩展名匹配，且不超过 200MB |
 | 混剪立即报 `No module named 'pyJianYingDraft'` | machine profile 的 `python_binary` 必须写为已安装 `pyJianYingDraft` 的 Python 绝对路径；保存后重启控制台。生成与登记两阶段都必须使用该路径，不能依赖启动终端的 `PATH` |

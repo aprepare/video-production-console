@@ -28,7 +28,6 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/conversation"
 	"video-production-console/internal/domain"
-	"video-production-console/internal/history"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
@@ -227,7 +226,6 @@ func main() {
 	})
 	var scheduler codex.Scheduler = legacyScheduler
 	var conversations *conversation.Service
-	var historyService *history.Service
 	var appServerHealth func() codexapp.Health
 	var completionRetryer httpapi.CompletionRetryer
 	if runtimeSettings.AppServerEnabled {
@@ -241,7 +239,6 @@ func main() {
 		if recoveryErr := conversations.RecoverProjectMainSessions(context.Background()); recoveryErr != nil {
 			slog.Error("recover Codex project routing", "error", recoveryErr)
 		}
-		historyService = history.NewService(history.NewAppServerSource(rpc), store.NewConversationRepository(db))
 		completionConfig := wireTaskCompletion(legacyScheduler, settings.DataRoot, montageCoordinator, remixCoordinator)
 		taskAdapter := conversation.NewTaskAdapter(taskRepo, broker, rpc, completionConfig)
 		completionRetryer = taskAdapter
@@ -263,7 +260,7 @@ func main() {
 	if montageCoordinator != nil {
 		montageRetryer = montageCoordinator
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, Conversations: conversations, AppServerHealth: appServerHealth, History: historyService, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
 	if err := serveUntilShutdown(signalCtx, server); err != nil {

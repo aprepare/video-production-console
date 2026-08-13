@@ -134,13 +134,12 @@
 | `tasks` | 任务详情弹窗、任务展示派生逻辑 `task-view.ts`、事件类型 |
 | `assets` | 素材预览弹窗、改稿弹窗、素材类型中文标签 |
 | `idea` | 选题规划弹窗 + `useIdeaPlanner` |
-| `chat` | 对话工作台弹窗 + `useChatWorkbench` |
 | `settings` | 设置弹窗 + `useSettingsDialog` |
 | `runtime` | `useRuntimeQuery`：7 秒轮询并发额度 |
 
 顶层散文件：`main.tsx`（入口与首屏防闪主题）、`types.ts`（跨模块 API 类型）、`taskModel.ts`、`TaskModelFields.tsx`、`messageTone.ts`、样式。
 
-自定义 hook 一共 6 个：`useConsoleData`、`useIdeaPlanner`、`useChatWorkbench`、`useSettingsDialog`、`useProjectActions`、`useRuntimeQuery`。
+自定义 hook 一共 5 个：`useConsoleData`、`useIdeaPlanner`、`useSettingsDialog`、`useProjectActions`、`useRuntimeQuery`。
 
 ### 4.3 其他
 
@@ -270,7 +269,7 @@
 
 **密钥永不回传**：GET 只给 `{configured, masked}`，`masked` 是常量 `********`；解密值只存在于 `settings.Runtime`，其密钥字段带 `json:"-"`（`internal/settings/service.go:104-111`）。PUT 时空字符串表示「不改」。
 
-**`restart_required`** 的原理是「配置态 vs 生效态」对比：服务缓存首次读到的 `Runtime` 快照，`Get` 时把两个可热更字段（`max_codex_concurrency`、`codex_history_limit`）清零后 `reflect.DeepEqual`，再比对密钥版本号（`internal/settings/service.go:402-410`）。热更字段直接就地生效并立刻推给调度器（`internal/app/app.go:215-224`）。
+**`restart_required`** 的原理是「配置态 vs 生效态」对比：服务缓存首次读到的 `Runtime` 快照，`Get` 时把可热更字段 `max_codex_concurrency` 清零后 `reflect.DeepEqual`，再比对密钥版本号（`internal/settings/service.go`）。热更字段直接就地生效并立刻推给调度器（`internal/app/app.go`）。
 
 **machine profile** 是一个设置键 `machine_profile_path` 指向的本机 JSON，声明 `python_binary` 与 `jianying_root`（也可承载混剪资源覆盖，见 §5.4）。启动时它为空会**整体禁用混剪登记**（`cmd/console/main.go:188`、`:216`）；否则解析成 `TrustedRuntime` 并**固定其 SHA-256**，之后每个任务在登记前都要比对路径与哈希（`internal/montage/coordinator.go:75-120`、`:492-503`）。
 
@@ -329,7 +328,6 @@
 | `CodexBinaryPath` | `codex`（裸名） | 启动 `LookPath` + `Abs` 解析，再由设置键覆盖；失效路径会自修复 |
 | `ObsidianVault` | 空 | 设置键 `obsidian_vault` |
 | `max_codex_concurrency` | `2` | 设置键，1–4，**可热更** |
-| `codex_history_limit` | `10` | 设置键，5–50，**可热更** |
 | `codex_default_model` / `..._reasoning_effort` | `gpt-5.6-sol` / `medium` | 设置键，可热更 |
 
 环境变量（进程启动时生效）：

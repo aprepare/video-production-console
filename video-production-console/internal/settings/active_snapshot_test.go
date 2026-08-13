@@ -40,7 +40,6 @@ func TestHotSettingsDoNotRequireRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	configured.MaxCodexConcurrency++
-	configured.CodexHistoryLimit++
 	view, err := service.Update(t.Context(), configured, map[string]string{})
 	if err != nil {
 		t.Fatal(err)

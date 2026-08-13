@@ -40,12 +40,12 @@
 .workbench-masthead { border-bottom-color: rgba(150, 165, 211, 0.16); }
 .workbench-title h1 { color: #f3f5ff; }
 .workbench-title__details p, .workbench-title__details > span { color: #8995b2; }
-.workbench-icon-button, .workbench-delete, .conversation-entry, .project-asset button, .asset-upload-control, .conversation-task, .active-task-summary button, .conversation-empty button {
+.workbench-icon-button, .workbench-delete, .project-asset button, .asset-upload-control, .task-summary-card, .active-task-summary button {
   border-color: rgba(166, 181, 226, 0.2);
   color: #e8edff;
   background: #151e3b;
 }
-.workbench-icon-button:hover, .conversation-entry:hover, .project-asset button:hover, .asset-upload-control:hover, .conversation-task:hover, .active-task-summary button:hover, .conversation-empty button:hover {
+.workbench-icon-button:hover, .project-asset button:hover, .asset-upload-control:hover, .task-summary-card:hover, .active-task-summary button:hover {
   border-color: rgba(113, 227, 196, 0.46);
   background: rgba(77, 212, 181, 0.1);
 }
@@ -65,11 +65,11 @@
 .primary-action-panel__hint, .input-track p, .active-task-summary > p { color: #a5b1cc; }
 .input-track { border-color: rgba(166, 181, 226, 0.16); background: rgba(255, 255, 255, 0.045); }
 .input-track__line { background: rgba(166, 181, 226, 0.2); }
-.project-assets, .project-conversation { border-color: var(--workbench-line); background: var(--workbench-surface); }
-.project-conversation { background: var(--workbench-surface-muted); }
+.project-assets, .project-task-summary { border-color: var(--workbench-line); background: var(--workbench-surface); }
+.project-task-summary { background: var(--workbench-surface-muted); }
 .workbench-section-heading { border-bottom-color: rgba(166, 181, 226, 0.16); }
 .workbench-section-heading h2, .project-asset__title > strong { color: #eef2ff; }
-.workbench-section-heading p, .project-asset__meta, .conversation-entry small { color: #8995b2; }
+.workbench-section-heading p, .project-asset__meta { color: #8995b2; }
 .project-asset:hover { border-color: rgba(113, 227, 196, 0.28); background: rgba(77, 212, 181, 0.06); }
 .project-asset--inherited { border-top-color: rgba(166, 181, 226, 0.16); background: rgba(77, 212, 181, 0.05); }
 .project-asset__display-name { color: #c4cce1; }
@@ -110,12 +110,11 @@
 
 .workbench-icon-button,
 .workbench-delete,
-.conversation-entry,
 .project-asset button,
 .asset-upload-control,
-.conversation-task,
+.task-summary-card,
 .active-task-summary button,
-.conversation-empty button {
+.task-summary-empty button {
   border: 1px solid var(--workbench-line);
   border-radius: 9px;
   background: var(--workbench-surface);
@@ -407,7 +406,7 @@
 
 .primary-action-panel,
 .project-assets,
-.project-conversation {
+.project-task-summary {
   min-width: 0;
   padding: 20px;
 }
@@ -1060,32 +1059,16 @@
   opacity: 0;
 }
 
-.workbench-section-heading--conversation {
+.workbench-section-heading--task {
   min-height: 76px;
 }
 
-.conversation-entry {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 9px;
-  border-color: #b9d2c6;
-  color: var(--workbench-teal-dark);
-  font-size: 9px;
-  font-weight: 700;
-}
 
-.conversation-entry:hover {
-  border-color: var(--workbench-teal);
-  background: #f1f8f4;
-}
-
-.conversation-thread {
+.task-summary-thread {
   padding-top: 14px;
 }
 
-.conversation-task {
+.task-summary-card {
   width: 100%;
   min-height: 58px;
   display: flex;
@@ -1097,24 +1080,24 @@
   text-align: left;
 }
 
-.conversation-task:hover {
+.task-summary-card:hover {
   border-color: #a8c1b5;
   box-shadow: 0 6px 16px rgba(20, 44, 52, 0.07);
 }
 
-.conversation-task__title {
+.task-summary-card__title {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
-.conversation-task__title small {
+.task-summary-card__title small {
   color: var(--workbench-muted);
   font: 700 8px/1 ui-monospace, Consolas, monospace;
   letter-spacing: 0.1em;
 }
 
-.conversation-task__title strong {
+.task-summary-card__title strong {
   overflow: hidden;
   color: var(--workbench-navy);
   font-size: 11px;
@@ -1122,7 +1105,7 @@
   white-space: nowrap;
 }
 
-.conversation-status {
+.task-summary-status {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -1135,36 +1118,36 @@
   font-weight: 750;
 }
 
-.conversation-status > span {
+.task-summary-status > span {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: currentColor;
 }
 
-.conversation-status--active,
-.conversation-status--complete {
+.task-summary-status--active,
+.task-summary-status--complete {
   background: var(--workbench-teal-soft);
   color: var(--workbench-teal-dark);
 }
 
-.conversation-status--attention {
+.task-summary-status--attention {
   background: var(--workbench-amber-soft);
   color: #8a601c;
 }
 
-.conversation-status--failed {
+.task-summary-status--failed {
   background: var(--workbench-danger-soft);
   color: var(--workbench-danger);
 }
 
-.conversation-model {
+.task-summary-model {
   margin: 7px 2px 0;
   color: var(--workbench-muted);
   font: 9px/1.4 ui-monospace, Consolas, monospace;
 }
 
-.conversation-message {
+.task-summary-message {
   position: relative;
   margin: 15px 0 0 18px;
   padding: 11px 12px;
@@ -1173,7 +1156,7 @@
   background: var(--workbench-surface);
 }
 
-.conversation-message::before {
+.task-summary-message::before {
   content: "";
   position: absolute;
   left: -18px;
@@ -1185,8 +1168,8 @@
   box-shadow: 0 0 0 4px #ddebe4;
 }
 
-.conversation-message__author,
-.conversation-message--question > span {
+.task-summary-message__author,
+.task-summary-question > span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1194,7 +1177,7 @@
   font: 750 9px/1 ui-monospace, Consolas, monospace;
 }
 
-.conversation-message p {
+.task-summary-message p {
   margin: 7px 0 0;
   color: var(--workbench-ink);
   font-size: 10px;
@@ -1203,17 +1186,17 @@
   overflow-wrap: anywhere;
 }
 
-.conversation-message--question {
+.task-summary-question {
   border-left: 3px solid var(--workbench-amber);
   background: #fffbf2;
 }
 
-.conversation-message--question::before {
+.task-summary-question::before {
   background: var(--workbench-amber);
   box-shadow: 0 0 0 4px var(--workbench-amber-soft);
 }
 
-.conversation-empty {
+.task-summary-empty {
   min-height: 250px;
   display: flex;
   flex-direction: column;
@@ -1224,7 +1207,7 @@
   text-align: center;
 }
 
-.conversation-empty__icon {
+.task-summary-empty__icon {
   width: 46px;
   height: 46px;
   display: grid;
@@ -1236,19 +1219,19 @@
   color: var(--workbench-teal-dark);
 }
 
-.conversation-empty strong {
+.task-summary-empty strong {
   color: var(--workbench-ink);
   font-size: 13px;
 }
 
-.conversation-empty p {
+.task-summary-empty p {
   max-width: 230px;
   margin: 7px 0 14px;
   font-size: 10px;
   line-height: 1.6;
 }
 
-.conversation-empty button {
+.task-summary-empty button {
   min-height: 36px;
   display: inline-flex;
   align-items: center;
@@ -1664,24 +1647,22 @@
 .input-track__head > span { color: var(--workbench-teal); }
 
 .workbench-icon-button,
-.conversation-entry,
 .project-asset button,
 .asset-upload-control,
-.conversation-task,
+.task-summary-card,
 .active-task-summary button,
-.conversation-empty button {
+.task-summary-empty button {
   border-color: var(--workbench-line);
   color: var(--workbench-ink);
   background: var(--workbench-surface);
 }
 
 .workbench-icon-button:hover,
-.conversation-entry:hover,
 .project-asset button:hover,
 .asset-upload-control:hover,
-.conversation-task:hover,
+.task-summary-card:hover,
 .active-task-summary button:hover,
-.conversation-empty button:hover {
+.task-summary-empty button:hover {
   border-color: #8fb9ac;
   color: var(--workbench-teal-dark);
   background: #edf8f4;
@@ -1726,17 +1707,17 @@
   grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.72fr);
   grid-template-areas:
     "action assets"
-    "conversation assets";
+    "task assets";
   align-content: start;
 }
 .primary-action-panel { grid-area: action; }
 .project-assets { grid-area: assets; }
-.project-conversation { grid-area: conversation; }
+.project-task-summary { grid-area: task; }
 .workbench-grid--review {
   grid-template-columns: minmax(250px, 0.68fr) minmax(0, 1.72fr);
   grid-template-areas:
     "action review"
-    "conversation assets";
+    "task assets";
 }
 .workbench-grid--review .publishing-review { grid-area: review; }
 .workbench-grid--review .project-assets { grid-area: assets; }
@@ -1759,7 +1740,7 @@
 .active-task-summary button { color: #eef4f6; background: var(--workbench-navy-raised); }
 
 .project-assets,
-.project-conversation,
+.project-task-summary,
 .publishing-review {
   overflow-x: hidden;
   overflow-y: auto;
@@ -1769,14 +1750,14 @@
   color: var(--workbench-ink);
   background: var(--workbench-surface);
 }
-.project-conversation { min-height: 230px; }
+.project-task-summary { min-height: 230px; }
 .workbench-section-heading h2,
 .project-asset__title > strong,
-.conversation-task__title strong { color: var(--workbench-ink); }
+.task-summary-card__title strong { color: var(--workbench-ink); }
 .workbench-section-heading p,
 .project-asset__meta,
 .project-asset__copy p,
-.conversation-model { color: var(--workbench-muted); }
+.task-summary-model { color: var(--workbench-muted); }
 .project-asset:hover { border-color: #a9d8cb; background: #f7fbfa; }
 .project-asset--inherited { border-top-color: var(--workbench-line); background: #f7faf9; }
 .project-asset__display-name { color: var(--workbench-ink); }
@@ -1916,11 +1897,10 @@
 }
 
 :root[data-theme="dark"] .workbench-icon-button,
-:root[data-theme="dark"] .conversation-entry,
 :root[data-theme="dark"] .project-asset button,
 :root[data-theme="dark"] .asset-upload-control,
-:root[data-theme="dark"] .conversation-task,
-:root[data-theme="dark"] .conversation-empty button,
+:root[data-theme="dark"] .task-summary-card,
+:root[data-theme="dark"] .task-summary-empty button,
 :root[data-theme="dark"] .publishing-copy-block {
   color: var(--workbench-ink);
   background: var(--workbench-surface);
@@ -1930,9 +1910,9 @@
 :root[data-theme="dark"] .workbench-section-heading h2,
 :root[data-theme="dark"] .project-asset__title > strong,
 :root[data-theme="dark"] .project-asset__display-name,
-:root[data-theme="dark"] .conversation-task__title strong,
-:root[data-theme="dark"] .conversation-message p,
-:root[data-theme="dark"] .conversation-empty strong {
+:root[data-theme="dark"] .task-summary-card__title strong,
+:root[data-theme="dark"] .task-summary-message p,
+:root[data-theme="dark"] .task-summary-empty strong {
   color: var(--workbench-ink);
 }
 
@@ -1940,7 +1920,7 @@
 :root[data-theme="dark"] .workbench-section-heading p,
 :root[data-theme="dark"] .project-asset__meta,
 :root[data-theme="dark"] .project-asset__copy p,
-:root[data-theme="dark"] .conversation-model {
+:root[data-theme="dark"] .task-summary-model {
   color: var(--workbench-muted);
 }
 
@@ -1948,12 +1928,12 @@
 :root[data-theme="dark"] .workbench-stage-badge--assets,
 :root[data-theme="dark"] .workbench-stage-badge--mixing,
 :root[data-theme="dark"] .workbench-stage-badge--review,
-:root[data-theme="dark"] .conversation-status--attention,
+:root[data-theme="dark"] .task-summary-status--attention,
 :root[data-theme="dark"] .asset-state--generating {
   color: var(--workbench-amber);
 }
 
-:root[data-theme="dark"] .conversation-message--question {
+:root[data-theme="dark"] .task-summary-question {
   background: var(--workbench-amber-soft);
 }
 
@@ -1976,7 +1956,7 @@
 
 :root[data-theme="dark"] .workbench-notice,
 :root[data-theme="dark"] .asset-state--missing,
-:root[data-theme="dark"] .conversation-status:not(.conversation-status--active):not(.conversation-status--attention):not(.conversation-status--failed) {
+:root[data-theme="dark"] .task-summary-status:not(.task-summary-status--active):not(.task-summary-status--attention):not(.task-summary-status--failed) {
   color: var(--workbench-amber);
   background: var(--workbench-amber-soft);
 }
@@ -1987,7 +1967,7 @@
 }
 
 :root[data-theme="dark"] .project-assets,
-:root[data-theme="dark"] .project-conversation,
+:root[data-theme="dark"] .project-task-summary,
 :root[data-theme="dark"] .publishing-review {
   color: var(--workbench-ink);
   background: var(--workbench-surface);

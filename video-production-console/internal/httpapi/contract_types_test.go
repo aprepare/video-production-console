@@ -32,7 +32,6 @@ var responseContracts = []struct {
 }{
 	{"task phase run", domain.TaskPhaseRun{}, "types.ts", "TaskPhaseRun"},
 	{"task timing summary", domain.TaskTimingSummary{}, "types.ts", "TaskTimingSummary"},
-	{"chat message", domain.ChatMessage{}, "types.ts", "ChatMessage"},
 	{"task event", domain.TaskEvent{}, "tasks/event-types.ts", "TaskEvent"},
 	{"semantic event", domain.SemanticEvent{}, "tasks/event-types.ts", "SemanticEvent"},
 	{"project", projectView{}, "project-workbench/types.ts", "ProjectSummary"},

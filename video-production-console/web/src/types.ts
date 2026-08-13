@@ -88,7 +88,6 @@ export type PublicSettings = {
   machine_profile_path: string;
   app_server_enabled: boolean;
   codex_workspace_roots: string[];
-  codex_history_limit: number;
   codex_default_model: string;
   codex_default_reasoning_effort: ReasoningEffort;
   volc_speech_speaker_id: string;
@@ -143,40 +142,6 @@ export type IdeaSessionDetail = {
   candidates?: IdeaCandidate[];
 };
 
-export type ChatMessage = {
-  id: string;
-  role: string;
-  kind: string;
-  content: string;
-  delivery_status: string;
-  turn_id?: string;
-  created_at: string;
-};
-
-export type ChatSession = {
-  id: string;
-  title: string;
-  kind: string;
-  source?: "console" | "desktop";
-  status: string;
-  model?: string;
-  reasoning_effort?: string;
-  skill_names?: string[];
-  updated_at: string;
-};
-
-export type ChatDetail = { session: ChatSession; messages: ChatMessage[] };
-
-export type HistoryThread = {
-  id: string;
-  title: string;
-  preview: string;
-  source: "desktop" | "cli" | "task";
-  model?: string;
-  reasoning_effort?: string;
-  active: boolean;
-  recency: string;
-};
 
 export type DirectoryManifest = {
   asset_id: string;

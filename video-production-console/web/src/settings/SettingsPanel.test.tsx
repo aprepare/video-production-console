@@ -27,7 +27,6 @@ const draft: PublicSettings = {
   machine_profile_path: "",
   app_server_enabled: false,
   codex_workspace_roots: [],
-  codex_history_limit: 10,
   codex_default_model: "gpt-default",
   codex_default_reasoning_effort: "high",
   volc_speech_speaker_id: "S_volc_speaker",
@@ -73,6 +72,14 @@ test("the Volcengine voice IDs are editable public fields", () => {
 
   fireEvent.change(speaker, { target: { value: "S_other_speaker" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, volc_speech_speaker_id: "S_other_speaker" });
+});
+
+test("standalone conversation and local history controls are not shown", () => {
+  renderPanel();
+
+  expect(screen.queryByText("启用实时 Codex 对话服务")).toBeNull();
+  expect(screen.queryByText("本机历史显示数量")).toBeNull();
+  expect(screen.getByText("启用任务实时交互服务")).toBeTruthy();
 });
 
 test("the Volcengine API key is masked and only sent when a new value is typed", () => {

@@ -192,10 +192,9 @@ func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings)
 		}
 		values["codex_workspace_roots"] = string(encoded)
 	}
-	// The console's primary workflow is now conversational. New installations
-	// should be able to create a Codex conversation without a hidden opt-in.
+	// The App Server powers formal task interaction and recovery. New
+	// installations enable it so task questions do not require a hidden opt-in.
 	values["app_server_enabled"] = "true"
-	values["codex_history_limit"] = "10"
 	return s.repo.InitializeBoot(ctx, values)
 }
 
@@ -292,7 +291,6 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 		return
 	}
 	s.active.MaxCodexConcurrency = configured.MaxCodexConcurrency
-	s.active.CodexHistoryLimit = configured.CodexHistoryLimit
 	s.active.CodexDefaultModel = configured.CodexDefaultModel
 	s.active.CodexDefaultReasoningEffort = configured.CodexDefaultReasoningEffort
 }
@@ -406,7 +404,6 @@ func cloneRuntime(value Runtime) Runtime {
 
 func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
-	configured.CodexHistoryLimit, active.CodexHistoryLimit = 0, 0
 	return !reflect.DeepEqual(configured, active)
 }
 
@@ -458,9 +455,6 @@ func validateSecretUpdate(key, value string) error {
 func validatePublic(value domain.PublicSettings) error {
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
-	}
-	if value.CodexHistoryLimit != 0 && (value.CodexHistoryLimit < 5 || value.CodexHistoryLimit > 50) {
-		return invalid("codex_history_limit")
 	}
 	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
 	if err != nil || normalizedModel.Model != value.CodexDefaultModel {
@@ -630,10 +624,6 @@ func pathWithin(root, target string) bool {
 
 func publicValues(value domain.PublicSettings) map[string]string {
 	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
-	historyLimit := value.CodexHistoryLimit
-	if historyLimit == 0 {
-		historyLimit = 10
-	}
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
 		"max_codex_concurrency": strconv.Itoa(value.MaxCodexConcurrency),
@@ -647,7 +637,6 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"app_server_enabled":      strconv.FormatBool(value.AppServerEnabled),
 		"codex_workspace_roots":   string(workspaceRoots),
 		"codex_task_project_root": value.CodexTaskProjectRoot,
-		"codex_history_limit":     strconv.Itoa(historyLimit),
 		"volc_speech_speaker_id":  value.VolcSpeechSpeakerID,
 		"volc_speech_resource_id": value.VolcSpeechResourceID,
 	}
@@ -668,10 +657,6 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		_ = json.Unmarshal([]byte(raw), &workspaceRoots)
 	}
 	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
-	historyLimit, _ := strconv.Atoi(values["codex_history_limit"])
-	if historyLimit < 5 || historyLimit > 50 {
-		historyLimit = 10
-	}
 	return domain.PublicSettings{
 		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
 		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
@@ -682,7 +667,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],
 		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots,
-		CodexTaskProjectRoot: values["codex_task_project_root"], CodexHistoryLimit: historyLimit,
+		CodexTaskProjectRoot: values["codex_task_project_root"],
 		VolcSpeechSpeakerID:  values["volc_speech_speaker_id"],
 		VolcSpeechResourceID: values["volc_speech_resource_id"],
 	}

@@ -6,8 +6,6 @@ import { apiRequest } from "./api/client";
 import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
 import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
-import { ChatWorkbenchDialog } from "./chat/ChatWorkbenchDialog";
-import { useChatWorkbench } from "./chat/useChatWorkbench";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
@@ -190,12 +188,6 @@ function App() {
     },
   });
   const { open: ideaOpen, setOpen: setIdeaOpen } = idea;
-  const chat = useChatWorkbench({
-    api,
-    historyLimit: settings?.public.codex_history_limit || 10,
-    setMessage,
-  });
-  const { open: chatOpen, setOpen: setChatOpen } = chat;
   const settingsPanel = useSettingsDialog({ api, readSettings, setMessage });
   const { open: settingsOpen, setOpen: setSettingsOpen } = settingsPanel;
 
@@ -578,7 +570,7 @@ function App() {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
     const dialogOpen = Boolean(
-      preview || reviseOpen || settingsOpen || ideaOpen || chatOpen || taskOpen,
+      preview || reviseOpen || settingsOpen || ideaOpen || taskOpen,
     );
     if (!dialogOpen) {
       if (dialogWasOpenRef.current) previousFocusRef.current?.focus();
@@ -661,8 +653,7 @@ function App() {
       if (taskOpen) {
         setTaskOpen(null);
         writeTaskQuery("", "replace");
-      } else if (chatOpen) setChatOpen(false);
-      else if (ideaOpen) setIdeaOpen(false);
+      } else if (ideaOpen) setIdeaOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
       else if (reviseOpen) setReviseOpen(false);
       else if (preview) setPreview(null);
@@ -687,7 +678,7 @@ function App() {
         }
       });
     };
-  }, [chatOpen, clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setChatOpen, setIdeaOpen, setSettingsOpen, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setIdeaOpen, setSettingsOpen, settingsOpen, taskOpen]);
   useEffect(() => () => {
     taskRestoreAbortRef.current?.abort();
     if (detailRefreshTimerRef.current !== null)
@@ -750,7 +741,7 @@ function App() {
     writeProjectLocation("", "push");
   };
   useEffect(() => {
-    if (!selected || preview || settingsOpen || ideaOpen || chatOpen || taskOpen) return;
+    if (!selected || preview || settingsOpen || ideaOpen || taskOpen) return;
     const returnToBoard = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -762,7 +753,7 @@ function App() {
     };
     window.addEventListener("keydown", returnToBoard);
     return () => window.removeEventListener("keydown", returnToBoard);
-  }, [chatOpen, clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
     if (!newAccount.trim() || !accountBackground) {
@@ -888,7 +879,7 @@ function App() {
     );
 
   const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || idea.open || chatOpen || taskOpen,
+    preview || reviseOpen || settingsOpen || idea.open || taskOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -924,7 +915,6 @@ function App() {
           taskModelDefaults={settings?.public}
           onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
-          onOpenConversation={() => void chat.openWorkbench()}
           onOpenTask={(task) => openTask(task as Task)}
           pendingActions={selectedPendingActions}
         />
@@ -946,7 +936,6 @@ function App() {
           onThemeChange={setTheme}
           runtime={runtime}
           onOpenIdeaPlanner={() => void idea.openPlanner()}
-          onOpenConversation={() => void chat.openWorkbench()}
           onOpenSettings={() => void settingsPanel.openDialog()}
           onLogout={() => void logout()}
           accounts={accounts}
@@ -1034,33 +1023,6 @@ function App() {
           onDeleteConversation={(session) => void idea.deleteConversation(session)}
           onSelectCandidate={(candidate) => void idea.selectCandidate(candidate)}
           onSubmit={idea.sendMessage}
-        />
-      )}
-      {chatOpen && (
-        <ChatWorkbenchDialog
-          detail={chat.detail}
-          sessions={chat.sessions}
-          visibleMessages={chat.visibleMessages}
-          technicalMessages={chat.technicalMessages}
-          creating={chat.creating}
-          creationSource={chat.creationSource}
-          onCreationSourceChange={chat.setCreationSource}
-          onCreate={(source) => void chat.createSession(source)}
-          onSelectSession={(session) => void chat.loadSession(session)}
-          onDeleteSession={(session) => void chat.deleteSession(session)}
-          settings={settings}
-          historySource={chat.historySource}
-          onHistorySourceChange={(source) => {
-            chat.setHistorySource(source);
-            void chat.refreshHistory(source);
-          }}
-          historyThreads={chat.historyThreads}
-          onApplyHistoryThread={(thread, mode) => void chat.applyHistoryThread(thread, mode)}
-          input={chat.input}
-          onInputChange={chat.setInput}
-          sending={chat.sending}
-          onClose={() => setChatOpen(false)}
-          onSubmit={chat.sendMessage}
         />
       )}
       {taskOpen && (

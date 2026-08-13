@@ -28,7 +28,7 @@ var publicSettingKeys = map[string]struct{}{
 	"obsidian_vault": {}, "topic_cards_dir": {},
 	"grok_base_url": {}, "grok_model": {}, "codex_binary_path": {},
 	"media_index_path": {}, "media_root": {}, "jianying_root": {},
-	"machine_profile_path": {}, "app_server_enabled": {}, "codex_workspace_roots": {}, "codex_task_project_root": {}, "codex_history_limit": {},
+	"machine_profile_path": {}, "app_server_enabled": {}, "codex_workspace_roots": {}, "codex_task_project_root": {},
 	"volc_speech_speaker_id": {}, "volc_speech_resource_id": {},
 }
 

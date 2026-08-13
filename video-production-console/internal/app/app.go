@@ -13,9 +13,7 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/codexapp"
 	"video-production-console/internal/config"
-	"video-production-console/internal/conversation"
 	"video-production-console/internal/domain"
-	"video-production-console/internal/history"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
@@ -40,9 +38,7 @@ type Options struct {
 	Settings        *consoleSettings.Service
 	Skills          *skillregistry.Service
 	TaskPreparer    httpapi.TaskManifestPreparer
-	Conversations   *conversation.Service
 	AppServerHealth func() codexapp.Health
-	History         *history.Service
 	MontageRetryer  interface {
 		Retry(context.Context, string) (domain.RegistrationAttempt, error)
 	}
@@ -117,16 +113,7 @@ func New(options Options) *App {
 		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer, models)
 		mux.Handle("/api/ideas", ideasHandler)
 		mux.Handle("/api/ideas/", ideasHandler)
-		if options.Conversations != nil {
-			conversationsHandler := httpapi.NewConversationsHandler(options.Conversations)
-			mux.Handle("/api/chat/sessions", conversationsHandler)
-			mux.Handle("/api/chat/sessions/", conversationsHandler)
-		}
-		if options.History != nil {
-			historyHandler := httpapi.NewHistoryHandler(options.History)
-			mux.Handle("/api/codex/history", historyHandler)
-			mux.Handle("/api/codex/history/", historyHandler)
-		}
+
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

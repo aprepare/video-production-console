@@ -782,7 +782,7 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
-		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"), CodexHistoryLimit: 10,
+		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

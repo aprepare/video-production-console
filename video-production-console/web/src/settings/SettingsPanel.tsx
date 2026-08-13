@@ -35,7 +35,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   media_root: "媒体素材目录",
   jianying_root: "剪映草稿目录",
   machine_profile_path: "混剪机器配置",
-  app_server_enabled: "实时 Codex 对话服务",
+  app_server_enabled: "任务实时交互服务",
   codex_workspace_roots: "Codex 工作目录白名单",
   codex_default_model: "默认模型",
   codex_default_reasoning_effort: "默认推理强度",
@@ -121,7 +121,7 @@ export function SettingsPanel({
           <div className="restart-required" role="status">
             <strong>配置已保存，重启控制台后生效</strong>
             <p>
-              并发数、历史显示数量等热更新项已经立即生效；路径、实时 Codex 对话服务、密钥等启动配置会在重启后启用。
+              并发数等热更新项已经立即生效；路径、任务实时交互服务、密钥等启动配置会在重启后启用。
             </p>
             {restartChangedFields.length ? (
               <p>等待重启：{restartChangedFields.join("、")}</p>
@@ -178,21 +178,8 @@ export function SettingsPanel({
               onDraftChange({ ...draft, app_server_enabled: event.target.checked })
             }
           />
-          启用实时 Codex 对话服务
-          <small>开启后可新建对话、查看历史并在任务运行中发送引导；保存后需要重启控制台。</small>
-        </label>
-        <label className="settings-field">
-          本机历史显示数量
-          <input
-            type="number"
-            min={5}
-            max={50}
-            value={draft.codex_history_limit || 10}
-            onChange={(event) =>
-              onDraftChange({ ...draft, codex_history_limit: Number(event.target.value) })
-            }
-          />
-          <small>默认显示最近 10 条，可设置 5—50 条。</small>
+          启用任务实时交互服务
+          <small>用于正在运行的生产任务追问、回答与恢复；保存后需要重启控制台。</small>
         </label>
         <label className="settings-field">
           Codex 工作目录白名单（每行一个绝对路径）

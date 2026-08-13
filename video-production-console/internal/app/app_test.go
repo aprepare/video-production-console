@@ -101,6 +101,23 @@ func TestEmbeddedWebConsole(t *testing.T) {
 	}
 }
 
+func TestStandaloneChatAndHistoryRoutesAreNotMounted(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	application := New(Options{Config: config.Config{DataRoot: t.TempDir()}, DB: database})
+
+	for _, path := range []string{"/api/chat/sessions", "/api/codex/history"} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `<div id="root"></div>`) {
+			t.Fatalf("GET %s should fall through to the embedded console; status=%d body=%q", path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestAccountRoutesAreMounted(t *testing.T) {
 	root := t.TempDir()
 	db, err := store.Open(filepath.Join(root, "console.db"))

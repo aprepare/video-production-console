@@ -90,38 +90,6 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
             },
           }]
         : [];
-    } else if (path === "/api/chat/sessions") {
-      body = [{
-        id: "session-1",
-        title: `当前对话 ${longValue}`,
-        kind: "general",
-        source: "console",
-        status: "idle",
-        skill_names: [],
-        updated_at: "2026-08-09T12:00:00Z",
-      }];
-    } else if (path === "/api/chat/sessions/session-1") {
-      body = {
-        session: {
-          id: "session-1",
-          title: `当前对话 ${longValue}`,
-          kind: "general",
-          source: "console",
-          status: "idle",
-          skill_names: [],
-          updated_at: "2026-08-09T12:00:00Z",
-        },
-        messages: [],
-      };
-    } else if (path.startsWith("/api/codex/history")) {
-      body = [{
-        id: "history-1",
-        title: `历史会话 ${longValue}`,
-        preview: `https://example.com/${longValue}?thread=without-breakpoints`,
-        source: "desktop",
-        active: false,
-        recency: "2026-08-09T11:00:00Z",
-      }];
     }
 
     await route.fulfill({
@@ -165,7 +133,7 @@ test("project workbench exposes landmarks, current step, focus and mobile layout
   await expect(page.getByRole("navigation", { name: "五阶段生产轨" })).toBeVisible();
   await expect(page.locator('[aria-current="step"]')).toContainText("文案");
   await expect(page.getByRole("region", { name: "当前项目资产" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Codex 对话摘要" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "当前任务摘要" })).toBeVisible();
   await expect(page.getByRole("button", { name: "移动端：开始二创文案" })).toBeVisible();
 
   await page.getByRole("button", { name: "返回项目看板" }).focus();
@@ -183,14 +151,14 @@ test("project workbench keeps its desktop dark-theme visual contract", async ({ 
 
   const title = page.getByRole("heading", { name: project.title });
   const assets = page.getByRole("region", { name: "当前项目资产" });
-  const conversation = page.getByRole("region", { name: "Codex 对话摘要" });
+  const taskSummary = page.getByRole("region", { name: "当前任务摘要" });
 
   await expect(title).toHaveCSS("color", "rgb(238, 242, 255)");
   await expect(page.locator(".project-workbench")).toHaveCSS("background-color", "rgb(8, 13, 29)");
   await expect(assets).toHaveCSS("background-color", "rgb(21, 29, 57)");
   await expect(assets).toHaveCSS("color", "rgb(238, 242, 255)");
-  await expect(conversation).toHaveCSS("background-color", "rgb(21, 29, 57)");
-  await expect(conversation).toHaveCSS("color", "rgb(238, 242, 255)");
+  await expect(taskSummary).toHaveCSS("background-color", "rgb(21, 29, 57)");
+  await expect(taskSummary).toHaveCSS("color", "rgb(238, 242, 255)");
 
   const measurements = await page.evaluate(() =>
     [
@@ -199,7 +167,7 @@ test("project workbench keeps its desktop dark-theme visual contract", async ({ 
       document.querySelector(".project-workbench"),
       document.querySelector(".workbench-grid"),
       document.querySelector(".project-assets"),
-      document.querySelector(".project-conversation"),
+      document.querySelector(".project-task-summary"),
     ]
       .filter((element): element is HTMLElement => element instanceof HTMLElement)
       .map((element) => ({
@@ -216,21 +184,14 @@ test("project workbench keeps its desktop dark-theme visual contract", async ({ 
   }
 });
 
-test("review and long chat data do not overflow desktop columns", async ({ page }) => {
+test("review and task data do not overflow desktop columns", async ({ page }) => {
   await page.setViewportSize({ width: 1180, height: 900 });
   await mockConsole(page, true, true);
   await page.goto(`/projects/${projectID}`);
   await page.getByLabel("选择项目工作台主题").selectOption("dark");
 
   await expect(page.locator(".workbench-grid--review")).toBeVisible();
-  for (const selector of [".project-workbench", ".workbench-grid--review", ".project-assets", ".project-conversation", ".publishing-review"]) {
-    const width = await page.locator(selector).evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
-    expect(width.scroll, `${selector} has horizontal overflow`).toBeLessThanOrEqual(width.client);
-  }
-
-  await page.getByRole("button", { name: "Codex 对话" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  for (const selector of [".chat-session-rail", ".chat-session-list", ".history-thread-list"]) {
+  for (const selector of [".project-workbench", ".workbench-grid--review", ".project-assets", ".project-task-summary", ".publishing-review"]) {
     const width = await page.locator(selector).evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
     expect(width.scroll, `${selector} has horizontal overflow`).toBeLessThanOrEqual(width.client);
   }

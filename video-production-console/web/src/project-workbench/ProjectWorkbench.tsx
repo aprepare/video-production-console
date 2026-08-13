@@ -19,7 +19,7 @@ import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } fro
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
 import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets";
-import { ProjectConversation } from "./ProjectConversation";
+import { ProjectTaskSummary } from "./ProjectTaskSummary";
 import "./project-workbench.css";
 
 type UploadAssetType = "narration" | "subtitle_srt";
@@ -46,7 +46,6 @@ export type ProjectWorkbenchProps = {
   taskModelDefaults?: TaskModelDefaults;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
-  onOpenConversation: () => void;
   onOpenTask: (task: ProjectTask) => void;
   pendingActions: string[];
 };
@@ -301,7 +300,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <h1>{detail.project.title}</h1>
           <div className="workbench-title__details">
             <p>项目 #{detail.project.id.slice(0, 8)}</p>
-            <span>资产、任务与对话均锁定在当前项目</span>
+            <span>资产与任务均锁定在当前项目</span>
           </div>
         </div>
         <div className="workbench-masthead__actions">
@@ -542,7 +541,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           pendingActions={props.pendingActions}
           uploadRequest={uploadRequest}
         />
-        <ProjectConversation task={currentTask} onOpenConversation={props.onOpenConversation} onOpenTask={props.onOpenTask} />
+        <ProjectTaskSummary task={currentTask} onOpenTask={props.onOpenTask} />
       </div>
 
       <div className="mobile-primary-action-bar" aria-label="移动端下一主动作">

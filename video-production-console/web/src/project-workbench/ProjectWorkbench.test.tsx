@@ -88,7 +88,6 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     },
     onReplaceBackground: vi.fn(),
     onViewAsset: vi.fn(),
-    onOpenConversation: vi.fn(),
     onOpenTask: vi.fn(),
     pendingActions: [] as string[],
   };
@@ -113,8 +112,8 @@ test("renders the desktop project production contract without drawer semantics o
   }
   expect(screen.getByRole("button", { name: "补齐制作素材" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
-  expect(screen.getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "打开 Codex 对话" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Codex 对话摘要" })).toBeNull();
+  expect(screen.getByRole("region", { name: "当前任务摘要" })).toBeTruthy();
   expect(screen.getAllByText("素材已校验，正在等待确认片尾时长。").length).toBeGreaterThan(0);
   expect(screen.getByText("请确认片尾保留几秒。")).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -126,7 +125,7 @@ test("renders the desktop project production contract without drawer semantics o
 test("presents project identity, production stage, asset readiness, and task state as one cockpit hierarchy", () => {
   const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
 
-  expect(screen.getByText("资产、任务与对话均锁定在当前项目")).toBeTruthy();
+  expect(screen.getByText("资产与任务均锁定在当前项目")).toBeTruthy();
   expect(container.querySelector(".workbench-stage-badge--assets")?.textContent).toContain("制作素材");
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
@@ -135,7 +134,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();
   expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
-  expect(container.querySelector(".conversation-status--attention")?.textContent).toContain("需要回复");
+  expect(container.querySelector(".task-summary-status--attention")?.textContent).toContain("需要回复");
 });
 
 test("shows every project-scoped production asset with state, meaning, and accessible actions", () => {
@@ -647,7 +646,7 @@ test("keeps the 1366 by 768 desktop structure without runtime layout classes", (
   expect(within(workbench as HTMLElement).getByRole("navigation", { name: "五阶段生产轨" })).toBeTruthy();
   expect(within(workbench as HTMLElement).getByRole("region", { name: "下一主动作" })).toBeTruthy();
   expect(within(workbench as HTMLElement).getByRole("region", { name: "当前项目资产" })).toBeTruthy();
-  expect(within(workbench as HTMLElement).getByRole("region", { name: "Codex 对话摘要" })).toBeTruthy();
+  expect(within(workbench as HTMLElement).getByRole("region", { name: "当前任务摘要" })).toBeTruthy();
 });
 
 test("keeps three workbench columns through 760 pixels and switches to one below it", () => {
@@ -680,19 +679,19 @@ test("defines the restrained cockpit palette, distinct desktop panels, and visib
   expect(css).not.toContain("backdrop-filter");
 });
 
-test("provides native mobile accordions for project assets and conversation", () => {
+test("provides native mobile accordions for project assets and current task", () => {
   const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
   const assetToggle = screen.getByLabelText("收起或展开项目资产");
-  const conversationToggle = screen.getByLabelText("收起或展开 Codex 对话");
+  const taskToggle = screen.getByLabelText("收起或展开当前任务");
   const assetDetails = assetToggle.closest("details") as HTMLDetailsElement | null;
-  const conversationDetails = conversationToggle.closest("details") as HTMLDetailsElement | null;
+  const taskDetails = taskToggle.closest("details") as HTMLDetailsElement | null;
 
   expect(assetDetails?.open).toBe(true);
-  expect(conversationDetails?.open).toBe(true);
+  expect(taskDetails?.open).toBe(true);
   fireEvent.click(assetToggle);
-  fireEvent.click(conversationToggle);
+  fireEvent.click(taskToggle);
   expect(assetDetails?.open).toBe(false);
-  expect(conversationDetails?.open).toBe(false);
+  expect(taskDetails?.open).toBe(false);
   expect(container.querySelectorAll(".mobile-accordion")).toHaveLength(2);
 });
 

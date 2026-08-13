@@ -22,7 +22,6 @@ type PublicSettings struct {
 	AppServerEnabled            bool     `json:"app_server_enabled"`
 	CodexWorkspaceRoots         []string `json:"codex_workspace_roots"`
 	CodexTaskProjectRoot        string   `json:"codex_task_project_root"`
-	CodexHistoryLimit           int      `json:"codex_history_limit"`
 	VolcSpeechSpeakerID         string   `json:"volc_speech_speaker_id"`
 	VolcSpeechResourceID        string   `json:"volc_speech_resource_id"`
 }

@@ -20,7 +20,6 @@ type ConsoleHomeProps = {
   onThemeChange: (theme: Theme) => void;
   runtime: RuntimeState | null | undefined;
   onOpenIdeaPlanner: () => void;
-  onOpenConversation: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
   accounts: Account[];
@@ -51,7 +50,6 @@ export function ConsoleHome({
   onThemeChange,
   runtime,
   onOpenIdeaPlanner,
-  onOpenConversation,
   onOpenSettings,
   onLogout,
   accounts,
@@ -111,9 +109,6 @@ export function ConsoleHome({
           )}
           <button className="header-button" onClick={onOpenIdeaPlanner}>
             给我选题
-          </button>
-          <button className="header-button chat-entry" onClick={onOpenConversation}>
-            Codex 对话
           </button>
           <button className="header-button" onClick={onOpenSettings}>
             设置
