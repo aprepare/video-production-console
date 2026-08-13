@@ -15,6 +15,7 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/httpapi"
+	"video-production-console/internal/imageproject"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
@@ -104,6 +105,9 @@ func New(options Options) *App {
 		if options.Settings != nil {
 			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
 			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
+			imageProjectsHandler := httpapi.NewImageProjectsHandler(options.DB, options.Settings, imageproject.NewClient(nil))
+			mux.Handle("/api/image-projects", imageProjectsHandler)
+			mux.Handle("/api/image-projects/", imageProjectsHandler)
 		}
 		if options.Skills != nil {
 			skillsHandler := httpapi.NewSkillsHandler(options.Skills)

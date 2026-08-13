@@ -7,6 +7,7 @@ import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
 import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
 import { SettingsPanel } from "./settings/SettingsPanel";
+import { ImageModeWorkbench } from "./image-mode/ImageModeWorkbench";
 import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
 import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
@@ -88,6 +89,7 @@ function App() {
   const client = useQueryClient();
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
+  const [productionMode, setProductionMode] = useState<"montage" | "image">("montage");
   const [expandedStages, setExpandedStages] = useState<Set<Project["stage"]>>(
     () => new Set(),
   );
@@ -892,7 +894,38 @@ function App() {
 
   return (
     <div className="shell">
-      {selected && detail && detailReady ? (
+      {productionMode === "image" && !selected ? (
+        <>
+          <header>
+            <div><span className="eyebrow">本机视频工作台</span><h1>视频生产控制台</h1></div>
+            <div className="status">
+              <label className="theme-control">
+                主题
+                <select
+                  aria-label="选择界面主题"
+                  value={theme}
+                  onChange={(event) => setTheme(event.target.value as Theme)}
+                >
+                  <option value="light">日间</option>
+                  <option value="dark">夜间</option>
+                </select>
+              </label>
+              <div className="mode-switch" role="group" aria-label="生产模式">
+                <button type="button" aria-pressed={false} onClick={() => setProductionMode("montage")}>混剪模式</button>
+                <button type="button" aria-pressed className="active" onClick={() => setProductionMode("image")}>图文模式</button>
+              </div>
+              <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
+              <button className="header-button" onClick={() => void logout()}>退出</button>
+            </div>
+          </header>
+          <ImageModeWorkbench
+            api={api}
+            defaultRatio={settings?.public.default_image_ratio}
+            defaultStyle={settings?.public.default_image_style}
+            defaultConcurrency={settings?.public.max_image_concurrency}
+          />
+        </>
+      ) : selected && detail && detailReady ? (
         <ProjectWorkbench
           detail={detail as WorkbenchProjectDetail}
           tasks={tasks}
@@ -958,6 +991,8 @@ function App() {
           expandedStages={expandedStages}
           onExpandedStagesChange={setExpandedStages}
           onOpenProject={openProject}
+          mode={productionMode}
+          onModeChange={setProductionMode}
         />
       )}
       {preview && (

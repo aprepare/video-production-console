@@ -161,6 +161,29 @@ test("clicking a project pushes a durable project path", async () => {
   expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
 });
 
+test("switches between montage and image modes and returns to the existing board", async () => {
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json([]);
+    if (path === "/api/image-projects") return json([]);
+  }));
+
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
+  const modeSwitch = screen.getByRole("group", { name: "生产模式" });
+  const montage = within(modeSwitch).getByRole("button", { name: "混剪模式" });
+  const image = within(modeSwitch).getByRole("button", { name: "图文模式" });
+  expect(montage.getAttribute("aria-pressed")).toBe("true");
+
+  fireEvent.click(image);
+  expect(await screen.findByRole("heading", { name: "图文项目" })).toBeTruthy();
+  const imageModeSwitch = screen.getByRole("group", { name: "生产模式" });
+  expect(within(imageModeSwitch).getByRole("button", { name: "图文模式" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByRole("heading", { name: "视频项目" })).toBeNull();
+
+  fireEvent.click(within(imageModeSwitch).getByRole("button", { name: "混剪模式" }));
+  expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
+});
+
 test("the standalone Codex conversation entry is not exposed", async () => {
   const fixture = routedProjectFetch();
   vi.stubGlobal("fetch", fixture.fetch);

@@ -12,7 +12,7 @@
 
 ## 1. 项目定位与当前状态
 
-**一句话定位：**本地视频生产控制台——Go 提供鉴权、项目/资产、Codex 正式任务调度、任务交互与实时事件；React/Vite 提供项目看板和五阶段工作台；混剪明文草稿可登记为剪映正式资产。
+**一句话定位：**本地视频生产控制台——Go 提供鉴权、设置、项目/资产、正式任务调度和独立图文批次；React/Vite 提供混剪项目看板、五阶段工作台与图文工作台；混剪交付到剪映草稿，图文交付到有序图片 ZIP。
 
 **当前状态（2026-08-13）：**主流程具备登录、项目隔离、资产管理、正式任务进度与恢复、爆款库代理、Obsidian/Skills、混剪登记、五阶段工作台、主题与项目列折叠、配音字幕一键生成（火山 TTS 直接调用）。独立“Codex 对话”和本机历史工作台已移除；App Server 仅作为生产任务追问、回答、恢复与 composite scheduler 的内部基础设施。同行原文闭环已落地：`source_script` 上传 → `remix.standard`（`source_version_id` 绑定与活动任务幂等）→ `continuous_script`（依赖血缘）→ 解锁素材阶段。选题消息支持 `source_feed_ids`：入队前从爆款库快照完整档案与转写为 `baokuan_source_bundle`，避免任务因 MCP 不可用而丢失已明确指定的来源。SPA 路由刷新由 `internal/webui/embed.go` 回退到 `index.html`。
 
@@ -129,6 +129,7 @@ go run .\cmd\console
 - 无管理员时必须提供 `VIDEO_CONSOLE_INITIAL_PASSWORD`。
 - 可选 AgentRuntime：见第 3 节；默认不要求 OpenAI / Pi。
 - 混剪还依赖 machine profile / 设置里的 `media_root` + `media_index_path`（见 §6.1）。
+- 图文生图全局设置为 `image_base_url`、`image_model`（默认 `gpt-image-2`）、`max_image_concurrency`（默认 3）、`default_image_ratio`（默认 `3:4`）、`default_image_style`（默认 `finance_documentary`）和后端密钥 `image_api_key`。全局默认比例/风格只用于创建图文项目：创建时复制进项目的 `ratio` / `style` 字段，此后项目保存自己的值，后续修改全局默认不会追改已有项目；图片数量和自定义风格也属于项目值。Key 只存 `encrypted_secrets`、API 不回显、runtime JSON 不序列化。公网 Base URL 应使用 HTTPS；用户明确接受风险时可保存 HTTP 地址，但任何文档、日志、测试夹具都不得放真实 Key。
 
 ## 6. 关键数据流
 
@@ -137,6 +138,7 @@ go run .\cmd\console
 3. 任务经 manifest 准备后入队；`remix.standard` 可绑定 `source_version_id`；同版本活动任务复用，不同版本 `409 active_remix_conflict`。
 4. 完成时校验输入仍为 current，否则 `input_superseded`；`continuous_script` 写入 source 依赖。
 5. 事件经 WebSocket 推送；混剪明文 → 登记 → 验证 → ready。
+6. 图文模式不进入 Codex/remix/montage 任务队列：`POST /api/image-projects` 保存原文和有序卡片；生成请求仅由 Go 后端读取解密后的 Key；单张输出落在数据根的图文目录，ZIP 只包含 ready 图片和清单。
 
 ### 6.1 混剪素材选择与预检
 

@@ -14,6 +14,11 @@ type PublicSettings struct {
 	TopicCardsDir               string   `json:"topic_cards_dir"`
 	GrokBaseURL                 string   `json:"grok_base_url"`
 	GrokModel                   string   `json:"grok_model"`
+	ImageBaseURL                string   `json:"image_base_url"`
+	ImageModel                  string   `json:"image_model"`
+	MaxImageConcurrency         int      `json:"max_image_concurrency"`
+	DefaultImageRatio           string   `json:"default_image_ratio"`
+	DefaultImageStyle           string   `json:"default_image_style"`
 	CodexBinaryPath             string   `json:"codex_binary_path"`
 	MediaIndexPath              string   `json:"media_index_path"`
 	MediaRoot                   string   `json:"media_root"`

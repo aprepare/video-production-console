@@ -42,6 +42,8 @@ type ConsoleHomeProps = {
   expandedStages: Set<Project["stage"]>;
   onExpandedStagesChange: Dispatch<SetStateAction<Set<Project["stage"]>>>;
   onOpenProject: (project: Project) => void;
+  mode: "montage" | "image";
+  onModeChange: (mode: "montage" | "image") => void;
 };
 
 export function ConsoleHome({
@@ -72,6 +74,8 @@ export function ConsoleHome({
   expandedStages,
   onExpandedStagesChange,
   onOpenProject,
+  mode,
+  onModeChange,
 }: ConsoleHomeProps) {
   const tone = messageTone(message);
   const urgent = tone === "danger";
@@ -95,6 +99,10 @@ export function ConsoleHome({
               <option value="dark">夜间</option>
             </select>
           </label>
+          <div className="mode-switch" role="group" aria-label="生产模式">
+            <button type="button" aria-pressed={mode === "montage"} className={mode === "montage" ? "active" : ""} onClick={() => onModeChange("montage")}>混剪模式</button>
+            <button type="button" aria-pressed={mode === "image"} className={mode === "image" ? "active" : ""} onClick={() => onModeChange("image")}>图文模式</button>
+          </div>
           {runtime && (
             <span
               className={

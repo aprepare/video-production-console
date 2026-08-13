@@ -48,3 +48,31 @@ func TestHotSettingsDoNotRequireRestart(t *testing.T) {
 		t.Fatal("restart_required=true for hot-only settings")
 	}
 }
+
+func TestImageConcurrencyIsHotButEndpointAndSecretRequireRestart(t *testing.T) {
+	service, _, _, configured := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), configured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Runtime(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	configured.MaxImageConcurrency = 5
+	view, err := service.Update(t.Context(), configured, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.RestartRequired || view.ActivePublic.MaxImageConcurrency != 5 {
+		t.Fatalf("image concurrency was not hot-applied: %+v", view)
+	}
+
+	configured.ImageBaseURL = "https://images.example.test/v1"
+	view, err = service.Update(t.Context(), configured, map[string]string{SecretImageAPIKey: "replacement-test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.RestartRequired || view.ActivePublic.ImageBaseURL == configured.ImageBaseURL {
+		t.Fatalf("image endpoint/secret change did not require restart: %+v", view)
+	}
+}

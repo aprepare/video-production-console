@@ -763,6 +763,124 @@ func TestSettingsAcceptEmptyVolcSpeechIDs(t *testing.T) {
 	}
 }
 
+func TestSettingsImageGenerationConfigurationIsEncryptedAndRuntimeOnly(t *testing.T) {
+	service, db, protector, public := newSettingsTestService(t, Options{})
+	public.ImageBaseURL = "http://127.0.0.1:8320/v1"
+	public.ImageModel = "gpt-image-2"
+	public.MaxImageConcurrency = 3
+	const imageKey = "test-image-key"
+	view, err := service.Update(t.Context(), public, map[string]string{SecretImageAPIKey: imageKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageBaseURL != public.ImageBaseURL || view.Public.ImageModel != public.ImageModel || view.Public.MaxImageConcurrency != 3 {
+		t.Fatalf("public image settings=%+v", view.Public)
+	}
+	if !view.Secrets[SecretImageAPIKey].Configured || view.Secrets[SecretImageAPIKey].Masked != secretMask {
+		t.Fatalf("image secret status=%+v", view.Secrets[SecretImageAPIKey])
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(imageKey)) || bytes.Contains(raw, []byte("cipher-boundary")) {
+		t.Fatalf("settings view leaked image API key: %s", raw)
+	}
+	var storedCiphertext string
+	if err := db.QueryRow(`SELECT ciphertext FROM encrypted_secrets WHERE key=?`, SecretImageAPIKey).Scan(&storedCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	if storedCiphertext == "" || strings.Contains(storedCiphertext, imageKey) {
+		t.Fatal("image API key was not stored as opaque ciphertext")
+	}
+	if len(protector.protected) != 1 || string(protector.protected[0]) != imageKey {
+		t.Fatalf("image key protection calls=%d", len(protector.protected))
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.ImageAPIKey != imageKey || runtime.ImageBaseURL != public.ImageBaseURL || runtime.ImageModel != public.ImageModel || runtime.MaxImageConcurrency != 3 {
+		t.Fatalf("image runtime base=%q model=%q concurrency=%d key_configured=%t", runtime.ImageBaseURL, runtime.ImageModel, runtime.MaxImageConcurrency, runtime.ImageAPIKey != "")
+	}
+	runtimeJSON, err := json.Marshal(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(runtimeJSON, []byte(imageKey)) {
+		t.Fatalf("runtime JSON leaked image API key: %s", runtimeJSON)
+	}
+}
+
+func TestLegacySettingsDefaultImageGenerationValues(t *testing.T) {
+	service, db, _, _ := newSettingsTestService(t, Options{})
+	if _, err := db.Exec(`DELETE FROM settings WHERE key IN ('image_base_url','image_model','max_image_concurrency')`); err != nil {
+		t.Fatal(err)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageBaseURL != "" || view.Public.ImageModel != defaultImageModel || view.Public.MaxImageConcurrency != defaultMaxImageConcurrency || view.Public.DefaultImageRatio != defaultImageRatio || view.Public.DefaultImageStyle != defaultImageStyle {
+		t.Fatalf("legacy image defaults=%+v", view.Public)
+	}
+}
+
+func TestLegacySettingsUpdateAppliesImageGenerationDefaults(t *testing.T) {
+	service, _, _, legacy := newSettingsTestService(t, Options{})
+	legacy.ImageModel = ""
+	legacy.MaxImageConcurrency = 0
+	legacy.DefaultImageRatio = ""
+	legacy.DefaultImageStyle = ""
+
+	view, err := service.Update(t.Context(), legacy, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageModel != defaultImageModel || view.Public.MaxImageConcurrency != defaultMaxImageConcurrency || view.Public.DefaultImageRatio != defaultImageRatio || view.Public.DefaultImageStyle != defaultImageStyle {
+		t.Fatalf("legacy update image defaults=%+v", view.Public)
+	}
+}
+
+func TestSettingsImageGenerationValidationAllowsHTTPAndRejectsInvalidValues(t *testing.T) {
+	service, _, _, valid := newSettingsTestService(t, Options{})
+	for _, baseURL := range []string{"http://images.example.test/v1", "https://images.example.test/v1"} {
+		candidate := valid
+		candidate.ImageBaseURL = baseURL
+		if _, err := service.PutPublic(t.Context(), candidate); err != nil {
+			t.Fatalf("base URL %q rejected: %v", baseURL, err)
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*domain.PublicSettings)
+	}{
+		{"too much concurrency", func(value *domain.PublicSettings) { value.MaxImageConcurrency = 6 }},
+		{"trimmed model", func(value *domain.PublicSettings) { value.ImageModel = " gpt-image-2 " }},
+		{"invalid default ratio", func(value *domain.PublicSettings) { value.DefaultImageRatio = "16:9" }},
+		{"invalid default style", func(value *domain.PublicSettings) { value.DefaultImageStyle = "unknown" }},
+		{"userinfo URL", func(value *domain.PublicSettings) { value.ImageBaseURL = "https://user@images.example.test/v1" }},
+		{"fragment URL", func(value *domain.PublicSettings) { value.ImageBaseURL = "https://images.example.test/v1#fragment" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			test.mutate(&candidate)
+			if _, err := service.PutPublic(t.Context(), candidate); !errors.Is(err, ErrInvalidSettings) {
+				t.Fatalf("PutPublic() error=%v", err)
+			}
+		})
+	}
+}
+
+func TestSettingsImageBaseURLRejectsValuesLongerThanSchemaLimit(t *testing.T) {
+	service, _, _, valid := newSettingsTestService(t, Options{})
+	valid.ImageBaseURL = "https://images.example.test/" + strings.Repeat("a", 2049)
+	if _, err := service.PutPublic(t.Context(), valid); !errors.Is(err, ErrInvalidSettings) {
+		t.Fatalf("PutPublic() error=%v, want invalid image_base_url", err)
+	}
+}
+
 func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *fakeProtector, domain.PublicSettings) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
@@ -781,6 +899,7 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		BaokuanBaseURL: "http://127.0.0.1:2022", BaokuanMCPExecutable: filepath.Join(root, "baokuan.exe"),
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
+		ImageModel: "gpt-image-2", MaxImageConcurrency: 3, DefaultImageRatio: "3:4", DefaultImageStyle: "finance_documentary",
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 	}

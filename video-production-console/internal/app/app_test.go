@@ -16,6 +16,7 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 	"video-production-console/internal/workflow"
 )
@@ -257,6 +258,27 @@ func TestProjectRemixRouteRequiresAuthentication(t *testing.T) {
 	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/"+uuid.NewString()+"/remix", nil))
 	if response.Code != http.StatusUnauthorized || starter.called {
 		t.Fatalf("status=%d called=%t body=%s", response.Code, starter.called, response.Body.String())
+	}
+}
+
+func TestImageProjectRoutesRequireAuthentication(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
+	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth, Settings: settings})
+	for _, path := range []string{"/api/image-projects", "/api/image-projects/" + uuid.NewString() + "/download"} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
 	}
 }
 

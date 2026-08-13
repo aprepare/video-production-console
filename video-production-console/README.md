@@ -29,6 +29,8 @@ go run .\cmd\console
 
 浏览器打开 `http://127.0.0.1:2030`，首次登录后立即改密。
 
+图文生图需在「设置」填写 OpenAI 兼容的生图 Base URL、模型（默认 `gpt-image-2`）、API Key，并可设置默认并发、比例与风格。API Key 只由后端加密保存，页面只显示是否已配置，文档和配置示例都不要写真实密钥。HTTPS 更安全；系统允许在用户明确接受风险时保存 HTTP 地址，但 HTTP 会明文传输请求头中的密钥。
+
 可选 AgentRuntime（默认不变：混剪 `script`，remix/topic `codex`）：见 [AI 接手说明 §3](docs/AI-HANDOFF.md)。例如 `VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 并配置 `VIDEO_CONSOLE_OPENAI_*`。设置页不做 runtime UI。
 
 ## 日常验证（不覆盖嵌入前端）
@@ -64,5 +66,6 @@ go build -o .\dist\video-production-console.exe .\cmd\console
 ## 安全提示
 
 - 不要把控制台暴露到公网或公共 Wi-Fi
+- 生图服务优先使用 HTTPS；只有明确接受明文传输风险时才继续使用 HTTP
 - 局域网访问须在设置中显式配置监听地址并重启
 - 「打开剪映目录」仅允许本机回环访问触发

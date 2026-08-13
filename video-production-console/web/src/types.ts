@@ -81,6 +81,11 @@ export type PublicSettings = {
   topic_cards_dir: string;
   grok_base_url: string;
   grok_model: string;
+  image_base_url: string;
+  image_model: string;
+  max_image_concurrency: number;
+  default_image_ratio: "3:4" | "4:3" | "9:16" | "1:1";
+  default_image_style: string;
   codex_binary_path: string;
   media_index_path: string;
   media_root: string;
@@ -102,6 +107,37 @@ export type Settings = {
   settings_version: number;
   secrets: Record<string, { configured: boolean; masked: string }>;
 };
+
+export type ImageProject = {
+  id: string;
+  title: string;
+  script: string;
+  image_count: number;
+  ratio: "3:4" | "4:3" | "9:16" | "1:1";
+  style: string;
+  custom_style: string;
+  concurrency: number;
+  status: "draft" | "generating" | "ready" | "partial" | "failed";
+  created_at: string;
+  updated_at: string;
+};
+
+export type ImageProjectItem = {
+  id: string;
+  project_id: string;
+  sequence: number;
+  source_text: string;
+  title: string;
+  prompt: string;
+  status: "pending" | "generating" | "ready" | "failed";
+  mime_type?: string;
+  width?: number;
+  height?: number;
+  error_message?: string;
+  updated_at?: string;
+};
+
+export type ImageProjectDetail = { project: ImageProject; items: ImageProjectItem[] };
 
 export type IdeaMessage = {
   id: string;

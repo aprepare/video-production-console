@@ -140,6 +140,8 @@ func TestOpenCreatesInitialSchema(t *testing.T) {
 		"semantic_events",
 		"thread_leases",
 		"project_workflow_runs",
+		"image_projects",
+		"image_project_items",
 	}
 	for _, table := range wantTables {
 		var name string

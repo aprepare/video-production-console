@@ -799,6 +799,38 @@ ON task_phase_runs(task_id,attempt,started_at,id);`,
 	// column constrained. Without this index every turn claim, interrupt and
 	// cancel scans codex_tasks end to end.
 	`CREATE INDEX codex_tasks_turn_idx ON codex_tasks(codex_turn_id);`,
+	`CREATE TABLE image_projects (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    script TEXT NOT NULL,
+    image_count INTEGER NOT NULL CHECK (image_count BETWEEN 1 AND 60),
+    ratio TEXT NOT NULL CHECK (ratio IN ('3:4','4:3','9:16','1:1')),
+    style TEXT NOT NULL,
+    custom_style TEXT NOT NULL DEFAULT '',
+    concurrency INTEGER NOT NULL CHECK (concurrency BETWEEN 1 AND 5),
+    status TEXT NOT NULL CHECK (status IN ('draft','generating','ready','partial','failed')),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE TABLE image_project_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES image_projects(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    source_text TEXT NOT NULL,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending','generating','ready','failed')),
+    image_path TEXT,
+    mime_type TEXT,
+    width INTEGER CHECK (width IS NULL OR width > 0),
+    height INTEGER CHECK (height IS NULL OR height > 0),
+    error_message TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE(project_id, sequence)
+);
+CREATE INDEX image_projects_updated_idx ON image_projects(updated_at DESC, id);
+CREATE INDEX image_project_items_project_idx ON image_project_items(project_id, sequence);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

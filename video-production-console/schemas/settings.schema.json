@@ -76,6 +76,25 @@
           "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
         },
         "grok_model": { "type": "string", "maxLength": 256 },
+        "image_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "image_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?:\\S|\\S.*\\S)$",
+          "default": "gpt-image-2"
+        },
+        "max_image_concurrency": { "type": "integer", "minimum": 1, "maximum": 5, "default": 3 },
+        "default_image_ratio": { "type": "string", "enum": ["3:4", "4:3", "9:16", "1:1"], "default": "3:4" },
+        "default_image_style": {
+          "type": "string",
+          "enum": ["finance_documentary", "red_ink", "old_newspaper", "ledger_investigation", "dark_crisis", "city_era", "blackboard"],
+          "default": "finance_documentary"
+        },
         "codex_binary_path": { "$ref": "#/$defs/optionalAbsolutePath" },
         "media_index_path": { "$ref": "#/$defs/optionalAbsolutePath" },
         "media_root": { "$ref": "#/$defs/optionalAbsolutePath" },
@@ -92,13 +111,79 @@
         "volc_speech_resource_id": { "type": "string", "maxLength": 256 }
       }
     },
+    "publicSettingsUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/publicSettings" },
+        {
+          "required": [
+            "listen_addr",
+            "data_root",
+            "max_codex_concurrency",
+            "codex_default_model",
+            "codex_default_reasoning_effort",
+            "baokuan_base_url",
+            "baokuan_mcp_executable",
+            "obsidian_vault",
+            "topic_cards_dir",
+            "grok_base_url",
+            "grok_model",
+            "codex_binary_path",
+            "media_index_path",
+            "media_root",
+            "jianying_root",
+            "machine_profile_path",
+            "app_server_enabled",
+            "codex_workspace_roots",
+            "codex_task_project_root",
+            "volc_speech_speaker_id",
+            "volc_speech_resource_id"
+          ]
+        }
+      ]
+    },
+    "publicSettingsView": {
+      "allOf": [
+        { "$ref": "#/$defs/publicSettings" },
+        {
+          "required": [
+            "listen_addr",
+            "data_root",
+            "max_codex_concurrency",
+            "codex_default_model",
+            "codex_default_reasoning_effort",
+            "baokuan_base_url",
+            "baokuan_mcp_executable",
+            "obsidian_vault",
+            "topic_cards_dir",
+            "grok_base_url",
+            "grok_model",
+            "image_base_url",
+            "image_model",
+            "max_image_concurrency",
+            "default_image_ratio",
+            "default_image_style",
+            "codex_binary_path",
+            "media_index_path",
+            "media_root",
+            "jianying_root",
+            "machine_profile_path",
+            "app_server_enabled",
+            "codex_workspace_roots",
+            "codex_task_project_root",
+            "volc_speech_speaker_id",
+            "volc_speech_resource_id"
+          ]
+        }
+      ]
+    },
     "secretInput": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "grok_api_key": { "type": "string", "maxLength": 16384 },
         "pexels_api_key": { "type": "string", "maxLength": 16384 },
-        "volc_speech_api_key": { "type": "string", "maxLength": 16384 }
+        "volc_speech_api_key": { "type": "string", "maxLength": 16384 },
+        "image_api_key": { "type": "string", "maxLength": 16384 }
       }
     },
     "secretStatus": {
@@ -123,11 +208,12 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key"],
+      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
         "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
-        "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" }
+        "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" },
+        "image_api_key": { "$ref": "#/$defs/secretStatus" }
       }
     },
     "settingsUpdate": {
@@ -135,7 +221,7 @@
       "additionalProperties": false,
       "required": ["public", "secrets"],
       "properties": {
-        "public": { "$ref": "#/$defs/publicSettings" },
+        "public": { "$ref": "#/$defs/publicSettingsUpdate" },
         "secrets": { "$ref": "#/$defs/secretInput" }
       }
     },
@@ -144,7 +230,7 @@
       "additionalProperties": false,
       "required": ["public", "settings_version", "secrets"],
       "properties": {
-        "public": { "$ref": "#/$defs/publicSettings" },
+        "public": { "$ref": "#/$defs/publicSettingsView" },
         "settings_version": { "type": "integer", "minimum": 0 },
         "secrets": { "$ref": "#/$defs/secretView" }
       }

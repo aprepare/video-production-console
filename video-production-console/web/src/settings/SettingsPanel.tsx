@@ -12,6 +12,8 @@ const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["topic_cards_dir", "选题卡目录", "Vault 内选题卡目录"],
   ["grok_base_url", "Grok 服务地址", "OpenAI 兼容 API 地址"],
   ["grok_model", "Grok 模型", "模型名称"],
+  ["image_base_url", "生图服务地址", "OpenAI 兼容 Base URL"],
+  ["image_model", "生图模型", "gpt-image-2"],
   ["codex_binary_path", "Codex CLI 路径", "codex 可执行文件路径"],
   ["media_index_path", "素材索引", "媒体索引文件"],
   ["media_root", "媒体素材目录", "本地媒体根目录"],
@@ -30,6 +32,8 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   topic_cards_dir: "选题卡目录",
   grok_base_url: "Grok 服务地址",
   grok_model: "Grok 模型",
+  image_base_url: "生图服务地址",
+  image_model: "生图模型",
   codex_binary_path: "Codex 程序路径",
   media_index_path: "素材索引",
   media_root: "媒体素材目录",
@@ -43,13 +47,24 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   volc_speech_resource_id: "火山语音资源 ID",
 };
 
-type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string };
+type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string; image_api_key: string };
 
 const secretFields: Array<[keyof SecretDraft, string]> = [
   ["grok_api_key", "Grok API 密钥"],
   ["pexels_api_key", "Pexels API 密钥"],
   ["volc_speech_api_key", "火山语音 API Key"],
+  ["image_api_key", "生图 API Key"],
 ];
+
+const imageStyles = [
+  ["finance_documentary", "财经纪实插画"],
+  ["red_ink", "赤墨风"],
+  ["old_newspaper", "旧报档案风"],
+  ["ledger_investigation", "账本调查风"],
+  ["dark_crisis", "暗黑危机风"],
+  ["city_era", "城市时代感"],
+  ["blackboard", "黑板讲解风"],
+] as const;
 
 type SettingsPanelProps = {
   settings: Settings | null;
@@ -170,6 +185,34 @@ export function SettingsPanel({
             ))}
           </select>
         </label>
+        <label className="settings-field">
+          同时生成图片数
+          <select
+            value={draft.max_image_concurrency || 3}
+            onChange={(event) => onDraftChange({ ...draft, max_image_concurrency: Number(event.target.value) })}
+          >
+            {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+          <small>图文模式批量生成的最大并发，建议 3；接口稳定时可调到 5。</small>
+        </label>
+        <label className="settings-field">
+          默认图片比例
+          <select
+            value={draft.default_image_ratio || "3:4"}
+            onChange={(event) => onDraftChange({ ...draft, default_image_ratio: event.target.value as PublicSettings["default_image_ratio"] })}
+          >
+            {["3:4", "4:3", "9:16", "1:1"].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label className="settings-field">
+          默认视觉风格
+          <select
+            value={draft.default_image_style || "finance_documentary"}
+            onChange={(event) => onDraftChange({ ...draft, default_image_style: event.target.value })}
+          >
+            {imageStyles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </label>
         <label className="settings-field checkbox-field">
           <input
             type="checkbox"
@@ -224,6 +267,11 @@ export function SettingsPanel({
             </label>
           ))}
         </div>
+        {(draft.image_base_url || "").toLowerCase().startsWith("http://") ? (
+          <p className="settings-feedback settings-feedback--danger" role="alert">
+            HTTP 会明文传输生图 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
+          </p>
+        ) : null}
         <button className="save-settings" type="submit">
           保存设置
         </button>

@@ -31,11 +31,16 @@ const (
 	SecretGrokAPIKey       = "grok_api_key"
 	SecretPexelsAPIKey     = "pexels_api_key"
 	SecretVolcSpeechAPIKey = "volc_speech_api_key"
+	SecretImageAPIKey      = "image_api_key"
 
-	secretMask           = "********"
-	probeTimeout         = 5 * time.Second
-	maxProbeBodySize     = 64 << 10
-	maxCommandOutputSize = 64 << 10
+	secretMask                 = "********"
+	defaultImageModel          = "gpt-image-2"
+	defaultMaxImageConcurrency = 3
+	defaultImageRatio          = "3:4"
+	defaultImageStyle          = "finance_documentary"
+	probeTimeout               = 5 * time.Second
+	maxProbeBodySize           = 64 << 10
+	maxCommandOutputSize       = 64 << 10
 )
 
 var (
@@ -44,7 +49,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -110,6 +115,7 @@ type Runtime struct {
 	GrokAPIKey       string           `json:"-"`
 	PexelsAPIKey     string           `json:"-"`
 	VolcSpeechAPIKey string           `json:"-"`
+	ImageAPIKey      string           `json:"-"`
 	SecretVersions   map[string]int64 `json:"-"`
 }
 
@@ -291,6 +297,7 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 		return
 	}
 	s.active.MaxCodexConcurrency = configured.MaxCodexConcurrency
+	s.active.MaxImageConcurrency = normalizedImageConcurrency(configured.MaxImageConcurrency)
 	s.active.CodexDefaultModel = configured.CodexDefaultModel
 	s.active.CodexDefaultReasoningEffort = configured.CodexDefaultReasoningEffort
 }
@@ -381,6 +388,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.PexelsAPIKey = value
 		case SecretVolcSpeechAPIKey:
 			runtime.VolcSpeechAPIKey = value
+		case SecretImageAPIKey:
+			runtime.ImageAPIKey = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -404,6 +413,7 @@ func cloneRuntime(value Runtime) Runtime {
 
 func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
+	configured.MaxImageConcurrency, active.MaxImageConcurrency = 0, 0
 	return !reflect.DeepEqual(configured, active)
 }
 
@@ -453,8 +463,12 @@ func validateSecretUpdate(key, value string) error {
 }
 
 func validatePublic(value domain.PublicSettings) error {
+	value = withImageDefaults(value)
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
+	}
+	if value.MaxImageConcurrency < 1 || value.MaxImageConcurrency > 5 {
+		return invalid("max_image_concurrency")
 	}
 	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
 	if err != nil || normalizedModel.Model != value.CodexDefaultModel {
@@ -476,6 +490,20 @@ func validatePublic(value domain.PublicSettings) error {
 		if err := validateHTTPURL(value.GrokBaseURL); err != nil {
 			return invalid("grok_base_url")
 		}
+	}
+	if value.ImageBaseURL != "" {
+		if len(value.ImageBaseURL) > 2048 || validateHTTPURL(value.ImageBaseURL) != nil {
+			return invalid("image_base_url")
+		}
+	}
+	if strings.TrimSpace(value.ImageModel) == "" || value.ImageModel != strings.TrimSpace(value.ImageModel) || len(value.ImageModel) > 128 {
+		return invalid("image_model")
+	}
+	if !validImageRatio(value.DefaultImageRatio) {
+		return invalid("default_image_ratio")
+	}
+	if !validImageStyle(value.DefaultImageStyle) {
+		return invalid("default_image_style")
 	}
 	paths := []struct {
 		name     string
@@ -623,6 +651,7 @@ func pathWithin(root, target string) bool {
 }
 
 func publicValues(value domain.PublicSettings) map[string]string {
+	value = withImageDefaults(value)
 	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
@@ -631,6 +660,9 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"baokuan_base_url": value.BaokuanBaseURL, "baokuan_mcp_executable": value.BaokuanMCPExecutable,
 		"obsidian_vault": value.ObsidianVault, "topic_cards_dir": value.TopicCardsDir,
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
+		"image_base_url": value.ImageBaseURL, "image_model": value.ImageModel,
+		"max_image_concurrency": strconv.Itoa(value.MaxImageConcurrency),
+		"default_image_ratio":   value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
 		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
 		"machine_profile_path":    value.MachineProfilePath,
@@ -639,6 +671,47 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"codex_task_project_root": value.CodexTaskProjectRoot,
 		"volc_speech_speaker_id":  value.VolcSpeechSpeakerID,
 		"volc_speech_resource_id": value.VolcSpeechResourceID,
+	}
+}
+
+func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if value.MaxImageConcurrency == 0 {
+		value.MaxImageConcurrency = defaultMaxImageConcurrency
+	}
+	if strings.TrimSpace(value.ImageModel) == "" {
+		value.ImageModel = defaultImageModel
+	}
+	if value.DefaultImageRatio == "" {
+		value.DefaultImageRatio = defaultImageRatio
+	}
+	if value.DefaultImageStyle == "" {
+		value.DefaultImageStyle = defaultImageStyle
+	}
+	return value
+}
+
+func normalizedImageConcurrency(value int) int {
+	if value < 1 || value > 5 {
+		return defaultMaxImageConcurrency
+	}
+	return value
+}
+
+func validImageRatio(value string) bool {
+	switch value {
+	case "3:4", "4:3", "9:16", "1:1":
+		return true
+	default:
+		return false
+	}
+}
+
+func validImageStyle(value string) bool {
+	switch value {
+	case "finance_documentary", "red_ink", "old_newspaper", "ledger_investigation", "dark_crisis", "city_era", "blackboard":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -657,12 +730,30 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		_ = json.Unmarshal([]byte(raw), &workspaceRoots)
 	}
 	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
+	imageConcurrency, _ := strconv.Atoi(values["max_image_concurrency"])
+	if imageConcurrency < 1 || imageConcurrency > 5 {
+		imageConcurrency = 3
+	}
+	imageModel := strings.TrimSpace(values["image_model"])
+	if imageModel == "" {
+		imageModel = defaultImageModel
+	}
+	imageRatio := values["default_image_ratio"]
+	if !validImageRatio(imageRatio) {
+		imageRatio = defaultImageRatio
+	}
+	imageStyle := values["default_image_style"]
+	if !validImageStyle(imageStyle) {
+		imageStyle = defaultImageStyle
+	}
 	return domain.PublicSettings{
 		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
 		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
 		BaokuanBaseURL: values["baokuan_base_url"], BaokuanMCPExecutable: values["baokuan_mcp_executable"],
 		ObsidianVault: values["obsidian_vault"], TopicCardsDir: values["topic_cards_dir"],
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
+		ImageBaseURL: values["image_base_url"], ImageModel: imageModel, MaxImageConcurrency: imageConcurrency,
+		DefaultImageRatio: imageRatio, DefaultImageStyle: imageStyle,
 		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],

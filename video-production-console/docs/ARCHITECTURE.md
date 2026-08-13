@@ -10,7 +10,12 @@
 
 ## 1. 这是什么
 
-一个**本地单机**的视频生产控制台。它把「同行爆款原文 → 二创文案 → 混剪草稿 → 剪映可继续编辑的正式资产」这条流水线固定下来，由 Go 服务托管状态与校验，由 Codex CLI（或本地确定性脚本）承担生成，由浏览器页面做操作界面。
+一个**本地单机**的视频生产控制台，包含两条互相隔离的生产线：
+
+- **混剪模式**：把「同行爆款原文 → 二创文案 → 混剪草稿 → 剪映可继续编辑的正式资产」固定为项目流水线；
+- **图文模式**：直接接收已经定稿的完整文案，不进行二创，按原文顺序拆成图片卡片，调用后端 OpenAI 兼容生图服务，提供网页预览、单张重生成和 ZIP 下载。
+
+Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的领域表、接口和页面状态，图文卡片不会进入混剪项目、素材资产或剪映草稿状态机。
 
 它管什么：
 
@@ -19,6 +24,7 @@
 - **任务调度**：把一次生成封装成「任务清单（manifest）→ 排队 → 认领 → 子进程执行 → 结果严格校验 → 资产入库」，全程有阶段计时和事件流。
 - **对话工作台**：基于 Codex App Server 的长会话，与正式任务分开。
 - **混剪**：本机确定性算法生成 `production_plan.json`，Python skill 造出明文草稿，可信主机把它登记成剪映真实草稿目录，才算 `mix_draft` 资产就绪。
+- **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、提示词、状态与输出位置；`internal/imageproject` 负责无损拆分、风格提示词和 OpenAI 兼容图片请求；`internal/httpapi/imageprojects.go` 负责创建、生成、预览、重生成、删除和 ZIP 清单。
 
 它**不**管什么（这些是设计决定，不是缺口）：
 
@@ -34,7 +40,7 @@
 | 层 | 技术 | 要点 |
 |---|---|---|
 | 服务 | Go，标准库 `net/http` + Go 1.22 方法路由 | 单进程；根 mux 注册 25 个前缀（`internal/app/app.go:62-160`），各域处理器内部再挂自己的子 mux |
-| 存储 | SQLite（`modernc` 驱动路径见 `internal/store/db.go`） | **`SetMaxOpenConns(1)`**（`internal/store/db.go:112`）；写事务统一 `BEGIN IMMEDIATE`；18 个版本化迁移 |
+| 存储 | SQLite（`modernc` 驱动路径见 `internal/store/db.go`） | **`SetMaxOpenConns(1)`**（`internal/store/db.go:112`）；写事务统一 `BEGIN IMMEDIATE`；19 个版本化迁移 |
 | 前端 | React + TypeScript + Vite | 无路由库，手写 History API；react-query 管服务端数据；`oxlint` + `vitest` + Playwright |
 | 交付 | 前端 `dist` 用 `go:embed` 嵌进 exe | `internal/webui/embed.go:10`；未命中静态文件的 GET 回落 `index.html`，SPA 刷新才不 404 |
 | 实时 | WebSocket（`github.com/coder/websocket`） | 仅任务事件走 WS；语义事件是轮询 REST |
@@ -263,11 +269,11 @@
 
 ### 5.7 设置与 machine profile
 
-设置是 `settings` 表里的 key/value，写入走 **20 个键的白名单**（`internal/store/settings.go:24-32`）；密钥单独存在 `encrypted_secrets`，用 OS 保护（Windows 上 DPAPI）后 base64。一次更新里 public 与 secrets 在同一个 `BEGIN IMMEDIATE` 提交（`internal/store/settings.go:184-255`）。
+设置是 `settings` 表里的 key/value，写入走显式键白名单（`internal/store/settings.go`）；图文生图新增 `image_base_url`、`image_model`、`max_image_concurrency`、`default_image_ratio`、`default_image_style`。密钥单独存在 `encrypted_secrets`，用 OS 保护（Windows 上 DPAPI）后 base64。一次更新里 public 与 secrets 在同一个 `BEGIN IMMEDIATE` 提交。
 
 校验全部是手写 Go（`internal/settings/service.go:453-517`），包含几条有安全含义的约束：并发 1–4；路径必须是规范绝对路径且不经符号链接别名；`topic_cards_dir ⊂ obsidian_vault`、`media_index_path ⊂ media_root`；`baokuan_base_url` 只允许回环主机。
 
-**密钥永不回传**：GET 只给 `{configured, masked}`，`masked` 是常量 `********`；解密值只存在于 `settings.Runtime`，其密钥字段带 `json:"-"`（`internal/settings/service.go:104-111`）。PUT 时空字符串表示「不改」。
+**密钥永不回传**：包括 `image_api_key` 在内，GET 只给 `{configured, masked}`，`masked` 是常量 `********`；解密值只存在于 `settings.Runtime`，密钥字段带 `json:"-"`。PUT 时空字符串表示「不改」。生图 Base URL 允许 HTTP 是为了兼容本机代理，但公网 HTTP 会明文暴露 Authorization/API Key，请求公网供应商必须使用 HTTPS；日志不得记录密钥或完整鉴权头。
 
 **`restart_required`** 的原理是「配置态 vs 生效态」对比：服务缓存首次读到的 `Runtime` 快照，`Get` 时把可热更字段 `max_codex_concurrency` 清零后 `reflect.DeepEqual`，再比对密钥版本号（`internal/settings/service.go`）。热更字段直接就地生效并立刻推给调度器（`internal/app/app.go`）。
 
@@ -278,9 +284,9 @@
 ### 5.8 存储与迁移
 
 - `store.Open` → 单连接、`foreign_keys=ON`、`busy_timeout=5000`，先校验迁移历史（版本必须是连续的 `1..N`，否则拒绝启动），对已存在的库在升级前自动备份，然后 `migrate`（`internal/store/db.go:96-161`）。
-- 迁移是**版本化**的（`schema_migrations` 表），整轮在一个 `BEGIN IMMEDIATE` 内、期间关闭外键并在 `defer` 里恢复，提交前跑 `PRAGMA foreign_key_check`（`internal/store/migrations.go:837-911`）。当前 18 个迁移。
+- 迁移是**版本化**的（`schema_migrations` 表），整轮在一个 `BEGIN IMMEDIATE` 内、期间关闭外键并在 `defer` 里恢复，提交前跑 `PRAGMA foreign_key_check`（`internal/store/migrations.go:837-911`）。当前 19 个迁移；第 19 个迁移新增图文域的 `image_projects`、`image_project_items` 两张表及其索引。
 - 写事务统一走 `runImmediate`（`internal/store/tx.go:26`）：独占连接 + `BEGIN IMMEDIATE`；`fn` 出错则 `ROLLBACK`；**COMMIT 失败不再尝试 ROLLBACK**（可能已提交），返回 `CommitUnknown` 并把事务状态不明的连接用 `driver.ErrBadConn` 踢出连接池。
-- 主要表：`accounts`/`projects`/`codex_tasks`/`task_events`/`task_messages`/`asset_items`/`asset_versions`/`asset_dependencies`/`task_artifacts`/`task_phase_runs`/`semantic_events`/`chat_*`/`idea_*`/`montage_registration_attempts`/`project_workflow_runs`/`project_step_notes`/`settings`/`encrypted_secrets`/`admins`/`auth_sessions`/`skill_snapshots`/`thread_leases`。`assets`（v1）在 v2 之后只当只读审计表。
+- 主要表：`accounts`/`projects`/`codex_tasks`/`task_events`/`task_messages`/`asset_items`/`asset_versions`/`asset_dependencies`/`task_artifacts`/`task_phase_runs`/`semantic_events`/`chat_*`/`idea_*`/`montage_registration_attempts`/`project_workflow_runs`/`project_step_notes`/`image_projects`/`image_project_items`/`settings`/`encrypted_secrets`/`admins`/`auth_sessions`/`skill_snapshots`/`thread_leases`。`assets`（v1）在 v2 之后只当只读审计表。
 
 ### 5.9 结构化日志
 
@@ -329,6 +335,8 @@
 | `ObsidianVault` | 空 | 设置键 `obsidian_vault` |
 | `max_codex_concurrency` | `2` | 设置键，1–4，**可热更** |
 | `codex_default_model` / `..._reasoning_effort` | `gpt-5.6-sol` / `medium` | 设置键，可热更 |
+| `image_model` / `max_image_concurrency` | `gpt-image-2` / `3` | 设置键；并发可热更，服务地址/模型/密钥变更需重启 |
+| `default_image_ratio` / `default_image_style` | `3:4` / `finance_documentary` | 设置键；用于新建图文项目默认值 |
 
 环境变量（进程启动时生效）：
 

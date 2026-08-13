@@ -20,6 +20,11 @@ const draft: PublicSettings = {
   topic_cards_dir: "",
   grok_base_url: "",
   grok_model: "",
+  image_base_url: "http://images.example.test/v1",
+  image_model: "gpt-image-2",
+  max_image_concurrency: 3,
+  default_image_ratio: "3:4",
+  default_image_style: "finance_documentary",
   codex_binary_path: "",
   media_index_path: "",
   media_root: "",
@@ -40,6 +45,7 @@ const settings: Settings = {
     grok_api_key: { configured: false, masked: "" },
     pexels_api_key: { configured: false, masked: "" },
     volc_speech_api_key: { configured: true, masked: "********" },
+    image_api_key: { configured: false, masked: "" },
   },
 };
 
@@ -51,7 +57,7 @@ function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {
       settings={settings}
       draft={draft}
       onDraftChange={onDraftChange}
-      secretDraft={{ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "" }}
+      secretDraft={{ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "" }}
       onSecretDraftChange={onSecretDraftChange}
       feedback=""
       onClose={() => {}}
@@ -95,5 +101,37 @@ test("the Volcengine API key is masked and only sent when a new value is typed",
     grok_api_key: "",
     pexels_api_key: "",
     volc_speech_api_key: "new-volc-key",
+    image_api_key: "",
   });
+});
+
+test("image generation settings and secret are editable", () => {
+  const { onDraftChange, onSecretDraftChange } = renderPanel();
+  const baseURL = screen.getByRole("textbox", { name: "生图服务地址" });
+  expect((screen.getByRole("textbox", { name: "生图模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
+  fireEvent.change(baseURL, { target: { value: "https://images.example.test/v1" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_base_url: "https://images.example.test/v1" });
+  fireEvent.change(screen.getByRole("combobox", { name: /同时生成图片数/ }), { target: { value: "5" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, max_image_concurrency: 5 });
+  fireEvent.change(screen.getByRole("combobox", { name: "默认图片比例" }), { target: { value: "9:16" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_ratio: "9:16" });
+  fireEvent.change(screen.getByRole("combobox", { name: "默认视觉风格" }), { target: { value: "red_ink" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_style: "red_ink" });
+  fireEvent.change(screen.getByLabelText(/生图 API Key/), { target: { value: "new-image-key" } });
+  expect(onSecretDraftChange).toHaveBeenCalledWith({
+    grok_api_key: "",
+    pexels_api_key: "",
+    volc_speech_api_key: "",
+    image_api_key: "new-image-key",
+  });
+  expect(screen.getByText(/HTTP 会明文传输生图 API Key/)).toBeTruthy();
+});
+
+test("an old settings response without image_base_url remains editable without an HTTP warning", () => {
+  const { image_base_url: _imageBaseURL, ...legacyDraft } = draft;
+
+  renderPanel({ draft: legacyDraft as PublicSettings });
+
+  expect((screen.getByRole("textbox", { name: "生图服务地址" }) as HTMLInputElement).value).toBe("");
+  expect(screen.queryByText(/HTTP 会以明文传输生图 API Key/)).toBeNull();
 });
