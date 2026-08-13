@@ -2019,3 +2019,45 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+.montage-plan-qc {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--workbench-line);
+  border-radius: 16px;
+  background: var(--workbench-surface);
+}
+
+.montage-plan-qc h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.montage-plan-qc p,
+.montage-plan-qc dd,
+.montage-plan-qc dt,
+.montage-plan-qc li {
+  color: var(--workbench-muted);
+}
+
+.montage-plan-qc dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0.85rem 0 0;
+}
+
+.montage-plan-qc dt {
+  font-size: 0.78rem;
+}
+
+.montage-plan-qc dd {
+  margin: 0.15rem 0 0;
+  color: var(--workbench-ink);
+  font-weight: 650;
+}
+
+.montage-plan-qc ul {
+  margin: 0.85rem 0 0;
+  padding-left: 1.1rem;
+}

@@ -14,7 +14,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { TaskModelFields } from "../TaskModelFields";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
-import type { ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
+import type { MontagePlanQC, ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
 import { deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
@@ -528,6 +528,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </section>
         ) : null}
 
+        {detail.montage_qc ? <MontagePlanQCCard qc={detail.montage_qc} /> : null}
+
         <ProjectAssets
           detail={detail}
           registeredDraft={registeredDraftTask?.montage?.registered_asset
@@ -550,5 +552,38 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           : <div className="primary-action-panel__complete"><CircleCheck size={20} aria-hidden="true" /> 项目流程已完成</div>}
       </div>
     </main>
+  );
+}
+
+function percent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function warningText(warning: string | { code?: string; message?: string }) {
+  if (typeof warning === "string") return warning;
+  return warning.message || warning.code || "";
+}
+
+function MontagePlanQCCard(props: { qc: MontagePlanQC }) {
+  const { qc } = props;
+  const captionLabel = qc.caption_mode === "off" ? "关闭字幕" : "只显示重点句";
+  const warnings = (qc.warnings || []).map(warningText).filter(Boolean);
+  return (
+    <section className="montage-plan-qc" aria-label="本次混剪计划摘要">
+      <h2>本次混剪计划</h2>
+      <p>这是这一条视频的规划结果，不是全局素材库。</p>
+      <dl>
+        <div><dt>B-roll 占比</dt><dd>{percent(qc.broll_ratio)}</dd></div>
+        <div><dt>电影片段占比</dt><dd>{percent(qc.movie_ratio)}</dd></div>
+        <div><dt>图片占比</dt><dd>{percent(qc.image_ratio)}</dd></div>
+        <div><dt>字幕</dt><dd>{captionLabel}，覆盖 {percent(qc.caption_coverage)}</dd></div>
+        <div><dt>明显效果</dt><dd>{qc.obvious_effect_count} 个</dd></div>
+      </dl>
+      {warnings.length > 0 ? (
+        <ul>
+          {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+        </ul>
+      ) : null}
+    </section>
   );
 }

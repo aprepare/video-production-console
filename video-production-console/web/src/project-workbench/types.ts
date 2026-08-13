@@ -114,6 +114,16 @@ export type ActiveWorkflow = {
   current_task: ProjectTask | null;
 };
 
+export type MontagePlanQC = {
+  broll_ratio: number;
+  movie_ratio: number;
+  image_ratio: number;
+  caption_mode: "off" | "highlights_only";
+  caption_coverage: number;
+  obvious_effect_count: number;
+  warnings?: Array<string | { code?: string; message?: string }>;
+};
+
 export type ProjectDetail = {
   project: ProjectSummary;
   assets: Record<string, ProjectAsset>;
@@ -122,6 +132,7 @@ export type ProjectDetail = {
   topic_context?: unknown;
   missing_assets?: string[];
   active_workflow?: ActiveWorkflow | null;
+  montage_qc?: MontagePlanQC | null;
 };
 
 export type PrimaryActionID =

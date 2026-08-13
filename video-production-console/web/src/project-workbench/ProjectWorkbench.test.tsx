@@ -715,6 +715,34 @@ test("renders the mobile primary action bar as a direct workbench child with a s
   expect(props.onRemix).toHaveBeenCalledTimes(1);
 });
 
+test("shows this plan's QC summary and hides it when absent", () => {
+  const without = fixture();
+  render(<ProjectWorkbench {...workbenchProps(without)} />);
+  expect(screen.queryByLabelText("本次混剪计划摘要")).toBeNull();
+  cleanup();
+
+  const withQC = fixture();
+  withQC.montage_qc = {
+    broll_ratio: 0.4,
+    movie_ratio: 0.3,
+    image_ratio: 0.3,
+    caption_mode: "highlights_only",
+    caption_coverage: 0.2,
+    obvious_effect_count: 1,
+    warnings: ["quota_below_min: movie"],
+  };
+  render(<ProjectWorkbench {...workbenchProps(withQC)} />);
+  const card = screen.getByLabelText("本次混剪计划摘要");
+  expect(card.textContent).toContain("B-roll 占比");
+  expect(card.textContent).toContain("40%");
+  expect(card.textContent).toContain("只显示重点句");
+  expect(card.textContent).toContain("20%");
+  expect(card.textContent).toContain("1 个");
+  expect(card.textContent).toContain("quota_below_min: movie");
+  expect(card.textContent).toContain("不是全局素材库");
+  expect(card.textContent).not.toMatch(/catalog/i);
+});
+
 test("defines vertical mobile production, root action bar visibility, safe area, and 44px touch targets", () => {
   const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
   const mobileStart = css.indexOf("@media (max-width: 759px)");
