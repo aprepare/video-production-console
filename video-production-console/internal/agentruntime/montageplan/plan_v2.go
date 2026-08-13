@@ -1,6 +1,7 @@
 package montageplan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -234,16 +235,52 @@ func BuildV2(opts Options) error {
 		return fmt.Errorf("unknown caption mode %q", mode)
 	}
 
-	clips, err := sampleMedia(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false)
+	if opts.CatalogPath == "" {
+		opts.CatalogPath = strings.TrimSpace(ctx.manifest.NonSecretSettings.MediaCatalogPath)
+	}
+	catalog, closer, err := resolveCatalog(opts)
 	if err != nil {
 		return err
 	}
-	if len(clips) == 0 {
-		return fmt.Errorf("media index produced no usable clips")
+	defer closer()
+
+	notes := []string{"deterministic console planner v2"}
+	var candidates []rankedCandidate
+	if catalog != nil {
+		sentences, sentErr := loadPlanSentences(ctx)
+		if sentErr != nil {
+			return sentErr
+		}
+		analyzer := opts.Analyzer
+		if analyzer == nil {
+			analyzer = LocalIntentAnalyzer{}
+		}
+		intents, intentErr := analyzer.Analyze(context.Background(), sentences)
+		if intentErr != nil || len(intents) == 0 {
+			intents, _ = LocalIntentAnalyzer{}.Analyze(context.Background(), sentences)
+		}
+		ranked, matchWarnings, rankErr := rankLibrary(context.Background(), intents, catalog, opts.Embedder)
+		if rankErr != nil {
+			return rankErr
+		}
+		candidates = resolveCandidatePaths(ranked, ctx.mediaRoot)
+		notes = append(notes, matchWarnings...)
 	}
-	candidates := make([]rankedCandidate, 0, len(clips))
-	for _, clip := range clips {
-		candidates = append(candidates, rankedCandidate{Item: clip})
+	if len(candidates) == 0 {
+		clips, sampleErr := sampleMedia(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false)
+		if sampleErr != nil {
+			return sampleErr
+		}
+		if len(clips) == 0 {
+			return fmt.Errorf("media index produced no usable clips")
+		}
+		candidates = make([]rankedCandidate, 0, len(clips))
+		for _, clip := range clips {
+			candidates = append(candidates, rankedCandidate{Item: clip})
+		}
+		if catalog != nil {
+			notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
+		}
 	}
 	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy)
 	if err != nil {
@@ -290,7 +327,6 @@ func BuildV2(opts Options) error {
 		captions.Items, captionWarnings = selectHighlightCaptions(eligible, narrationMS, mode)
 	}
 
-	notes := []string{"deterministic console planner v2"}
 	for _, warning := range quotaWarnings {
 		notes = append(notes, fmt.Sprintf("%s: kind=%s wanted=%.4f actual=%.4f",
 			warning.Code, warning.Kind, warning.Wanted, warning.Actual))
@@ -381,19 +417,14 @@ func buildV2Timeline(selection []plannedMedia) []TimelineShotV2 {
 	for i, segment := range selection {
 		slot := segment.EndS - segment.StartS
 		shot := TimelineShotV2{
-			ShotNo:     i + 1,
-			StartS:     segment.StartS,
-			EndS:       segment.EndS,
-			MediaKind:  string(segment.Item.Kind),
-			SourceID:   segment.Item.ID,
-			ShotID:     segment.Item.ShotID,
-			SourcePath: segment.Item.AbsPath,
-			Match: MatchEvidence{
-				Level:    "neutral",
-				Score:    0,
-				IntentID: fmt.Sprintf("seg-%03d", i+1),
-				Reason:   v2NeutralMatchReason,
-			},
+			ShotNo:           i + 1,
+			StartS:           segment.StartS,
+			EndS:             segment.EndS,
+			MediaKind:        string(segment.Item.Kind),
+			SourceID:         segment.Item.ID,
+			ShotID:           segment.Item.ShotID,
+			SourcePath:       segment.Item.AbsPath,
+			Match:            matchEvidenceOrTemplate(segment, i),
 			Opacity:          1.0,
 			SourceAudioMuted: true,
 			Look:             "none",
@@ -469,4 +500,45 @@ var brollMotionCycle = [3]MotionPlan{
 
 func brollMotionPlan(ordinal int) MotionPlan {
 	return brollMotionCycle[ordinal%len(brollMotionCycle)]
+}
+
+func matchEvidenceOrTemplate(segment plannedMedia, index int) MatchEvidence {
+	if segment.Match.Level != "" && segment.Match.Reason != "" {
+		return segment.Match
+	}
+	intentID := segment.Match.IntentID
+	if intentID == "" {
+		intentID = fmt.Sprintf("seg-%03d", index+1)
+	}
+	return MatchEvidence{
+		Level:    "neutral",
+		Score:    segment.Match.Score,
+		IntentID: intentID,
+		Reason:   v2NeutralMatchReason,
+	}
+}
+
+func loadPlanSentences(ctx *planContext) ([]TimedSentence, error) {
+	if ctx.srtPath == "" {
+		return nil, nil
+	}
+	file, err := os.Open(ctx.srtPath)
+	if err != nil {
+		return nil, fmt.Errorf("open subtitle srt: %w", err)
+	}
+	defer file.Close()
+	sentences, err := parseSRTSentences(file)
+	if err != nil {
+		return nil, fmt.Errorf("parse subtitle srt: %w", err)
+	}
+	return sentences, nil
+}
+
+func resolveCandidatePaths(candidates []rankedCandidate, mediaRoot string) []rankedCandidate {
+	for i := range candidates {
+		if path, err := resolveMediaPath(mediaRoot, candidates[i].Item.RelativePath); err == nil {
+			candidates[i].Item.AbsPath = path
+		}
+	}
+	return candidates
 }

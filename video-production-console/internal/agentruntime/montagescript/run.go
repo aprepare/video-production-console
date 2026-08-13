@@ -14,12 +14,16 @@ import (
 
 // Options configures the local montage script orchestration.
 type Options struct {
-	ManifestPath       string
-	SkillRoot          string
-	OutputLastMessage  string
-	PythonBinary       string
-	Duration           montageplan.DurationFunc
-	CommandRunner      func(name string, args ...string) ([]byte, error)
+	ManifestPath      string
+	SkillRoot         string
+	OutputLastMessage string
+	PythonBinary      string
+	Duration          montageplan.DurationFunc
+	CommandRunner     func(name string, args ...string) ([]byte, error)
+	CatalogPath       string
+	FFprobePath       string
+	Analyzer          montageplan.IntentAnalyzer
+	Embedder          montageplan.Embedder
 }
 
 // Run validates inputs, builds a deterministic plan, executes the skill script,
@@ -75,6 +79,10 @@ func Run(opts Options) error {
 		ManifestPath: manifestPath,
 		PlanPath:     planPath,
 		Duration:     durationFn,
+		CatalogPath:  opts.CatalogPath,
+		FFprobePath:  opts.FFprobePath,
+		Analyzer:     opts.Analyzer,
+		Embedder:     opts.Embedder,
 	}); err != nil {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("build plan: %w", err))
 	}

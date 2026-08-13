@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"video-production-console/internal/agentruntime/montageplan"
 )
 
 func TestRunWritesEnvelopeWithFakePython(t *testing.T) {
@@ -55,6 +57,9 @@ func TestRunWritesEnvelopeWithFakePython(t *testing.T) {
 		SkillRoot:         skillRoot,
 		OutputLastMessage: last,
 		Duration:          func(string) (float64, error) { return 12, nil },
+		CatalogPath:       filepath.Join(root, "unused-catalog"),
+		FFprobePath:       "ffprobe-from-options",
+		Analyzer:          montageplan.LocalIntentAnalyzer{},
 		CommandRunner: func(name string, args ...string) ([]byte, error) {
 			calls++
 			phase := args[1]

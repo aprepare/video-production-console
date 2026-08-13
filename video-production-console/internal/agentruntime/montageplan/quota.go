@@ -31,13 +31,15 @@ type quotaWarning struct {
 type rankedCandidate struct {
 	Item  mediaItem
 	Score float64
+	Match MatchEvidence
 }
 
 // plannedMedia is one timeline slot with the media chosen for it.
 type plannedMedia struct {
-	Item   mediaItem `json:"item"`
-	StartS float64   `json:"start_s"`
-	EndS   float64   `json:"end_s"`
+	Item   mediaItem     `json:"item"`
+	StartS float64       `json:"start_s"`
+	EndS   float64       `json:"end_s"`
+	Match  MatchEvidence `json:"-"`
 }
 
 // kindOrder fixes every per-kind iteration; map iteration is never used to
@@ -113,6 +115,7 @@ func timelineSlots(duration float64) []timelineSlot {
 type quotaCandidate struct {
 	item  mediaItem
 	score float64
+	match MatchEvidence
 	rank  [sha256.Size]byte
 	order int
 }
@@ -146,6 +149,7 @@ func selectTimeline(candidates []rankedCandidate, duration float64, seed string,
 		entry := &quotaCandidate{
 			item:  candidate.Item,
 			score: candidate.Score,
+			match: candidate.Match,
 			rank:  mediaRank(seed, candidate.Item),
 			order: i,
 		}
@@ -277,7 +281,7 @@ func selectTimeline(candidates []rankedCandidate, duration float64, seed string,
 		prevCategory = normalizeCategory(chosen.item.Category)
 		prevSource = src
 		assigned[chosen.item.Kind] += slot.seconds
-		selection = append(selection, plannedMedia{Item: chosen.item, StartS: slot.start, EndS: slot.start + slot.seconds})
+		selection = append(selection, plannedMedia{Item: chosen.item, StartS: slot.start, EndS: slot.start + slot.seconds, Match: chosen.match})
 	}
 
 	warnings := make([]quotaWarning, 0, 2)
@@ -360,6 +364,7 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		entry := &quotaCandidate{
 			item:  candidate.Item,
 			score: candidate.Score,
+			match: candidate.Match,
 			rank:  mediaRank(seed, candidate.Item),
 			order: i,
 		}
@@ -509,7 +514,7 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		prevCategory = normalizeCategory(chosen.item.Category)
 		prevSource = src
 		assigned[chosen.item.Kind] += end - cursor
-		selection = append(selection, plannedMedia{Item: chosen.item, StartS: cursor, EndS: end})
+		selection = append(selection, plannedMedia{Item: chosen.item, StartS: cursor, EndS: end, Match: chosen.match})
 		cursor = end
 	}
 

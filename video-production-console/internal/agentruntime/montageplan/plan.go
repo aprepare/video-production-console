@@ -38,6 +38,11 @@ type Options struct {
 	MediaLimit   int
 	CaptionMode  CaptionMode
 	MixPreset    string
+	FFprobePath  string
+	CatalogPath  string
+	Catalog      CatalogReader
+	Analyzer     IntentAnalyzer
+	Embedder     Embedder
 }
 
 type manifestFile struct {
@@ -55,6 +60,8 @@ type manifestFile struct {
 		MediaRoot          string `json:"media_root"`
 		MachineProfilePath string `json:"machine_profile_path"`
 		DraftDisplayName   string `json:"draft_display_name"`
+		MediaCatalogPath   string `json:"media_catalog_path"`
+		FFprobePath        string `json:"ffprobe_path"`
 	} `json:"non_secret_settings"`
 }
 
@@ -80,10 +87,6 @@ func loadPlanContext(opts Options) (*planContext, error) {
 	if strings.TrimSpace(opts.ManifestPath) == "" || strings.TrimSpace(opts.PlanPath) == "" {
 		return nil, fmt.Errorf("manifest and plan paths are required")
 	}
-	durationFn := opts.Duration
-	if durationFn == nil {
-		durationFn = ProbeDuration
-	}
 	limit := opts.MediaLimit
 	if limit <= 0 {
 		limit = 48
@@ -100,6 +103,18 @@ func loadPlanContext(opts Options) (*planContext, error) {
 	}
 	if manifest.TaskID == "" || manifest.TaskID != manifest.JobID {
 		return nil, fmt.Errorf("manifest task_id must equal job_id")
+	}
+	durationFn := opts.Duration
+	if durationFn == nil {
+		probe := strings.TrimSpace(opts.FFprobePath)
+		if probe == "" {
+			probe = strings.TrimSpace(manifest.NonSecretSettings.FFprobePath)
+		}
+		if probe != "" {
+			durationFn = func(path string) (float64, error) { return probeDurationWith(probe, path) }
+		} else {
+			durationFn = ProbeDuration
+		}
 	}
 	roles := map[string]string{}
 	for _, input := range manifest.Inputs {
@@ -410,7 +425,14 @@ func readerWithoutBOM(r io.Reader) io.Reader {
 
 // ProbeDuration uses ffprobe to measure media duration.
 func ProbeDuration(path string) (float64, error) {
-	cmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
+	return probeDurationWith("ffprobe", path)
+}
+
+func probeDurationWith(binary, path string) (float64, error) {
+	if strings.TrimSpace(binary) == "" {
+		binary = "ffprobe"
+	}
+	cmd := exec.Command(binary, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, err
