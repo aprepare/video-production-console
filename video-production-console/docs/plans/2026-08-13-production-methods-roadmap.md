@@ -43,6 +43,22 @@
 
 规模预期：2 小时电影约 800–1200 个镜头，打标是两三千次小图请求；建库必须支持断点续跑与单条重试（v2 计划 `media_jobs` 状态机已设计）。切镜首选 FFmpeg 场景滤镜，质量不足时升级 PySceneDetect/TransNetV2（见 v2 计划 Task 7）。
 
+### 4.1 分布式建库（多机协作，二期规划）
+
+用户可用多台电脑分摊建库，结束后把结果并回主机。设计约定（catalog 的内容寻址已为此留好接口，实施为一个独立合并命令，不改表结构）：
+
+- 传回物：远程机的 `catalog.db` + `derived/keyframes/`（小截图，通常几百 MB），电影本体不必随建库包往返；
+- 合并规则：按 `media_sources.sha256` 逐条并入——本地已有则跳过，没有则收编其 shots/tags/rights/embeddings 与截图文件，远程 ID 重映射为本地 ID；重复合并幂等；
+- 硬前提一：**电影原件最终必须在主机** `media_root/originals/movies/` 的相同相对路径下，否则台账条目无法用于剪映成片；
+- 硬前提二：所有机器统一视觉模型、embedding 模型/维度、`analysis_version`，否则向量互不可比；
+- 硬前提三：目录结构一致（同一套 `originals/` 约定）；
+- 形态建议：`console-maintenance.exe` 风格子命令（`catalog merge <远程包路径>`），或控制台维护页入口；
+- 收益边界：多机省的是切镜/抽帧 CPU 与打标墙钟时间（各机各用 API key 并行），打标 API 费用不因多机而减少。
+
+配套的**独立建库 CLI**（`catalog-builder`，二期）：把 T6–T8 的建库管线套一个免安装命令行外壳，参数化素材目录、ffmpeg/ffprobe 路径、vision/embedding 端点与密钥、并发数；断点续跑复用 `media_jobs` 状态机；密钥走参数/环境变量，不依赖 DPAPI。用于云机分布式建库。
+
+GPU 选型指引：默认设计（云 API 打标）不吃 GPU——切镜抽帧吃 CPU、打标吃网络，租多核 CPU 云机即可；只有改用本地视觉模型（vLLM/Ollama 起 Qwen-VL 类模型，暴露 OpenAI 兼容端点、`vision_base_url` 指向本机）才需要 4090 级 GPU，此时零代码改动即可切换。决策顺序：先用云 API 单机试跑一部电影核实成本，再决定 CPU 云机堆并行还是 GPU + 本地模型。
+
 ## 5. 可借鉴的开源项目（2026-08-13 检索）
 
 | 项目 | 借鉴点 | 对应环节 |
