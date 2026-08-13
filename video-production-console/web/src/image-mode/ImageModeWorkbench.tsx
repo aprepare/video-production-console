@@ -10,8 +10,16 @@ type Props = {
   defaultRatio?: ImageProject["ratio"];
   defaultStyle?: string;
   defaultConcurrency?: number;
+  defaultTextModel?: string;
 };
 type EditableItemField = "source_text" | "title" | "prompt";
+type DraftSegment = {
+  sequence: number;
+  role: "cover" | "content";
+  title: string;
+  source_text: string;
+  rationale?: string;
+};
 
 const styles = [
   ["finance_documentary", "财经纪实插画"],
@@ -25,7 +33,7 @@ const styles = [
 ] as const;
 
 const ratios: ImageProject["ratio"][] = ["3:4", "4:3", "9:16", "1:1"];
-const concurrencyOptions = [1, 2, 3, 4, 5];
+const concurrencyOptions = Array.from({ length: 18 }, (_, index) => index + 1);
 
 function orderedItems(items: ImageProjectItem[]) {
   return [...items].sort((left, right) => left.sequence - right.sequence);
@@ -44,20 +52,24 @@ export function ImageModeWorkbench({
   defaultRatio = "3:4",
   defaultStyle = "finance_documentary",
   defaultConcurrency = 3,
+  defaultTextModel = "",
 }: Props) {
   const [projects, setProjects] = useState<ImageProject[]>([]);
   const [detail, setDetail] = useState<ImageProjectDetail | null>(null);
   const [previewItem, setPreviewItem] = useState<ImageProjectItem | null>(null);
+  const [segments, setSegments] = useState<DraftSegment[]>([]);
+  const [plannerModel, setPlannerModel] = useState("");
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
-  const [count, setCount] = useState(20);
+  const [count, setCount] = useState(8);
   const [ratio, setRatio] = useState<ImageProject["ratio"]>(defaultRatio);
   const [style, setStyle] = useState(defaultStyle);
   const [customStyle, setCustomStyle] = useState("");
-  const [concurrency, setConcurrency] = useState(Math.min(5, Math.max(1, defaultConcurrency)));
+  const [textModel, setTextModel] = useState(defaultTextModel);
+  const [concurrency, setConcurrency] = useState(Math.min(18, Math.max(1, defaultConcurrency)));
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
-  const editedDefaults = useRef({ ratio: false, style: false, concurrency: false });
+  const editedDefaults = useRef({ ratio: false, style: false, concurrency: false, textModel: false });
   const previewCloseRef = useRef<HTMLButtonElement | null>(null);
   const previewReturnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -71,9 +83,13 @@ export function ImageModeWorkbench({
 
   useEffect(() => {
     if (!editedDefaults.current.concurrency) {
-      setConcurrency(Math.min(5, Math.max(1, defaultConcurrency)));
+      setConcurrency(Math.min(18, Math.max(1, defaultConcurrency)));
     }
   }, [defaultConcurrency]);
+
+  useEffect(() => {
+    if (!editedDefaults.current.textModel) setTextModel(defaultTextModel);
+  }, [defaultTextModel]);
 
   useEffect(() => {
     if (!previewItem) return;
@@ -129,10 +145,59 @@ export function ImageModeWorkbench({
     }
   };
 
-  const create = async (event: FormEvent) => {
+  const draftPayload = () => ({
+    title: title.trim(),
+    script,
+    image_count: count,
+    ratio,
+    style,
+    custom_style: customStyle.trim(),
+    concurrency,
+    text_model: textModel.trim(),
+  });
+
+  const requestSegments = async (event: FormEvent) => {
     event.preventDefault();
     const cleanTitle = title.trim();
-    if (!cleanTitle || !script.trim() || count < 1 || count > 60) return;
+    if (!cleanTitle || !script.trim() || count < 1 || count > 18) return;
+    if (style === "custom" && !customStyle.trim()) {
+      setMessage("请填写自定义风格。");
+      return;
+    }
+    setBusy("suggest");
+    setMessage("");
+    try {
+      const response = await api("/api/image-projects/segment-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draftPayload()),
+      });
+      if (!response.ok) throw new Error("suggest failed");
+      const next = await response.json() as { model?: string; segments?: DraftSegment[] };
+      const loaded = Array.isArray(next.segments) ? next.segments : [];
+      if (!loaded.length) throw new Error("empty segments");
+      setSegments(loaded);
+      setPlannerModel(next.model || textModel.trim());
+      setMessage("分段建议已生成。第一张是封面，确认原文无改写后再生成提示词。");
+    } catch {
+      setMessage("分段建议失败。请先检查图文文本模型设置，或稍后重试。");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const updateSegment = (index: number, key: keyof DraftSegment, value: string) => {
+    setSegments((current) => current.map((segment, currentIndex) => (
+      currentIndex === index ? { ...segment, [key]: value } : segment
+    )));
+  };
+
+  const create = async () => {
+    const cleanTitle = title.trim();
+    if (!cleanTitle || !script.trim() || !segments.length) {
+      setMessage("请先确认分段建议，再生成提示词。");
+      return;
+    }
     if (style === "custom" && !customStyle.trim()) {
       setMessage("请填写自定义风格。");
       return;
@@ -144,22 +209,18 @@ export function ImageModeWorkbench({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: cleanTitle,
-          script,
-          image_count: count,
-          ratio,
-          style,
-          custom_style: customStyle.trim(),
-          concurrency,
+          ...draftPayload(),
+          segments,
         }),
       });
       if (!response.ok) throw new Error("create failed");
       const next = orderedDetail(await response.json() as ImageProjectDetail);
       setDetail(next);
       setProjects((current) => [next.project, ...current.filter((item) => item.id !== next.project.id)]);
-      setMessage("图文项目已创建；最终文案只做分段，不会二创。");
+      setSegments([]);
+      setMessage("分段已确认，提示词已生成；最终文案不会二创。");
     } catch {
-      setMessage("图文项目创建失败，请检查文案和参数。");
+      setMessage("确认分段后生成提示词失败。请检查分段是否覆盖原文，以及文本模型是否可用。");
     } finally {
       setBusy("");
     }
@@ -309,7 +370,7 @@ export function ImageModeWorkbench({
         <div>
           <span className="eyebrow">图文模式</span>
           <h1>{detail.project.title}</h1>
-          <p>比例 {detail.project.ratio} · {detail.items.length} 张 · 最终文案不二创</p>
+          <p>比例 {detail.project.ratio} · {detail.items.length} 张 · 第一张是封面 · 最终文案不二创</p>
         </div>
         <div className="image-mode-actions">
           <button type="button" disabled={Boolean(busy)} onClick={() => { setDetail(null); setPreviewItem(null); }}>返回图文项目</button>
@@ -325,7 +386,7 @@ export function ImageModeWorkbench({
           const revision = item.updated_at || `${item.status}-${item.width || 0}-${item.height || 0}`;
           return (
             <article className={`image-card image-card--${item.status}`} key={item.id} aria-label={`图片 ${sequence}`}>
-              <div className="image-card-number">{sequence}</div>
+              <div className="image-card-number">{sequence}{item.role === "cover" || item.sequence === 1 ? " 封面" : ""}</div>
               {item.status === "ready" ? (
                 <button type="button" className="image-preview-trigger" onClick={(event) => { previewReturnFocusRef.current = event.currentTarget; setPreviewItem(item); }} aria-label={`预览图片 ${sequence}`}>
                   <img src={imageURL(detail.project.id, item.id, revision)} alt="" />
@@ -369,24 +430,40 @@ export function ImageModeWorkbench({
         <div>
           <span className="eyebrow">图文模式</span>
           <h1>图文项目</h1>
-          <p>直接使用最终文案，按语义生成有序图片，不做二创。</p>
+          <p>粘贴最终文案，先看 AI 分段建议，确认后再生成提示词和图片。最多 18 张，第一张是封面。</p>
         </div>
       </div>
       {message ? <div className="notice" role="status">{message}</div> : null}
       <div className="image-mode-start">
-        <form className="image-create-form" onSubmit={create}>
+        <form className="image-create-form" onSubmit={requestSegments}>
           <h2>新建图文项目</h2>
           <label>项目名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：养老现金流" maxLength={120} /></label>
-          <label>最终文案<textarea rows={12} value={script} onChange={(event) => setScript(event.target.value)} placeholder="粘贴已经定稿的完整文案；系统不会二创" /></label>
+          <label>最终文案<textarea rows={12} value={script} onChange={(event) => { setScript(event.target.value); setSegments([]); }} placeholder="粘贴已经定稿的完整文案；系统不会二创" /></label>
           <div className="image-param-grid">
-            <label>图片数量<input type="number" min={1} max={60} value={count} onChange={(event) => setCount(Math.min(60, Math.max(1, Number(event.target.value) || 1)))} /></label>
+            <label>建议张数<input type="number" min={1} max={18} value={count} onChange={(event) => setCount(Math.min(18, Math.max(1, Number(event.target.value) || 1)))} /></label>
             <label>图片比例<select value={ratio} onChange={(event) => { editedDefaults.current.ratio = true; setRatio(event.target.value as ImageProject["ratio"]); }}>{ratios.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>视觉风格<select value={style} onChange={(event) => { editedDefaults.current.style = true; setStyle(event.target.value); }}>{styles.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
             <label>项目并发<select value={concurrency} onChange={(event) => { editedDefaults.current.concurrency = true; setConcurrency(Number(event.target.value)); }}>{concurrencyOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
           </div>
+          <label>文本模型<input value={textModel} onChange={(event) => { editedDefaults.current.textModel = true; setTextModel(event.target.value); }} placeholder="可覆盖设置里的图文文本模型" /></label>
           {style === "custom" ? <label>自定义风格<textarea rows={4} value={customStyle} onChange={(event) => setCustomStyle(event.target.value)} placeholder="描述画面材质、光线、色彩与构图" /></label> : null}
-          <p className="image-style-note">默认禁止伪文字、日期、收益和水印；优先中国家庭、养老、住房、银行与商业场景。</p>
-          <button className="primary" disabled={busy === "create" || !title.trim() || !script.trim() || (style === "custom" && !customStyle.trim())}>{busy === "create" ? "正在创建…" : "创建图文项目"}</button>
+          <p className="image-style-note">第一张必须是封面。默认禁止伪文字、日期、收益和水印；优先中国家庭、养老、住房、银行与商业场景。</p>
+          <button className="primary" disabled={busy === "suggest" || !title.trim() || !script.trim() || (style === "custom" && !customStyle.trim())}>{busy === "suggest" ? "正在分段…" : "生成分段建议"}</button>
+          {segments.length ? (
+            <section className="image-segment-preview" aria-label="分段建议">
+              <h3>分段建议{plannerModel ? ` · ${plannerModel}` : ""}</h3>
+              <p className="image-style-note">请核对每段原文。第一张是封面。确认无改写后，再生成提示词。</p>
+              {segments.map((segment, index) => (
+                <article className="image-segment-card" key={`${segment.sequence}-${index}`}>
+                  <strong>{String(segment.sequence).padStart(3, "0")} {segment.role === "cover" || segment.sequence === 1 ? "封面" : "内容"}</strong>
+                  <label>段落标题<input value={segment.title} onChange={(event) => updateSegment(index, "title", event.target.value)} /></label>
+                  <label>对应原文<textarea rows={4} value={segment.source_text} onChange={(event) => updateSegment(index, "source_text", event.target.value)} /></label>
+                  {segment.rationale ? <small>{segment.rationale}</small> : null}
+                </article>
+              ))}
+              <button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void create()}>{busy === "create" ? "正在生成提示词…" : "确认分段并生成提示词"}</button>
+            </section>
+          ) : null}
         </form>
         <section className="image-project-list" aria-labelledby="image-project-list-title">
           <h2 id="image-project-list-title">已有图文项目</h2>

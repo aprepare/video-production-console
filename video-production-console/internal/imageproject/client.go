@@ -269,8 +269,8 @@ func GenerateBatch(ctx context.Context, generator Generator, requests []Generate
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	if concurrency > 5 {
-		concurrency = 5
+	if concurrency > MaxImages {
+		concurrency = MaxImages
 	}
 	results := make([]GenerateResult, len(requests))
 	jobs := make(chan int)

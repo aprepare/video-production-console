@@ -13,7 +13,7 @@
 一个**本地单机**的视频生产控制台，包含两条互相隔离的生产线：
 
 - **混剪模式**：把「同行爆款原文 → 二创文案 → 混剪草稿 → 剪映可继续编辑的正式资产」固定为项目流水线；
-- **图文模式**：直接接收已经定稿的完整文案，不进行二创，按原文顺序拆成图片卡片，调用后端 OpenAI 兼容生图服务，提供网页预览、单张重生成和 ZIP 下载。
+- **图文模式**：直接接收已经定稿的完整文案，不进行二创；先由可配置的 OpenAI 兼容文本模型给出最多 18 张的分段建议（第一张固定为封面），用户确认后再按段生成提示词，随后调用独立的 OpenAI 兼容生图服务，提供批量/单张生成、网页预览和 ZIP 下载。
 
 Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的领域表、接口和页面状态，图文卡片不会进入混剪项目、素材资产或剪映草稿状态机。
 
@@ -24,7 +24,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 - **任务调度**：把一次生成封装成「任务清单（manifest）→ 排队 → 认领 → 子进程执行 → 结果严格校验 → 资产入库」，全程有阶段计时和事件流。
 - **对话工作台**：基于 Codex App Server 的长会话，与正式任务分开。
 - **混剪**：本机确定性算法生成 `production_plan.json`，Python skill 造出明文草稿，可信主机把它登记成剪映真实草稿目录，才算 `mix_draft` 资产就绪。
-- **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、提示词、状态与输出位置；`internal/imageproject` 负责无损拆分、风格提示词和 OpenAI 兼容图片请求；`internal/httpapi/imageprojects.go` 负责创建、生成、预览、重生成、删除和 ZIP 清单。
+- **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、封面/内容角色、提示词、状态与输出位置；`internal/imageproject` 负责校验 AI 分段完整覆盖原文、生成分段/提示词请求和 OpenAI 兼容图片请求；`internal/httpapi/imageprojects.go` 负责分段预览、确认创建、生成、预览、重生成、删除和 ZIP 清单。
 
 它**不**管什么（这些是设计决定，不是缺口）：
 
@@ -335,7 +335,8 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | `ObsidianVault` | 空 | 设置键 `obsidian_vault` |
 | `max_codex_concurrency` | `2` | 设置键，1–4，**可热更** |
 | `codex_default_model` / `..._reasoning_effort` | `gpt-5.6-sol` / `medium` | 设置键，可热更 |
-| `image_model` / `max_image_concurrency` | `gpt-image-2` / `3` | 设置键；并发可热更，服务地址/模型/密钥变更需重启 |
+| `image_model` / `max_image_concurrency` | `gpt-image-2` / `3` | 设置键；并发范围 1–18 且可热更，服务地址/模型/密钥变更需重启 |
+| `image_text_base_url` / `image_text_model` | 空 / 空 | 图文分段与提示词使用的 OpenAI 兼容文本模型；未单独配置时回落 Grok 配置 |
 | `default_image_ratio` / `default_image_style` | `3:4` / `finance_documentary` | 设置键；用于新建图文项目默认值 |
 
 环境变量（进程启动时生效）：

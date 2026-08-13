@@ -20,6 +20,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
     pexels_api_key: "",
     volc_speech_api_key: "",
     image_api_key: "",
+    image_text_api_key: "",
   });
 
   const openDialog = async () => {
@@ -31,7 +32,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
         staleTime: 0,
       });
       setDraft({ ...next.public });
-      setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "" });
+      setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "", image_text_api_key: "" });
       setFeedback("");
       setOpen(true);
     } catch {
@@ -54,7 +55,7 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
     const next = (await response.json()) as Settings;
     client.setQueryData(queryKeys.settings(), next);
     setDraft({ ...next.public });
-    setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "" });
+    setSecretDraft({ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "", image_text_api_key: "" });
     setFeedback("设置已保存。");
   };
 

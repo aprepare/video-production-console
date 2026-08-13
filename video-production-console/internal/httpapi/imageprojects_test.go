@@ -4,9 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -27,6 +28,15 @@ import (
 type imageRuntimeStub struct{ runtime consoleSettings.Runtime }
 
 func (s imageRuntimeStub) Runtime(context.Context) (consoleSettings.Runtime, error) {
+	if strings.TrimSpace(s.runtime.ImageTextBaseURL) == "" {
+		s.runtime.ImageTextBaseURL = "https://text.example.test/v1"
+	}
+	if strings.TrimSpace(s.runtime.ImageTextModel) == "" {
+		s.runtime.ImageTextModel = "planner-test"
+	}
+	if strings.TrimSpace(s.runtime.ImageTextAPIKey) == "" {
+		s.runtime.ImageTextAPIKey = "test-only-key"
+	}
 	return s.runtime, nil
 }
 
@@ -37,6 +47,68 @@ type imageGeneratorStub struct {
 
 func (s imageGeneratorStub) Generate(context.Context, imageproject.GenerateRequest) (imageproject.GenerateResult, error) {
 	return s.result, s.err
+}
+
+type imagePlannerStub struct{}
+
+func (imagePlannerStub) Complete(_ context.Context, input imageproject.ChatRequest) (string, error) {
+	if strings.Contains(input.System, "分镜编辑") {
+		script := input.User
+		if idx := strings.LastIndex(script, "原文：\n"); idx >= 0 {
+			script = script[idx+len("原文：\n"):]
+		}
+		return defaultTestSegmentJSON(script), nil
+	}
+	raw := input.User
+	if idx := strings.LastIndex(raw, "卡片：\n"); idx >= 0 {
+		raw = raw[idx+len("卡片：\n"):]
+	}
+	var segments []imageproject.Segment
+	if err := json.Unmarshal([]byte(raw), &segments); err != nil || len(segments) == 0 {
+		return "", errors.New("planner stub missing segments")
+	}
+	prompts := make([]map[string]any, 0, len(segments))
+	for _, segment := range segments {
+		prompt := "内容图提示词"
+		if segment.Role == imageproject.RoleCover || segment.Sequence == 1 {
+			prompt = "封面图，强冲突"
+		}
+		prompts = append(prompts, map[string]any{"sequence": segment.Sequence, "prompt": prompt})
+	}
+	encoded, _ := json.Marshal(map[string]any{"prompts": prompts})
+	return string(encoded), nil
+}
+
+func defaultTestSegmentJSON(script string) string {
+	segments := testSegmentsForScript(script)
+	encoded, _ := json.Marshal(map[string]any{"segments": segments})
+	return string(encoded)
+}
+
+func testSegmentsForScript(script string) []map[string]any {
+	if first, second, ok := strings.Cut(script, "第二句。"); ok && strings.Contains(first, "第一句。") {
+		return []map[string]any{
+			{"sequence": 1, "role": "cover", "title": "第一句", "source_text": first, "rationale": "封面"},
+			{"sequence": 2, "role": "content", "title": "第二句", "source_text": "第二句。" + second, "rationale": "正文"},
+		}
+	}
+	return []map[string]any{{"sequence": 1, "role": "cover", "title": "封面", "source_text": script, "rationale": "封面"}}
+}
+
+func imageCreatePayload(title, script string, extra map[string]any) []byte {
+	body := map[string]any{
+		"title": title, "script": script, "image_count": 0, "ratio": "3:4",
+		"style": "finance_documentary", "concurrency": 1, "segments": testSegmentsForScript(script),
+	}
+	for key, value := range extra {
+		body[key] = value
+	}
+	encoded, _ := json.Marshal(body)
+	return encoded
+}
+
+func testImageHandler(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator) http.Handler {
+	return NewImageProjectsHandlerWithPlanner(db, runtime, generator, imagePlannerStub{})
 }
 
 func testImagePNG(t *testing.T) string {
@@ -65,9 +137,9 @@ func TestImageProjectsHTTPCreateGeneratePreviewAndDownload(t *testing.T) {
 	}))
 	defer vendor.Close()
 	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: vendor.URL + "/v1", ImageModel: "gpt-image-2", MaxImageConcurrency: 2}, ImageAPIKey: "secret"}}
-	handler := NewImageProjectsHandler(db, runtime, imageproject.NewClient(vendor.Client()))
+	handler := testImageHandler(db, runtime, imageproject.NewClient(vendor.Client()))
 
-	create := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"养老现金流","script":"第一句。第二句。","image_count":2,"ratio":"3:4","style":"ledger_investigation","concurrency":2}`))
+	create := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("养老现金流", "第一句。第二句。", map[string]any{"image_count": 2, "style": "ledger_investigation", "concurrency": 2})))
 	create.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, create)
@@ -147,8 +219,8 @@ func TestImageProjectsHTTPRejectsMissingConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	handler := NewImageProjectsHandler(db, imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageModel: "gpt-image-2", MaxImageConcurrency: 2}}}, imageproject.NewClient(nil))
-	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"x","script":"有效文案。","image_count":1,"ratio":"3:4","style":"finance_documentary","concurrency":1}`))
+	handler := testImageHandler(db, imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageModel: "gpt-image-2", MaxImageConcurrency: 2}}}, imageproject.NewClient(nil))
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "有效文案。", map[string]any{"image_count": 1})))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -170,9 +242,9 @@ func TestImageProjectsHTTPCreatePreservesFinalScriptExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	handler := NewImageProjectsHandler(db, nil, nil)
+	handler := testImageHandler(db, imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test", ImageModel: "gpt-image-2", MaxImageConcurrency: 1}, GrokAPIKey: "configured"}}, nil)
 	script := "  第一句。\r\n\r\n第二句。  "
-	body, _ := json.Marshal(map[string]any{"title": "原文", "script": script, "image_count": 2, "ratio": "3:4", "style": "finance_documentary", "concurrency": 1})
+	body := imageCreatePayload("原文", script, map[string]any{"image_count": 2})
 	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -195,7 +267,7 @@ func TestImageProjectsHTTPRejectsEmptyCustomStyle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	handler := NewImageProjectsHandler(db, nil, nil)
+	handler := testImageHandler(db, nil, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"自定义","script":"有效文案。","image_count":1,"ratio":"3:4","style":"custom","custom_style":"  ","concurrency":1}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -216,8 +288,8 @@ func TestImageProjectsHTTPSingleGenerationKeepsAggregateProjectStatus(t *testing
 		t.Fatal(err)
 	}
 	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: "https://api.example.com/v1", ImageModel: "gpt-image-2", MaxImageConcurrency: 2}, ImageAPIKey: "configured"}}
-	handler := NewImageProjectsHandler(db, runtime, imageGeneratorStub{result: imageproject.GenerateResult{Bytes: imageBytes, MIMEType: "image/png", Width: 3, Height: 4}})
-	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"x","script":"第一句。第二句。","image_count":2,"ratio":"3:4","style":"finance_documentary","concurrency":1}`))
+	handler := testImageHandler(db, runtime, imageGeneratorStub{result: imageproject.GenerateResult{Bytes: imageBytes, MIMEType: "image/png", Width: 3, Height: 4}})
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "第一句。第二句。", map[string]any{"image_count": 2})))
 	request.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, request)

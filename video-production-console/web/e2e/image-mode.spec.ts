@@ -19,6 +19,7 @@ const items = [
     id: "image-item-1",
     project_id: project.id,
     sequence: 1,
+    role: "cover",
     source_text: "第一句。",
     title: "第一句",
     prompt: "提示词一",
@@ -28,6 +29,7 @@ const items = [
     id: "image-item-2",
     project_id: project.id,
     sequence: 2,
+    role: "content",
     source_text: "第二句。",
     title: "第二句",
     prompt: "提示词二",
@@ -79,7 +81,11 @@ async function mockImageConsole(page: Page) {
           grok_model: "",
           image_base_url: "http://127.0.0.1:8320/v1",
           image_model: "gpt-image-2",
-          max_image_concurrency: 3,
+          image_text_base_url: "http://127.0.0.1:8320/v1",
+          image_text_model: "planner-test",
+          max_image_concurrency: 18,
+          default_image_ratio: "3:4",
+          default_image_style: "finance_documentary",
           codex_binary_path: "C:\\codex.exe",
           media_index_path: "",
           media_root: "",
@@ -91,10 +97,21 @@ async function mockImageConsole(page: Page) {
           volc_speech_resource_id: "",
         },
         settings_version: 1,
-        secrets: { image_api_key: { configured: true, masked: "********" } },
+        secrets: {
+          image_api_key: { configured: true, masked: "********" },
+          image_text_api_key: { configured: true, masked: "********" },
+        },
       };
     } else if (path === "/api/image-projects" && request.method() === "GET") {
       body = created ? [project] : [];
+    } else if (path === "/api/image-projects/segment-preview" && request.method() === "POST") {
+      body = {
+        model: "planner-test",
+        segments: [
+          { sequence: 1, role: "cover", title: "第一句", source_text: "第一句。", rationale: "封面反差" },
+          { sequence: 2, role: "content", title: "第二句", source_text: "第二句。", rationale: "正文信息" },
+        ],
+      };
     } else if (path === "/api/image-projects" && request.method() === "POST") {
       created = true;
       status = 201;
@@ -121,17 +138,20 @@ test("image mode creates an ordered project without entering remix", async ({ pa
 
   await page.getByRole("button", { name: "图文模式" }).click();
   await expect(page.getByRole("heading", { name: "图文项目", exact: true })).toBeVisible();
-  await expect(page.getByText("直接使用最终文案", { exact: false })).toBeVisible();
+  await expect(page.getByText("先看 AI 分段建议", { exact: false })).toBeVisible();
 
   await page.getByLabel("项目名称").fill("养老现金流");
   await page.getByLabel("最终文案").fill("第一句。第二句。");
-  await page.getByLabel("图片数量").fill("2");
+  await page.getByLabel("建议张数").fill("2");
   await page.getByLabel("图片比例").selectOption("3:4");
   await page.getByLabel("视觉风格").selectOption("ledger_investigation");
-  await page.getByRole("button", { name: "创建图文项目" }).click();
+  await page.getByLabel("项目并发").selectOption("18");
+  await page.getByRole("button", { name: "生成分段建议" }).click();
+  await expect(page.getByText("001 封面", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "确认分段并生成提示词" }).click();
 
   await expect(page.getByRole("heading", { name: "养老现金流" })).toBeVisible();
-  await expect(page.getByText("001", { exact: true })).toBeVisible();
+  await expect(page.getByText("001 封面", { exact: true })).toBeVisible();
   await expect(page.getByText("002", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "生成缺失图片" })).toBeVisible();
   const download = page.getByRole("button", { name: "打包下载" });

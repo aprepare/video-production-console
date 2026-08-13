@@ -21,7 +21,7 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	secretInput := definitions["secretInput"].(map[string]any)
 	properties := secretInput["properties"].(map[string]any)
-	secretKeys := []string{"grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key"}
+	secretKeys := []string{"grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key"}
 	for _, key := range secretKeys {
 		property, ok := properties[key].(map[string]any)
 		if !ok || property["maxLength"] != float64(16<<10) {
@@ -57,7 +57,7 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 	definitions := schema["$defs"].(map[string]any)
 	public := definitions["publicSettings"].(map[string]any)
 	properties := public["properties"].(map[string]any)
-	imageKeys := []string{"image_base_url", "image_model", "max_image_concurrency", "default_image_ratio", "default_image_style"}
+	imageKeys := []string{"image_base_url", "image_model", "image_text_base_url", "image_text_model", "max_image_concurrency", "default_image_ratio", "default_image_style"}
 	for _, key := range imageKeys {
 		if properties[key] == nil {
 			t.Fatalf("%s missing from public settings schema", key)
@@ -86,7 +86,7 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 	}
 
 	concurrency := properties["max_image_concurrency"].(map[string]any)
-	if concurrency["minimum"] != float64(1) || concurrency["maximum"] != float64(5) || concurrency["default"] != float64(3) {
+	if concurrency["minimum"] != float64(1) || concurrency["maximum"] != float64(18) || concurrency["default"] != float64(3) {
 		t.Fatalf("max_image_concurrency schema=%v", concurrency)
 	}
 	baseURL := properties["image_base_url"].(map[string]any)

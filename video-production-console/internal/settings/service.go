@@ -32,10 +32,12 @@ const (
 	SecretPexelsAPIKey     = "pexels_api_key"
 	SecretVolcSpeechAPIKey = "volc_speech_api_key"
 	SecretImageAPIKey      = "image_api_key"
+	SecretImageTextAPIKey  = "image_text_api_key"
 
 	secretMask                 = "********"
 	defaultImageModel          = "gpt-image-2"
 	defaultMaxImageConcurrency = 3
+	maxImageConcurrency        = 18
 	defaultImageRatio          = "3:4"
 	defaultImageStyle          = "finance_documentary"
 	probeTimeout               = 5 * time.Second
@@ -49,7 +51,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey, SecretImageTextAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -116,6 +118,7 @@ type Runtime struct {
 	PexelsAPIKey     string           `json:"-"`
 	VolcSpeechAPIKey string           `json:"-"`
 	ImageAPIKey      string           `json:"-"`
+	ImageTextAPIKey  string           `json:"-"`
 	SecretVersions   map[string]int64 `json:"-"`
 }
 
@@ -390,6 +393,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.VolcSpeechAPIKey = value
 		case SecretImageAPIKey:
 			runtime.ImageAPIKey = value
+		case SecretImageTextAPIKey:
+			runtime.ImageTextAPIKey = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -467,7 +472,7 @@ func validatePublic(value domain.PublicSettings) error {
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
 	}
-	if value.MaxImageConcurrency < 1 || value.MaxImageConcurrency > 5 {
+	if value.MaxImageConcurrency < 1 || value.MaxImageConcurrency > maxImageConcurrency {
 		return invalid("max_image_concurrency")
 	}
 	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
@@ -499,6 +504,15 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	if strings.TrimSpace(value.ImageModel) == "" || value.ImageModel != strings.TrimSpace(value.ImageModel) || len(value.ImageModel) > 128 {
 		return invalid("image_model")
+	}
+	if value.ImageTextBaseURL != "" {
+		parsed, err := parseHTTPURL(value.ImageTextBaseURL)
+		if len(value.ImageTextBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("image_text_base_url")
+		}
+	}
+	if value.ImageTextModel != strings.TrimSpace(value.ImageTextModel) || len(value.ImageTextModel) > 128 {
+		return invalid("image_text_model")
 	}
 	if !validImageRatio(value.DefaultImageRatio) {
 		return invalid("default_image_ratio")
@@ -662,6 +676,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"obsidian_vault": value.ObsidianVault, "topic_cards_dir": value.TopicCardsDir,
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"image_base_url": value.ImageBaseURL, "image_model": value.ImageModel,
+		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
 		"max_image_concurrency": strconv.Itoa(value.MaxImageConcurrency),
 		"default_image_ratio":   value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
@@ -692,7 +707,7 @@ func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
 }
 
 func normalizedImageConcurrency(value int) int {
-	if value < 1 || value > 5 {
+	if value < 1 || value > maxImageConcurrency {
 		return defaultMaxImageConcurrency
 	}
 	return value
@@ -732,8 +747,8 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 	}
 	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
 	imageConcurrency, _ := strconv.Atoi(values["max_image_concurrency"])
-	if imageConcurrency < 1 || imageConcurrency > 5 {
-		imageConcurrency = 3
+	if imageConcurrency < 1 || imageConcurrency > maxImageConcurrency {
+		imageConcurrency = defaultMaxImageConcurrency
 	}
 	imageModel := strings.TrimSpace(values["image_model"])
 	if imageModel == "" {
@@ -753,8 +768,10 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		BaokuanBaseURL: values["baokuan_base_url"], BaokuanMCPExecutable: values["baokuan_mcp_executable"],
 		ObsidianVault: values["obsidian_vault"], TopicCardsDir: values["topic_cards_dir"],
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
-		ImageBaseURL: values["image_base_url"], ImageModel: imageModel, MaxImageConcurrency: imageConcurrency,
-		DefaultImageRatio: imageRatio, DefaultImageStyle: imageStyle,
+		ImageBaseURL: values["image_base_url"], ImageModel: imageModel,
+		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
+		MaxImageConcurrency: imageConcurrency,
+		DefaultImageRatio:   imageRatio, DefaultImageStyle: imageStyle,
 		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],

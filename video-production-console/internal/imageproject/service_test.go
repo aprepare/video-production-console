@@ -40,7 +40,7 @@ func TestSplitScriptPreservesWhitespaceAndReturnsExactRequestedCount(t *testing.
 }
 
 func TestSplitScriptRejectsImpossibleCounts(t *testing.T) {
-	for _, count := range []int{0, 61} {
+	for _, count := range []int{0, 19} {
 		if _, err := SplitScript("有效文案。", count); err == nil {
 			t.Fatalf("count %d accepted", count)
 		}

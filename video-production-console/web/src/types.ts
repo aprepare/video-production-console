@@ -83,6 +83,8 @@ export type PublicSettings = {
   grok_model: string;
   image_base_url: string;
   image_model: string;
+  image_text_base_url: string;
+  image_text_model: string;
   max_image_concurrency: number;
   default_image_ratio: "3:4" | "4:3" | "9:16" | "1:1";
   default_image_style: string;
@@ -126,6 +128,7 @@ export type ImageProjectItem = {
   id: string;
   project_id: string;
   sequence: number;
+  role?: "cover" | "content";
   source_text: string;
   title: string;
   prompt: string;

@@ -855,7 +855,7 @@ func TestSettingsImageGenerationValidationAllowsHTTPAndRejectsInvalidValues(t *t
 		name   string
 		mutate func(*domain.PublicSettings)
 	}{
-		{"too much concurrency", func(value *domain.PublicSettings) { value.MaxImageConcurrency = 6 }},
+		{"too much concurrency", func(value *domain.PublicSettings) { value.MaxImageConcurrency = 19 }},
 		{"trimmed model", func(value *domain.PublicSettings) { value.ImageModel = " gpt-image-2 " }},
 		{"invalid default ratio", func(value *domain.PublicSettings) { value.DefaultImageRatio = "16:9" }},
 		{"invalid default style", func(value *domain.PublicSettings) { value.DefaultImageStyle = "unknown" }},

@@ -13,6 +13,7 @@ type PromptInput struct {
 	Ratio       string
 	Style       string
 	CustomStyle string
+	Role        string
 }
 
 var styleInstructions = map[string]string{
@@ -29,8 +30,8 @@ func SplitScript(script string, count int) ([]string, error) {
 	if strings.TrimSpace(script) == "" {
 		return nil, errors.New("script is required")
 	}
-	if count < 1 || count > 60 {
-		return nil, errors.New("image count must be between 1 and 60")
+	if count < 1 || count > MaxImages {
+		return nil, fmt.Errorf("image count must be between 1 and %d", MaxImages)
 	}
 	if count > utf8.RuneCountInString(script) {
 		return nil, errors.New("image count exceeds available script characters")
@@ -148,5 +149,9 @@ func BuildPrompt(input PromptInput) string {
 	if style == "" {
 		style = styleInstructions["finance_documentary"]
 	}
-	return fmt.Sprintf("为中国45—65岁观众制作财经认知视频内容图。画幅比例 %s。画面内容严格对应：%s。视觉风格：%s。优先中国人物、家庭、银行、住房、养老或商业语境；主体明确，中高信息密度，节奏稳定，不花哨。不要生成可读文字、标题、日期、年份、收益、比例、品牌标志、水印或伪文字。", input.Ratio, strings.TrimSpace(input.SourceText), style)
+	roleHint := "这是正文内容图，承接封面之后的信息点。"
+	if input.Role == RoleCover {
+		roleHint = "这是封面图，必须第一眼抓住45—65岁观众：主体更大、冲突更强、风险或反差一眼能看懂。"
+	}
+	return fmt.Sprintf("为中国45—65岁观众制作财经认知视频内容图。画幅比例 %s。%s画面内容严格对应：%s。视觉风格：%s。优先中国人物、家庭、银行、住房、养老或商业语境；主体明确，中高信息密度，节奏稳定，不花哨。不要生成可读文字、标题、日期、年份、收益、比例、品牌标志、水印或伪文字。", input.Ratio, roleHint, strings.TrimSpace(input.SourceText), style)
 }

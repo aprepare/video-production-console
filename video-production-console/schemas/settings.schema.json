@@ -88,7 +88,13 @@
           "pattern": "^(?:\\S|\\S.*\\S)$",
           "default": "gpt-image-2"
         },
-        "max_image_concurrency": { "type": "integer", "minimum": 1, "maximum": 5, "default": 3 },
+        "image_text_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "image_text_model": { "type": "string", "maxLength": 128 },
+        "max_image_concurrency": { "type": "integer", "minimum": 1, "maximum": 18, "default": 3 },
         "default_image_ratio": { "type": "string", "enum": ["3:4", "4:3", "9:16", "1:1"], "default": "3:4" },
         "default_image_style": {
           "type": "string",
@@ -159,6 +165,8 @@
             "grok_model",
             "image_base_url",
             "image_model",
+            "image_text_base_url",
+            "image_text_model",
             "max_image_concurrency",
             "default_image_ratio",
             "default_image_style",
@@ -183,7 +191,8 @@
         "grok_api_key": { "type": "string", "maxLength": 16384 },
         "pexels_api_key": { "type": "string", "maxLength": 16384 },
         "volc_speech_api_key": { "type": "string", "maxLength": 16384 },
-        "image_api_key": { "type": "string", "maxLength": 16384 }
+        "image_api_key": { "type": "string", "maxLength": 16384 },
+        "image_text_api_key": { "type": "string", "maxLength": 16384 }
       }
     },
     "secretStatus": {
@@ -208,12 +217,13 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key"],
+      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
         "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
         "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" },
-        "image_api_key": { "$ref": "#/$defs/secretStatus" }
+        "image_api_key": { "$ref": "#/$defs/secretStatus" },
+        "image_text_api_key": { "$ref": "#/$defs/secretStatus" }
       }
     },
     "settingsUpdate": {

@@ -923,6 +923,7 @@ function App() {
             defaultRatio={settings?.public.default_image_ratio}
             defaultStyle={settings?.public.default_image_style}
             defaultConcurrency={settings?.public.max_image_concurrency}
+            defaultTextModel={settings?.public.image_text_model}
           />
         </>
       ) : selected && detail && detailReady ? (

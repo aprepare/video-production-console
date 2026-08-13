@@ -33,7 +33,15 @@ func (r *ImageProjectRepository) Create(ctx context.Context, project domain.Imag
 		return err
 	}
 	for _, item := range items {
-		_, err = tx.ExecContext(ctx, `INSERT INTO image_project_items(id,project_id,sequence,source_text,title,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, item.ID, item.ProjectID, item.Sequence, item.SourceText, item.Title, item.Prompt, item.Status, item.CreatedAt, item.UpdatedAt)
+		role := item.Role
+		if role == "" {
+			if item.Sequence == 1 {
+				role = "cover"
+			} else {
+				role = "content"
+			}
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO image_project_items(id,project_id,sequence,role,source_text,title,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, item.ID, item.ProjectID, item.Sequence, role, item.SourceText, item.Title, item.Prompt, item.Status, item.CreatedAt, item.UpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -67,7 +75,7 @@ func (r *ImageProjectRepository) Get(ctx context.Context, id string) (domain.Ima
 	if err != nil {
 		return domain.ImageProject{}, nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,sequence,source_text,title,prompt,status,image_path,mime_type,width,height,error_message,created_at,updated_at FROM image_project_items WHERE project_id=? ORDER BY sequence`, id)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,sequence,role,source_text,title,prompt,status,image_path,mime_type,width,height,error_message,created_at,updated_at FROM image_project_items WHERE project_id=? ORDER BY sequence`, id)
 	if err != nil {
 		return domain.ImageProject{}, nil, err
 	}
@@ -77,7 +85,7 @@ func (r *ImageProjectRepository) Get(ctx context.Context, id string) (domain.Ima
 		var item domain.ImageProjectItem
 		var imagePath, mimeType, errorMessage sql.NullString
 		var width, height sql.NullInt64
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.Sequence, &item.SourceText, &item.Title, &item.Prompt, &item.Status, &imagePath, &mimeType, &width, &height, &errorMessage, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.Sequence, &item.Role, &item.SourceText, &item.Title, &item.Prompt, &item.Status, &imagePath, &mimeType, &width, &height, &errorMessage, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return domain.ImageProject{}, nil, err
 		}
 		if imagePath.Valid {

@@ -33,13 +33,19 @@ type imageProjectsHandler struct {
 	repo      *store.ImageProjectRepository
 	runtime   imageRuntimeProvider
 	generator imageproject.Generator
+	planner   imageproject.ChatClient
 }
 
 func NewImageProjectsHandler(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator) http.Handler {
-	h := &imageProjectsHandler{repo: store.NewImageProjectRepository(db), runtime: runtime, generator: generator}
+	return NewImageProjectsHandlerWithPlanner(db, runtime, generator, imageproject.NewHTTPChatClient(nil))
+}
+
+func NewImageProjectsHandlerWithPlanner(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator, planner imageproject.ChatClient) http.Handler {
+	h := &imageProjectsHandler{repo: store.NewImageProjectRepository(db), runtime: runtime, generator: generator, planner: planner}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/image-projects", h.list)
 	mux.HandleFunc("POST /api/image-projects", h.create)
+	mux.HandleFunc("POST /api/image-projects/segment-preview", h.previewSegments)
 	mux.HandleFunc("GET /api/image-projects/{id}", h.get)
 	mux.HandleFunc("DELETE /api/image-projects/{id}", h.delete)
 	mux.HandleFunc("PATCH /api/image-projects/{id}/items/{item}", h.updateItem)
@@ -59,41 +65,161 @@ func (h *imageProjectsHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, projects)
 }
 
-func (h *imageProjectsHandler) create(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Title       string `json:"title"`
-		Script      string `json:"script"`
-		ImageCount  int    `json:"image_count"`
-		Ratio       string `json:"ratio"`
-		Style       string `json:"style"`
-		CustomStyle string `json:"custom_style"`
-		Concurrency int    `json:"concurrency"`
-	}
-	if err := decodeJSON(w, r, maxTaskJSONRequest, &in); err != nil {
-		writeDecodeError(w, err, "invalid_image_project", "A valid image project is required.")
+func (h *imageProjectsHandler) previewSegments(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeImageProjectDraft(w, r)
+	if !ok {
 		return
 	}
-	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" || strings.TrimSpace(in.Script) == "" || utf8.RuneCountInString(in.Title) > 120 || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > 5 {
-		writeError(w, http.StatusBadRequest, "invalid_image_project", "Image project settings are invalid.")
-		return
-	}
-	parts, err := imageproject.SplitScript(in.Script, in.ImageCount)
+	segments, model, err := h.suggestSegments(r.Context(), in)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_image_count", "The script could not be split into that image count.")
+		h.writePlannerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"script": in.Script, "model": model, "segments": segments})
+}
+
+func (h *imageProjectsHandler) create(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeImageProjectDraft(w, r)
+	if !ok {
+		return
+	}
+	segments, err := confirmedSegments(in)
+	if err != nil {
+		h.writePlannerError(w, err)
+		return
+	}
+	prompts, _, err := h.suggestPrompts(r.Context(), in, segments)
+	if err != nil {
+		h.writePlannerError(w, err)
 		return
 	}
 	now := time.Now().UTC()
-	project := domain.ImageProject{ID: uuid.NewString(), Title: in.Title, Script: in.Script, ImageCount: len(parts), Ratio: in.Ratio, Style: in.Style, CustomStyle: strings.TrimSpace(in.CustomStyle), Concurrency: in.Concurrency, Status: "draft", CreatedAt: now, UpdatedAt: now}
-	items := make([]domain.ImageProjectItem, 0, len(parts))
-	for index, part := range parts {
-		items = append(items, domain.ImageProjectItem{ID: uuid.NewString(), ProjectID: project.ID, Sequence: index + 1, SourceText: part, Title: itemTitle(part, index+1), Prompt: imageproject.BuildPrompt(imageproject.PromptInput{SourceText: part, Ratio: project.Ratio, Style: project.Style, CustomStyle: project.CustomStyle}), Status: "pending", CreatedAt: now, UpdatedAt: now})
+	project := domain.ImageProject{ID: uuid.NewString(), Title: in.Title, Script: in.Script, ImageCount: len(segments), Ratio: in.Ratio, Style: in.Style, CustomStyle: strings.TrimSpace(in.CustomStyle), Concurrency: in.Concurrency, Status: "draft", CreatedAt: now, UpdatedAt: now}
+	items := make([]domain.ImageProjectItem, 0, len(segments))
+	for index, segment := range segments {
+		title := strings.TrimSpace(segment.Title)
+		if title == "" {
+			title = itemTitle(segment.SourceText, segment.Sequence)
+		}
+		items = append(items, domain.ImageProjectItem{ID: uuid.NewString(), ProjectID: project.ID, Sequence: segment.Sequence, Role: segment.Role, SourceText: segment.SourceText, Title: title, Prompt: prompts[index], Status: "pending", CreatedAt: now, UpdatedAt: now})
 	}
 	if err := h.repo.Create(r.Context(), project, items); err != nil {
 		writeError(w, http.StatusInternalServerError, "image_project_create_failed", "The image project could not be created.")
 		return
 	}
 	writeJSON(w, http.StatusCreated, domain.ImageProjectDetail{Project: project, Items: items})
+}
+
+type imageProjectDraft struct {
+	Title             string                 `json:"title"`
+	Script            string                 `json:"script"`
+	ImageCount        int                    `json:"image_count"`
+	Ratio             string                 `json:"ratio"`
+	Style             string                 `json:"style"`
+	CustomStyle       string                 `json:"custom_style"`
+	Concurrency       int                    `json:"concurrency"`
+	TextModel         string                 `json:"text_model"`
+	ConfirmedSegments []imageproject.Segment `json:"segments"`
+}
+
+func decodeImageProjectDraft(w http.ResponseWriter, r *http.Request) (imageProjectDraft, bool) {
+	var in imageProjectDraft
+	if err := decodeJSON(w, r, maxTaskJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_image_project", "A valid image project is required.")
+		return imageProjectDraft{}, false
+	}
+	in.Title = strings.TrimSpace(in.Title)
+	in.TextModel = strings.TrimSpace(in.TextModel)
+	if in.Title == "" || strings.TrimSpace(in.Script) == "" || utf8.RuneCountInString(in.Title) > 120 || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > imageproject.MaxImages {
+		writeError(w, http.StatusBadRequest, "invalid_image_project", "Image project settings are invalid.")
+		return imageProjectDraft{}, false
+	}
+	if in.ImageCount != 0 && (in.ImageCount < 1 || in.ImageCount > imageproject.MaxImages) {
+		writeError(w, http.StatusBadRequest, "invalid_image_count", "Image count must be between 1 and 18.")
+		return imageProjectDraft{}, false
+	}
+	return in, true
+}
+
+func confirmedSegments(in imageProjectDraft) ([]imageproject.Segment, error) {
+	if len(in.ConfirmedSegments) == 0 {
+		return nil, errors.New("confirmed segments are required")
+	}
+	encoded, err := json.Marshal(map[string]any{"segments": in.ConfirmedSegments})
+	if err != nil {
+		return nil, err
+	}
+	return imageproject.ParseSegmentSuggestions(in.Script, string(encoded))
+}
+
+func (h *imageProjectsHandler) suggestSegments(ctx context.Context, in imageProjectDraft) ([]imageproject.Segment, string, error) {
+	client, model, err := h.plannerClient(ctx, in.TextModel)
+	if err != nil {
+		return nil, "", err
+	}
+	segments, err := imageproject.SuggestSegments(ctx, client, model, in.Script, in.ImageCount)
+	return segments, model, err
+}
+
+func (h *imageProjectsHandler) suggestPrompts(ctx context.Context, in imageProjectDraft, segments []imageproject.Segment) ([]string, string, error) {
+	client, model, err := h.plannerClient(ctx, in.TextModel)
+	if err != nil {
+		return nil, "", err
+	}
+	prompts, err := imageproject.SuggestPrompts(ctx, client, model, segments, in.Ratio, in.Style, in.CustomStyle)
+	return prompts, model, err
+}
+
+func (h *imageProjectsHandler) plannerClient(ctx context.Context, requestedModel string) (imageproject.ChatClient, string, error) {
+	if h.runtime == nil {
+		return nil, "", consoleSettings.ErrNotConfigured
+	}
+	runtime, err := h.runtime.Runtime(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	baseURL := strings.TrimSpace(runtime.ImageTextBaseURL)
+	apiKey := strings.TrimSpace(runtime.ImageTextAPIKey)
+	model := strings.TrimSpace(requestedModel)
+	if model == "" {
+		model = strings.TrimSpace(runtime.ImageTextModel)
+	}
+	if model == "" {
+		model = strings.TrimSpace(runtime.GrokModel)
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(runtime.GrokBaseURL)
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(runtime.GrokAPIKey)
+	}
+	if baseURL == "" || apiKey == "" || model == "" {
+		return nil, "", consoleSettings.ErrNotConfigured
+	}
+	switch planner := h.planner.(type) {
+	case imageproject.ConfiguredChatClient:
+		planner.BaseURL, planner.APIKey, planner.Model = baseURL, apiKey, model
+		return planner, model, nil
+	case *imageproject.HTTPChatClient:
+		return imageproject.ConfiguredChatClient{HTTP: planner.HTTP, BaseURL: baseURL, APIKey: apiKey, Model: model}, model, nil
+	case nil:
+		return imageproject.ConfiguredChatClient{BaseURL: baseURL, APIKey: apiKey, Model: model}, model, nil
+	default:
+		return planner, model, nil
+	}
+}
+
+func (h *imageProjectsHandler) writePlannerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, consoleSettings.ErrNotConfigured):
+		writeError(w, http.StatusConflict, "image_text_model_not_configured", "Configure the image text model before requesting segment suggestions.")
+	case strings.Contains(err.Error(), "rewrote") || strings.Contains(err.Error(), "cover the original") || strings.Contains(err.Error(), "must be the cover") || strings.Contains(err.Error(), "between"):
+		writeError(w, http.StatusBadRequest, "invalid_image_segments", "The confirmed segments must keep the original script, start with a cover, and stay within 18 cards.")
+	case strings.Contains(err.Error(), "confirmed segments"):
+		writeError(w, http.StatusBadRequest, "segments_not_confirmed", "Confirm the AI segment suggestions before creating the image project.")
+	default:
+		writeError(w, http.StatusBadGateway, "image_text_model_failed", "The text model could not produce a usable plan.")
+	}
 }
 
 func (h *imageProjectsHandler) get(w http.ResponseWriter, r *http.Request) {

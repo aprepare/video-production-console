@@ -14,6 +14,8 @@ const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["grok_model", "Grok 模型", "模型名称"],
   ["image_base_url", "生图服务地址", "OpenAI 兼容 Base URL"],
   ["image_model", "生图模型", "gpt-image-2"],
+  ["image_text_base_url", "图文文本模型地址", "OpenAI 兼容 Chat Base URL"],
+  ["image_text_model", "图文文本模型", "用于分段建议和提示词"],
   ["codex_binary_path", "Codex CLI 路径", "codex 可执行文件路径"],
   ["media_index_path", "素材索引", "媒体索引文件"],
   ["media_root", "媒体素材目录", "本地媒体根目录"],
@@ -34,6 +36,8 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   grok_model: "Grok 模型",
   image_base_url: "生图服务地址",
   image_model: "生图模型",
+  image_text_base_url: "图文文本模型地址",
+  image_text_model: "图文文本模型",
   codex_binary_path: "Codex 程序路径",
   media_index_path: "素材索引",
   media_root: "媒体素材目录",
@@ -47,13 +51,14 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   volc_speech_resource_id: "火山语音资源 ID",
 };
 
-type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string; image_api_key: string };
+type SecretDraft = { grok_api_key: string; pexels_api_key: string; volc_speech_api_key: string; image_api_key: string; image_text_api_key: string };
 
 const secretFields: Array<[keyof SecretDraft, string]> = [
   ["grok_api_key", "Grok API 密钥"],
   ["pexels_api_key", "Pexels API 密钥"],
   ["volc_speech_api_key", "火山语音 API Key"],
   ["image_api_key", "生图 API Key"],
+  ["image_text_api_key", "图文文本模型 API Key"],
 ];
 
 const imageStyles = [
@@ -191,9 +196,9 @@ export function SettingsPanel({
             value={draft.max_image_concurrency || 3}
             onChange={(event) => onDraftChange({ ...draft, max_image_concurrency: Number(event.target.value) })}
           >
-            {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
+            {Array.from({ length: 18 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
-          <small>图文模式批量生成的最大并发，建议 3；接口稳定时可调到 5。</small>
+          <small>图文模式批量生成的最大并发，最多 18。</small>
         </label>
         <label className="settings-field">
           默认图片比例
@@ -267,9 +272,9 @@ export function SettingsPanel({
             </label>
           ))}
         </div>
-        {(draft.image_base_url || "").toLowerCase().startsWith("http://") ? (
+        {(draft.image_base_url || "").toLowerCase().startsWith("http://") || (draft.image_text_base_url || "").toLowerCase().startsWith("http://") ? (
           <p className="settings-feedback settings-feedback--danger" role="alert">
-            HTTP 会明文传输生图 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
+            HTTP 会明文传输生图或图文文本模型 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
           </p>
         ) : null}
         <button className="save-settings" type="submit">

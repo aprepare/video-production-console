@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"video-production-console/internal/domain"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
 
@@ -18,8 +20,8 @@ func TestImageProjectsHTTPRejectsIncompleteDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	handler := NewImageProjectsHandler(db, imageRuntimeStub{}, nil)
-	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"x","script":"第一句。","image_count":1,"ratio":"3:4","style":"finance_documentary","concurrency":1}`))
+	handler := testImageHandler(db, imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test"}, GrokAPIKey: "configured"}}, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "第一句。", map[string]any{"image_count": 1})))
 	request.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, request)

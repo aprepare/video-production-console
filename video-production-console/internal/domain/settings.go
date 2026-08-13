@@ -16,6 +16,8 @@ type PublicSettings struct {
 	GrokModel                   string   `json:"grok_model"`
 	ImageBaseURL                string   `json:"image_base_url"`
 	ImageModel                  string   `json:"image_model"`
+	ImageTextBaseURL            string   `json:"image_text_base_url"`
+	ImageTextModel              string   `json:"image_text_model"`
 	MaxImageConcurrency         int      `json:"max_image_concurrency"`
 	DefaultImageRatio           string   `json:"default_image_ratio"`
 	DefaultImageStyle           string   `json:"default_image_style"`

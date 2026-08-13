@@ -831,6 +831,54 @@ CREATE TABLE image_project_items (
 );
 CREATE INDEX image_projects_updated_idx ON image_projects(updated_at DESC, id);
 CREATE INDEX image_project_items_project_idx ON image_project_items(project_id, sequence);`,
+	`CREATE TABLE image_projects_v2 (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    script TEXT NOT NULL,
+    image_count INTEGER NOT NULL CHECK (image_count BETWEEN 1 AND 60),
+    ratio TEXT NOT NULL CHECK (ratio IN ('3:4','4:3','9:16','1:1')),
+    style TEXT NOT NULL,
+    custom_style TEXT NOT NULL DEFAULT '',
+    concurrency INTEGER NOT NULL CHECK (concurrency BETWEEN 1 AND 18),
+    status TEXT NOT NULL CHECK (status IN ('draft','generating','ready','partial','failed')),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+INSERT INTO image_projects_v2(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at)
+SELECT id,title,script,image_count,
+       ratio,style,custom_style,
+       CASE WHEN concurrency > 18 THEN 18 ELSE concurrency END,
+       status,created_at,updated_at
+FROM image_projects;
+CREATE TABLE image_project_items_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES image_projects_v2(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    role TEXT NOT NULL DEFAULT 'content' CHECK (role IN ('cover','content')),
+    source_text TEXT NOT NULL,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending','generating','ready','failed')),
+    image_path TEXT,
+    mime_type TEXT,
+    width INTEGER CHECK (width IS NULL OR width > 0),
+    height INTEGER CHECK (height IS NULL OR height > 0),
+    error_message TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE(project_id, sequence)
+);
+INSERT INTO image_project_items_v2(id,project_id,sequence,role,source_text,title,prompt,status,image_path,mime_type,width,height,error_message,created_at,updated_at)
+SELECT id,project_id,sequence,
+       CASE WHEN sequence = 1 THEN 'cover' ELSE 'content' END,
+       source_text,title,prompt,status,image_path,mime_type,width,height,error_message,created_at,updated_at
+FROM image_project_items;
+DROP TABLE image_project_items;
+DROP TABLE image_projects;
+ALTER TABLE image_projects_v2 RENAME TO image_projects;
+ALTER TABLE image_project_items_v2 RENAME TO image_project_items;
+CREATE INDEX image_projects_updated_idx ON image_projects(updated_at DESC, id);
+CREATE INDEX image_project_items_project_idx ON image_project_items(project_id, sequence);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

@@ -20,6 +20,7 @@ type ImageProjectItem struct {
 	ID           string    `json:"id"`
 	ProjectID    string    `json:"project_id"`
 	Sequence     int       `json:"sequence"`
+	Role         string    `json:"role"`
 	SourceText   string    `json:"source_text"`
 	Title        string    `json:"title"`
 	Prompt       string    `json:"prompt"`

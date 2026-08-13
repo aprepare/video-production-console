@@ -129,7 +129,7 @@ go run .\cmd\console
 - 无管理员时必须提供 `VIDEO_CONSOLE_INITIAL_PASSWORD`。
 - 可选 AgentRuntime：见第 3 节；默认不要求 OpenAI / Pi。
 - 混剪还依赖 machine profile / 设置里的 `media_root` + `media_index_path`（见 §6.1）。
-- 图文生图全局设置为 `image_base_url`、`image_model`（默认 `gpt-image-2`）、`max_image_concurrency`（默认 3）、`default_image_ratio`（默认 `3:4`）、`default_image_style`（默认 `finance_documentary`）和后端密钥 `image_api_key`。全局默认比例/风格只用于创建图文项目：创建时复制进项目的 `ratio` / `style` 字段，此后项目保存自己的值，后续修改全局默认不会追改已有项目；图片数量和自定义风格也属于项目值。Key 只存 `encrypted_secrets`、API 不回显、runtime JSON 不序列化。公网 Base URL 应使用 HTTPS；用户明确接受风险时可保存 HTTP 地址，但任何文档、日志、测试夹具都不得放真实 Key。
+- 图文线分开配置文本模型和生图模型。文本阶段使用 `image_text_base_url`、`image_text_model`、加密密钥 `image_text_api_key`；未单独配置时回落 `grok_*`。图片阶段使用 `image_base_url`、`image_model`（默认 `gpt-image-2`）和加密密钥 `image_api_key`。`max_image_concurrency` 默认 3、范围 1–18；单个项目最多 18 张，第一张固定为封面。工作流必须是「粘贴最终原文 → AI 分段建议 → 用户确认 → AI 按段生成提示词 → 批量/单张生图」，禁止恢复规则拆卡直出。全局默认比例/风格只用于创建图文项目，后续修改不会追改已有项目。Key 只存 `encrypted_secrets`、API 不回显、runtime JSON 不序列化。公网 Base URL 应使用 HTTPS；用户明确接受风险时可保存 HTTP 地址，但任何文档、日志、测试夹具都不得放真实 Key。
 
 ## 6. 关键数据流
 

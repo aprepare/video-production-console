@@ -37,6 +37,11 @@ const detail = (items: ImageProjectItem[], overrides: Partial<ImageProject> = {}
   items,
 });
 
+const segmentPreview = (segments = [
+  { sequence: 1, role: "cover", title: "第一句", source_text: "第一句。", rationale: "封面反差" },
+  { sequence: 2, role: "content", title: "第二句", source_text: "第二句。", rationale: "正文信息" },
+]) => json({ model: "planner-test", segments });
+
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 test("uses configured defaults for a new image project", async () => {
@@ -72,14 +77,16 @@ test("does not let a slow initial list replace a newly created project", async (
   const staleProject = { ...project, id: "stale", title: "旧项目", updated_at: "2026-08-13T00:00:00Z" };
   const api = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/image-projects" && (!init?.method || init.method === "GET")) return listResponse;
-    if (path === "/api/image-projects" && init?.method === "POST") return json(detail([item({})]), 201);
+    if (path === "/api/image-projects/segment-preview" && init?.method === "POST") return segmentPreview();
+    if (path === "/api/image-projects" && init?.method === "POST") return json(detail([item({ role: "cover" })]), 201);
     throw new Error(path);
   });
 
   render(<ImageModeWorkbench api={api} />);
   fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: project.title } });
   fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: project.script } });
-  fireEvent.click(screen.getByRole("button", { name: "创建图文项目" }));
+  fireEvent.click(screen.getByRole("button", { name: "生成分段建议" }));
+  fireEvent.click(await screen.findByRole("button", { name: "确认分段并生成提示词" }));
   expect(await screen.findByRole("heading", { name: project.title })).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "返回图文项目" }));
@@ -93,6 +100,12 @@ test("creates a final-copy image project with bounded parameters and ordered car
   let createBody: Record<string, unknown> | null = null;
   const api = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/image-projects" && (!init?.method || init.method === "GET")) return json([]);
+    if (path === "/api/image-projects/segment-preview" && init?.method === "POST") {
+      return segmentPreview([
+        { sequence: 1, role: "cover", title: "第一句", source_text: "  第一句。\n\n", rationale: "封面反差" },
+        { sequence: 2, role: "content", title: "第二句", source_text: "第二句。  ", rationale: "正文信息" },
+      ]);
+    }
     if (path === "/api/image-projects" && init?.method === "POST") {
       createBody = JSON.parse(String(init.body));
       return json(detail([
@@ -105,9 +118,10 @@ test("creates a final-copy image project with bounded parameters and ordered car
   render(<ImageModeWorkbench api={api} />);
   expect(await screen.findByRole("heading", { name: "图文项目" })).toBeTruthy();
 
-  const count = screen.getByLabelText<HTMLInputElement>("图片数量");
+  const count = screen.getByLabelText<HTMLInputElement>("建议张数");
   expect(count.min).toBe("1");
-  expect(count.max).toBe("60");
+  expect(count.max).toBe("18");
+  expect(within(screen.getByLabelText("项目并发")).getAllByRole("option")).toHaveLength(18);
   expect(within(screen.getByLabelText("图片比例")).getAllByRole("option").map((option) => option.textContent)).toEqual(["3:4", "4:3", "9:16", "1:1"]);
 
   const exactScript = "  第一句。\n\n第二句。  ";
@@ -117,11 +131,14 @@ test("creates a final-copy image project with bounded parameters and ordered car
   fireEvent.change(screen.getByLabelText("图片比例"), { target: { value: "9:16" } });
   fireEvent.change(screen.getByLabelText("视觉风格"), { target: { value: "custom" } });
   fireEvent.change(screen.getByLabelText("自定义风格"), { target: { value: "木刻版画" } });
-  fireEvent.change(screen.getByLabelText("项目并发"), { target: { value: "4" } });
-  fireEvent.submit(screen.getByRole("button", { name: "创建图文项目" }).closest("form")!);
+  fireEvent.change(screen.getByLabelText("项目并发"), { target: { value: "18" } });
+  fireEvent.change(screen.getByLabelText("文本模型"), { target: { value: "planner-custom" } });
+  fireEvent.click(screen.getByRole("button", { name: "生成分段建议" }));
+  expect(await screen.findByText("001 封面")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "确认分段并生成提示词" }));
 
-  expect(await screen.findByText("001")).toBeTruthy();
-  expect(screen.getByText("002")).toBeTruthy();
+  expect(await screen.findByText(/^001 封面$/)).toBeTruthy();
+  expect(screen.getByText(/^002$/)).toBeTruthy();
   expect(createBody).toMatchObject({
     title: "养老现金流",
     script: exactScript,
@@ -129,7 +146,12 @@ test("creates a final-copy image project with bounded parameters and ordered car
     ratio: "9:16",
     style: "custom",
     custom_style: "木刻版画",
-    concurrency: 4,
+    concurrency: 18,
+    text_model: "planner-custom",
+    segments: [
+      { sequence: 1, role: "cover", title: "第一句", source_text: "  第一句。\n\n", rationale: "封面反差" },
+      { sequence: 2, role: "content", title: "第二句", source_text: "第二句。  ", rationale: "正文信息" },
+    ],
   });
   expect(api.mock.calls.some(([path]) => String(path).includes("remix"))).toBe(false);
 });
@@ -153,8 +175,8 @@ test("keeps gallery order and saves edited source, title and prompt", async () =
   render(<ImageModeWorkbench api={api} />);
   fireEvent.click(await screen.findByRole("button", { name: /养老现金流/ }));
   const cards = await screen.findAllByRole("article");
-  expect(within(cards[0]).getByText("001")).toBeTruthy();
-  expect(within(cards[1]).getByText("002")).toBeTruthy();
+  expect(within(cards[0]).getByText(/^001 封面$/)).toBeTruthy();
+  expect(within(cards[1]).getByText(/^002$/)).toBeTruthy();
 
   fireEvent.change(within(cards[0]).getByLabelText("图片名称"), { target: { value: "新名称" } });
   fireEvent.change(within(cards[0]).getByLabelText("对应原文"), { target: { value: "新原文" } });

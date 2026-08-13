@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,11 +30,14 @@ func TestImageProjectsHTTPRegenerationKeepsOldImageOnFailureAndRemovesItOnSucces
 	}
 	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: "https://api.example.com/v1", ImageModel: "gpt-image-2", MaxImageConcurrency: 2}, ImageAPIKey: "secret"}}
 	success := imageGeneratorStub{result: imageproject.GenerateResult{Bytes: imageBytes, MIMEType: "image/png", Width: 3, Height: 4}}
-	handler := NewImageProjectsHandler(db, runtime, success)
-	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"x","script":"第一句。","image_count":1,"ratio":"3:4","style":"finance_documentary","concurrency":1}`))
+	handler := testImageHandler(db, runtime, success)
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "第一句。", map[string]any{"image_count": 1})))
 	request.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, request)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
 	var detail domain.ImageProjectDetail
 	if err := json.Unmarshal(created.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
@@ -70,7 +74,7 @@ func TestImageProjectsHTTPRegenerationKeepsOldImageOnFailureAndRemovesItOnSucces
 		t.Fatalf("unchanged save invalidated ready image: %+v", detail.Items[0])
 	}
 
-	failing := NewImageProjectsHandler(db, runtime, imageGeneratorStub{err: errors.New("vendor unavailable")})
+	failing := testImageHandler(db, runtime, imageGeneratorStub{err: errors.New("vendor unavailable")})
 	failed := httptest.NewRecorder()
 	failing.ServeHTTP(failed, httptest.NewRequest(http.MethodPost, itemURL, nil))
 	if failed.Code != http.StatusOK {
@@ -132,8 +136,8 @@ func TestImageProjectsHTTPEditedReadyItemBecomesPendingAndFailureDoesNotServeOld
 		t.Fatal(err)
 	}
 	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: "https://api.example.com/v1", ImageModel: "gpt-image-2", MaxImageConcurrency: 2}, ImageAPIKey: "secret"}}
-	handler := NewImageProjectsHandler(db, runtime, imageGeneratorStub{result: imageproject.GenerateResult{Bytes: imageBytes, MIMEType: "image/png", Width: 3, Height: 4}})
-	createRequest := httptest.NewRequest(http.MethodPost, "/api/image-projects", strings.NewReader(`{"title":"x","script":"  第一句。\n","image_count":1,"ratio":"3:4","style":"finance_documentary","concurrency":1}`))
+	handler := testImageHandler(db, runtime, imageGeneratorStub{result: imageproject.GenerateResult{Bytes: imageBytes, MIMEType: "image/png", Width: 3, Height: 4}})
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "  第一句。\n", map[string]any{"image_count": 1})))
 	createRequest.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, createRequest)
@@ -162,7 +166,7 @@ func TestImageProjectsHTTPEditedReadyItemBecomesPendingAndFailureDoesNotServeOld
 	if preview.Code != http.StatusNotFound {
 		t.Fatalf("stale edited image preview status=%d", preview.Code)
 	}
-	failing := NewImageProjectsHandler(db, runtime, imageGeneratorStub{err: errors.New("vendor unavailable")})
+	failing := testImageHandler(db, runtime, imageGeneratorStub{err: errors.New("vendor unavailable")})
 	failed := httptest.NewRecorder()
 	failing.ServeHTTP(failed, httptest.NewRequest(http.MethodPost, itemURL+"/generate", nil))
 	if err := json.Unmarshal(failed.Body.Bytes(), &detail); err != nil {

@@ -22,6 +22,8 @@ const draft: PublicSettings = {
   grok_model: "",
   image_base_url: "http://images.example.test/v1",
   image_model: "gpt-image-2",
+  image_text_base_url: "http://text.example.test/v1",
+  image_text_model: "planner-test",
   max_image_concurrency: 3,
   default_image_ratio: "3:4",
   default_image_style: "finance_documentary",
@@ -46,6 +48,7 @@ const settings: Settings = {
     pexels_api_key: { configured: false, masked: "" },
     volc_speech_api_key: { configured: true, masked: "********" },
     image_api_key: { configured: false, masked: "" },
+    image_text_api_key: { configured: false, masked: "" },
   },
 };
 
@@ -57,7 +60,7 @@ function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {
       settings={settings}
       draft={draft}
       onDraftChange={onDraftChange}
-      secretDraft={{ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "" }}
+      secretDraft={{ grok_api_key: "", pexels_api_key: "", volc_speech_api_key: "", image_api_key: "", image_text_api_key: "" }}
       onSecretDraftChange={onSecretDraftChange}
       feedback=""
       onClose={() => {}}
@@ -102,6 +105,7 @@ test("the Volcengine API key is masked and only sent when a new value is typed",
     pexels_api_key: "",
     volc_speech_api_key: "new-volc-key",
     image_api_key: "",
+    image_text_api_key: "",
   });
 });
 
@@ -111,8 +115,9 @@ test("image generation settings and secret are editable", () => {
   expect((screen.getByRole("textbox", { name: "生图模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
   fireEvent.change(baseURL, { target: { value: "https://images.example.test/v1" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_base_url: "https://images.example.test/v1" });
-  fireEvent.change(screen.getByRole("combobox", { name: /同时生成图片数/ }), { target: { value: "5" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, max_image_concurrency: 5 });
+  fireEvent.change(screen.getByRole("combobox", { name: /同时生成图片数/ }), { target: { value: "18" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, max_image_concurrency: 18 });
+  expect((screen.getByRole("textbox", { name: "图文文本模型" }) as HTMLInputElement).value).toBe("planner-test");
   fireEvent.change(screen.getByRole("combobox", { name: "默认图片比例" }), { target: { value: "9:16" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_ratio: "9:16" });
   fireEvent.change(screen.getByRole("combobox", { name: "默认视觉风格" }), { target: { value: "red_ink" } });
@@ -123,8 +128,17 @@ test("image generation settings and secret are editable", () => {
     pexels_api_key: "",
     volc_speech_api_key: "",
     image_api_key: "new-image-key",
+    image_text_api_key: "",
   });
-  expect(screen.getByText(/HTTP 会明文传输生图 API Key/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText(/图文文本模型 API Key/), { target: { value: "new-text-key" } });
+  expect(onSecretDraftChange).toHaveBeenCalledWith({
+    grok_api_key: "",
+    pexels_api_key: "",
+    volc_speech_api_key: "",
+    image_api_key: "",
+    image_text_api_key: "new-text-key",
+  });
+  expect(screen.getByText(/HTTP 会明文传输生图或图文文本模型 API Key/)).toBeTruthy();
 });
 
 test("an old settings response without image_base_url remains editable without an HTTP warning", () => {

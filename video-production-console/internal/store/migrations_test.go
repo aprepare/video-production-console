@@ -1429,6 +1429,50 @@ func assertBackupIsPreMigration(t *testing.T, path string) {
 	}
 }
 
+func TestImageProjectV2MigrationPreservesLegacyCardsWhileCappingConcurrency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image-project-v2-upgrade.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	for i, migration := range migrations[:len(migrations)-1] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply predecessor migration %d: %v", i+1, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO image_projects(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at) VALUES('legacy','旧项目','原文',20,'3:4','finance_documentary','',5,'draft',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	for sequence := 1; sequence <= 20; sequence++ {
+		if _, err := db.Exec(`INSERT INTO image_project_items(id,project_id,sequence,source_text,title,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)`, fmt.Sprintf("item-%02d", sequence), "legacy", sequence, fmt.Sprintf("原文%d", sequence), fmt.Sprintf("标题%d", sequence), fmt.Sprintf("提示词%d", sequence), now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(migrations[len(migrations)-1]); err != nil {
+		t.Fatalf("apply image project v2 migration: %v", err)
+	}
+	if got := scalar(t, db, `SELECT image_count FROM image_projects WHERE id='legacy'`); got != "20" {
+		t.Fatalf("image_count=%s, want 20", got)
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM image_project_items WHERE project_id='legacy'`); got != "20" {
+		t.Fatalf("item count=%s, want 20", got)
+	}
+	if got := scalar(t, db, `SELECT MAX(sequence) FROM image_project_items WHERE project_id='legacy'`); got != "20" {
+		t.Fatalf("max sequence=%s, want 20", got)
+	}
+	if _, err := db.Exec(`INSERT INTO image_projects(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at) VALUES('too-concurrent','x','x',1,'3:4','finance_documentary','',19,'draft',?,?)`, now, now); err == nil {
+		t.Fatal("migration accepted concurrency 19")
+	}
+}
+
 func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var count int
