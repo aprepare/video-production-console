@@ -42,6 +42,7 @@
 | 前端重构（本轮） | `App.tsx` 从约 2900 行降到 1086 行：数据获取迁 react-query，弹窗与首页拆成组件，有状态逻辑收进 6 个自定义 hook。目录含义见 [全景说明 §4.2](ARCHITECTURE.md) | `web/src/{shell,tasks,assets,idea,chat,settings,projects,query}/` |
 | 后端质量（本轮） | 统一 `BEGIN IMMEDIATE` 事务助手；`log` 全量迁 `log/slog`（含 `request_id`/`task_id`）；补齐 timing/phase 的 json tag；`codex_turn_id` 加索引 | `store/tx.go`、`internal/logging/`、`internal/domain/timings.go`、`store/migrations.go` |
 | 混剪质量（本轮） | 取样后加 category 相邻打散；素材索引扫描结果按 (索引路径, media_root) + mtime/size 缓存复用；剪映资源 ID 外置到 machine profile | `montageplan/diversify.go`、`mediascan.go`、`resources.go` |
+| 图文模式两段式 AI 规划 | 分段预览 → 用户确认 → AI 提示词 → 生图；并发与卡片上限 1–18、首张固定封面；旧批次 v2 迁移截断到 18 张 | `internal/imageproject/planner.go`、`httpapi/imageprojects.go`、`store/migrations.go`；`c7382e5` |
 
 默认运行时（勿擅自改默认）：
 
@@ -54,6 +55,8 @@
 ### 1.2 下一阶段规划（建议接手顺序）
 
 > [优化工单](OPTIMIZATION-BACKLOG.md) 的 P0–P3 已全部完成或转为方案，只剩 P2-5b（契约代码生成）待用户拍板。所以下一阶段的重点是**真机回归**，不是继续改代码。
+>
+> 真机回归之后的产品方向按 [制作方式路线图](plans/2026-08-13-production-methods-roadmap.md) 排序：先 [素材智能混剪 v2 计划](plans/2026-08-13-montage-media-intelligence.md) 的 Task 0–2 修"只选风景"，再交付"图片视频"（P1.5，方式四），最后电影建库（P2，方式三）。**该 v2 计划截至 2026-08-13 完全未实施**（`plan_version` 仍是 `1.0`，`internal/mediacatalog/` 等均不存在），读它时不要误当现状。
 
 1. **混剪真机回归（高优先）**  
    重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`（含 ≥240s 旁白）：应不再因 SFX 数量或 `source_timerange` 超素材失败；任务详情顶栏应显示总耗时。缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。

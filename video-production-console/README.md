@@ -12,6 +12,7 @@
 | [使用说明](docs/USER-GUIDE.md) | 登录、五阶段、同行原文二创、混剪限制 |
 | [AI 接手说明](docs/AI-HANDOFF.md) | 接手备忘：近期改动、下一步规划、验证命令、工作区红线 |
 | [优化工单](docs/OPTIMIZATION-BACKLOG.md) | 待办优化项，按 P0→P3 排序，每条含证据/改法/验收/边界 |
+| [制作方式路线图](docs/plans/2026-08-13-production-methods-roadmap.md) | 四种制作方式的现状、共享底座、建库方法与实施顺序（方式三/四**未实施**） |
 | [混剪登记](docs/operations/montage-registration.md) | 明文草稿、登记、重试与本机限制 |
 | [验收清单](docs/operations/acceptance-checklist.md) | 人工验收路径 |
 | [常见问题与排障](docs/operations/troubleshooting.md) | 已验证故障、错误原文、根因、最小处置与禁止操作 |
