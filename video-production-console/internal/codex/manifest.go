@@ -111,6 +111,13 @@ type ManifestSettings struct {
 	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
 	DraftDisplayName     string `json:"draft_display_name,omitempty"`
 	RevisionNotes        string `json:"revision_notes,omitempty"`
+	MediaCatalogPath     string `json:"media_catalog_path,omitempty"`
+	FFmpegPath           string `json:"ffmpeg_path,omitempty"`
+	FFprobePath          string `json:"ffprobe_path,omitempty"`
+	VisionBaseURL        string `json:"vision_base_url,omitempty"`
+	VisionModel          string `json:"vision_model,omitempty"`
+	EmbeddingBaseURL     string `json:"embedding_base_url,omitempty"`
+	EmbeddingModel       string `json:"embedding_model,omitempty"`
 }
 
 type BuildManifestInput struct {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -873,6 +874,160 @@ func TestSettingsImageGenerationValidationAllowsHTTPAndRejectsInvalidValues(t *t
 	}
 }
 
+func TestSettingsMediaIntelligenceDefaultsFillMissingValues(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	legacy := public
+	legacy.PexelsAPIBaseURL = ""
+	legacy.PixabayAPIBaseURL = ""
+	legacy.MaxExternalResultsPerQuery = 0
+	view, err := service.Update(t.Context(), legacy, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.PexelsAPIBaseURL != "https://api.pexels.com" || view.Public.PixabayAPIBaseURL != "https://pixabay.com" {
+		t.Fatalf("provider base defaults=%q/%q", view.Public.PexelsAPIBaseURL, view.Public.PixabayAPIBaseURL)
+	}
+	if view.Public.MaxExternalResultsPerQuery != 20 {
+		t.Fatalf("max_external_results_per_query=%d, want default 20", view.Public.MaxExternalResultsPerQuery)
+	}
+}
+
+func TestSettingsMediaIntelligenceRoundTripsValidConfiguration(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	binaries := t.TempDir()
+	ffmpeg := filepath.Join(binaries, "ffmpeg.exe")
+	ffprobe := filepath.Join(binaries, "ffprobe.exe")
+	for _, path := range []string{ffmpeg, ffprobe} {
+		if err := os.WriteFile(path, []byte("binary"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	public.MediaCatalogPath = filepath.Join(public.MediaRoot, "catalog.db")
+	public.FFmpegPath = ffmpeg
+	public.FFprobePath = ffprobe
+	public.VisionBaseURL = "https://vision.example.test/v1"
+	public.VisionModel = "vision-x"
+	public.EmbeddingBaseURL = "https://embedding.example.test/v1"
+	public.EmbeddingModel = "embed-y"
+	public.MaxExternalResultsPerQuery = 50
+	view, err := service.Update(t.Context(), public, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(view.Public, public) {
+		t.Fatalf("round trip=%+v want %+v", view.Public, public)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.MediaCatalogPath != public.MediaCatalogPath || runtime.FFmpegPath != ffmpeg || runtime.VisionModel != "vision-x" || runtime.EmbeddingBaseURL != public.EmbeddingBaseURL {
+		t.Fatalf("runtime media settings=%+v", runtime.PublicSettings)
+	}
+}
+
+func TestSettingsMediaIntelligenceValidationRejectsUnsafeValues(t *testing.T) {
+	service, _, _, valid := newSettingsTestService(t, Options{})
+	binaries := t.TempDir()
+	ffmpeg := filepath.Join(binaries, "ffmpeg.exe")
+	if err := os.WriteFile(ffmpeg, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	valid.FFmpegPath = ffmpeg
+	if _, err := service.PutPublic(t.Context(), valid); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	tests := []struct {
+		name   string
+		mutate func(*domain.PublicSettings)
+	}{
+		{"catalog outside media root", func(v *domain.PublicSettings) { v.MediaCatalogPath = filepath.Join(outside, "catalog.db") }},
+		{"catalog relative", func(v *domain.PublicSettings) { v.MediaCatalogPath = "catalog.db" }},
+		{"catalog without media root", func(v *domain.PublicSettings) {
+			v.MediaCatalogPath = filepath.Join(v.MediaRoot, "catalog.db")
+			v.MediaIndexPath = ""
+			v.MediaRoot = ""
+		}},
+		{"ffmpeg relative", func(v *domain.PublicSettings) { v.FFmpegPath = "ffmpeg.exe" }},
+		{"ffmpeg missing", func(v *domain.PublicSettings) { v.FFmpegPath = filepath.Join(outside, "missing-ffmpeg.exe") }},
+		{"ffmpeg directory", func(v *domain.PublicSettings) { v.FFmpegPath = outside }},
+		{"ffprobe missing", func(v *domain.PublicSettings) { v.FFprobePath = filepath.Join(outside, "missing-ffprobe.exe") }},
+		{"pexels plain http", func(v *domain.PublicSettings) { v.PexelsAPIBaseURL = "http://api.pexels.com" }},
+		{"pexels foreign host", func(v *domain.PublicSettings) { v.PexelsAPIBaseURL = "https://api.pexels.com.evil.test" }},
+		{"pexels other host", func(v *domain.PublicSettings) { v.PexelsAPIBaseURL = "https://example.com" }},
+		{"pixabay subdomain", func(v *domain.PublicSettings) { v.PixabayAPIBaseURL = "https://api.pixabay.com" }},
+		{"pixabay plain http", func(v *domain.PublicSettings) { v.PixabayAPIBaseURL = "http://pixabay.com" }},
+		{"external results above cap", func(v *domain.PublicSettings) { v.MaxExternalResultsPerQuery = 51 }},
+		{"external results negative", func(v *domain.PublicSettings) { v.MaxExternalResultsPerQuery = -1 }},
+		{"vision URL with query", func(v *domain.PublicSettings) { v.VisionBaseURL = "https://vision.example.test/v1?key=leak" }},
+		{"vision URL not http", func(v *domain.PublicSettings) { v.VisionBaseURL = "ftp://vision.example.test" }},
+		{"vision URL too long", func(v *domain.PublicSettings) {
+			v.VisionBaseURL = "https://vision.example.test/" + strings.Repeat("a", 2049)
+		}},
+		{"embedding URL with fragment", func(v *domain.PublicSettings) { v.EmbeddingBaseURL = "https://embedding.example.test/v1#frag" }},
+		{"vision model untrimmed", func(v *domain.PublicSettings) { v.VisionModel = " vision-x " }},
+		{"embedding model too long", func(v *domain.PublicSettings) { v.EmbeddingModel = strings.Repeat("m", 129) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := valid
+			test.mutate(&invalid)
+			if _, err := service.PutPublic(t.Context(), invalid); !errors.Is(err, ErrInvalidSettings) {
+				t.Fatalf("PutPublic() error=%v, want invalid settings", err)
+			}
+		})
+	}
+}
+
+func TestSettingsMediaIntelligenceSecretsStayEncryptedAndRuntimeOnly(t *testing.T) {
+	service, db, _, public := newSettingsTestService(t, Options{})
+	secrets := map[string]string{
+		SecretVisionAPIKey:    "vision-secret-value",
+		SecretEmbeddingAPIKey: "embedding-secret-value",
+		SecretPixabayAPIKey:   "pixabay-secret-value",
+	}
+	view, err := service.Update(t.Context(), public, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range secrets {
+		if !view.Secrets[key].Configured || view.Secrets[key].Masked != secretMask {
+			t.Fatalf("secret %s status=%+v", key, view.Secrets[key])
+		}
+		if bytes.Contains(raw, []byte(value)) {
+			t.Fatalf("settings view leaked %s", key)
+		}
+		var ciphertext string
+		if err := db.QueryRow(`SELECT ciphertext FROM encrypted_secrets WHERE key=?`, key).Scan(&ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		if ciphertext == "" || strings.Contains(ciphertext, value) {
+			t.Fatalf("secret %s was not stored as opaque ciphertext", key)
+		}
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.VisionAPIKey != "vision-secret-value" || runtime.EmbeddingAPIKey != "embedding-secret-value" || runtime.PixabayAPIKey != "pixabay-secret-value" {
+		t.Fatalf("runtime secrets missing: vision=%t embedding=%t pixabay=%t", runtime.VisionAPIKey != "", runtime.EmbeddingAPIKey != "", runtime.PixabayAPIKey != "")
+	}
+	runtimeJSON, err := json.Marshal(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range secrets {
+		if bytes.Contains(runtimeJSON, []byte(value)) {
+			t.Fatalf("runtime JSON leaked a media intelligence key: %s", runtimeJSON)
+		}
+	}
+}
+
 func TestSettingsImageBaseURLRejectsValuesLongerThanSchemaLimit(t *testing.T) {
 	service, _, _, valid := newSettingsTestService(t, Options{})
 	valid.ImageBaseURL = "https://images.example.test/" + strings.Repeat("a", 2049)
@@ -902,6 +1057,8 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		ImageModel: "gpt-image-2", MaxImageConcurrency: 3, DefaultImageRatio: "3:4", DefaultImageStyle: "finance_documentary",
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
+		PexelsAPIBaseURL: "https://api.pexels.com", PixabayAPIBaseURL: "https://pixabay.com",
+		MaxExternalResultsPerQuery: 20,
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

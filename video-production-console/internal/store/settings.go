@@ -32,6 +32,9 @@ var publicSettingKeys = map[string]struct{}{
 	"media_index_path": {}, "media_root": {}, "jianying_root": {},
 	"machine_profile_path": {}, "app_server_enabled": {}, "codex_workspace_roots": {}, "codex_task_project_root": {},
 	"volc_speech_speaker_id": {}, "volc_speech_resource_id": {},
+	"media_catalog_path": {}, "ffmpeg_path": {}, "ffprobe_path": {},
+	"vision_base_url": {}, "vision_model": {}, "embedding_base_url": {}, "embedding_model": {},
+	"pexels_api_base_url": {}, "pixabay_api_base_url": {}, "max_external_results_per_query": {},
 }
 
 type EncryptedSecret struct {

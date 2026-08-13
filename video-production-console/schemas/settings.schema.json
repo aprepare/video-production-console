@@ -114,7 +114,35 @@
         },
         "codex_task_project_root": { "$ref": "#/$defs/optionalAbsolutePath" },
         "volc_speech_speaker_id": { "type": "string", "maxLength": 256 },
-        "volc_speech_resource_id": { "type": "string", "maxLength": 256 }
+        "volc_speech_resource_id": { "type": "string", "maxLength": 256 },
+        "media_catalog_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "ffmpeg_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "ffprobe_path": { "$ref": "#/$defs/optionalAbsolutePath" },
+        "vision_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "vision_model": { "type": "string", "maxLength": 128 },
+        "embedding_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "embedding_model": { "type": "string", "maxLength": 128 },
+        "pexels_api_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "default": "https://api.pexels.com",
+          "pattern": "^(?:$|https://api\\.pexels\\.com(?:/[^#?]*)?)$"
+        },
+        "pixabay_api_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "default": "https://pixabay.com",
+          "pattern": "^(?:$|https://pixabay\\.com(?:/[^#?]*)?)$"
+        },
+        "max_external_results_per_query": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
       }
     },
     "publicSettingsUpdate": {
@@ -179,7 +207,17 @@
             "codex_workspace_roots",
             "codex_task_project_root",
             "volc_speech_speaker_id",
-            "volc_speech_resource_id"
+            "volc_speech_resource_id",
+            "media_catalog_path",
+            "ffmpeg_path",
+            "ffprobe_path",
+            "vision_base_url",
+            "vision_model",
+            "embedding_base_url",
+            "embedding_model",
+            "pexels_api_base_url",
+            "pixabay_api_base_url",
+            "max_external_results_per_query"
           ]
         }
       ]
@@ -192,7 +230,10 @@
         "pexels_api_key": { "type": "string", "maxLength": 16384 },
         "volc_speech_api_key": { "type": "string", "maxLength": 16384 },
         "image_api_key": { "type": "string", "maxLength": 16384 },
-        "image_text_api_key": { "type": "string", "maxLength": 16384 }
+        "image_text_api_key": { "type": "string", "maxLength": 16384 },
+        "vision_api_key": { "type": "string", "maxLength": 16384 },
+        "embedding_api_key": { "type": "string", "maxLength": 16384 },
+        "pixabay_api_key": { "type": "string", "maxLength": 16384 }
       }
     },
     "secretStatus": {
@@ -217,13 +258,16 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key"],
+      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
         "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
         "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" },
         "image_api_key": { "$ref": "#/$defs/secretStatus" },
-        "image_text_api_key": { "$ref": "#/$defs/secretStatus" }
+        "image_text_api_key": { "$ref": "#/$defs/secretStatus" },
+        "vision_api_key": { "$ref": "#/$defs/secretStatus" },
+        "embedding_api_key": { "$ref": "#/$defs/secretStatus" },
+        "pixabay_api_key": { "$ref": "#/$defs/secretStatus" }
       }
     },
     "settingsUpdate": {

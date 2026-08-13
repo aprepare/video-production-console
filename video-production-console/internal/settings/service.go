@@ -33,16 +33,24 @@ const (
 	SecretVolcSpeechAPIKey = "volc_speech_api_key"
 	SecretImageAPIKey      = "image_api_key"
 	SecretImageTextAPIKey  = "image_text_api_key"
+	SecretVisionAPIKey     = "vision_api_key"
+	SecretEmbeddingAPIKey  = "embedding_api_key"
+	SecretPixabayAPIKey    = "pixabay_api_key"
 
 	secretMask                 = "********"
 	defaultImageModel          = "gpt-image-2"
 	defaultMaxImageConcurrency = 3
 	maxImageConcurrency        = 18
-	defaultImageRatio          = "3:4"
-	defaultImageStyle          = "finance_documentary"
-	probeTimeout               = 5 * time.Second
-	maxProbeBodySize           = 64 << 10
-	maxCommandOutputSize       = 64 << 10
+
+	defaultPexelsAPIBaseURL           = "https://api.pexels.com"
+	defaultPixabayAPIBaseURL          = "https://pixabay.com"
+	defaultMaxExternalResultsPerQuery = 20
+	maxExternalResultsPerQuery        = 50
+	defaultImageRatio                 = "3:4"
+	defaultImageStyle                 = "finance_documentary"
+	probeTimeout                      = 5 * time.Second
+	maxProbeBodySize                  = 64 << 10
+	maxCommandOutputSize              = 64 << 10
 )
 
 var (
@@ -51,7 +59,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey, SecretImageTextAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -119,6 +127,9 @@ type Runtime struct {
 	VolcSpeechAPIKey string           `json:"-"`
 	ImageAPIKey      string           `json:"-"`
 	ImageTextAPIKey  string           `json:"-"`
+	VisionAPIKey     string           `json:"-"`
+	EmbeddingAPIKey  string           `json:"-"`
+	PixabayAPIKey    string           `json:"-"`
 	SecretVersions   map[string]int64 `json:"-"`
 }
 
@@ -395,6 +406,12 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.ImageAPIKey = value
 		case SecretImageTextAPIKey:
 			runtime.ImageTextAPIKey = value
+		case SecretVisionAPIKey:
+			runtime.VisionAPIKey = value
+		case SecretEmbeddingAPIKey:
+			runtime.EmbeddingAPIKey = value
+		case SecretPixabayAPIKey:
+			runtime.PixabayAPIKey = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -469,6 +486,7 @@ func validateSecretUpdate(key, value string) error {
 
 func validatePublic(value domain.PublicSettings) error {
 	value = withImageDefaults(value)
+	value = withMediaIntelligenceDefaults(value)
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
 	}
@@ -520,6 +538,50 @@ func validatePublic(value domain.PublicSettings) error {
 	if !validImageStyle(value.DefaultImageStyle) {
 		return invalid("default_image_style")
 	}
+	if value.MaxExternalResultsPerQuery < 1 || value.MaxExternalResultsPerQuery > maxExternalResultsPerQuery {
+		return invalid("max_external_results_per_query")
+	}
+	if err := validateFixedHTTPSHost(value.PexelsAPIBaseURL, "api.pexels.com"); err != nil {
+		return invalid("pexels_api_base_url")
+	}
+	if err := validateFixedHTTPSHost(value.PixabayAPIBaseURL, "pixabay.com"); err != nil {
+		return invalid("pixabay_api_base_url")
+	}
+	if value.VisionBaseURL != "" {
+		parsed, err := parseHTTPURL(value.VisionBaseURL)
+		if len(value.VisionBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("vision_base_url")
+		}
+	}
+	if value.VisionModel != strings.TrimSpace(value.VisionModel) || len(value.VisionModel) > 128 {
+		return invalid("vision_model")
+	}
+	if value.EmbeddingBaseURL != "" {
+		parsed, err := parseHTTPURL(value.EmbeddingBaseURL)
+		if len(value.EmbeddingBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("embedding_base_url")
+		}
+	}
+	if value.EmbeddingModel != strings.TrimSpace(value.EmbeddingModel) || len(value.EmbeddingModel) > 128 {
+		return invalid("embedding_model")
+	}
+	// FFmpeg binaries are optional, but a configured path must name an
+	// existing regular file so tasks never shell out to a guessed location.
+	for _, binary := range []struct{ name, value string }{
+		{"ffmpeg_path", value.FFmpegPath},
+		{"ffprobe_path", value.FFprobePath},
+	} {
+		if binary.value == "" {
+			continue
+		}
+		if err := validateCanonicalAbsolutePath(binary.value); err != nil {
+			return invalid(binary.name)
+		}
+		info, err := os.Stat(binary.value)
+		if err != nil || !info.Mode().IsRegular() {
+			return invalid(binary.name)
+		}
+	}
 	paths := []struct {
 		name     string
 		value    string
@@ -535,6 +597,7 @@ func validatePublic(value domain.PublicSettings) error {
 		{"jianying_root", value.JianyingRoot, false},
 		{"machine_profile_path", value.MachineProfilePath, false},
 		{"codex_task_project_root", value.CodexTaskProjectRoot, false},
+		{"media_catalog_path", value.MediaCatalogPath, false},
 	}
 	for _, path := range paths {
 		if path.value == "" && !path.required {
@@ -549,6 +612,9 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	if value.MediaIndexPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaIndexPath)) {
 		return invalid("media_index_path")
+	}
+	if value.MediaCatalogPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaCatalogPath)) {
+		return invalid("media_catalog_path")
 	}
 	for _, root := range value.CodexWorkspaceRoots {
 		if err := validateCanonicalAbsolutePath(root); err != nil {
@@ -601,6 +667,20 @@ func validateLoopbackURL(value string) error {
 func validateHTTPURL(value string) error {
 	_, err := parseHTTPURL(value)
 	return err
+}
+
+// validateFixedHTTPSHost pins an external provider base URL to HTTPS on one
+// exact host. Tests exercise providers through fake transports instead of
+// loosening this restriction.
+func validateFixedHTTPSHost(value, host string) error {
+	parsed, err := parseHTTPURL(value)
+	if err != nil {
+		return err
+	}
+	if len(value) > 2048 || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, host) || parsed.RawQuery != "" {
+		return errors.New("URL host is not allowed")
+	}
+	return nil
 }
 
 func parseHTTPURL(value string) (*url.URL, error) {
@@ -667,6 +747,7 @@ func pathWithin(root, target string) bool {
 
 func publicValues(value domain.PublicSettings) map[string]string {
 	value = withImageDefaults(value)
+	value = withMediaIntelligenceDefaults(value)
 	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
@@ -687,6 +768,13 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"codex_task_project_root": value.CodexTaskProjectRoot,
 		"volc_speech_speaker_id":  value.VolcSpeechSpeakerID,
 		"volc_speech_resource_id": value.VolcSpeechResourceID,
+		"media_catalog_path":      value.MediaCatalogPath,
+		"ffmpeg_path":             value.FFmpegPath, "ffprobe_path": value.FFprobePath,
+		"vision_base_url": value.VisionBaseURL, "vision_model": value.VisionModel,
+		"embedding_base_url": value.EmbeddingBaseURL, "embedding_model": value.EmbeddingModel,
+		"pexels_api_base_url":            value.PexelsAPIBaseURL,
+		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
+		"max_external_results_per_query": strconv.Itoa(value.MaxExternalResultsPerQuery),
 	}
 }
 
@@ -702,6 +790,19 @@ func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
 	}
 	if value.DefaultImageStyle == "" {
 		value.DefaultImageStyle = defaultImageStyle
+	}
+	return value
+}
+
+func withMediaIntelligenceDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if strings.TrimSpace(value.PexelsAPIBaseURL) == "" {
+		value.PexelsAPIBaseURL = defaultPexelsAPIBaseURL
+	}
+	if strings.TrimSpace(value.PixabayAPIBaseURL) == "" {
+		value.PixabayAPIBaseURL = defaultPixabayAPIBaseURL
+	}
+	if value.MaxExternalResultsPerQuery == 0 {
+		value.MaxExternalResultsPerQuery = defaultMaxExternalResultsPerQuery
 	}
 	return value
 }
@@ -762,6 +863,18 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 	if !validImageStyle(imageStyle) {
 		imageStyle = defaultImageStyle
 	}
+	externalResults, _ := strconv.Atoi(values["max_external_results_per_query"])
+	if externalResults < 1 || externalResults > maxExternalResultsPerQuery {
+		externalResults = defaultMaxExternalResultsPerQuery
+	}
+	pexelsBaseURL := strings.TrimSpace(values["pexels_api_base_url"])
+	if pexelsBaseURL == "" {
+		pexelsBaseURL = defaultPexelsAPIBaseURL
+	}
+	pixabayBaseURL := strings.TrimSpace(values["pixabay_api_base_url"])
+	if pixabayBaseURL == "" {
+		pixabayBaseURL = defaultPixabayAPIBaseURL
+	}
 	return domain.PublicSettings{
 		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
 		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
@@ -779,6 +892,12 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		CodexTaskProjectRoot: values["codex_task_project_root"],
 		VolcSpeechSpeakerID:  values["volc_speech_speaker_id"],
 		VolcSpeechResourceID: values["volc_speech_resource_id"],
+		MediaCatalogPath:     values["media_catalog_path"],
+		FFmpegPath:           values["ffmpeg_path"], FFprobePath: values["ffprobe_path"],
+		VisionBaseURL: values["vision_base_url"], VisionModel: strings.TrimSpace(values["vision_model"]),
+		EmbeddingBaseURL: values["embedding_base_url"], EmbeddingModel: strings.TrimSpace(values["embedding_model"]),
+		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
+		MaxExternalResultsPerQuery: externalResults,
 	}
 }
 

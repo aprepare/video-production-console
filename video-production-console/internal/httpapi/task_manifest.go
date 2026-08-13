@@ -153,6 +153,12 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		SessionID: strings.TrimSpace(req.SessionID), CandidateID: strings.TrimSpace(req.CandidateID),
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
 		MachineProfilePath: machineProfilePath, RevisionNotes: strings.TrimSpace(req.RevisionNotes),
+		// Media intelligence settings freeze only typed public fields; Runtime
+		// secrets have no representable slot in ManifestSettings.
+		MediaCatalogPath: runtime.MediaCatalogPath,
+		FFmpegPath:       runtime.FFmpegPath, FFprobePath: runtime.FFprobePath,
+		VisionBaseURL: runtime.VisionBaseURL, VisionModel: runtime.VisionModel,
+		EmbeddingBaseURL: runtime.EmbeddingBaseURL, EmbeddingModel: runtime.EmbeddingModel,
 	}
 	if task.Action == domain.ActionMontageExecute {
 		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -563,7 +564,11 @@ func TestTaskManifestSchemaUsesFlatPublicSettingsAllowlist(t *testing.T) {
 	if !ok {
 		t.Fatal("non_secret_settings public property allowlist missing")
 	}
-	for _, key := range []string{"baokuan_base_url", "obsidian_vault", "topic_cards_dir", "grok_model", "media_root", "jianying_root"} {
+	for _, key := range []string{
+		"baokuan_base_url", "obsidian_vault", "topic_cards_dir", "grok_model", "media_root", "jianying_root",
+		"media_catalog_path", "ffmpeg_path", "ffprobe_path",
+		"vision_base_url", "vision_model", "embedding_base_url", "embedding_model",
+	} {
 		if _, ok := properties[key]; !ok {
 			t.Fatalf("public setting %q missing", key)
 		}
@@ -571,6 +576,56 @@ func TestTaskManifestSchemaUsesFlatPublicSettingsAllowlist(t *testing.T) {
 	for _, forbidden := range []string{"api_key", "token", "password", "authorization"} {
 		if _, ok := properties[forbidden]; ok {
 			t.Fatalf("credential setting %q allowed", forbidden)
+		}
+	}
+}
+
+// ManifestSettings 是 Skill 可见的非密钥白名单：必须 typed、禁止 map 透传，
+// 且序列化后只出现媒体智能的 endpoint/model/binary path，绝不含密钥字段。
+func TestManifestSettingsFreezeMediaIntelligenceFieldsWithoutSecrets(t *testing.T) {
+	settingsType := reflect.TypeOf(ManifestSettings{})
+	for i := 0; i < settingsType.NumField(); i++ {
+		field := settingsType.Field(i)
+		switch field.Type.Kind() {
+		case reflect.Map, reflect.Interface:
+			t.Fatalf("ManifestSettings field %s allows untyped passthrough", field.Name)
+		}
+		tag := strings.ToLower(field.Tag.Get("json"))
+		for _, forbidden := range []string{"api_key", "token", "password", "authorization", "secret"} {
+			if strings.Contains(tag, forbidden) {
+				t.Fatalf("ManifestSettings exposes credential-shaped field %s", field.Name)
+			}
+		}
+	}
+	settings := ManifestSettings{
+		MediaCatalogPath: `C:\media\catalog.db`,
+		FFmpegPath:       `C:\tools\ffmpeg.exe`,
+		FFprobePath:      `C:\tools\ffprobe.exe`,
+		VisionBaseURL:    "https://vision.example.test/v1",
+		VisionModel:      "vision-x",
+		EmbeddingBaseURL: "https://embedding.example.test/v1",
+		EmbeddingModel:   "embed-y",
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := map[string]any{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"media_catalog_path": settings.MediaCatalogPath,
+		"ffmpeg_path":        settings.FFmpegPath,
+		"ffprobe_path":       settings.FFprobePath,
+		"vision_base_url":    settings.VisionBaseURL,
+		"vision_model":       settings.VisionModel,
+		"embedding_base_url": settings.EmbeddingBaseURL,
+		"embedding_model":    settings.EmbeddingModel,
+	}
+	for key, value := range want {
+		if decoded[key] != value {
+			t.Fatalf("frozen setting %s=%v want %q", key, decoded[key], value)
 		}
 	}
 }

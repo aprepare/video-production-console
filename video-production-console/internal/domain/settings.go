@@ -31,6 +31,16 @@ type PublicSettings struct {
 	CodexTaskProjectRoot        string   `json:"codex_task_project_root"`
 	VolcSpeechSpeakerID         string   `json:"volc_speech_speaker_id"`
 	VolcSpeechResourceID        string   `json:"volc_speech_resource_id"`
+	MediaCatalogPath            string   `json:"media_catalog_path"`
+	FFmpegPath                  string   `json:"ffmpeg_path"`
+	FFprobePath                 string   `json:"ffprobe_path"`
+	VisionBaseURL               string   `json:"vision_base_url"`
+	VisionModel                 string   `json:"vision_model"`
+	EmbeddingBaseURL            string   `json:"embedding_base_url"`
+	EmbeddingModel              string   `json:"embedding_model"`
+	PexelsAPIBaseURL            string   `json:"pexels_api_base_url"`
+	PixabayAPIBaseURL           string   `json:"pixabay_api_base_url"`
+	MaxExternalResultsPerQuery  int      `json:"max_external_results_per_query"`
 }
 
 type SecretStatus struct {

@@ -3,6 +3,7 @@ package schemas
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -21,7 +22,7 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	secretInput := definitions["secretInput"].(map[string]any)
 	properties := secretInput["properties"].(map[string]any)
-	secretKeys := []string{"grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key"}
+	secretKeys := []string{"grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"}
 	for _, key := range secretKeys {
 		property, ok := properties[key].(map[string]any)
 		if !ok || property["maxLength"] != float64(16<<10) {
@@ -104,6 +105,53 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 	style := properties["default_image_style"].(map[string]any)
 	if style["default"] != "finance_documentary" {
 		t.Fatalf("default_image_style schema=%v", style)
+	}
+}
+
+func TestSettingsSchemaDescribesMediaIntelligenceSettings(t *testing.T) {
+	raw, err := os.ReadFile("settings.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	definitions := schema["$defs"].(map[string]any)
+	public := definitions["publicSettings"].(map[string]any)
+	properties := public["properties"].(map[string]any)
+	mediaKeys := []string{
+		"media_catalog_path", "ffmpeg_path", "ffprobe_path",
+		"vision_base_url", "vision_model", "embedding_base_url", "embedding_model",
+		"pexels_api_base_url", "pixabay_api_base_url", "max_external_results_per_query",
+	}
+	for _, key := range mediaKeys {
+		if properties[key] == nil {
+			t.Fatalf("%s missing from public settings schema", key)
+		}
+	}
+	// 旧客户端 PUT 的完整 public 对象可以没有新字段，GET 响应必须完整。
+	updateRequired := stringSet(definitions["publicSettingsUpdate"].(map[string]any)["allOf"].([]any)[1].(map[string]any)["required"])
+	viewRequired := stringSet(definitions["publicSettingsView"].(map[string]any)["allOf"].([]any)[1].(map[string]any)["required"])
+	for _, key := range mediaKeys {
+		if updateRequired[key] {
+			t.Fatalf("legacy settings update unexpectedly requires %s", key)
+		}
+		if !viewRequired[key] {
+			t.Fatalf("settings view does not require %s", key)
+		}
+	}
+	limit := properties["max_external_results_per_query"].(map[string]any)
+	if limit["minimum"] != float64(1) || limit["maximum"] != float64(50) || limit["default"] != float64(20) {
+		t.Fatalf("max_external_results_per_query schema=%v", limit)
+	}
+	pexels := properties["pexels_api_base_url"].(map[string]any)
+	if pexels["default"] != "https://api.pexels.com" || !strings.Contains(pexels["pattern"].(string), "api\\.pexels\\.com") {
+		t.Fatalf("pexels_api_base_url schema=%v", pexels)
+	}
+	pixabay := properties["pixabay_api_base_url"].(map[string]any)
+	if pixabay["default"] != "https://pixabay.com" || !strings.Contains(pixabay["pattern"].(string), "pixabay\\.com") {
+		t.Fatalf("pixabay_api_base_url schema=%v", pixabay)
 	}
 }
 

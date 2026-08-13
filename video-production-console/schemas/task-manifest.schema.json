@@ -92,7 +92,14 @@
         "jianying_root": {"type": "string"},
         "machine_profile_path": {"type": "string", "minLength": 1},
         "draft_display_name": {"type": "string", "minLength": 1},
-        "revision_notes": {"type": "string"}
+        "revision_notes": {"type": "string"},
+        "media_catalog_path": {"type": "string"},
+        "ffmpeg_path": {"type": "string"},
+        "ffprobe_path": {"type": "string"},
+        "vision_base_url": {"type": "string"},
+        "vision_model": {"type": "string"},
+        "embedding_base_url": {"type": "string"},
+        "embedding_model": {"type": "string"}
       }
     }
   },

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -268,6 +269,95 @@ func prepareMontageManifestFixture(t *testing.T, withPublishingPackage bool) (*t
 		skills: manifestTestSkills{snapshot: snapshot},
 	}
 	return preparer, task, filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+}
+
+// Manifest 冻结媒体智能的 endpoint/model/binary path，但任何 Runtime 密钥值、
+// key/value 中的 Authorization 或 api_key 形态字段都不得出现在 manifest JSON 里。
+func TestTaskManifestFreezesMediaIntelligenceSettingsWithoutSecretLeaks(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	runtime := preparer.settings.(manifestTestSettings).runtime
+	runtime.MediaCatalogPath = filepath.Join(runtime.MediaRoot, "catalog.db")
+	runtime.FFmpegPath = filepath.Join(runtime.DataRoot, "tools", "ffmpeg.exe")
+	runtime.FFprobePath = filepath.Join(runtime.DataRoot, "tools", "ffprobe.exe")
+	runtime.VisionBaseURL = "https://vision.example.test/v1"
+	runtime.VisionModel = "vision-model-x"
+	runtime.EmbeddingBaseURL = "https://embedding.example.test/v1"
+	runtime.EmbeddingModel = "embedding-model-y"
+	secrets := []string{
+		"grok-secret-value-1", "pexels-secret-value-2", "volc-secret-value-3",
+		"image-secret-value-4", "imagetext-secret-value-5",
+		"vision-secret-value-6", "embedding-secret-value-7", "pixabay-secret-value-8",
+	}
+	runtime.GrokAPIKey = secrets[0]
+	runtime.PexelsAPIKey = secrets[1]
+	runtime.VolcSpeechAPIKey = secrets[2]
+	runtime.ImageAPIKey = secrets[3]
+	runtime.ImageTextAPIKey = secrets[4]
+	runtime.VisionAPIKey = secrets[5]
+	runtime.EmbeddingAPIKey = secrets[6]
+	runtime.PixabayAPIKey = secrets[7]
+	preparer.settings = manifestTestSettings{runtime: runtime}
+
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := decoded["non_secret_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("non_secret_settings missing: %s", data)
+	}
+	for key, want := range map[string]string{
+		"media_catalog_path": runtime.MediaCatalogPath,
+		"ffmpeg_path":        runtime.FFmpegPath,
+		"ffprobe_path":       runtime.FFprobePath,
+		"vision_base_url":    runtime.VisionBaseURL,
+		"vision_model":       runtime.VisionModel,
+		"embedding_base_url": runtime.EmbeddingBaseURL,
+		"embedding_model":    runtime.EmbeddingModel,
+	} {
+		if settings[key] != want {
+			t.Fatalf("frozen setting %s=%v want %q", key, settings[key], want)
+		}
+	}
+	var scan func(path string, value any)
+	scan = func(path string, value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, item := range typed {
+				lower := strings.ToLower(key)
+				// "non_secret_settings" 是白名单容器本身的合法命名。
+				if lower != "non_secret_settings" {
+					for _, forbidden := range []string{"api_key", "apikey", "authorization", "token", "password", "secret"} {
+						if strings.Contains(lower, forbidden) {
+							t.Fatalf("manifest key %s.%s is credential-shaped", path, key)
+						}
+					}
+				}
+				scan(path+"."+key, item)
+			}
+		case []any:
+			for index, item := range typed {
+				scan(fmt.Sprintf("%s[%d]", path, index), item)
+			}
+		case string:
+			for _, secret := range secrets {
+				if strings.Contains(typed, secret) {
+					t.Fatalf("manifest value at %s leaked a runtime secret", path)
+				}
+			}
+			if strings.Contains(typed, "Authorization") {
+				t.Fatalf("manifest value at %s embeds an Authorization header", path)
+			}
+		}
+	}
+	scan("$", decoded)
 }
 
 func TestTaskManifestPreparerFreezesDraftDisplayNameFromFirstShortTitle(t *testing.T) {
