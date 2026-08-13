@@ -132,8 +132,7 @@ export function ImageModeWorkbench({
   const create = async (event: FormEvent) => {
     event.preventDefault();
     const cleanTitle = title.trim();
-    const cleanScript = script.trim();
-    if (!cleanTitle || !cleanScript || count < 1 || count > 60) return;
+    if (!cleanTitle || !script.trim() || count < 1 || count > 60) return;
     if (style === "custom" && !customStyle.trim()) {
       setMessage("请填写自定义风格。");
       return;
@@ -146,7 +145,7 @@ export function ImageModeWorkbench({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: cleanTitle,
-          script: cleanScript,
+          script,
           image_count: count,
           ratio,
           style,

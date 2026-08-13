@@ -110,8 +110,9 @@ test("creates a final-copy image project with bounded parameters and ordered car
   expect(count.max).toBe("60");
   expect(within(screen.getByLabelText("图片比例")).getAllByRole("option").map((option) => option.textContent)).toEqual(["3:4", "4:3", "9:16", "1:1"]);
 
+  const exactScript = "  第一句。\n\n第二句。  ";
   fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "养老现金流" } });
-  fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "第一句。第二句。" } });
+  fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: exactScript } });
   fireEvent.change(count, { target: { value: "2" } });
   fireEvent.change(screen.getByLabelText("图片比例"), { target: { value: "9:16" } });
   fireEvent.change(screen.getByLabelText("视觉风格"), { target: { value: "custom" } });
@@ -123,7 +124,7 @@ test("creates a final-copy image project with bounded parameters and ordered car
   expect(screen.getByText("002")).toBeTruthy();
   expect(createBody).toMatchObject({
     title: "养老现金流",
-    script: "第一句。第二句。",
+    script: exactScript,
     image_count: 2,
     ratio: "9:16",
     style: "custom",
