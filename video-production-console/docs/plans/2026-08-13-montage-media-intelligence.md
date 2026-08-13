@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **状态（2026-08-13）：未实施，任何 Task 均未动工。** 产品语境与交付顺序见 [制作方式路线图](2026-08-13-production-methods-roadmap.md)：P0–P1 之后先交付"图片视频"（P1.5，路线图方式四），电影建库（P2，方式三）在其后。图文模式基线已提交（`c7382e5`），Task 0 的等待前置已满足。本次修订要点：Task 11 复用目标改为 `SuggestSegments`/`SuggestPrompts`；`media_mix_policy` 支持任务级预设；§8 新增 P1.5 里程碑；Task 7 增加切镜升级路径；§4.2 增加图片 embedding 落表说明。
+> **状态（2026-08-13）：Task 0–12 代码已落地。** 产品语境与交付顺序见 [制作方式路线图](2026-08-13-production-methods-roadmap.md)。v2 由 skill snapshot `assets/capabilities.json` 门控；真机三场景验收仍需用户在本机完成。图文模式基线已提交（`c7382e5`）。本次修订要点：Task 11 复用目标改为 `SuggestSegments`/`SuggestPrompts`；`media_mix_policy` 支持任务级预设；§8 新增 P1.5 里程碑；Task 7 增加切镜升级路径；§4.2 增加图片 embedding 落表说明。
 
 **Goal:** 把当前“固定风景轮询 + 全片固定文字”的混剪，升级为能混用本地电影镜头、普通 B-roll、图片/图表并按文案做大体匹配的可编辑剪映草稿，同时只显示少量重点字幕并增加克制、可验证的动效与音效。
 

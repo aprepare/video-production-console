@@ -118,6 +118,7 @@ type ManifestSettings struct {
 	VisionModel          string `json:"vision_model,omitempty"`
 	EmbeddingBaseURL     string `json:"embedding_base_url,omitempty"`
 	EmbeddingModel       string `json:"embedding_model,omitempty"`
+	MontagePlanVersion   string `json:"montage_plan_version,omitempty"`
 }
 
 type BuildManifestInput struct {

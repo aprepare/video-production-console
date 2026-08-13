@@ -75,7 +75,7 @@ func Run(opts Options) error {
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	if err := montageplan.Build(montageplan.Options{
+	planOpts := montageplan.Options{
 		ManifestPath: manifestPath,
 		PlanPath:     planPath,
 		Duration:     durationFn,
@@ -83,7 +83,8 @@ func Run(opts Options) error {
 		FFprobePath:  opts.FFprobePath,
 		Analyzer:     opts.Analyzer,
 		Embedder:     opts.Embedder,
-	}); err != nil {
+	}
+	if err := buildMontagePlan(manifestPath, planOpts); err != nil {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("build plan: %w", err))
 	}
 
@@ -137,6 +138,32 @@ func probeDurationViaSkill(pythonBinary, skillRoot, audioPath string) (float64, 
 		return 0, fmt.Errorf("python duration probe returned non-positive value")
 	}
 	return value, nil
+}
+
+func buildMontagePlan(manifestPath string, opts montageplan.Options) error {
+	if planVersionFromManifest(manifestPath) == "2.0" {
+		return montageplan.BuildV2(opts)
+	}
+	return montageplan.Build(opts)
+}
+
+func planVersionFromManifest(manifestPath string) string {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "1.0"
+	}
+	var manifest struct {
+		NonSecretSettings struct {
+			MontagePlanVersion string `json:"montage_plan_version"`
+		} `json:"non_secret_settings"`
+	}
+	if json.Unmarshal(raw, &manifest) != nil {
+		return "1.0"
+	}
+	if strings.TrimSpace(manifest.NonSecretSettings.MontagePlanVersion) == "2.0" {
+		return "2.0"
+	}
+	return "1.0"
 }
 
 func planPathFromManifest(manifestPath string) (string, error) {

@@ -135,7 +135,14 @@ build plan: measure narration duration: exec: "ffprobe": executable file not fou
 D:\ProgramData\anaconda3\envs\index-tts\Library\bin\ffprobe.exe
 ```
 
-当前混剪优先用 `pyJianYingDraft.local_materials.AudioMaterial` 测量音频时长，失败时才回退 ffprobe。若仍报此错，先检查目标 Python 环境和 ffprobe 路径，不要改时间线数据。
+当前混剪优先用 `pyJianYingDraft.local_materials.AudioMaterial` 测量音频时长，失败时才回退 ffprobe。若仍报此错，先在设置中填写 FFprobe 绝对路径并重启，不要改时间线数据。
+
+### 4.3b 素材库未配置 / 外部图库不可用
+
+- `catalog_not_configured`：设置里同时填写素材库目录和媒体素材目录，保存并重启。
+- `provider_not_configured`：Pexels/Pixabay 密钥未填。这不阻塞本地建库，只是不能搜索外部图库。
+- 建库失败码（`ffmpeg_not_configured`、`vision_not_configured`、`embedding_not_configured`、`probe_failed`）看素材库面板的中文提示，按设置补路径或密钥后单项重试。
+- 新任务仍是 v1：到 Skills 页重新扫描 `jianying-montage-draft`，确认 snapshot 含 `assets/capabilities.json` 且声明 `2.0`。已经入队的旧任务不会跟着 Latest 升级。
 
 ### 4.4 素材时间范围超出真实时长
 

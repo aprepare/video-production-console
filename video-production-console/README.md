@@ -12,7 +12,7 @@
 | [使用说明](docs/USER-GUIDE.md) | 登录、五阶段、同行原文二创、混剪限制 |
 | [AI 接手说明](docs/AI-HANDOFF.md) | 接手备忘：近期改动、下一步规划、验证命令、工作区红线 |
 | [优化工单](docs/OPTIMIZATION-BACKLOG.md) | 待办优化项，按 P0→P3 排序，每条含证据/改法/验收/边界 |
-| [制作方式路线图](docs/plans/2026-08-13-production-methods-roadmap.md) | 四种制作方式的现状、共享底座、建库方法与实施顺序（方式三/四**未实施**） |
+| [制作方式路线图](docs/plans/2026-08-13-production-methods-roadmap.md) | 四种制作方式的现状、共享底座、建库方法与实施顺序 |
 | [混剪登记](docs/operations/montage-registration.md) | 明文草稿、登记、重试与本机限制 |
 | [验收清单](docs/operations/acceptance-checklist.md) | 人工验收路径 |
 | [常见问题与排障](docs/operations/troubleshooting.md) | 已验证故障、错误原文、根因、最小处置与禁止操作 |
@@ -31,6 +31,8 @@ go run .\cmd\console
 浏览器打开 `http://127.0.0.1:2030`，首次登录后立即改密。
 
 图文生图需在「设置」填写 OpenAI 兼容的生图 Base URL、模型（默认 `gpt-image-2`）、API Key，并可设置默认并发、比例与风格。API Key 只由后端加密保存，页面只显示是否已配置，文档和配置示例都不要写真实密钥。HTTPS 更安全；系统允许在用户明确接受风险时保存 HTTP 地址，但 HTTP 会明文传输请求头中的密钥。
+
+混剪素材智能库：电影/B-roll/图片放进 `media_root/originals/{movies,broll,images}/`，在设置里填写素材库目录、FFmpeg/FFprobe、视觉与 embedding 地址。首页「素材库」可建库、搜索 Pexels/Pixabay（未配密钥不阻塞本地建库）并导入。完整电影和原音轨不上云，只上传每镜 2–3 张低清关键帧。新混剪任务仅在 skill snapshot 明确声明 `production_plan_versions` 含 `2.0` 时冻结 `montage_plan_version=2.0`；旧任务继续用自己的 snapshot 和 v1 计划。能生成草稿不等于拥有公开发布权，未知许可只标 `local_draft_only`。
 
 可选 AgentRuntime（默认不变：混剪 `script`，remix/topic `codex`）：见 [AI 接手说明 §3](docs/AI-HANDOFF.md)。例如 `VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 并配置 `VIDEO_CONSOLE_OPENAI_*`。设置页不做 runtime UI。
 

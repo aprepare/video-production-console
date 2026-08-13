@@ -99,7 +99,8 @@
         "vision_base_url": {"type": "string"},
         "vision_model": {"type": "string"},
         "embedding_base_url": {"type": "string"},
-        "embedding_model": {"type": "string"}
+        "embedding_model": {"type": "string"},
+        "montage_plan_version": {"type": "string", "enum": ["1.0", "2.0"]}
       }
     }
   },

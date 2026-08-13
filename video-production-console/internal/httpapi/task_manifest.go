@@ -76,6 +76,12 @@ func NewTaskManifestPreparer(db *sql.DB, settings runtimeSettingsProvider, skill
 }
 
 func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTask, req TaskManifestRequest) error {
+	if p.db != nil {
+		if snapshotID, manifestPath, err := store.NewTaskRepository(p.db).PreparedManifest(ctx, task.ID); err == nil &&
+			strings.TrimSpace(snapshotID) != "" && strings.TrimSpace(manifestPath) != "" {
+			return nil
+		}
+	}
 	runtime, err := p.settings.Runtime(ctx)
 	if err != nil {
 		return fmt.Errorf("runtime settings unavailable: %w", err)
@@ -159,6 +165,14 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		FFmpegPath:       runtime.FFmpegPath, FFprobePath: runtime.FFprobePath,
 		VisionBaseURL: runtime.VisionBaseURL, VisionModel: runtime.VisionModel,
 		EmbeddingBaseURL: runtime.EmbeddingBaseURL, EmbeddingModel: runtime.EmbeddingModel,
+	}
+	if task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute {
+		decision := skillregistry.DecideMontagePlanVersion(snapshot)
+		settings.MontagePlanVersion = decision.Version
+		if decision.Warning != "" {
+			logging.LoggerFrom(ctx).Warn("montage capability degraded to v1",
+				"task_id", task.ID, "skill_snapshot_id", snapshot.ID, "warning", decision.Warning)
+		}
 	}
 	if task.Action == domain.ActionMontageExecute {
 		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)

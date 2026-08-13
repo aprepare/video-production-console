@@ -56,7 +56,7 @@
 
 > [优化工单](OPTIMIZATION-BACKLOG.md) 的 P0–P3 已全部完成或转为方案，只剩 P2-5b（契约代码生成）待用户拍板。所以下一阶段的重点是**真机回归**，不是继续改代码。
 >
-> 真机回归之后的产品方向按 [制作方式路线图](plans/2026-08-13-production-methods-roadmap.md) 排序：先 [素材智能混剪 v2 计划](plans/2026-08-13-montage-media-intelligence.md) 的 Task 0–2 修"只选风景"，再交付"图片视频"（P1.5，方式四），最后电影建库（P2，方式三）。**该 v2 计划截至 2026-08-13 完全未实施**（`plan_version` 仍是 `1.0`，`internal/mediacatalog/` 等均不存在），读它时不要误当现状。
+> 产品方向按 [制作方式路线图](plans/2026-08-13-production-methods-roadmap.md) 与 [素材智能混剪 v2 计划](plans/2026-08-13-montage-media-intelligence.md)。Task 0–11 已在本分支落地；Task 12 用 skill snapshot 的 `assets/capabilities.json` 门控 v2。**不要看计划文档顶部的「未实施」旧注。** 新 `montage.execute` 只有在冻结 snapshot 明确含 `production_plan_versions: ["2.0"]` 时才写 `montage_plan_version=2.0` 并调用 `BuildV2`；解析失败、旧 snapshot、已持久化的 v1 任务一律继续 `Build`。升级 skill 后必须重新扫描 snapshot，已入队任务不会跟着 Latest 变。
 
 1. **混剪真机回归（高优先）**  
    重启 `:2030` 后，用真实大素材库连续跑多条 `montage.execute`（含 ≥240s 旁白）：应不再因 SFX 数量或 `source_timerange` 超素材失败；任务详情顶栏应显示总耗时。缺失素材应在入队前提示；不同 `task_id` 开头应变化；同一任务重试顺序应稳定。若仍有 `mix_draft` 失败/未登记，再查 `output-last-message.json`、`draft.validation.json`、登记重试 API；勿先改 runtime。

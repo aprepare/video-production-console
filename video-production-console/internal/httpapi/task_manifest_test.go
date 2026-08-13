@@ -314,13 +314,14 @@ func TestTaskManifestFreezesMediaIntelligenceSettingsWithoutSecretLeaks(t *testi
 		t.Fatalf("non_secret_settings missing: %s", data)
 	}
 	for key, want := range map[string]string{
-		"media_catalog_path": runtime.MediaCatalogPath,
-		"ffmpeg_path":        runtime.FFmpegPath,
-		"ffprobe_path":       runtime.FFprobePath,
-		"vision_base_url":    runtime.VisionBaseURL,
-		"vision_model":       runtime.VisionModel,
-		"embedding_base_url": runtime.EmbeddingBaseURL,
-		"embedding_model":    runtime.EmbeddingModel,
+		"media_catalog_path":   runtime.MediaCatalogPath,
+		"ffmpeg_path":          runtime.FFmpegPath,
+		"ffprobe_path":         runtime.FFprobePath,
+		"vision_base_url":      runtime.VisionBaseURL,
+		"vision_model":         runtime.VisionModel,
+		"embedding_base_url":   runtime.EmbeddingBaseURL,
+		"embedding_model":      runtime.EmbeddingModel,
+		"montage_plan_version": "1.0",
 	} {
 		if settings[key] != want {
 			t.Fatalf("frozen setting %s=%v want %q", key, settings[key], want)
@@ -841,5 +842,116 @@ func TestTaskManifestPreparerSnapshotsTopicCandidatesIntoCurrentProject(t *testi
 	}
 	if string(gotCandidates) != string(wantCandidates) {
 		t.Fatalf("snapshot bytes = %q, want %q", gotCandidates, wantCandidates)
+	}
+}
+
+func attachMontageCapabilities(t *testing.T, snapshot domain.SkillSnapshot, payload []byte) domain.SkillSnapshot {
+	t.Helper()
+	root := filepath.Dir(snapshot.Path)
+	if strings.EqualFold(filepath.Base(snapshot.Path), "skill.md") {
+		root = filepath.Dir(snapshot.Path)
+	} else if info, err := os.Stat(snapshot.Path); err == nil && info.IsDir() {
+		root = snapshot.Path
+	} else {
+		root = t.TempDir()
+		snapshot.Path = root
+	}
+	path := filepath.Join(root, filepath.FromSlash("assets/capabilities.json"))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	snapshot.Files = append(snapshot.Files, domain.SkillFileSnapshot{
+		Path: "assets/capabilities.json", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
+	})
+	snapshot.Path = root
+	return snapshot
+}
+
+func TestTaskManifestFreezesV2OnlyWhenSnapshotDeclaresCapability(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	snapshot := attachMontageCapabilities(t, preparer.skills.(manifestTestSkills).snapshot, []byte(`{"contract_version":"1.0","production_plan_versions":["1.0","2.0"],"features":["highlight_captions","image_keyframes","style_policy_v2"]}`))
+	preparer.skills = manifestTestSkills{snapshot: snapshot}
+
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.MontagePlanVersion != "2.0" {
+		t.Fatalf("montage_plan_version=%q, want 2.0; body=%s", manifest.NonSecretSettings.MontagePlanVersion, data)
+	}
+	if manifest.SkillSnapshotID != snapshot.ID {
+		t.Fatalf("skill_snapshot_id=%q want %q", manifest.SkillSnapshotID, snapshot.ID)
+	}
+}
+
+func TestTaskManifestMalformedCapabilityStaysV1(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	snapshot := attachMontageCapabilities(t, preparer.skills.(manifestTestSkills).snapshot, []byte(`{"contract_version":`))
+	preparer.skills = manifestTestSkills{snapshot: snapshot}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.MontagePlanVersion != "1.0" {
+		t.Fatalf("malformed capability must freeze v1, got %q", manifest.NonSecretSettings.MontagePlanVersion)
+	}
+}
+
+func TestTaskManifestHistoricalSnapshotIgnoresNewerLatest(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	v1 := preparer.skills.(manifestTestSkills).snapshot
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2 := attachMontageCapabilities(t, domain.SkillSnapshot{
+		ID: uuid.NewString(), Name: v1.Name, Path: v1.Path,
+		SHA256: strings.Repeat("d", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+	}, []byte(`{"contract_version":"1.0","production_plan_versions":["1.0","2.0"],"features":["highlight_captions"]}`))
+	if err := store.NewSkillRepository(preparer.db).Save(context.Background(), v2); err != nil {
+		t.Fatal(err)
+	}
+	preparer.skills = manifestTestSkills{snapshot: v2}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstManifest, secondManifest codex.TaskManifest
+	if err := json.Unmarshal(first, &firstManifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second, &secondManifest); err != nil {
+		t.Fatal(err)
+	}
+	if firstManifest.SkillSnapshotID != v1.ID || secondManifest.SkillSnapshotID != v1.ID {
+		t.Fatalf("historical task rebound to latest snapshot: first=%q second=%q v1=%q v2=%q",
+			firstManifest.SkillSnapshotID, secondManifest.SkillSnapshotID, v1.ID, v2.ID)
+	}
+	if secondManifest.NonSecretSettings.MontagePlanVersion == "2.0" {
+		t.Fatalf("historical v1 task must not pick up a later v2 capability")
 	}
 }

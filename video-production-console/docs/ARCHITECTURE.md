@@ -103,8 +103,9 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | `codexapp` | 监管长驻的 Codex App Server 子进程及其 JSON-RPC | `Manager` `codexapp/manager.go:79` |
 | `conversation` | App Server 之上的对话：broker/outbox 投递、会话路由、任务↔对话适配 | `Broker` `conversation/broker.go:79`、`TaskAdapter` `conversation/task_adapter.go:22` |
 | `agentruntime` | 任务后端抽象与按 env 选路 | `Select` `agentruntime/router.go:46` |
-| `agentruntime/montageplan` | 确定性混剪计划：素材扫描/校验、取样、类别打散、时间线、资源配置 | `Build` `plan.go:67`、`ValidateMediaLibrary` `plan.go:422`、`interleaveByCategory` `diversify.go:11`、`scanMediaIndex` `mediascan.go:56` |
-| `agentruntime/montagescript` | `montage-script-run` 子命令的编排（validate-inputs → 生成计划 → validate-plan → execute） | `Run` `montagescript/run.go:27` |
+| `agentruntime/montageplan` | 确定性混剪计划：v1 打散取样与 v2 配额/召回时间线 | `Build`、`BuildV2`、`ValidateMediaLibrary` |
+| `agentruntime/montagescript` | `montage-script-run`：按 manifest `montage_plan_version` 选 `Build` 或 `BuildV2` | `Run` `montagescript/run.go` |
+| `mediacatalog` | 独立 `catalog.db`：切镜、关键帧、标签、召回、导入与权利元数据 | `Open`、`RecallByTags`、`Importer` |
 | `agentruntime/openaicompat`、`agentruntime/piruntime` | 两个 opt-in 的替代生成后端 | `Run` `openaicompat/run.go:34`、`piruntime/run.go:33` |
 | `montage` | 剪映登记：可信运行时解析、登记子进程、验证、恢复与审计 | `Coordinator` `montage/coordinator.go:49`、`ValidateRegisteredDraft` `montage/validator.go:41` |
 | `assets` | 资产落盘、体积/类型策略、目录清单、库↔盘对账、在资源管理器打开 | `Service` `assets/service.go:634`、`MaxSizeForType` `:36` |
@@ -114,7 +115,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | `workflow` | 二创多步工作流编排与任务启动 | `RemixCoordinator` `workflow/remix.go:35` |
 | `taskcompletion` | 只有接口、没有实现的契约壳（完成门/观察者） | `Gate` `taskcompletion/gate.go:23` |
 | `taskmodel` | 模型名与推理强度的归一化与解析 | `Resolve` `taskmodel/model_selection.go:40` |
-| `skillregistry` | 扫描 skill 目录成带哈希的快照并提供「最新一份」 | `ScanAll` `skillregistry/service.go:222`、`Latest` `:241` |
+| `skillregistry` | 扫描 skill 目录成带哈希的快照；按冻结 `assets/capabilities.json` 决定计划版本 | `ScanAll`、`DecideMontagePlanVersion` |
 | `history` | App Server 线程历史的读模型 | `Service` `history/service.go:32` |
 | `publishing` | 读取并按哈希校验发布包工件 | `Reader.Read` `publishing/package.go:34` |
 | `baokuan` | 外部爆款库服务的 HTTP 客户端 | `Client` `baokuan/client.go:38` |
@@ -226,7 +227,9 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.4 混剪：取样与登记
 
-**素材来源**：manifest 的 `media_root` + `media_index_path`，缺失时回落 machine profile 的同名字段（`internal/agentruntime/montageplan/plan.go:121-138`）。索引是**顶层 JSON 数组**，流式解码，容忍 BOM，拒绝非数组 / 未闭合 / 尾部脏数据（`mediascan.go:82-127`）。不是项目资产表，也不做全库枚举扫盘。
+**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 额外使用 `media_catalog_path` 指向的 `catalog.db`（相对 `media_root`），按文案意图做四级召回后再由确定性 planner 拍板时间线。catalog 只存相对路径；电影本体和音轨不上云。`media_index.json` 在无 catalog 或召回为空时仍是降级来源。
+
+**计划版本门控**：`taskManifestPreparer` 读取**当前任务将冻结的** skill snapshot，用 `skillregistry.DecideMontagePlanVersion` 解析 `assets/capabilities.json`（必须出现在 `SkillSnapshot.Files` 且 SHA-256 与磁盘一致，`contract_version` 必须是已知的 `1.0`，且 `production_plan_versions` 明确含 `2.0`）。只有这时才把 `non_secret_settings.montage_plan_version` 写成 `2.0`。畸形/未知/缺文件/哈希不一致都写 `1.0` 并打 warning，任务仍可生成。已经 `EnsurePreparedTask` 的任务再次 Prepare 直接返回，不因 Latest snapshot 升级而改写 manifest。`montagescript.Run` 只看这份冻结字段：`2.0` 调 `BuildV2`，其余调 `Build`。
 
 **入队前严格预检**：`montage.execute` 准备 manifest 时调 `ValidateMediaLibrary`（`internal/httpapi/task_manifest.go:159`），内部 `sampleMedia(..., strict=true)`。合格条目要求 `id`、`relative_path` 非空且 `duration_seconds >= 10`（`mediascan.go:100`；**阈值是字面量 10，没有命名常量**，注释解释是「8s 时间线 @1.1x 需要 8.8s 源」）。合格条目文件缺失或非普通文件，strict 立即报错，错误前缀 `montage media preflight:`，**任务不入队**。
 
