@@ -492,7 +492,8 @@ func validatePublic(value domain.PublicSettings) error {
 		}
 	}
 	if value.ImageBaseURL != "" {
-		if len(value.ImageBaseURL) > 2048 || validateHTTPURL(value.ImageBaseURL) != nil {
+		parsed, err := parseHTTPURL(value.ImageBaseURL)
+		if len(value.ImageBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
 			return invalid("image_base_url")
 		}
 	}

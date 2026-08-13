@@ -114,7 +114,11 @@ func (r *ImageProjectRepository) Item(ctx context.Context, projectID, itemID str
 }
 
 func (r *ImageProjectRepository) UpdateItemText(ctx context.Context, projectID, itemID, sourceText, title, prompt string, at time.Time) error {
-	result, err := r.db.ExecContext(ctx, `UPDATE image_project_items SET source_text=?,title=?,prompt=?,status='pending',error_message=NULL,updated_at=? WHERE id=? AND project_id=?`, sourceText, title, prompt, at, itemID, projectID)
+	result, err := r.db.ExecContext(ctx, `UPDATE image_project_items SET
+ source_text=?,title=?,prompt=?,
+ status=CASE WHEN source_text<>? OR title<>? OR prompt<>? THEN 'pending' ELSE status END,
+ error_message=CASE WHEN source_text<>? OR title<>? OR prompt<>? THEN NULL ELSE error_message END,
+ updated_at=? WHERE id=? AND project_id=?`, sourceText, title, prompt, sourceText, title, prompt, sourceText, title, prompt, at, itemID, projectID)
 	if err != nil {
 		return err
 	}
