@@ -1092,10 +1092,10 @@ summary:focus-visible,
 }
 
 .settings-modal {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(760px, 100%);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 15px;
+  gap: 14px;
   padding: 27px 29px 29px;
 }
 
@@ -1234,11 +1234,39 @@ summary:focus-visible,
   justify-self: start;
 }
 
-.settings-modal .modal-head,
-.settings-note,
-.secret-grid,
-.save-settings,
-.restart-required {
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-tab {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-650);
+  background: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-tab.is-active,
+.settings-tab[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--teal-600) 42%, var(--line));
+  color: var(--teal-700);
+  background: var(--teal-050);
+}
+
+.settings-tab-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.settings-field--wide,
+.settings-tab-panel .checkbox-field {
   grid-column: 1 / -1;
 }
 
@@ -2212,7 +2240,7 @@ summary:focus-visible,
     padding: 22px 18px;
   }
 
-  .settings-modal,
+  .settings-tab-panel,
   .secret-grid,
   .task-model-grid {
     grid-template-columns: 1fr;

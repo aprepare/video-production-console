@@ -105,8 +105,9 @@ test("root chooser navigates to image mode and montage entry navigates to projec
   expect(window.location.pathname).toBe("/image-projects");
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
-  fireEvent.click(await screen.findByRole("button", { name: "进入混剪制作" }));
+  fireEvent.click(await screen.findByRole("button", { name: "进入风景混剪" }));
   expect(window.location.pathname).toBe("/projects");
+  expect(window.location.search).toBe("?mode=scenic");
 });
 
 test("the root chooser does not load workflow-specific data", async () => {
@@ -443,7 +444,7 @@ test("the project workbench starts mixing through the formal montage task API", 
 test("the project workbench starts movie mixing through the movie montage task API", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "电影混剪项目", stage: "mixing" };
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
-  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  window.history.replaceState({}, "", `/projects/${routedProjectID}?mode=movie`);
   vi.stubGlobal("fetch", baseFetch((path, method, init) => {
     if (path === "/api/projects") return json([project]);
     if (path === `/api/projects/${routedProjectID}`) return json({
@@ -464,10 +465,40 @@ test("the project workbench starts movie mixing through the movie montage task A
   }));
   render(<App />);
 
-  fireEvent.click((await screen.findAllByRole("button", { name: "开始电影混剪" }))[0]);
+  fireEvent.click(await screen.findByRole("button", { name: "开始电影混剪" }));
 
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(requests[0].body).toMatchObject({ type: "movie_montage" });
+});
+
+test("the project workbench starts image-video mixing through the image_video task API", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "图片视频项目", stage: "mixing" };
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}?mode=image-video`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({
+      project,
+      assets: {
+        continuous_script: testAsset("continuous_script"),
+        narration: testAsset("narration"),
+        subtitle_srt: testAsset("subtitle_srt"),
+      },
+      background_reference: testAsset("account_background"),
+      missing_assets: [],
+    });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      requests.push({ path, body: JSON.parse(String(init?.body)) });
+      return json({ id: "image-video-task" }, 202);
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "开始图片视频" }));
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0].body).toMatchObject({ type: "image_video" });
 });
 
 test("the assets stage generates narration and subtitles through the project narration endpoint", async () => {
@@ -1181,6 +1212,8 @@ const publicSettings = {
   grok_model: "",
   remix_base_url: "",
   remix_model: "",
+  remix_reasoning_effort: "",
+  codex_task_project_root: "",
   codex_binary_path: "codex",
   media_index_path: "",
   media_root: "",
@@ -1230,16 +1263,13 @@ test("settings show model defaults and use the PUT response as the saved draft",
 
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "系统" }));
 
   const model = await screen.findByRole("textbox", { name: "默认模型" });
   const effort = screen.getByRole("combobox", { name: "默认推理强度" });
   expect((model as HTMLInputElement).value).toBe("gpt-default");
   expect((effort as HTMLSelectElement).value).toBe("high");
-  expect(
-    screen.getByText(
-      "默认值只影响之后新建的任务，不会修改运行中任务，也不会改写本机 Codex 全局配置。",
-    ),
-  ).toBeTruthy();
+  expect(screen.getByText("密钥留空表示不改。")).toBeTruthy();
 
   fireEvent.change(model, { target: { value: "gpt-edited" } });
   fireEvent.change(effort, { target: { value: "max" } });

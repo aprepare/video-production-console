@@ -9,6 +9,7 @@
 | 文档 | 用途 |
 |---|---|
 | [项目全景说明](docs/ARCHITECTURE.md) | **先读这份**：模块、目录、机制、契约；§11 是给其他 AI 的模块→代码对照 |
+| [可交互架构图](docs/archify/runtime.architecture.html) | Archify 运行时地图：搜索节点、追踪路径、四条导览 |
 | [使用说明](docs/USER-GUIDE.md) | 登录、图文、同行原文二创、本机建库与自动检索、混剪限制 |
 | [AI 接手说明](docs/AI-HANDOFF.md) | 2026-08-15 进度、能用什么、不要做什么、验证命令、工作区红线 |
 | [优化工单](docs/OPTIMIZATION-BACKLOG.md) | 历史优化项；P0–P3 代码项已完成，不要当未做清单 |

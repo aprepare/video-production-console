@@ -19,7 +19,7 @@ import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { ConsoleHome } from "./shell/ConsoleHome";
 import { ModeHome } from "./production-modes/ModeHome";
-import { productionModes } from "./production-modes/catalog";
+import { montageKindLabel, parseMontageKind, productionModes } from "./production-modes/catalog";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
 import {
@@ -61,7 +61,12 @@ function writeProjectLocation(
   preserveQuery = false,
 ) {
   const pathname = projectID ? `/projects/${projectID}` : "/projects";
-  const search = preserveQuery ? window.location.search : "";
+  const params = new URLSearchParams(preserveQuery ? window.location.search : "");
+  const kind = new URLSearchParams(window.location.search).get("mode");
+  if (kind === "scenic" || kind === "movie" || kind === "image-video") {
+    params.set("mode", kind);
+  }
+  const search = params.toString() ? `?${params.toString()}` : "";
   const target = `${pathname}${search}`;
   const current = `${window.location.pathname}${window.location.search}`;
   if (mode === "push" && current !== target) window.history.pushState({}, "", target);
@@ -90,6 +95,7 @@ function App() {
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const route = parseLocation(window.location.pathname);
+  const montageKind = parseMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
   const montageRoute = route.view === "projects" || route.view === "project";
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
@@ -906,7 +912,7 @@ function App() {
       ) : imageRoute ? (
         <>
           <header>
-            <div><span className="eyebrow">本机视频工作台</span><h1>视频生产控制台</h1></div>
+            <div><span className="eyebrow">视频生产控制台</span><h1>图文制作</h1></div>
             <div className="status">
               <label className="theme-control">
                 主题
@@ -934,8 +940,8 @@ function App() {
             defaultStyle={settings?.public.default_image_style}
             defaultConcurrency={settings?.public.max_image_concurrency}
             defaultTextModel={settings?.public.image_text_model || "gpt-5.6-sol"}
-            defaultReasoningEffort={settings?.public.image_text_reasoning_effort}
-            defaultImageModel={settings?.public.image_model}
+            defaultReasoningEffort=""
+            defaultImageModel={settings?.public.image_model || "gpt-image-2"}
             defaultImageAttempts={settings?.public.image_generation_attempts}
             onAdvancedMode={() => navigate("/image-projects/advanced")}
           />
@@ -950,10 +956,13 @@ function App() {
           onThemeChange={setTheme}
           onBack={closeProject}
           onDelete={() => void projectActions.deleteProject()}
+          mixKind={montageKind}
           onMix={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
           onMovieMix={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库生成混剪草稿。")}
+          onImageVideoMix={() => void projectActions.startImageVideoTask("使用当前连续文案、配音、SRT、固定背景图和静帧库生成图片视频草稿。")}
           onRemakeMontage={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图重新生成混剪草稿。", { remake: true })}
           onRemakeMovieMontage={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库重新生成混剪草稿。", { remake: true })}
+          onRemakeImageVideo={() => void projectActions.startImageVideoTask("使用当前连续文案、配音、SRT、固定背景图和静帧库重新生成图片视频草稿。", { remake: true })}
           onPublish={() => void projectActions.publishProject()}
           onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
           onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
@@ -987,6 +996,7 @@ function App() {
           theme={theme}
           onThemeChange={setTheme}
           onChooseProductionMode={() => navigate("/")}
+          modeTitle={montageKindLabel(montageKind)}
           runtime={runtime}
           onOpenMediaLibrary={() => setMediaLibraryOpen(true)}
           onOpenSettings={() => void settingsPanel.openDialog()}

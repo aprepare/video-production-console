@@ -86,6 +86,8 @@ function settingsBody() {
       grok_model: "",
       remix_base_url: "",
       remix_model: "",
+      remix_reasoning_effort: "",
+      codex_task_project_root: "",
       image_base_url: "http://127.0.0.1:8320/v1",
       image_model: "gpt-image-2",
       image_text_base_url: "http://127.0.0.1:8320/v1",

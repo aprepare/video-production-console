@@ -35,10 +35,16 @@ const ratios: ImageProject["ratio"][] = ["3:4", "4:3", "9:16", "1:1"];
 const concurrencyOptions = Array.from({ length: 18 }, (_, index) => index + 1);
 const attemptOptions = [1, 2, 3, 4];
 export const DEFAULT_IMAGE_TEXT_MODEL = "gpt-5.6-sol";
+export const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 export function resolveImageTextModel(value?: string) {
   const trimmed = value?.trim() ?? "";
   return trimmed || DEFAULT_IMAGE_TEXT_MODEL;
+}
+
+export function resolveImageModel(value?: string) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || DEFAULT_IMAGE_MODEL;
 }
 
 function clamp(value: number, min: number, max: number, fallback: number) {
@@ -66,6 +72,7 @@ export function QuickGenerateForm({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">(defaultReasoningEffort);
   const [imageAttempts, setImageAttempts] = useState(clamp(defaultImageAttempts, 1, 4, 2));
   const [textModel, setTextModel] = useState(resolveImageTextModel(defaultTextModel));
+  const [imageModel, setImageModel] = useState(resolveImageModel(defaultImageModel));
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -84,7 +91,7 @@ export function QuickGenerateForm({
       concurrency: clamp(concurrency, 1, 18, 3),
       text_model: resolveImageTextModel(textModel),
       reasoning_effort: reasoningEffort,
-      image_model: defaultImageModel.trim(),
+      image_model: resolveImageModel(imageModel),
       image_attempts: clamp(imageAttempts, 1, 4, 2),
     };
     setBusy(true);
@@ -133,9 +140,29 @@ export function QuickGenerateForm({
       <aside className="quick-generate-rail">
         <p className="image-kicker">日常参数</p>
         <label>
+          文本模型
+          <input
+            aria-label="文本模型"
+            value={textModel}
+            onChange={(event) => setTextModel(event.target.value)}
+            placeholder={DEFAULT_IMAGE_TEXT_MODEL}
+            maxLength={128}
+          />
+        </label>
+        <label>
+          图片模型
+          <input
+            aria-label="图片模型"
+            value={imageModel}
+            onChange={(event) => setImageModel(event.target.value)}
+            placeholder={DEFAULT_IMAGE_MODEL}
+            maxLength={128}
+          />
+        </label>
+        <label>
           思考强度
           <select aria-label="思考强度" value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")}>
-            <option value="">跟随设置</option>
+            <option value="">不设置</option>
             {reasoningEfforts.map((value) => <option value={value} key={value}>{value}</option>)}
           </select>
         </label>
@@ -168,28 +195,12 @@ export function QuickGenerateForm({
           高级参数
         </button>
         {advancedOpen ? (
-          <>
-            <label>
-              每张图片最多请求次数
-              <select aria-label="每张图片最多请求次数" value={imageAttempts} onChange={(event) => setImageAttempts(Number(event.target.value))}>
-                {attemptOptions.map((value) => <option value={value} key={value}>{value}</option>)}
-              </select>
-            </label>
-            <p className="image-fixed-model">
-              <span>图片模型</span>
-              <strong aria-label="图片模型">{defaultImageModel || "未配置，请到设置中填写"}</strong>
-            </p>
-            <label>
-              文本模型
-              <input
-                aria-label="文本模型"
-                value={textModel}
-                onChange={(event) => setTextModel(event.target.value)}
-                placeholder={DEFAULT_IMAGE_TEXT_MODEL}
-                maxLength={128}
-              />
-            </label>
-          </>
+          <label>
+            每张图片最多请求次数
+            <select aria-label="每张图片最多请求次数" value={imageAttempts} onChange={(event) => setImageAttempts(Number(event.target.value))}>
+              {attemptOptions.map((value) => <option value={value} key={value}>{value}</option>)}
+            </select>
+          </label>
         ) : null}
         <div className="quick-generate-actions">
           {error ? <p className="image-mode-notice" role="alert">提交失败：{error}</p> : null}

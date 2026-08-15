@@ -58,7 +58,7 @@ func TestSettingsSchemaDescribesRemixModelSettings(t *testing.T) {
 	definitions := schema["$defs"].(map[string]any)
 	public := definitions["publicSettings"].(map[string]any)
 	properties := public["properties"].(map[string]any)
-	remixKeys := []string{"remix_base_url", "remix_model"}
+	remixKeys := []string{"remix_base_url", "remix_model", "remix_reasoning_effort"}
 	for _, key := range remixKeys {
 		if properties[key] == nil {
 			t.Fatalf("%s missing from public settings schema", key)
@@ -129,7 +129,7 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 		t.Fatalf("image_base_url schema=%v", baseURL)
 	}
 	model := properties["image_model"].(map[string]any)
-	if model["default"] != "gpt-image-2" || model["pattern"] != "^(?:\\S|\\S.*\\S)$" {
+	if model["default"] != "gpt-image-2" || model["maxLength"] != float64(128) {
 		t.Fatalf("image_model schema=%v", model)
 	}
 	ratio := properties["default_image_ratio"].(map[string]any)

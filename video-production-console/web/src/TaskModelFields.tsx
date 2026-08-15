@@ -1,5 +1,5 @@
 import type { ReasoningEffort, TaskModelDefaults, TaskModelOverride, TaskModelPurpose } from "./taskModel";
-import { inheritedTaskModel, reasoningEfforts } from "./taskModel";
+import { inheritedTaskEffort, inheritedTaskModel, reasoningEfforts } from "./taskModel";
 
 export function TaskModelFields({
   value,
@@ -17,8 +17,9 @@ export function TaskModelFields({
   purpose?: TaskModelPurpose;
 }) {
   const actualModel = value.model.trim() || inheritedTaskModel(defaults, purpose);
-  const actualEffort =
-    value.reasoningEffort || defaults?.codex_default_reasoning_effort || "Codex 默认强度";
+  const inheritedEffort = inheritedTaskEffort(defaults, purpose);
+  const actualEffort = value.reasoningEffort || inheritedEffort;
+  const emptyEffortLabel = purpose === "remix" ? `跟随设置（${inheritedEffort}）` : "继承默认强度";
   return (
     <details className="task-model-fields">
       <summary>{hideReasoningEffort ? "模型（可选）" : "模型与推理强度（可选）"}</summary>
@@ -45,7 +46,7 @@ export function TaskModelFields({
                 })
               }
             >
-              <option value="">继承默认强度</option>
+              <option value="">{emptyEffortLabel}</option>
               {reasoningEfforts.map((effort) => (
                 <option key={effort} value={effort}>
                   {effort}

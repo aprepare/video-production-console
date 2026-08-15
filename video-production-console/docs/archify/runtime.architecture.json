@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "视频生产控制台 · 运行时架构",
+    "output": "runtime.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "daily-scenic",
+        "label": "日产风景混剪",
+        "focus": ["spa", "console", "remix", "volc", "montage", "jianying"],
+        "note": "粘贴原文 → openai-compat 二创 → 火山配音 → BuildV2 选片 → 剪映草稿。"
+      },
+      {
+        "id": "catalog-recall",
+        "label": "建库与自动检索",
+        "focus": ["console", "builder", "catalog", "montage"],
+        "note": "控制台与 catalog-builder 都写 catalog.db；混剪从库里四级召回。"
+      },
+      {
+        "id": "image-line",
+        "label": "图文批次",
+        "focus": ["spa", "console", "image"],
+        "note": "图文走独立表与 /api/image-projects，不进混剪任务队列。"
+      },
+      {
+        "id": "state-store",
+        "label": "状态与密钥",
+        "focus": ["console", "consoledb"],
+        "note": "项目、任务、会话在 console.db；密钥进 encrypted_secrets。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "OpenAI 兼容 API",
+      "sublabel": "二创 / 视觉 / 生图",
+      "pos": [80, 90],
+      "size": [150, 64]
+    },
+    {
+      "id": "remix",
+      "type": "backend",
+      "label": "二创运行时",
+      "sublabel": "openai-compat-run",
+      "pos": [360, 90],
+      "size": [150, 64],
+      "tag": "remix.standard"
+    },
+    {
+      "id": "volc",
+      "type": "external",
+      "label": "火山语音",
+      "sublabel": "TTS + 词级 SRT",
+      "pos": [640, 90],
+      "size": [150, 64],
+      "tag": "POST /narration"
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "React 工作台",
+      "sublabel": "web/src · embed dist",
+      "pos": [80, 290],
+      "size": [150, 64],
+      "tag": "/ /projects"
+    },
+    {
+      "id": "console",
+      "type": "backend",
+      "label": "Go 控制台",
+      "sublabel": "cmd/console :2030",
+      "pos": [360, 290],
+      "size": [150, 64],
+      "tag": "httpapi + scheduler"
+    },
+    {
+      "id": "montage",
+      "type": "backend",
+      "label": "混剪运行时",
+      "sublabel": "montage-script-run",
+      "pos": [640, 290],
+      "size": [150, 64],
+      "tag": "BuildV2"
+    },
+    {
+      "id": "jianying",
+      "type": "external",
+      "label": "剪映草稿",
+      "sublabel": "本机登记目录",
+      "pos": [920, 290],
+      "size": [150, 64]
+    },
+    {
+      "id": "image",
+      "type": "backend",
+      "label": "图文编排",
+      "sublabel": "imageproject",
+      "pos": [80, 490],
+      "size": [150, 64],
+      "tag": "一键 202"
+    },
+    {
+      "id": "consoledb",
+      "type": "database",
+      "label": "console.db",
+      "sublabel": "项目 / 任务 / 会话",
+      "pos": [360, 490],
+      "size": [150, 64]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "catalog.db",
+      "sublabel": "镜头台账 + 向量",
+      "pos": [640, 490],
+      "size": [150, 64],
+      "tag": "ready_shots"
+    },
+    {
+      "id": "builder",
+      "type": "cloud",
+      "label": "catalog-builder",
+      "sublabel": "cmd/catalog-builder :2031",
+      "pos": [920, 490],
+      "size": [150, 64],
+      "tag": "打包 / 合并"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "本机控制台进程",
+      "wraps": ["spa", "console", "remix", "montage", "image"]
+    },
+    {
+      "kind": "region",
+      "label": "本机磁盘",
+      "wraps": ["consoledb", "catalog"]
+    },
+    {
+      "kind": "security-group",
+      "label": "会话 + CSRF :2030",
+      "wraps": ["spa", "console"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "spa-to-console",
+      "from": "spa",
+      "to": "console",
+      "label": "HTTPS /api",
+      "variant": "emphasis"
+    },
+    {
+      "id": "console-to-remix",
+      "from": "console",
+      "to": "remix",
+      "label": "二创子进程",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "remix-to-llm",
+      "from": "remix",
+      "to": "llm",
+      "label": "写稿"
+    },
+    {
+      "id": "console-to-volc",
+      "from": "console",
+      "to": "volc",
+      "label": "配音",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "console-to-montage",
+      "from": "console",
+      "to": "montage",
+      "label": "混剪执行",
+      "variant": "emphasis"
+    },
+    {
+      "id": "montage-to-jianying",
+      "from": "montage",
+      "to": "jianying",
+      "label": "登记",
+      "variant": "emphasis"
+    },
+    {
+      "id": "montage-to-catalog",
+      "from": "montage",
+      "to": "catalog",
+      "label": "四级召回",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "console-to-image",
+      "from": "console",
+      "to": "image",
+      "label": "图文 API",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "console-to-consoledb",
+      "from": "console",
+      "to": "consoledb",
+      "label": "SQLite",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "builder-to-catalog",
+      "from": "builder",
+      "to": "catalog",
+      "label": "合并",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "日产主路径",
+      "items": [
+        "粘贴原文 → openai-compat 二创 → 火山配音 → BuildV2 → 剪映草稿"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "素材库",
+      "items": [
+        "开始建库后混剪自动从 catalog.db 召回；云机包在 :2031 合并"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "隔离与红线",
+      "items": [
+        "图文不进混剪任务队列；不打开视频号、不成片上传"
+      ]
+    }
+  ]
+}

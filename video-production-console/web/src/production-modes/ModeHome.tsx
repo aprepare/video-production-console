@@ -13,7 +13,6 @@ export function ModeHome({ modes, onNavigate }: ModeHomeProps) {
       <div className="mode-home-intro">
         <span className="mode-home-eyebrow">视频生产控制台</span>
         <h1>选择制作方式</h1>
-        <p>每种制作方式都有独立地址。后续增加新的剪辑流程，也会从这里进入。</p>
       </div>
       <div className="mode-home-grid">
         {modes.map((mode) => {

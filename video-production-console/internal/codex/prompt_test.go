@@ -117,6 +117,17 @@ func TestResolveTaskActionMapsLegacyTypesAndRejectsSkillCrossovers(t *testing.T)
 	}
 }
 
+func TestSkillForTaskAndResolveActionImageVideo(t *testing.T) {
+	skill, err := SkillForTask("image_video")
+	if err != nil || skill != "jianying-montage-draft" {
+		t.Fatalf("SkillForTask(image_video)=%q %v", skill, err)
+	}
+	action, resolved, err := ResolveTaskAction("image_video", "")
+	if err != nil || action != domain.ActionMontageExecute || resolved.Skill != "jianying-montage-draft" || resolved.WireAction != "execute" {
+		t.Fatalf("ResolveTaskAction(image_video)=%q %#v %v", action, resolved, err)
+	}
+}
+
 func TestSkillForTaskAndResolveActionMovieMontage(t *testing.T) {
 	skill, err := SkillForTask("movie_montage")
 	if err != nil || skill != MovieMontageSkill {

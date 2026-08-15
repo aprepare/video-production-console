@@ -22,6 +22,8 @@ const draft: PublicSettings = {
   grok_model: "",
   remix_base_url: "",
   remix_model: "",
+  remix_reasoning_effort: "",
+  codex_task_project_root: "",
   image_base_url: "http://images.example.test/v1",
   image_model: "gpt-image-2",
   image_text_base_url: "http://text.example.test/v1",
@@ -54,15 +56,6 @@ const draft: PublicSettings = {
   pixabay_api_base_url: "https://pixabay.com",
   max_external_results_per_query: 20,
 };
-
-test("image stream keepalive toggle is editable and defaults off", () => {
-  const { onDraftChange } = renderPanel();
-  const toggle = screen.getByRole("checkbox", { name: /生图流式保活/ }) as HTMLInputElement;
-  expect(toggle.checked).toBe(false);
-  expect(screen.getByText(/仅当兼容服务支持stream:true时开启/)).toBeTruthy();
-  fireEvent.click(toggle);
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_stream: true });
-});
 
 const emptySecretDraft = {
   grok_api_key: "",
@@ -111,6 +104,25 @@ function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {
   return { onDraftChange, onSecretDraftChange };
 }
 
+function openTab(name: string) {
+  fireEvent.click(screen.getByRole("tab", { name }));
+}
+
+test("image tab only exposes service addresses and keys", () => {
+  renderPanel();
+  openTab("图文");
+  expect(screen.getByRole("textbox", { name: "生图服务地址" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "图文文本模型地址" })).toBeTruthy();
+  expect(screen.getByLabelText("生图 API Key")).toBeTruthy();
+  expect(screen.getByLabelText("图文文本模型 API Key")).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "生图模型" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "图文文本模型" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: /同时生成图片数/ })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: /图文文本思考强度/ })).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: /生图流式保活/ })).toBeNull();
+  expect(screen.getByText(/模型和思考强度在进入图文项目后选择或填写/)).toBeTruthy();
+});
+
 test("remix model fields are editable independently", () => {
   const { onDraftChange, onSecretDraftChange } = renderPanel();
   fireEvent.change(screen.getByRole("textbox", { name: "二创服务地址" }), {
@@ -124,6 +136,11 @@ test("remix model fields are editable independently", () => {
     target: { value: "gpt-5.6-sol" },
   });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
+  fireEvent.change(screen.getByRole("combobox", { name: "二创思考强度" }), {
+    target: { value: "high" },
+  });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_reasoning_effort: "high" });
+  expect((screen.getByRole("combobox", { name: "二创思考强度" }) as HTMLSelectElement).value).toBe("");
   fireEvent.change(screen.getByLabelText("二创 API 密钥"), {
     target: { value: "new-remix-key" },
   });
@@ -135,6 +152,7 @@ test("remix model fields are editable independently", () => {
 
 test("the Volcengine voice IDs are editable public fields", () => {
   const { onDraftChange } = renderPanel();
+  openTab("配音");
 
   const speaker = screen.getByRole("textbox", { name: "火山音色 ID" });
   const resource = screen.getByRole("textbox", { name: "火山语音资源 ID" });
@@ -147,6 +165,7 @@ test("the Volcengine voice IDs are editable public fields", () => {
 
 test("standalone conversation and local history controls are not shown", () => {
   renderPanel();
+  openTab("系统");
 
   expect(screen.queryByText("启用实时 Codex 对话服务")).toBeNull();
   expect(screen.queryByText("本机历史显示数量")).toBeNull();
@@ -155,6 +174,7 @@ test("standalone conversation and local history controls are not shown", () => {
 
 test("the Volcengine API key is masked and only sent when a new value is typed", () => {
   const { onSecretDraftChange } = renderPanel();
+  openTab("配音");
 
   const key = screen.getByLabelText(/火山语音 API Key/) as HTMLInputElement;
   expect(key.type).toBe("password");
@@ -170,23 +190,10 @@ test("the Volcengine API key is masked and only sent when a new value is typed",
 
 test("image generation settings and secret are editable", () => {
   const { onDraftChange, onSecretDraftChange } = renderPanel();
+  openTab("图文");
   const baseURL = screen.getByRole("textbox", { name: "生图服务地址" });
-  expect((screen.getByRole("textbox", { name: "生图模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
   fireEvent.change(baseURL, { target: { value: "https://images.example.test/v1" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_base_url: "https://images.example.test/v1" });
-  fireEvent.change(screen.getByRole("combobox", { name: /同时生成图片数/ }), { target: { value: "18" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, max_image_concurrency: 18 });
-  expect((screen.getByRole("combobox", { name: /每张图片最多请求次数/ }) as HTMLSelectElement).value).toBe("2");
-  fireEvent.change(screen.getByRole("combobox", { name: /每张图片最多请求次数/ }), { target: { value: "4" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_generation_attempts: 4 });
-  expect((screen.getByRole("textbox", { name: "图文文本模型" }) as HTMLInputElement).value).toBe("planner-test");
-  expect((screen.getByRole("combobox", { name: /图文文本思考强度/ }) as HTMLSelectElement).value).toBe("high");
-  fireEvent.change(screen.getByRole("combobox", { name: /图文文本思考强度/ }), { target: { value: "xhigh" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_text_reasoning_effort: "xhigh" });
-  fireEvent.change(screen.getByRole("combobox", { name: "默认图片比例" }), { target: { value: "9:16" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_ratio: "9:16" });
-  fireEvent.change(screen.getByRole("combobox", { name: "默认视觉风格" }), { target: { value: "red_ink" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_style: "red_ink" });
   fireEvent.change(screen.getByLabelText(/生图 API Key/), { target: { value: "new-image-key" } });
   expect(onSecretDraftChange).toHaveBeenCalledWith({
     ...emptySecretDraft,
@@ -197,13 +204,13 @@ test("image generation settings and secret are editable", () => {
     ...emptySecretDraft,
     image_text_api_key: "new-text-key",
   });
-  expect(screen.getByText(/HTTP 会明文传输二创、Grok、生图或图文文本模型 API Key/)).toBeTruthy();
+  expect(screen.getByText(/当前地址使用 HTTP，密钥会明文传输/)).toBeTruthy();
 });
 
-test("the media library settings group exposes catalog, FFmpeg, and analysis fields", () => {
+test("the montage tab exposes catalog and FFmpeg paths without analysis keys", () => {
   const { onDraftChange } = renderPanel();
+  openTab("混剪");
 
-  expect(screen.getByText("素材库", { selector: "h3" })).toBeTruthy();
   const catalogPath = screen.getByRole("textbox", { name: "素材库目录" }) as HTMLInputElement;
   expect(catalogPath.value).toBe("C:\\media\\catalog.db");
   fireEvent.change(catalogPath, { target: { value: "D:\\library\\catalog.db" } });
@@ -213,41 +220,28 @@ test("the media library settings group exposes catalog, FFmpeg, and analysis fie
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, ffmpeg_path: "C:\\tools\\ffmpeg.exe" });
   fireEvent.change(screen.getByRole("textbox", { name: "FFprobe 路径" }), { target: { value: "C:\\tools\\ffprobe.exe" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, ffprobe_path: "C:\\tools\\ffprobe.exe" });
-
-  expect((screen.getByRole("textbox", { name: "视觉分析服务地址" }) as HTMLInputElement).value).toBe("https://vision.example.test/v1");
-  fireEvent.change(screen.getByRole("textbox", { name: "视觉分析模型" }), { target: { value: "vision-next" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, vision_model: "vision-next" });
-  fireEvent.change(screen.getByRole("textbox", { name: "向量服务地址" }), { target: { value: "https://embed.example.test/v1" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, embedding_base_url: "https://embed.example.test/v1" });
-  fireEvent.change(screen.getByRole("textbox", { name: "向量模型" }), { target: { value: "embed-next" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, embedding_model: "embed-next" });
+  expect(screen.queryByRole("textbox", { name: "视觉分析服务地址" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "向量服务地址" })).toBeNull();
 });
 
-test("the media library secrets are masked and only sent when typed", () => {
-  const { onSecretDraftChange } = renderPanel({
-    settings: {
-      ...settings,
-      secrets: { ...settings.secrets, vision_api_key: { configured: true, masked: "********" } },
-    },
-  });
-
-  const vision = screen.getByLabelText(/视觉分析 API Key/) as HTMLInputElement;
-  expect(vision.type).toBe("password");
-  expect(vision.value).toBe("");
-
-  fireEvent.change(vision, { target: { value: "new-vision-key" } });
-  expect(onSecretDraftChange).toHaveBeenCalledWith({ ...emptySecretDraft, vision_api_key: "new-vision-key" });
-  fireEvent.change(screen.getByLabelText(/向量模型 API Key/), { target: { value: "new-embed-key" } });
-  expect(onSecretDraftChange).toHaveBeenCalledWith({ ...emptySecretDraft, embedding_api_key: "new-embed-key" });
-  fireEvent.change(screen.getByLabelText(/Pixabay API 密钥/), { target: { value: "new-pixabay-key" } });
-  expect(onSecretDraftChange).toHaveBeenCalledWith({ ...emptySecretDraft, pixabay_api_key: "new-pixabay-key" });
+test("unused retrieval and catalog-builder keys stay off the settings form", () => {
+  renderPanel();
+  for (const name of ["二创", "图文", "配音", "混剪", "系统"]) {
+    openTab(name);
+    expect(screen.queryByLabelText("Grok 检索 API 密钥")).toBeNull();
+    expect(screen.queryByLabelText("Pexels API 密钥")).toBeNull();
+    expect(screen.queryByLabelText("Pixabay API 密钥")).toBeNull();
+    expect(screen.queryByLabelText("视觉分析 API Key")).toBeNull();
+    expect(screen.queryByLabelText("向量模型 API Key")).toBeNull();
+  }
 });
 
 test("an old settings response without image_base_url remains editable without an HTTP warning", () => {
-  const { image_base_url: _imageBaseURL, ...legacyDraft } = draft;
+  const { image_base_url: _imageBaseURL, image_text_base_url: _textURL, ...legacyDraft } = draft;
 
   renderPanel({ draft: legacyDraft as PublicSettings });
+  openTab("图文");
 
   expect((screen.getByRole("textbox", { name: "生图服务地址" }) as HTMLInputElement).value).toBe("");
-  expect(screen.queryByText(/HTTP 会以明文传输生图 API Key/)).toBeNull();
+  expect(screen.queryByText(/当前地址使用 HTTP，密钥会明文传输/)).toBeNull();
 });

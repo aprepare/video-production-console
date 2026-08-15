@@ -160,6 +160,54 @@ func TestSettingsHTTPDependencyProbeAndRepairContracts(t *testing.T) {
 	}
 }
 
+func TestSettingsHTTPOverlaysPartialPublicAndReportsFieldError(t *testing.T) {
+	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{})
+	public.RemixModel = "gpt-5.6-sol"
+	public.ImageBaseURL = "http://127.0.0.1:8320/v1"
+	seed, err := json.Marshal(map[string]any{"public": public, "secrets": map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(seed)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("seed status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	partial, err := json.Marshal(map[string]any{
+		"public":  map[string]any{"remix_reasoning_effort": "high", "unknown_public": "ignore"},
+		"secrets": map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(partial)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("partial status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var view consoleSettings.View
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.RemixReasoningEffort != "high" || view.Public.RemixModel != "gpt-5.6-sol" || view.Public.ImageBaseURL != public.ImageBaseURL {
+		t.Fatalf("overlay result=%+v", view.Public)
+	}
+
+	invalidBody, err := json.Marshal(map[string]any{
+		"public":  map[string]any{"remix_base_url": "not-a-url"},
+		"secrets": map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(invalidBody)))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "二创服务地址") {
+		t.Fatalf("invalid field status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestSettingsHTTPRejectsUnknownOrOversizedInputsWithoutEcho(t *testing.T) {
 	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{})
 	body, _ := json.Marshal(map[string]any{"public": public, "secrets": map[string]string{"unknown": "do-not-echo"}})

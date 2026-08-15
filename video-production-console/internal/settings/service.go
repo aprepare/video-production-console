@@ -258,6 +258,7 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 }
 
 func (s *Service) PutPublic(ctx context.Context, value domain.PublicSettings) (int64, error) {
+	value = sanitizePublicModels(value)
 	if err := validatePublic(value); err != nil {
 		return 0, err
 	}
@@ -280,6 +281,10 @@ func (s *Service) ResolveTaskModel(ctx context.Context, override taskmodel.Selec
 	defaults := taskmodel.Selection{
 		Model:           model,
 		ReasoningEffort: runtime.CodexDefaultReasoningEffort,
+		Kind:            override.Kind,
+	}
+	if override.Kind == taskmodel.KindRemix {
+		defaults.ReasoningEffort = strings.TrimSpace(runtime.RemixReasoningEffort)
 	}
 	return taskmodel.Resolve(defaults, override)
 }
@@ -287,6 +292,7 @@ func (s *Service) ResolveTaskModel(ctx context.Context, override taskmodel.Selec
 // Update validates the complete request before changing public settings.
 // Empty secret values deliberately mean "leave unchanged".
 func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secrets map[string]string) (View, error) {
+	public = sanitizePublicModels(public)
 	if err := validatePublic(public); err != nil {
 		return View{}, err
 	}
@@ -325,6 +331,7 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.CodexDefaultReasoningEffort = configured.CodexDefaultReasoningEffort
 	s.active.RemixBaseURL = configured.RemixBaseURL
 	s.active.RemixModel = configured.RemixModel
+	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
 	s.active.ImageStream = configured.ImageStream
 }
@@ -500,6 +507,12 @@ func validateSecretUpdate(key, value string) error {
 	return nil
 }
 
+func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
+	value.RemixModel = strings.TrimSpace(value.RemixModel)
+	value.RemixReasoningEffort = strings.ToLower(strings.TrimSpace(value.RemixReasoningEffort))
+	return value
+}
+
 func validatePublic(value domain.PublicSettings) error {
 	if value.ImageGenerationAttempts == 0 {
 		value.ImageGenerationAttempts = defaultImageGenerationAttempts
@@ -541,8 +554,14 @@ func validatePublic(value domain.PublicSettings) error {
 			return invalid("remix_base_url")
 		}
 	}
-	if value.RemixModel != strings.TrimSpace(value.RemixModel) || len(value.RemixModel) > 256 {
+	if len(value.RemixModel) > 256 {
 		return invalid("remix_model")
+	}
+	if value.RemixReasoningEffort != "" {
+		normalizedRemixEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.RemixReasoningEffort})
+		if err != nil || normalizedRemixEffort.ReasoningEffort != value.RemixReasoningEffort {
+			return invalid("remix_reasoning_effort")
+		}
 	}
 	if value.ImageBaseURL != "" {
 		parsed, err := parseHTTPURL(value.ImageBaseURL)
@@ -550,7 +569,7 @@ func validatePublic(value domain.PublicSettings) error {
 			return invalid("image_base_url")
 		}
 	}
-	if strings.TrimSpace(value.ImageModel) == "" || value.ImageModel != strings.TrimSpace(value.ImageModel) || len(value.ImageModel) > 128 {
+	if value.ImageModel != strings.TrimSpace(value.ImageModel) || len(value.ImageModel) > 128 {
 		return invalid("image_model")
 	}
 	if value.ImageTextBaseURL != "" {
@@ -793,6 +812,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"obsidian_vault": value.ObsidianVault, "topic_cards_dir": value.TopicCardsDir,
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"remix_base_url": value.RemixBaseURL, "remix_model": value.RemixModel,
+		"remix_reasoning_effort": value.RemixReasoningEffort,
 		"image_base_url": value.ImageBaseURL, "image_model": value.ImageModel,
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
 		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
@@ -937,6 +957,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		ObsidianVault: values["obsidian_vault"], TopicCardsDir: values["topic_cards_dir"],
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
 		RemixBaseURL: values["remix_base_url"], RemixModel: strings.TrimSpace(values["remix_model"]),
+		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
 		ImageBaseURL: values["image_base_url"], ImageModel: imageModel,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
 		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),

@@ -173,7 +173,15 @@ func main() {
 		}
 		return root, nil
 	}
-	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveSkillRoot)
+	refreshSecrets := func() map[string]string {
+		runtime, err := settingsService.Runtime(context.Background())
+		if err != nil {
+			slog.Warn("refresh command secrets failed; using startup secret environment", "error", err)
+			return nil
+		}
+		return runtimeSecretEnvironment(runtime, os.LookupEnv)
+	}
+	makeCommand, makeResume := newCodexCommandFactories(settings, commandConfig, resolveSkillRoot, refreshSecrets)
 	legacyScheduler, err := codex.NewScheduler(taskRepo, runtimeSettings.MaxCodexConcurrency, makeCommand, makeResume, nil)
 	if err != nil {
 		fatal("create Codex scheduler", "max_concurrency", runtimeSettings.MaxCodexConcurrency, "error", err)
@@ -503,7 +511,7 @@ func runMontageScriptCommand(args []string) error {
 }
 
 func runOpenAICompatCommand(args []string) error {
-	var manifestPath, skillRoot, outputLast, model string
+	var manifestPath, skillRoot, outputLast, model, reasoningEffort string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--manifest":
@@ -530,6 +538,12 @@ func runOpenAICompatCommand(args []string) error {
 			}
 			i++
 			model = args[i]
+		case "--reasoning-effort":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--reasoning-effort requires a value")
+			}
+			i++
+			reasoningEffort = args[i]
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -540,6 +554,7 @@ func runOpenAICompatCommand(args []string) error {
 		SkillRoot:         skillRoot,
 		OutputLastMessage: outputLast,
 		Model:             model,
+		ReasoningEffort:   reasoningEffort,
 		BaseURL:           baseURL,
 		APIKey:            apiKey,
 	})
@@ -586,7 +601,11 @@ func runPiCommand(args []string) error {
 	})
 }
 
-func newCodexCommandFactories(settings config.Config, base codex.Config, resolveSkillRoot func(string) (string, error)) (codex.CommandFactory, codex.ResumeCommandFactory) {
+func newCodexCommandFactories(settings config.Config, base codex.Config, resolveSkillRoot func(string) (string, error), refreshSecrets ...func() map[string]string) (codex.CommandFactory, codex.ResumeCommandFactory) {
+	var refresh func() map[string]string
+	if len(refreshSecrets) > 0 {
+		refresh = refreshSecrets[0]
+	}
 	makeCommand := func(task domain.CodexTask) (*exec.Cmd, string, error) {
 		root, workspace, err := managedTaskRoot(settings.DataRoot, task)
 		if err != nil {
@@ -596,7 +615,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 		if err != nil {
 			return nil, "", err
 		}
-		cfg := taskCommandConfig(base, task, root, taskRoot)
+		cfg := liveTaskCommandConfig(base, refresh, task, root, taskRoot)
 		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
 		if task.Action == domain.ActionMontageExecute {
 			preferred := agentruntime.MontageRuntimeFromEnv()
@@ -676,7 +695,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 			return nil, "", err
 		}
 		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
-		cmd, err := codex.BuildResumeCommand(taskCommandConfig(base, task, root, taskRoot), *task.CodexSessionID, answer, manifestPath)
+		cmd, err := codex.BuildResumeCommand(liveTaskCommandConfig(base, refresh, task, root, taskRoot), *task.CodexSessionID, answer, manifestPath)
 		if err != nil {
 			return nil, "", err
 		}
@@ -816,12 +835,17 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	cmd := exec.Command(exe, "openai-compat-run",
+	args := []string{
+		"openai-compat-run",
 		"--manifest", manifestPath,
 		"--skill-root", skillRoot,
 		"--output-last-message", cfg.OutputLastMessage,
 		"--model", model,
-	)
+	}
+	if effort := strings.TrimSpace(task.ReasoningEffort); effort != "" {
+		args = append(args, "--reasoning-effort", effort)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(),
 		"VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath,
@@ -870,6 +894,16 @@ func buildPiCommand(cfg codex.Config, task domain.CodexTask, manifestPath string
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
 	return cmd, nil
+}
+
+func liveTaskCommandConfig(base codex.Config, refresh func() map[string]string, task domain.CodexTask, projectRoot, taskRoot string) codex.Config {
+	cfg := base
+	if refresh != nil {
+		if secrets := refresh(); secrets != nil {
+			cfg.SecretEnvironment = secrets
+		}
+	}
+	return taskCommandConfig(cfg, task, projectRoot, taskRoot)
 }
 
 func taskCommandConfig(base codex.Config, task domain.CodexTask, projectRoot, taskRoot string) codex.Config {

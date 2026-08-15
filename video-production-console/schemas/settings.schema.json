@@ -82,6 +82,10 @@
           "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
         },
         "remix_model": { "type": "string", "maxLength": 256 },
+        "remix_reasoning_effort": {
+          "type": "string",
+          "enum": ["", "low", "medium", "high", "xhigh", "max", "ultra"]
+        },
         "image_base_url": {
           "type": "string",
           "maxLength": 2048,
@@ -89,9 +93,7 @@
         },
         "image_model": {
           "type": "string",
-          "minLength": 1,
           "maxLength": 128,
-          "pattern": "^(?:\\S|\\S.*\\S)$",
           "default": "gpt-image-2"
         },
         "image_text_base_url": {
@@ -205,6 +207,7 @@
             "grok_model",
             "remix_base_url",
             "remix_model",
+            "remix_reasoning_effort",
             "image_base_url",
             "image_model",
             "image_text_base_url",

@@ -81,8 +81,7 @@ func movieCatalogPolicy() mixPolicy {
 	}
 }
 
-// imageVideoPolicy is the parked image_video preset (method four). No user
-// entry should call this; movieMixPolicy remains the scenic default.
+// imageVideoPolicy is the image_video preset: stills first, no movie footage.
 func imageVideoPolicy() mixPolicy {
 	return mixPolicy{
 		Targets: map[mediaKind]quotaRange{

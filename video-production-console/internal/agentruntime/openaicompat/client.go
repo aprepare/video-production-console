@@ -43,13 +43,14 @@ type ToolSpecFunc struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
-// ChatRequest is the OpenAI-compatible chat body. Remix model names already
-// encode thinking intensity, so reasoning_effort is intentionally omitted.
+// ChatRequest is the OpenAI-compatible chat body. reasoning_effort is omitted
+// when empty so models that do not support it can be used unchanged.
 type ChatRequest struct {
-	Model    string     `json:"model"`
-	Messages []Message  `json:"messages"`
-	Tools    []ToolSpec `json:"tools,omitempty"`
-	Stream   bool       `json:"stream,omitempty"`
+	Model           string     `json:"model"`
+	Messages        []Message  `json:"messages"`
+	Tools           []ToolSpec `json:"tools,omitempty"`
+	Stream          bool       `json:"stream,omitempty"`
+	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
 }
 
 type ChatResponse struct {

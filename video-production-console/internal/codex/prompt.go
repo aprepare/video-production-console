@@ -16,12 +16,14 @@ var skills = map[string]string{
 	"remix":         "finance-viral-remix",
 	"montage":       "jianying-montage-draft",
 	"movie_montage": "jianying-movie-montage",
+	"image_video":   "jianying-montage-draft",
 }
 
 var legacyWireActions = map[string]string{
 	"topic_select": "brainstorm", "topic_commit": "commit_topic", "topic_deepen": "deepen", "remix": "standard",
 	"montage":       "execute",
 	"movie_montage": "execute",
+	"image_video":   "execute",
 }
 
 var legacyTaskActions = map[string]domain.TaskAction{
@@ -31,6 +33,7 @@ var legacyTaskActions = map[string]domain.TaskAction{
 	"remix":        domain.ActionRemixStandard,
 	"montage":       domain.ActionMontageExecute,
 	"movie_montage": domain.ActionMontageExecute,
+	"image_video":   domain.ActionMontageExecute,
 }
 
 // ResolveTaskAction bridges the original HTTP task type vocabulary to the

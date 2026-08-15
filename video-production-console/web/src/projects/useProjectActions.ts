@@ -218,7 +218,7 @@ export function useProjectActions({
           prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
           source_version_id: sourceVersionID,
           remix_prompt_style: remixPromptStyle,
-          ...modelOverrideBody(false),
+          ...modelOverrideBody(),
         },
       });
       if (selectedIDRef.current !== projectID) return;
@@ -271,6 +271,45 @@ export function useProjectActions({
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("混剪任务启动失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
+  const startImageVideoTask = async (prompt: string, options?: { remake?: boolean }) => {
+    if (!selected) return;
+    const project = selected;
+    const projectDetail = detail;
+    if (!projectDetail || projectDetail.project.id !== project.id) {
+      setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
+      return;
+    }
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "montage");
+    if (!lockKey) return;
+    try {
+      const started = await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
+          account_id: project.account_id,
+          type: "image_video",
+          prompt,
+          ...modelOverrideBody(),
+        },
+      });
+      if (!started) {
+        if (selectedIDRef.current === projectID)
+          setMessage("图片视频任务启动失败，请检查静帧库与项目素材后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      setTaskModel({ model: "", reasoningEffort: "" });
+      if (options?.remake) {
+        setMessage("已重新排队图片视频，会生成新的剪映草稿；旧草稿不会被删。");
+      }
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("图片视频任务启动失败，请检查网络连接后重试。");
     } finally {
       unlockAction(lockKey);
     }
@@ -368,6 +407,34 @@ export function useProjectActions({
     }
   };
 
+  const importContinuousScript = async (content: string) => {
+    if (!selected) return;
+    const text = content.trim();
+    if (!text) {
+      setMessage("请先粘贴成品文案。");
+      return;
+    }
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "save-continuous-script");
+    if (!lockKey) return;
+    try {
+      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content: text });
+      if (!saved) {
+        if (selectedIDRef.current === projectID) setMessage("成品文案导入失败，请稍后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      onContinuousScriptSaved(text);
+      setMessage("成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。");
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("成品文案导入失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
   const startRemixReview = async (notes: string) => {
     if (!selected || !detail?.assets.continuous_script) return;
     const project = selected;
@@ -388,7 +455,7 @@ export function useProjectActions({
           action: "remix.review",
           prompt: `按修改要求重写当前连续文案。\n\n修改要求：\n${revisionNotes}`,
           revision_notes: revisionNotes,
-          ...modelOverrideBody(false),
+          ...modelOverrideBody(),
         },
       });
       if (!started) {
@@ -562,8 +629,10 @@ export function useProjectActions({
     saveSourceScriptAndStartRemix,
     startMontageTask,
     startMovieMontageTask,
+    startImageVideoTask,
     publishProject,
     saveContinuousScript,
+    importContinuousScript,
     startRemixReview,
     generateNarration,
     uploadAsset,

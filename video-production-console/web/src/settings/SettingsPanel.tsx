@@ -1,55 +1,19 @@
-import { useMemo } from "react";
-import type { FormEvent } from "react";
+import { useMemo, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { X } from "lucide-react";
 import { messageTone } from "../messageTone";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
-import type { PublicSettings, PublicStringSettingKey, Settings } from "../types";
-
-const settingFields: Array<[PublicStringSettingKey, string, string]> = [
-  ["baokuan_base_url", "爆款库地址", "http://127.0.0.1:2022"],
-  ["obsidian_vault", "Obsidian Vault", "本地 Vault 目录"],
-  ["grok_base_url", "Grok 检索地址", "可选，仅留给旧检索回落"],
-  ["grok_model", "Grok 检索模型", "可选"],
-  ["image_base_url", "生图服务地址", "OpenAI 兼容 Base URL"],
-  ["image_model", "生图模型", "gpt-image-2"],
-  ["image_text_base_url", "图文文本模型地址", "OpenAI 兼容 Chat Base URL"],
-  ["image_text_model", "图文文本模型", "例如 gpt-5.6-sol"],
-  ["codex_binary_path", "Codex CLI 路径", "codex 可执行文件路径"],
-  ["media_index_path", "素材索引", "媒体索引文件"],
-  ["media_root", "媒体素材目录", "本地媒体根目录"],
-  ["jianying_root", "剪映草稿目录", "剪映草稿根目录"],
-  ["machine_profile_path", "混剪机器配置", "machine profile JSON 文件"],
-  ["volc_speech_speaker_id", "火山音色 ID", "复刻音色 ID"],
-  ["volc_speech_resource_id", "火山语音资源 ID", "seed-icl-2.0"],
-];
-
-// 素材库（混剪媒体智能库）设置组：目录、FFmpeg 与分析模型。
-const mediaLibraryFields: Array<[PublicStringSettingKey, string, string]> = [
-  ["media_catalog_path", "素材库目录", "媒体素材目录内的 catalog.db 路径"],
-  ["ffmpeg_path", "FFmpeg 路径", "ffmpeg 可执行文件路径"],
-  ["ffprobe_path", "FFprobe 路径", "ffprobe 可执行文件路径"],
-  ["vision_base_url", "视觉分析服务地址", "OpenAI 兼容 Base URL"],
-  ["vision_model", "视觉分析模型", "用于镜头画面理解"],
-  ["embedding_base_url", "向量服务地址", "OpenAI 兼容 Base URL"],
-  ["embedding_model", "向量模型", "用于镜头语义检索"],
-];
+import type { PublicSettings, Settings } from "../types";
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   listen_addr: "监听地址",
   data_root: "数据目录",
-  baokuan_base_url: "爆款库地址",
-  baokuan_mcp_executable: "爆款库连接程序",
-  obsidian_vault: "Obsidian 目录",
-  grok_base_url: "Grok 检索地址",
-  grok_model: "Grok 检索模型",
   remix_base_url: "二创服务地址",
   remix_model: "二创模型",
+  remix_reasoning_effort: "二创思考强度",
   image_base_url: "生图服务地址",
-  image_model: "生图模型",
   image_text_base_url: "图文文本模型地址",
-  image_text_model: "图文文本模型",
-  image_text_reasoning_effort: "图文文本思考强度",
   codex_binary_path: "Codex 程序路径",
   media_index_path: "素材索引",
   media_root: "媒体素材目录",
@@ -64,13 +28,6 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   media_catalog_path: "素材库目录",
   ffmpeg_path: "FFmpeg 路径",
   ffprobe_path: "FFprobe 路径",
-  vision_base_url: "视觉分析服务地址",
-  vision_model: "视觉分析模型",
-  embedding_base_url: "向量服务地址",
-  embedding_model: "向量模型",
-  pexels_api_base_url: "Pexels API 地址",
-  pixabay_api_base_url: "Pixabay API 地址",
-  max_external_results_per_query: "外部搜索单次结果上限",
 };
 
 type SecretDraft = {
@@ -85,26 +42,15 @@ type SecretDraft = {
   pixabay_api_key: string;
 };
 
-const secretFields: Array<[keyof SecretDraft, string]> = [
-  ["grok_api_key", "Grok 检索 API 密钥"],
-  ["pexels_api_key", "Pexels API 密钥"],
-  ["volc_speech_api_key", "火山语音 API Key"],
-  ["image_api_key", "生图 API Key"],
-  ["image_text_api_key", "图文文本模型 API Key"],
-  ["vision_api_key", "视觉分析 API Key"],
-  ["embedding_api_key", "向量模型 API Key"],
-  ["pixabay_api_key", "Pixabay API 密钥"],
-];
-
-const imageStyles = [
-  ["finance_documentary", "财经纪实插画"],
-  ["red_ink", "赤墨风"],
-  ["old_newspaper", "旧报档案风"],
-  ["ledger_investigation", "账本调查风"],
-  ["dark_crisis", "暗黑危机风"],
-  ["city_era", "城市时代感"],
-  ["blackboard", "黑板讲解风"],
+const settingsTabs = [
+  { id: "remix", label: "二创" },
+  { id: "image", label: "图文" },
+  { id: "voice", label: "配音" },
+  { id: "montage", label: "混剪" },
+  { id: "system", label: "系统" },
 ] as const;
+
+type SettingsTab = (typeof settingsTabs)[number]["id"];
 
 type SettingsPanelProps = {
   settings: Settings | null;
@@ -117,6 +63,15 @@ type SettingsPanelProps = {
   onSubmit: (event: FormEvent) => void;
 };
 
+function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
+  return (
+    <label className={`settings-field${props.wide ? " settings-field--wide" : ""}`}>
+      {props.label}
+      {props.children}
+    </label>
+  );
+}
+
 export function SettingsPanel({
   settings,
   draft,
@@ -127,8 +82,7 @@ export function SettingsPanel({
   onClose,
   onSubmit,
 }: SettingsPanelProps) {
-  // Only fields that differ from what the running process loaded still need a
-  // restart, so the banner names those rather than every configured field.
+  const [tab, setTab] = useState<SettingsTab>("remix");
   const restartChangedFields = useMemo(() => {
     if (!settings?.restart_required || !settings.active_public) return [];
     const configured = settings.configured_public || settings.public;
@@ -139,6 +93,13 @@ export function SettingsPanel({
       )
       .map((key) => restartFieldLabels[key] || String(key));
   }, [settings]);
+
+  const setText = (key: keyof PublicSettings) => (event: { target: { value: string } }) =>
+    onDraftChange({ ...draft, [key]: event.target.value });
+
+  const httpOnTab = (tab === "remix" && (draft.remix_base_url || "").toLowerCase().startsWith("http://"))
+    || (tab === "image" && ["image_base_url", "image_text_base_url"].some((key) =>
+      String(draft[key as keyof PublicSettings] || "").toLowerCase().startsWith("http://")));
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -160,13 +121,7 @@ export function SettingsPanel({
             <X size={20} aria-hidden="true" />
           </button>
         </div>
-        <p className="settings-note">密钥不会回显；留空表示保持现有值不变。</p>
-        <p className="settings-note">
-          默认值只影响之后新建的任务，不会修改运行中任务，也不会改写本机 Codex 全局配置。
-        </p>
-        <p className="settings-note">
-          二创模型单独配置：地址、模型名和 API Key 只用于写二创，不走 Codex CLI。模型名会原样发送。改地址或密钥后需要重启控制台。
-        </p>
+        <p className="settings-note">密钥留空表示不改。</p>
         {feedback ? (
           <div
             className={`settings-feedback settings-feedback--${messageTone(feedback)}`}
@@ -177,234 +132,238 @@ export function SettingsPanel({
         ) : null}
         {settings?.restart_required ? (
           <div className="restart-required" role="status">
-            <strong>配置已保存，重启控制台后生效</strong>
-            <p>
-              并发数等热更新项已经立即生效；路径、任务实时交互服务、密钥等启动配置会在重启后启用。
-            </p>
-            {restartChangedFields.length ? (
-              <p>等待重启：{restartChangedFields.join("、")}</p>
-            ) : null}
+            <strong>已保存，重启后生效</strong>
+            {restartChangedFields.length ? <p>等待重启：{restartChangedFields.join("、")}</p> : null}
           </div>
         ) : null}
-        <h3 className="settings-group-title">二创模型</h3>
-        <p className="settings-note">
-          只给「保存原文并开始二创」用。地址填 OpenAI 兼容根地址，例如 http://127.0.0.1:2001 或带 /v1。思考强度写在模型名里，请求不会再单独传 reasoning_effort。
-        </p>
-        <label className="settings-field">
-          二创服务地址
-          <input
-            value={draft.remix_base_url || ""}
-            placeholder="http://127.0.0.1:2001/v1"
-            onChange={(event) => onDraftChange({ ...draft, remix_base_url: event.target.value })}
-          />
-        </label>
-        <label className="settings-field">
-          二创模型
-          <input
-            value={draft.remix_model || ""}
-            placeholder="例如 gpt-5.6-sol"
-            onChange={(event) => onDraftChange({ ...draft, remix_model: event.target.value })}
-          />
-        </label>
-        <label className="settings-field">
-          二创 API 密钥
-          <small>
-            {settings?.secrets.remix_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
-          </small>
-          <input
-            type="password"
-            aria-label="二创 API 密钥"
-            value={secretDraft.remix_api_key}
-            placeholder="留空保持不变"
-            onChange={(event) =>
-              onSecretDraftChange({ ...secretDraft, remix_api_key: event.target.value })
-            }
-          />
-        </label>
-        <label className="settings-field">
-          默认模型
-          <small>只给混剪等 Codex 任务。二创用上面的二创模型。</small>
-          <input
-            value={draft.codex_default_model || ""}
-            onChange={(event) =>
-              onDraftChange({ ...draft, codex_default_model: event.target.value })
-            }
-          />
-        </label>
-        <label className="settings-field">
-          默认推理强度
-          <small>只给混剪等 Codex 任务。二创不使用这项。</small>
-          <select
-            aria-label="默认推理强度"
-            value={draft.codex_default_reasoning_effort || "medium"}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                codex_default_reasoning_effort: event.target.value as ReasoningEffort,
-              })
-            }
-          >
-            {reasoningEfforts.map((effort) => (
-              <option key={effort} value={effort}>
-                {effort}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="settings-field">
-          同时运行任务数
-          <select
-            value={draft.max_codex_concurrency}
-            onChange={(event) =>
-              onDraftChange({ ...draft, max_codex_concurrency: Number(event.target.value) })
-            }
-          >
-            {[1, 2, 3, 4].map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="settings-field">
-          同时生成图片数
-          <select
-            value={draft.max_image_concurrency || 3}
-            onChange={(event) => onDraftChange({ ...draft, max_image_concurrency: Number(event.target.value) })}
-          >
-            {Array.from({ length: 18 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-          <small>图文模式批量生成的最大并发，最多 18。</small>
-        </label>
-        <label className="settings-field">
-          每张图片最多请求次数
-          <select
-            value={draft.image_generation_attempts || 2}
-            onChange={(event) => onDraftChange({
-              ...draft,
-              image_generation_attempts: Number(event.target.value),
-            })}
-          >
-            {[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-          <small>包含首次请求；设置为 2 表示失败后最多再请求一次。</small>
-        </label>
-        <label className="settings-field">
-          默认图片比例
-          <select
-            value={draft.default_image_ratio || "3:4"}
-            onChange={(event) => onDraftChange({ ...draft, default_image_ratio: event.target.value as PublicSettings["default_image_ratio"] })}
-          >
-            {["3:4", "4:3", "9:16", "1:1"].map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </label>
-        <label className="settings-field">
-          默认视觉风格
-          <select
-            value={draft.default_image_style || "finance_documentary"}
-            onChange={(event) => onDraftChange({ ...draft, default_image_style: event.target.value })}
-          >
-            {imageStyles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label className="settings-field">
-          图文文本思考强度
-          <select
-            value={draft.image_text_reasoning_effort || ""}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                image_text_reasoning_effort: event.target.value as PublicSettings["image_text_reasoning_effort"],
-              })
-            }
-          >
-            <option value="">不指定（请求里不带该字段）</option>
-            {reasoningEfforts.map((effort) => (
-              <option key={effort} value={effort}>
-                {effort}
-              </option>
-            ))}
-          </select>
-          <small>分段和提示词请求可带思考强度。留空可避免不支持该字段的供应商报错。</small>
-        </label>
-        <label className="settings-field checkbox-field">
-          <input
-            type="checkbox"
-            checked={draft.app_server_enabled || false}
-            onChange={(event) =>
-              onDraftChange({ ...draft, app_server_enabled: event.target.checked })
-            }
-          />
-          启用任务实时交互服务
-          <small>用于正在运行的生产任务追问、回答与恢复；保存后需要重启控制台。</small>
-        </label>
-        <label className="settings-field checkbox-field">
-          <input
-            type="checkbox"
-            checked={draft.image_stream || false}
-            onChange={(event) => onDraftChange({ ...draft, image_stream: event.target.checked })}
-          />
-          生图流式保活（SSE）
-          <small>仅当兼容服务支持stream:true时开启，用于避免长时间无响应字节导致断线。</small>
-        </label>
-        <label className="settings-field">
-          Codex 工作目录白名单（每行一个绝对路径）
-          <textarea
-            value={(draft.codex_workspace_roots || []).join("\n")}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                codex_workspace_roots: event.target.value
-                  .split("\n")
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              })
-            }
-          />
-        </label>
-        {settingFields.map(([key, label, placeholder]) => (
-          <label className="settings-field" key={key}>
-            {label}
-            <input
-              value={draft[key] || ""}
-              placeholder={placeholder}
-              onChange={(event) => onDraftChange({ ...draft, [key]: event.target.value })}
-            />
-          </label>
-        ))}
-        <h3 className="settings-group-title">素材库</h3>
-        <p className="settings-note">混剪素材智能库：目录建库、FFmpeg 探测与镜头分析模型。</p>
-        {mediaLibraryFields.map(([key, label, placeholder]) => (
-          <label className="settings-field" key={key}>
-            {label}
-            <input
-              value={draft[key] || ""}
-              placeholder={placeholder}
-              onChange={(event) => onDraftChange({ ...draft, [key]: event.target.value })}
-            />
-          </label>
-        ))}
-        <div className="secret-grid">
-          {secretFields.map(([key, label]) => (
-            <label className="settings-field" key={key}>
-              {label}
-              <small>
-                {settings?.secrets[key]?.configured ? "已配置，输入新值才会替换" : "未配置"}
-              </small>
-              <input
-                type="password"
-                value={secretDraft[key]}
-                placeholder="留空保持不变"
-                onChange={(event) =>
-                  onSecretDraftChange({ ...secretDraft, [key]: event.target.value })
-                }
-              />
-            </label>
+        <div className="settings-tabs" role="tablist" aria-label="设置分类">
+          {settingsTabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`settings-tab-${item.id}`}
+              aria-selected={tab === item.id}
+              aria-controls={`settings-panel-${item.id}`}
+              className={tab === item.id ? "settings-tab is-active" : "settings-tab"}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
           ))}
         </div>
-        {(draft.image_base_url || "").toLowerCase().startsWith("http://") || (draft.image_text_base_url || "").toLowerCase().startsWith("http://") || (draft.grok_base_url || "").toLowerCase().startsWith("http://") || (draft.remix_base_url || "").toLowerCase().startsWith("http://") ? (
+        <div
+          className="settings-tab-panel"
+          role="tabpanel"
+          id={`settings-panel-${tab}`}
+          aria-labelledby={`settings-tab-${tab}`}
+        >
+          {tab === "remix" ? (
+            <>
+              <Field label="二创服务地址">
+                <input
+                  value={draft.remix_base_url || ""}
+                  placeholder="http://127.0.0.1:2001/v1"
+                  onChange={setText("remix_base_url")}
+                />
+              </Field>
+              <Field label="二创模型">
+                <input
+                  value={draft.remix_model || ""}
+                  placeholder="gpt-5.6-sol"
+                  onChange={setText("remix_model")}
+                />
+              </Field>
+              <Field label="二创思考强度">
+                <select
+                  aria-label="二创思考强度"
+                  value={draft.remix_reasoning_effort || ""}
+                  onChange={(event) =>
+                    onDraftChange({
+                      ...draft,
+                      remix_reasoning_effort: event.target.value as PublicSettings["remix_reasoning_effort"],
+                    })
+                  }
+                >
+                  <option value="">不设置</option>
+                  {reasoningEfforts.map((effort) => (
+                    <option key={effort} value={effort}>{effort}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="二创 API 密钥">
+                <small>
+                  {settings?.secrets.remix_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="二创 API 密钥"
+                  value={secretDraft.remix_api_key}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, remix_api_key: event.target.value })
+                  }
+                />
+              </Field>
+            </>
+          ) : null}
+          {tab === "image" ? (
+            <>
+              <Field label="生图服务地址">
+                <input value={draft.image_base_url || ""} placeholder="OpenAI 兼容地址" onChange={setText("image_base_url")} />
+              </Field>
+              <Field label="生图 API Key">
+                <small>
+                  {settings?.secrets.image_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="生图 API Key"
+                  value={secretDraft.image_api_key}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, image_api_key: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label="图文文本模型地址">
+                <input value={draft.image_text_base_url || ""} placeholder="OpenAI 兼容地址" onChange={setText("image_text_base_url")} />
+              </Field>
+              <Field label="图文文本模型 API Key">
+                <small>
+                  {settings?.secrets.image_text_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="图文文本模型 API Key"
+                  value={secretDraft.image_text_api_key}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, image_text_api_key: event.target.value })
+                  }
+                />
+              </Field>
+              <p className="settings-note">模型和思考强度在进入图文项目后选择或填写。</p>
+            </>
+          ) : null}
+          {tab === "voice" ? (
+            <>
+              <Field label="火山音色 ID">
+                <input value={draft.volc_speech_speaker_id || ""} placeholder="复刻音色 ID" onChange={setText("volc_speech_speaker_id")} />
+              </Field>
+              <Field label="火山语音资源 ID">
+                <input value={draft.volc_speech_resource_id || ""} placeholder="seed-icl-2.0" onChange={setText("volc_speech_resource_id")} />
+              </Field>
+              <Field label="火山语音 API Key">
+                <small>
+                  {settings?.secrets.volc_speech_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="火山语音 API Key"
+                  value={secretDraft.volc_speech_api_key}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, volc_speech_api_key: event.target.value })
+                  }
+                />
+              </Field>
+            </>
+          ) : null}
+          {tab === "montage" ? (
+            <>
+              <Field label="素材库目录">
+                <input value={draft.media_catalog_path || ""} placeholder="catalog.db 路径" onChange={setText("media_catalog_path")} />
+              </Field>
+              <Field label="媒体素材目录">
+                <input value={draft.media_root || ""} placeholder="本地媒体根目录" onChange={setText("media_root")} />
+              </Field>
+              <Field label="素材索引">
+                <input value={draft.media_index_path || ""} placeholder="媒体索引文件" onChange={setText("media_index_path")} />
+              </Field>
+              <Field label="剪映草稿目录">
+                <input value={draft.jianying_root || ""} placeholder="剪映草稿根目录" onChange={setText("jianying_root")} />
+              </Field>
+              <Field label="FFmpeg 路径">
+                <input value={draft.ffmpeg_path || ""} placeholder="ffmpeg 可执行文件" onChange={setText("ffmpeg_path")} />
+              </Field>
+              <Field label="FFprobe 路径">
+                <input value={draft.ffprobe_path || ""} placeholder="ffprobe 可执行文件" onChange={setText("ffprobe_path")} />
+              </Field>
+              <Field label="混剪机器配置" wide>
+                <input value={draft.machine_profile_path || ""} placeholder="machine profile JSON" onChange={setText("machine_profile_path")} />
+              </Field>
+            </>
+          ) : null}
+          {tab === "system" ? (
+            <>
+              <Field label="默认模型">
+                <input
+                  value={draft.codex_default_model || ""}
+                  onChange={(event) => onDraftChange({ ...draft, codex_default_model: event.target.value })}
+                />
+              </Field>
+              <Field label="默认推理强度">
+                <select
+                  aria-label="默认推理强度"
+                  value={draft.codex_default_reasoning_effort || "medium"}
+                  onChange={(event) =>
+                    onDraftChange({
+                      ...draft,
+                      codex_default_reasoning_effort: event.target.value as ReasoningEffort,
+                    })
+                  }
+                >
+                  {reasoningEfforts.map((effort) => (
+                    <option key={effort} value={effort}>{effort}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="同时运行任务数">
+                <select
+                  value={draft.max_codex_concurrency}
+                  onChange={(event) =>
+                    onDraftChange({ ...draft, max_codex_concurrency: Number(event.target.value) })
+                  }
+                >
+                  {[1, 2, 3, 4].map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Codex CLI 路径">
+                <input value={draft.codex_binary_path || ""} placeholder="codex 可执行文件" onChange={setText("codex_binary_path")} />
+              </Field>
+              <label className="settings-field checkbox-field settings-field--wide">
+                <input
+                  type="checkbox"
+                  checked={draft.app_server_enabled || false}
+                  onChange={(event) =>
+                    onDraftChange({ ...draft, app_server_enabled: event.target.checked })
+                  }
+                />
+                启用任务实时交互服务
+              </label>
+              <Field label="Codex 工作目录白名单" wide>
+                <textarea
+                  value={(draft.codex_workspace_roots || []).join("\n")}
+                  onChange={(event) =>
+                    onDraftChange({
+                      ...draft,
+                      codex_workspace_roots: event.target.value
+                        .split("\n")
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </Field>
+            </>
+          ) : null}
+        </div>
+        {httpOnTab ? (
           <p className="settings-feedback settings-feedback--danger" role="alert">
-            HTTP 会明文传输二创、Grok、生图或图文文本模型 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
+            当前地址使用 HTTP，密钥会明文传输。
           </p>
         ) : null}
         <button className="save-settings" type="submit">

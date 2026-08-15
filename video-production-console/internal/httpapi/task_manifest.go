@@ -176,6 +176,9 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 		settings.RemixPromptStyle = style
 	}
+	if task.Type == "image_video" {
+		settings.MixPreset = "image_video"
+	}
 	if task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute {
 		decision := skillregistry.DecideMontagePlanVersion(snapshot)
 		settings.MontagePlanVersion = decision.Version

@@ -76,3 +76,13 @@ func TestSelectionConstants(t *testing.T) {
 		t.Fatalf("defaults=%q/%q", DefaultModel, DefaultReasoningEffort)
 	}
 }
+
+func TestSelectionResolveAllowsEmptyRemixEffort(t *testing.T) {
+	got, err := Resolve(Selection{Model: DefaultModel, Kind: KindRemix}, Selection{Kind: KindRemix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != DefaultModel || got.ReasoningEffort != "" || got.Kind != KindRemix {
+		t.Fatalf("Resolve()=%+v", got)
+	}
+}

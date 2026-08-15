@@ -55,7 +55,16 @@ export function useSettingsDialog({ api, readSettings, setMessage }: SettingsDia
       body: JSON.stringify({ public: draft, secrets: secretDraft }),
     });
     if (!response.ok) {
-      setFeedback("设置保存失败，请检查填写内容。");
+      if (response.status === 401 || response.status === 403) {
+        setFeedback("登录已失效，请刷新后重试。");
+        return;
+      }
+      try {
+        const payload = (await response.json()) as { message?: string };
+        setFeedback(payload.message?.trim() || "设置保存失败，请检查填写内容。");
+      } catch {
+        setFeedback("设置保存失败，请检查填写内容。");
+      }
       return;
     }
     const next = (await response.json()) as Settings;

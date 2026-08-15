@@ -59,7 +59,6 @@ export function ReviseDialog({
           onChange={onTaskModelChange}
           defaults={taskModelDefaults}
           labelPrefix="打回"
-          hideReasoningEffort
           purpose="remix"
         />
         <button

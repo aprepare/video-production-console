@@ -75,8 +75,10 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onDelete: vi.fn(),
     onMix: vi.fn(),
     onMovieMix: vi.fn(),
+    onImageVideoMix: vi.fn(),
     onRemakeMontage: vi.fn(),
     onRemakeMovieMontage: vi.fn(),
+    onRemakeImageVideo: vi.fn(),
     onPublish: vi.fn(),
     onUpload: vi.fn(),
     onSaveSourceScript: vi.fn(),
@@ -129,7 +131,7 @@ test("renders the desktop project production contract without drawer semantics o
 test("presents project identity, production stage, asset readiness, and task state as one cockpit hierarchy", () => {
   const { container } = render(<ProjectWorkbench {...workbenchProps()} />);
 
-  expect(screen.getByText("资产与任务均锁定在当前项目")).toBeTruthy();
+  expect(screen.getByText(/风景混剪 · #/)).toBeTruthy();
   expect(container.querySelector(".workbench-stage-badge--assets")?.textContent).toContain("制作素材");
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
@@ -353,7 +355,7 @@ test("accepts a non-empty source script and starts source remix once", () => {
   expect(screen.queryByLabelText("同行原文")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "粘贴同行原文" }));
   expect(screen.getByRole("dialog", { name: "粘贴同行原文" })).toBeTruthy();
-  expect(screen.queryByLabelText("工作台临时推理强度")).toBeNull();
+  expect(screen.getAllByLabelText("工作台临时推理强度").length).toBeGreaterThan(0);
   const source = screen.getByLabelText<HTMLTextAreaElement>("同行原文");
   const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存原文并开始二创" });
 
@@ -461,17 +463,37 @@ test("runs mixing from the single primary action when all formal inputs are read
   expect(props.onMix).toHaveBeenCalledOnce();
 });
 
-test("starts movie montage from the secondary mixing action", () => {
+test("starts movie montage from the primary action in movie mode", () => {
   const detail = fixture();
   detail.assets.narration = asset("narration");
   detail.assets.subtitle_srt = asset("subtitle_srt");
   delete detail.assets.mix_draft;
-  const props = renderWorkbench(detail);
+  const props = workbenchProps(detail);
+  props.mixKind = "movie";
+  render(<ProjectWorkbench {...props} />);
 
-  fireEvent.click(screen.getAllByRole("button", { name: "开始电影混剪" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: "开始电影混剪" }));
 
   expect(props.onMovieMix).toHaveBeenCalledOnce();
   expect(props.onMix).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "开始风景混剪" })).toBeNull();
+});
+
+test("starts image-video mixing from the primary action in image-video mode", () => {
+  const detail = fixture();
+  detail.assets.narration = asset("narration");
+  detail.assets.subtitle_srt = asset("subtitle_srt");
+  delete detail.assets.mix_draft;
+  const props = workbenchProps(detail);
+  props.mixKind = "image-video";
+  props.onImageVideoMix = vi.fn();
+  render(<ProjectWorkbench {...props} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "开始图片视频" }));
+
+  expect(props.onImageVideoMix).toHaveBeenCalledOnce();
+  expect(props.onMix).not.toHaveBeenCalled();
+  expect(props.onMovieMix).not.toHaveBeenCalled();
 });
 
 test("exposes remake montage after a registered draft without replacing publish", () => {
@@ -673,7 +695,7 @@ test("blocks an unknown backend missing key with an actionable explanation", () 
 
   const action = screen.getByRole<HTMLButtonElement>("button", { name: "暂无法继续" });
   expect(action.disabled).toBe(true);
-  expect(screen.getByText("无法识别项目缺项 future_asset，请刷新项目；若仍存在，请更新控制台服务。")).toBeTruthy();
+  expect(screen.getByText("无法识别缺项 future_asset，请刷新项目。")).toBeTruthy();
 });
 
 test("disables the current action, delete, and related input while pending", () => {
@@ -808,7 +830,6 @@ test("shows this plan's QC summary and hides it when absent", () => {
   expect(card.textContent).toContain("20%");
   expect(card.textContent).toContain("1 个");
   expect(card.textContent).toContain("quota_below_min: movie");
-  expect(card.textContent).toContain("不是全局素材库");
   expect(card.textContent).not.toMatch(/catalog/i);
 });
 

@@ -201,6 +201,20 @@ func TestWriteFailureStillWritesEnvelope(t *testing.T) {
 	}
 }
 
+func TestMixPresetFromManifest(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "task_manifest.json")
+	if err := os.WriteFile(path, []byte(`{"non_secret_settings":{"mix_preset":"image_video"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mixPresetFromManifest(path); got != "image_video" {
+		t.Fatalf("mix preset=%q", got)
+	}
+	if got := mixPresetFromManifest(filepath.Join(root, "missing.json")); got != "" {
+		t.Fatalf("missing manifest preset=%q", got)
+	}
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }

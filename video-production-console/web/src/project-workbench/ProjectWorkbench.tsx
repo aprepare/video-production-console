@@ -22,6 +22,8 @@ import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
 import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets";
 import { ProjectTaskSummary } from "./ProjectTaskSummary";
+import type { MontageKind } from "../production-modes/catalog";
+import { montageKindLabel } from "../production-modes/catalog";
 import "./project-workbench.css";
 
 type UploadAssetType = "narration" | "subtitle_srt";
@@ -35,13 +37,17 @@ export type ProjectWorkbenchProps = {
   onThemeChange: (theme: "light" | "dark") => void;
   onBack: () => void;
   onDelete: () => void;
+  mixKind?: MontageKind;
   onMix: () => void;
   onMovieMix?: () => void;
+  onImageVideoMix?: () => void;
   onRemakeMontage?: () => void;
   onRemakeMovieMontage?: () => void;
+  onRemakeImageVideo?: () => void;
   onPublish: () => void;
   onUpload: (type: UploadAssetType, file: File) => void;
   onSaveSourceScript: (content: string) => void;
+  onImportContinuousScript: (content: string) => void;
   loadSourceScriptContent?: (assetID: string) => Promise<string>;
   onReviseContinuousScript?: () => void;
   onGenerateNarration?: () => void;
@@ -114,8 +120,20 @@ function CopyFieldButton(props: {
 
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const { detail, loadSourceScriptContent } = props;
+  const mixKind = props.mixKind ?? "scenic";
   const stage = deriveProductionStage(detail);
   const action = nextPrimaryAction(detail);
+  const mixLabel = mixKind === "movie"
+    ? "开始电影混剪"
+    : mixKind === "image-video"
+      ? "开始图片视频"
+      : "开始风景混剪";
+  const remakeLabel = mixKind === "movie"
+    ? "重做电影混剪"
+    : mixKind === "image-video"
+      ? "重做图片视频"
+      : "重做混剪";
+  const displayAction = action?.id === "start-mixing" ? { ...action, label: mixLabel } : action;
   const missing = missingProductionInputs(detail);
   const currentTask = [...props.tasks]
     .filter((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status))
@@ -148,8 +166,12 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const [uploadRequest, setUploadRequest] = useState<AssetUploadRequest>(null);
   const [sourceScript, setSourceScript] = useState("");
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
+  const [importScript, setImportScript] = useState("");
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const sourceOpenButtonRef = useRef<HTMLButtonElement>(null);
+  const importOpenButtonRef = useRef<HTMLButtonElement>(null);
   const sourceDialogRef = useRef<HTMLElement>(null);
+  const importDialogRef = useRef<HTMLElement>(null);
   const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
@@ -164,22 +186,22 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const montageLive = props.tasks.some((task) =>
     task.action === "montage.execute"
     && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
-  const remakeMontage = Boolean(
-    props.onRemakeMontage
-    && canRemakeMontage(detail)
-    && !montageLive
-    && !props.pendingActions.includes("montage"),
-  );
-  const remakeMovieMontage = Boolean(
-    props.onRemakeMovieMontage
-    && canRemakeMontage(detail)
-    && !montageLive
-    && !props.pendingActions.includes("montage"),
-  );
+  const remakeReady = canRemakeMontage(detail) && !montageLive && !props.pendingActions.includes("montage");
+  const remakeMontage = Boolean(mixKind === "scenic" && props.onRemakeMontage && remakeReady);
+  const remakeMovieMontage = Boolean(mixKind === "movie" && props.onRemakeMovieMontage && remakeReady);
+  const remakeImageVideo = Boolean(mixKind === "image-video" && props.onRemakeImageVideo && remakeReady);
+  const remakeCurrent = remakeMontage || remakeMovieMontage || remakeImageVideo;
+  const onRemakeCurrent = mixKind === "movie"
+    ? props.onRemakeMovieMontage
+    : mixKind === "image-video"
+      ? props.onRemakeImageVideo
+      : props.onRemakeMontage;
 
   useEffect(() => {
     setSourceScript("");
     setSourceDialogOpen(false);
+    setImportScript("");
+    setImportDialogOpen(false);
     setCopiedKey("");
   }, [detail.project.id]);
 
@@ -219,6 +241,37 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       openButton?.focus();
     };
   }, [sourceDialogOpen]);
+
+  useEffect(() => {
+    if (!importDialogOpen) return;
+    const openButton = importOpenButtonRef.current;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setImportDialogOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(importDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      openButton?.focus();
+    };
+  }, [importDialogOpen]);
 
   async function copyPublishingText(key: string, value: string) {
     const text = value.trim();
@@ -266,7 +319,11 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (action.id === "start-source-remix") {
       if (sourceScript.trim()) props.onSaveSourceScript(sourceScript.trim());
     }
-    else if (action.id === "start-mixing") props.onMix();
+    else if (action.id === "start-mixing") {
+      if (mixKind === "movie") props.onMovieMix?.();
+      else if (mixKind === "image-video") props.onImageVideoMix?.();
+      else props.onMix();
+    }
     else if (action.id === "publish") props.onPublish();
     else {
       const target = missing[0];
@@ -282,20 +339,20 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
   };
 
-  const primaryActionButton = (className: string, mobile = false) => action ? (
+  const primaryActionButton = (className: string, mobile = false) => displayAction ? (
     <button
       type="button"
       className={`primary-action ${className}`}
-      disabled={action.disabled || actionPending || Boolean(unknownMissing)}
+      disabled={displayAction.disabled || actionPending || Boolean(unknownMissing)}
       onClick={runPrimaryAction}
-      aria-label={`${mobile ? "移动端：" : ""}${unknownMissing ? "暂无法继续" : action.id === "publish" ? "将当前项目标记为已发布" : action.label}`}
+      aria-label={`${mobile ? "移动端：" : ""}${unknownMissing ? "暂无法继续" : displayAction.id === "publish" ? "将当前项目标记为已发布" : displayAction.label}`}
     >
       <span className="primary-action__icon" aria-hidden="true">
-        {unknownMissing ? <Info size={19} /> : primaryActionIcon(action.id)}
+        {unknownMissing ? <Info size={19} /> : primaryActionIcon(displayAction.id)}
       </span>
       <span className="primary-action__copy">
-        <small>{actionPending ? "正在执行" : action.disabled ? "流程处理中" : "建议下一步"}</small>
-        <strong>{unknownMissing ? "暂无法继续" : action.label}</strong>
+        <small>{actionPending ? "正在执行" : displayAction.disabled ? "流程处理中" : "建议下一步"}</small>
+        <strong>{unknownMissing ? "暂无法继续" : displayAction.label}</strong>
       </span>
       <span className="primary-action__arrow" aria-hidden="true"><ArrowRight size={17} /></span>
     </button>
@@ -317,8 +374,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </div>
           <h1>{detail.project.title}</h1>
           <div className="workbench-title__details">
-            <p>项目 #{detail.project.id.slice(0, 8)}</p>
-            <span>资产与任务均锁定在当前项目</span>
+            <p>{montageKindLabel(mixKind)} · #{detail.project.id.slice(0, 8)}</p>
           </div>
         </div>
         <div className="workbench-masthead__actions">
@@ -348,8 +404,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <div className="source-script-entry__copy">
             <FileText size={18} aria-hidden="true" />
             <div>
-              <h2>{sourceReady ? "同行原文已保存" : "需要参考同行原文？"}</h2>
-              <p>{sourceReady ? `已载入 ${sourceScript.length || "…"} 字，可随时查看或替换。` : "按需打开输入框，不再占用制作状态的首屏空间。"}</p>
+              <h2>{sourceReady ? "同行原文已保存" : "同行原文"}</h2>
+              <p>{sourceReady ? `已载入 ${sourceScript.length || "…"} 字` : "需要时再打开。"}</p>
             </div>
           </div>
           <button
@@ -383,7 +439,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <div>
                 <span className="panel-kicker">SOURCE SCRIPT</span>
                 <h2 id="source-script-dialog-title">{sourceReady ? "查看或替换同行原文" : "粘贴同行原文"}</h2>
-                <p>原文只在保存后进入当前项目，并按所选提示词和模型启动二创。</p>
+                <p>保存后按所选方式开始二创。</p>
               </div>
               <button type="button" className="source-script-dialog__close" aria-label="关闭原文输入" onClick={() => setSourceDialogOpen(false)}>
                 <X size={18} aria-hidden="true" />
@@ -407,12 +463,11 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 onChange={props.onTaskModelChange}
                 defaults={props.taskModelDefaults}
                 labelPrefix="工作台"
-                hideReasoningEffort
                 purpose="remix"
               />
             ) : null}
             <footer>
-              <small>普通对话不会写入项目或解锁下一步。</small>
+              <small>未保存不会写入项目。</small>
               <div>
                 <button type="button" className="source-script-dialog__cancel" onClick={() => setSourceDialogOpen(false)}>取消</button>
                 <button
@@ -443,38 +498,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
             </span>
           </div>
           <h2 className="primary-action-panel__title">{stage === "review" || stage === "published" ? "确认发布信息" : "继续当前制作"}</h2>
-          {action ? (
+          {displayAction ? (
             <>
               {primaryActionButton("desktop-primary-action")}
-              {action.id === "start-mixing" && props.onMovieMix ? (
+              {remakeCurrent && onRemakeCurrent ? (
                 <button
                   type="button"
                   className="remake-montage-action"
-                  disabled={actionPending || Boolean(unknownMissing)}
-                  onClick={props.onMovieMix}
+                  onClick={onRemakeCurrent}
                 >
-                  开始电影混剪
+                  {remakeLabel}
                 </button>
               ) : null}
-              {remakeMontage ? (
-                <button
-                  type="button"
-                  className="remake-montage-action"
-                  onClick={props.onRemakeMontage}
-                >
-                  重做混剪
-                </button>
-              ) : null}
-              {remakeMovieMontage ? (
-                <button
-                  type="button"
-                  className="remake-montage-action"
-                  onClick={props.onRemakeMovieMontage}
-                >
-                  重做电影混剪
-                </button>
-              ) : null}
-              {action.id === "start-source-remix" && !sourceDialogOpen ? (
+              {displayAction.id === "start-source-remix" && !sourceDialogOpen ? (
                 <RemixPromptStyleFields
                   name="remix-prompt-style-panel"
                   value={props.remixPromptStyle}
@@ -487,22 +523,25 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   onChange={props.onTaskModelChange}
                   defaults={props.taskModelDefaults}
                   labelPrefix="工作台"
-                  hideReasoningEffort={action.id === "start-source-remix"}
-                  purpose={action.id === "start-source-remix" ? "remix" : "codex"}
+                  purpose={displayAction.id === "start-source-remix" ? "remix" : "codex"}
                 />
               ) : null}
               <p className="primary-action-panel__hint">
                 {unknownMissing
-                  ? `无法识别项目缺项 ${unknownMissing}，请刷新项目；若仍存在，请更新控制台服务。`
-                  : action.disabled
-                  ? "自动工作流正在推进，完成后这里会切换到下一步。"
-                  : action.id === "start-source-remix"
-                    ? "先选换说法或洗稿，再按所选模型开始二创。思考强度写在模型名里，不会单独发送。"
-                    : action.id === "start-mixing"
-                      ? "风景混剪用风景库；电影混剪用电影切镜库。两者都只用连续文案、配音、SRT 与账号背景图。"
-                      : action.id === "publish"
-                        ? "检查视频描述与短标题后，可直接确认项目已发布。"
-                        : "先补齐当前阶段所需文件。"}
+                  ? `无法识别缺项 ${unknownMissing}，请刷新项目。`
+                  : displayAction.disabled
+                  ? "任务完成后会切换到下一步。"
+                  : displayAction.id === "start-source-remix"
+                    ? "选好转写方式后开始二创。"
+                    : displayAction.id === "start-mixing"
+                      ? mixKind === "movie"
+                        ? "用电影切镜库生成剪映草稿。"
+                        : mixKind === "image-video"
+                          ? "用静帧库生成剪映草稿。"
+                          : "用风景库生成剪映草稿。"
+                      : displayAction.id === "publish"
+                        ? "确认后标记为已发布。"
+                        : "先补齐当前文件。"}
               </p>
             </>
           ) : (
@@ -517,7 +556,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               </strong>
             </div>
             <div className="input-track__line" aria-hidden="true"><span /></div>
-            <p>{missing.length ? missing.map((item) => missingLabels[item] || item).join(" · ") : "所有制作输入已通过检查"}</p>
+            <p>{missing.length ? missing.map((item) => missingLabels[item] || item).join(" · ") : "输入已齐备"}</p>
           </div>
 
           <div className="active-task-summary">
@@ -538,7 +577,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 <small>{currentTask.result_summary || "查看进度与问题"}</small>
                 <span className="active-task-summary__link">查看任务 <ArrowRight size={13} aria-hidden="true" /></span>
               </button>
-            ) : <p>当前没有运行中的任务，执行主动作后会在此同步进展。</p>}
+            ) : <p>执行主动作后会在此显示进度。</p>}
           </div>
         </section>
 
@@ -548,7 +587,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <div>
                 <span>PUBLISHING COPY</span>
                 <h2>发布文案</h2>
-                <p>只展示视频号发布要用的「视频描述」和「短标题」，点复制即可粘贴。</p>
+                <p>复制后即可粘贴到视频号。</p>
               </div>
               {publishingTask ? <span className="publishing-review__source">来自最近二创结果</span> : null}
             </div>
@@ -586,7 +625,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
             ) : (
               <div className="publishing-review__empty">
                 <strong>暂未找到发布文案</strong>
-                <p>完成二创文案任务后，这里会自动显示视频描述和短标题。</p>
+                <p>二创完成后会显示在这里。</p>
               </div>
             )}
           </section>
@@ -603,7 +642,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
           onReviseContinuousScript={props.onReviseContinuousScript}
-          onRemakeMontage={remakeMontage ? props.onRemakeMontage : undefined}
+          onRemakeMontage={remakeCurrent ? onRemakeCurrent : undefined}
           onGenerateNarration={props.onGenerateNarration}
           pendingActions={props.pendingActions}
           uploadRequest={uploadRequest}
@@ -612,22 +651,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       </div>
 
       <div className="mobile-primary-action-bar" aria-label="移动端下一主动作">
-        {action
-          ? (
-            <>
-              {primaryActionButton("mobile-primary-action", true)}
-              {action.id === "start-mixing" && props.onMovieMix ? (
-                <button
-                  type="button"
-                  className="remake-montage-action"
-                  disabled={actionPending || Boolean(unknownMissing)}
-                  onClick={props.onMovieMix}
-                >
-                  开始电影混剪
-                </button>
-              ) : null}
-            </>
-          )
+        {displayAction
+          ? primaryActionButton("mobile-primary-action", true)
           : <div className="primary-action-panel__complete"><CircleCheck size={20} aria-hidden="true" /> 项目流程已完成</div>}
       </div>
     </main>
@@ -650,7 +675,6 @@ function MontagePlanQCCard(props: { qc: MontagePlanQC }) {
   return (
     <section className="montage-plan-qc" aria-label="本次混剪计划摘要">
       <h2>本次混剪计划</h2>
-      <p>这是这一条视频的规划结果，不是全局素材库。</p>
       <dl>
         <div><dt>B-roll 占比</dt><dd>{percent(qc.broll_ratio)}</dd></div>
         <div><dt>电影片段占比</dt><dd>{percent(qc.movie_ratio)}</dd></div>

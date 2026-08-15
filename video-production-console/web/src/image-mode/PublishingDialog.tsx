@@ -148,7 +148,7 @@ export function PublishingDialog({
           <div className="publishing-empty">
             <p className="image-kicker">发布文案</p>
             {publishingError ? <p role="alert">{publishingError}</p> : <p>暂无候选文案</p>}
-            <p className="publishing-empty__hint">一次生成 5 条标题和描述。描述末尾会带 3–5 个与原文相关的话题。</p>
+            <p className="publishing-empty__hint">一次生成 5 条标题和描述。</p>
             {error ? <p role="alert">{error}</p> : null}
             <button type="button" className="primary" disabled={busy} onClick={() => void regenerate()}>重新生成发布文案</button>
           </div>

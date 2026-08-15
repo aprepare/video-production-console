@@ -98,12 +98,31 @@ func TestResolveOpenAICompatConfigPrefersRemixSettings(t *testing.T) {
 	}
 }
 
-func TestCompatModelNameKeepsCursorPrefix(t *testing.T) {
+func TestResolveOpenAICompatConfigPrefersRemixSettingsOverProcessOpenAIEnv(t *testing.T) {
+	t.Setenv(EnvOpenAIBaseURL, "https://big-response-arch-percentage.trycloudflare.com/v1")
+	t.Setenv(EnvOpenAIAPIKey, "stale-openai-key")
+	t.Setenv("GROK_SEARCH_BASE_URL", "")
+	t.Setenv("GROK_SEARCH_API_KEY", "")
+	t.Setenv("GROK_SEARCH_MODEL", "")
+	t.Setenv("REMIX_BASE_URL", "")
+	t.Setenv("REMIX_API_KEY", "")
+	t.Setenv("REMIX_MODEL", "")
+	baseURL, apiKey, model, ok := ResolveOpenAICompatConfig(map[string]string{
+		"REMIX_BASE_URL": "http://23.138.12.112:2001/v1",
+		"REMIX_API_KEY":  "remix-key",
+		"REMIX_MODEL":    "gpt-5.6-sol",
+	})
+	if !ok || baseURL != "http://23.138.12.112:2001/v1" || apiKey != "remix-key" || model != "gpt-5.6-sol" {
+		t.Fatalf("stale openai env won: %q %q %q ok=%t", baseURL, apiKey, model, ok)
+	}
+}
+
+func TestCompatModelNameKeepsExplicitModel(t *testing.T) {
 	if got := CompatModelName("cursor-grok-4.6-xhigh-fast", "grok-fallback"); got != "cursor-grok-4.6-xhigh-fast" {
 		t.Fatalf("custom cursor model rewritten: %q", got)
 	}
-	if got := CompatModelName("gpt-5.6-sol", "cursor-grok-4.6-xhigh-fast"); got != "cursor-grok-4.6-xhigh-fast" {
-		t.Fatalf("codex default not substituted: %q", got)
+	if got := CompatModelName("gpt-5.6-sol", "cursor-grok-4.6-xhigh-fast"); got != "gpt-5.6-sol" {
+		t.Fatalf("explicit gpt model rewritten: %q", got)
 	}
 	if got := CompatModelName("", "cursor-grok-4.6-xhigh-fast"); got != "cursor-grok-4.6-xhigh-fast" {
 		t.Fatalf("empty task model = %q", got)

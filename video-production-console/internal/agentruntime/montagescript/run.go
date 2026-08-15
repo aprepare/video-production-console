@@ -148,6 +148,10 @@ func buildMontagePlan(manifestPath string, opts montageplan.Options) error {
 		opts.MixPreset = "movie_catalog"
 		return montageplan.BuildV2(opts)
 	}
+	if preset := mixPresetFromManifest(manifestPath); preset != "" {
+		opts.MixPreset = preset
+		return montageplan.BuildV2(opts)
+	}
 	if planVersionFromManifest(manifestPath) == "2.0" {
 		return montageplan.BuildV2(opts)
 	}
@@ -166,6 +170,22 @@ func skillFromManifest(manifestPath string) string {
 		return ""
 	}
 	return strings.TrimSpace(manifest.Skill)
+}
+
+func mixPresetFromManifest(manifestPath string) string {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		NonSecretSettings struct {
+			MixPreset string `json:"mix_preset"`
+		} `json:"non_secret_settings"`
+	}
+	if json.Unmarshal(raw, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.NonSecretSettings.MixPreset)
 }
 
 func planVersionFromManifest(manifestPath string) string {

@@ -7,6 +7,7 @@ export type TaskModelOverride = {
 
 export type TaskModelDefaults = {
   remix_model?: string;
+  remix_reasoning_effort?: string;
   codex_default_model?: string;
   codex_default_reasoning_effort?: string;
 };
@@ -18,6 +19,13 @@ export function inheritedTaskModel(defaults: TaskModelDefaults | undefined, purp
     return defaults?.remix_model?.trim() || defaults?.codex_default_model?.trim() || "默认模型";
   }
   return defaults?.codex_default_model?.trim() || "默认模型";
+}
+
+export function inheritedTaskEffort(defaults: TaskModelDefaults | undefined, purpose: TaskModelPurpose): string {
+  if (purpose === "remix") {
+    return defaults?.remix_reasoning_effort?.trim() || "不设置";
+  }
+  return defaults?.codex_default_reasoning_effort?.trim() || "Codex 默认强度";
 }
 
 export const reasoningEfforts: ReasoningEffort[] = [

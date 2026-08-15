@@ -5,7 +5,7 @@ import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate } from "../types";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
-import { DEFAULT_IMAGE_TEXT_MODEL, QuickGenerateForm, resolveImageTextModel } from "./QuickGenerateForm";
+import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_TEXT_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
 import "./image-mode.css";
 
 type API = (path: string, init?: RequestInit) => Promise<Response>;
@@ -124,6 +124,7 @@ export function ImageModeWorkbench({
   const [concurrency, setConcurrency] = useState(Math.min(18, Math.max(1, defaultConcurrency)));
   const [imageAttempts, setImageAttempts] = useState(clampAttempts(defaultImageAttempts));
   const [textModel, setTextModel] = useState(resolveImageTextModel(defaultTextModel));
+  const [imageModel, setImageModel] = useState(resolveImageModel(defaultImageModel));
   const [titleDraft, setTitleDraft] = useState("");
   const [showAdvancedEdit, setShowAdvancedEdit] = useState(false);
   const [busy, setBusy] = useState("");
@@ -132,7 +133,7 @@ export function ImageModeWorkbench({
   const routeRequestRef = useRef(0);
   const loadedDetailRef = useRef<ImageProjectDetail | null>(null);
   const inFlightIDRef = useRef<string | null>(null);
-  const editedDefaults = useRef({ ratio: false, style: false, concurrency: false, reasoningEffort: false, imageAttempts: false, textModel: false });
+  const editedDefaults = useRef({ ratio: false, style: false, concurrency: false, reasoningEffort: false, imageAttempts: false, textModel: false, imageModel: false });
   const previewCloseRef = useRef<HTMLButtonElement | null>(null);
   const previewReturnFocusRef = useRef<HTMLElement | null>(null);
   const onProjectOpenRef = useRef(onProjectOpen);
@@ -157,6 +158,7 @@ export function ImageModeWorkbench({
   useEffect(() => { if (!editedDefaults.current.reasoningEffort) setReasoningEffort(defaultReasoningEffort); }, [defaultReasoningEffort]);
   useEffect(() => { if (!editedDefaults.current.imageAttempts) setImageAttempts(clampAttempts(defaultImageAttempts)); }, [defaultImageAttempts]);
   useEffect(() => { if (!editedDefaults.current.textModel) setTextModel(resolveImageTextModel(defaultTextModel)); }, [defaultTextModel]);
+  useEffect(() => { if (!editedDefaults.current.imageModel) setImageModel(resolveImageModel(defaultImageModel)); }, [defaultImageModel]);
   const detailID = detail?.project.id ?? "";
   const detailTitle = detail?.project.title ?? "";
   useEffect(() => {
@@ -299,7 +301,7 @@ export function ImageModeWorkbench({
     text_model: resolveImageTextModel(textModel),
     reasoning_effort: reasoningEffort,
     image_attempts: clampAttempts(imageAttempts),
-    image_model: defaultImageModel.trim(),
+    image_model: resolveImageModel(imageModel),
   });
 
   const requestSegments = async (event: FormEvent) => {
@@ -719,17 +721,23 @@ export function ImageModeWorkbench({
           <label>最终文案<textarea rows={12} value={script} onChange={(event) => { setScript(event.target.value); setSegments([]); }} placeholder="粘贴已经定稿的完整文案；系统不会二创" /></label>
           <div className="image-param-grid">
             <label>{"\u5efa\u8bae\u5f20\u6570"}<input type="number" min={1} max={18} value={count || ""} onChange={(event) => setCount(Math.min(18, Math.max(0, Number(event.target.value) || 0)))} placeholder={"\u7559\u7a7a\u5219\u81ea\u52a8\u5206\u6bb5"} /></label>
-            <label>{"\u601d\u8003\u5f3a\u5ea6"}<select aria-label={"\u601d\u8003\u5f3a\u5ea6"} value={reasoningEffort} onChange={(event) => { editedDefaults.current.reasoningEffort = true; setReasoningEffort(event.target.value as ReasoningEffort | ""); }}><option value="">{"\u8ddf\u968f\u8bbe\u7f6e"}</option>{reasoningEfforts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+            <label>{"\u601d\u8003\u5f3a\u5ea6"}<select aria-label={"\u601d\u8003\u5f3a\u5ea6"} value={reasoningEffort} onChange={(event) => { editedDefaults.current.reasoningEffort = true; setReasoningEffort(event.target.value as ReasoningEffort | ""); }}><option value="">{"\u4e0d\u8bbe\u7f6e"}</option>{reasoningEfforts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>图片比例<select value={ratio} onChange={(event) => { editedDefaults.current.ratio = true; setRatio(event.target.value as ImageProject["ratio"]); }}>{ratios.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>视觉风格<select value={style} onChange={(event) => { editedDefaults.current.style = true; setStyle(event.target.value); }}>{styles.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
             <label>项目并发<select value={concurrency} onChange={(event) => { editedDefaults.current.concurrency = true; setConcurrency(Number(event.target.value)); }}>{concurrencyOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>每张图片最多请求次数<select aria-label="每张图片最多请求次数" value={imageAttempts} onChange={(event) => { editedDefaults.current.imageAttempts = true; setImageAttempts(Number(event.target.value)); }}>{attemptOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
           </div>
           <div className="image-fixed-models">
-            <p className="image-fixed-model">
-              <span>图片模型</span>
-              <strong aria-label="图片模型">{defaultImageModel || "未配置，请到设置中填写"}</strong>
-            </p>
+            <label>
+              图片模型
+              <input
+                aria-label="图片模型"
+                value={imageModel}
+                onChange={(event) => { editedDefaults.current.imageModel = true; setImageModel(event.target.value); }}
+                placeholder={DEFAULT_IMAGE_MODEL}
+                maxLength={128}
+              />
+            </label>
             <label>
               文本模型
               <input

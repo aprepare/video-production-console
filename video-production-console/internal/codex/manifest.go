@@ -120,6 +120,7 @@ type ManifestSettings struct {
 	EmbeddingBaseURL     string `json:"embedding_base_url,omitempty"`
 	EmbeddingModel       string `json:"embedding_model,omitempty"`
 	MontagePlanVersion   string `json:"montage_plan_version,omitempty"`
+	MixPreset            string `json:"mix_preset,omitempty"`
 }
 
 type BuildManifestInput struct {

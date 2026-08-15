@@ -26,7 +26,7 @@ var publicSettingKeys = map[string]struct{}{
 	"codex_default_model": {}, "codex_default_reasoning_effort": {},
 	"baokuan_base_url": {}, "baokuan_mcp_executable": {},
 	"obsidian_vault": {}, "topic_cards_dir": {},
-	"grok_base_url": {}, "grok_model": {}, "remix_base_url": {}, "remix_model": {}, "codex_binary_path": {},
+	"grok_base_url": {}, "grok_model": {}, "remix_base_url": {}, "remix_model": {}, "remix_reasoning_effort": {}, "codex_binary_path": {},
 	"image_base_url": {}, "image_model": {}, "image_text_base_url": {}, "image_text_model": {},
 	"image_text_reasoning_effort": {},
 	"image_stream":                {},

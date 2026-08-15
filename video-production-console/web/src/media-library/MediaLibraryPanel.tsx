@@ -169,7 +169,7 @@ export function MediaLibraryPanel({ api, onClose }: MediaLibraryPanelProps) {
       >
         <div className="modal-head">
           <div>
-            <span className="muted">混剪素材智能库</span>
+            <span className="muted">本地素材库</span>
             <h2 id="media-library-title">素材库</h2>
           </div>
           <button type="button" className="close" aria-label="关闭素材库" onClick={onClose}>
@@ -205,9 +205,7 @@ export function MediaLibraryPanel({ api, onClose }: MediaLibraryPanelProps) {
               >
                 开始建库
               </button>
-              <p className="muted">
-                本机建库会扫描 originals、切镜抽帧、视觉打标和向量。建好后混剪会自动从库里检索镜头，不必再手工选片。
-              </p>
+              <p className="muted">建好后混剪会自动检索镜头。</p>
             </div>
             <div className="media-stats">
               <div className="media-stat"><strong>{status.counts.sources}</strong><span>素材源</span></div>

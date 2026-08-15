@@ -83,6 +83,8 @@ export type PublicSettings = {
   grok_model: string;
   remix_base_url: string;
   remix_model: string;
+  remix_reasoning_effort: ReasoningEffort | "";
+  codex_task_project_root: string;
   image_base_url: string;
   image_model: string;
   image_text_base_url: string;

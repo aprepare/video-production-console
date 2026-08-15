@@ -68,3 +68,17 @@ func TestChatRequestOmitsReasoningEffort(t *testing.T) {
 		t.Fatalf("request must not send thinking intensity: %s", raw)
 	}
 }
+
+func TestChatRequestIncludesReasoningEffortWhenSet(t *testing.T) {
+	raw, err := json.Marshal(ChatRequest{
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "high",
+		Messages:        []Message{{Role: "user", Content: "你好"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"reasoning_effort":"high"`) {
+		t.Fatalf("request missing reasoning_effort: %s", raw)
+	}
+}

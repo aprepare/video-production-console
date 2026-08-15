@@ -40,12 +40,33 @@ func Normalize(selection Selection) (Selection, error) {
 	return selection, nil
 }
 
+func normalizeOptionalEffort(selection Selection) (Selection, error) {
+	selection.Model = strings.TrimSpace(selection.Model)
+	selection.ReasoningEffort = strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
+	if !modelPattern.MatchString(selection.Model) {
+		return Selection{}, errInvalidModel
+	}
+	if selection.ReasoningEffort == "" {
+		return selection, nil
+	}
+	if _, ok := validReasoningEfforts[selection.ReasoningEffort]; !ok {
+		return Selection{}, errInvalidReasoningEffort
+	}
+	return selection, nil
+}
+
 func Resolve(defaults, override Selection) (Selection, error) {
 	if strings.TrimSpace(override.Model) != "" {
 		defaults.Model = override.Model
 	}
 	if strings.TrimSpace(override.ReasoningEffort) != "" {
 		defaults.ReasoningEffort = override.ReasoningEffort
+	}
+	if override.Kind != "" {
+		defaults.Kind = override.Kind
+	}
+	if defaults.Kind == KindRemix {
+		return normalizeOptionalEffort(defaults)
 	}
 	return Normalize(defaults)
 }

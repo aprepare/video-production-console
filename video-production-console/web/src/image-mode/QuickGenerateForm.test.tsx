@@ -25,13 +25,11 @@ describe("QuickGenerateForm", () => {
     expect((screen.getByLabelText("图片比例") as HTMLSelectElement).value).toBe("3:4");
     expect((screen.getByLabelText("视觉风格") as HTMLSelectElement).value).toBe("finance_documentary");
     expect((screen.getByLabelText("项目并发") as HTMLSelectElement).value).toBe("3");
-    expect(screen.queryByRole("textbox", { name: "图片模型" })).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "文本模型" })).toBeNull();
+    expect((screen.getByRole("textbox", { name: "图片模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
+    expect((screen.getByRole("textbox", { name: "文本模型" }) as HTMLInputElement).value).toBe("gpt-5.6-sol");
     expect(screen.queryByLabelText("每张图片最多请求次数")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "高级参数" }));
     expect((screen.getByLabelText("每张图片最多请求次数") as HTMLSelectElement).value).toBe("2");
-    expect(screen.getByLabelText("图片模型").textContent).toBe("gpt-image-2");
-    expect((screen.getByLabelText("文本模型") as HTMLInputElement).value).toBe("gpt-5.6-sol");
   });
 
   test("lets the user type a different text model and submits that name", async () => {
@@ -42,7 +40,6 @@ describe("QuickGenerateForm", () => {
       return json({ project_id: "new-project", run_status: "running" }, 202);
     });
     render(<QuickGenerateForm api={api} {...defaults} defaultTextModel="" onCreated={onCreated} onAdvancedMode={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "高级参数" }));
     const modelInput = screen.getByLabelText("文本模型") as HTMLInputElement;
     expect(modelInput.value).toBe("gpt-5.6-sol");
     fireEvent.change(modelInput, { target: { value: "my-own-text-model" } });

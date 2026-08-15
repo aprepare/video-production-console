@@ -14,6 +14,7 @@ type Options struct {
 	SkillRoot         string
 	OutputLastMessage string
 	Model             string
+	ReasoningEffort   string
 	BaseURL           string
 	APIKey            string
 	MaxSteps          int
@@ -105,9 +106,10 @@ func Run(opts Options) error {
 		client = &HTTPChatClient{BaseURL: baseURL, APIKey: apiKey}
 	}
 	resp, err := client.Chat(ChatRequest{
-		Model:    model,
-		Stream:   true,
-		Messages: []Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		Model:           model,
+		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
+		Stream:          true,
+		Messages:        []Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
 	})
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)

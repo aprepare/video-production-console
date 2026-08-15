@@ -20,6 +20,7 @@ type ConsoleHomeProps = {
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   onChooseProductionMode: () => void;
+  modeTitle: string;
   runtime: RuntimeState | null | undefined;
   onOpenMediaLibrary: () => void;
   onOpenSettings: () => void;
@@ -51,6 +52,7 @@ export function ConsoleHome({
   theme,
   onThemeChange,
   onChooseProductionMode,
+  modeTitle,
   runtime,
   onOpenMediaLibrary,
   onOpenSettings,
@@ -83,8 +85,8 @@ export function ConsoleHome({
     <>
       <header aria-hidden={hidden || undefined}>
         <div>
-          <span className="eyebrow">本机视频工作台</span>
-          <h1>视频生产控制台</h1>
+          <span className="eyebrow">视频生产控制台</span>
+          <h1>{modeTitle}</h1>
         </div>
         <div className="status">
           <label className="theme-control">
@@ -171,7 +173,6 @@ export function ConsoleHome({
             <section className="project-board" aria-labelledby="project-board-title">
               <div className="board-help">
                 <strong id="project-board-title">项目看板</strong>
-                <span>按生产阶段查看项目；点击项目卡片进入制作工作台。</span>
               </div>
               <div className="board">
                 {stages.map((stage) => {

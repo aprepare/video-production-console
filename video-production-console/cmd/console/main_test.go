@@ -557,6 +557,19 @@ func TestCodexCommandFactoryUsesOpenAICompatWhenConfigured(t *testing.T) {
 	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "--model") {
 		t.Fatalf("args=%#v", cmd.Args)
 	}
+	if strings.Contains(joined, "--reasoning-effort") {
+		t.Fatalf("empty effort should be omitted: %#v", cmd.Args)
+	}
+
+	task.ReasoningEffort = "high"
+	cmd, _, err = makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand with effort: %v", err)
+	}
+	joined = strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--reasoning-effort") || !strings.Contains(joined, "high") {
+		t.Fatalf("expected reasoning effort in %#v", cmd.Args)
+	}
 }
 
 func TestCodexCommandFactoryUsesGrokSettingsWhenEnvEmpty(t *testing.T) {
@@ -599,12 +612,75 @@ func TestCodexCommandFactoryUsesGrokSettingsWhenEnvEmpty(t *testing.T) {
 		t.Fatalf("makeCommand: %v", err)
 	}
 	joined := strings.Join(cmd.Args, " ")
-	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "cursor-grok-4.6-xhigh-fast") {
+	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "gpt-5.6-sol") {
 		t.Fatalf("args=%#v", cmd.Args)
 	}
-	if strings.Contains(joined, "gpt-5.6-sol") {
-		t.Fatalf("codex default model leaked into grok request: %#v", cmd.Args)
+	if strings.Contains(joined, "cursor-grok-4.6-xhigh-fast") {
+		t.Fatalf("explicit remix model rewritten to cursor prefix: %#v", cmd.Args)
 	}
+}
+
+func TestCodexCommandFactoryUsesLiveRemixURLAfterSettingsChange(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "https://big-response-arch-percentage.trycloudflare.com/v1")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "stale-openai-key")
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	base.SecretEnvironment = map[string]string{
+		"REMIX_BASE_URL": "https://big-response-arch-percentage.trycloudflare.com/v1",
+		"REMIX_API_KEY":  "stale-remix-key",
+		"REMIX_MODEL":    "gpt-5.6-sol",
+	}
+	const liveURL = "http://23.138.12.112:2001/v1"
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		if name != "finance-viral-remix" {
+			t.Fatalf("skill=%q", name)
+		}
+		return skillRoot, nil
+	}, func() map[string]string {
+		return map[string]string{
+			"REMIX_BASE_URL": liveURL,
+			"REMIX_API_KEY":  "live-remix-key",
+			"REMIX_MODEL":    "gpt-5.6-sol",
+		}
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-live-url"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-5.6-sol"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-live-url"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	gotURL := lastCommandEnvValue(cmd.Env, agentruntime.EnvOpenAIBaseURL)
+	if gotURL != liveURL {
+		t.Fatalf("openai base url = %q, want live settings url %q; env=%#v", gotURL, liveURL, cmd.Env)
+	}
+}
+
+func lastCommandEnvValue(env []string, key string) string {
+	prefix := key + "="
+	found := ""
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			found = strings.TrimPrefix(item, prefix)
+		}
+	}
+	return found
 }
 
 func TestCodexCommandFactoryKeepsCursorGrokModelName(t *testing.T) {

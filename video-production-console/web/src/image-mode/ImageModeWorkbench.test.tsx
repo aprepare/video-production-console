@@ -221,7 +221,9 @@ describe("ImageModeWorkbench", () => {
     });
     render(<ImageModeWorkbench api={api} initialProjectID="p" />);
     await screen.findByRole("heading", { name: "Project", level: 1 });
-    fireEvent.change(screen.getByLabelText("图文项目名称"), { target: { value: "新的项目名" } });
+    const titleInput = screen.getByLabelText("图文项目名称") as HTMLInputElement;
+    await waitFor(() => expect(titleInput.value).toBe("Project"));
+    fireEvent.change(titleInput, { target: { value: "新的项目名" } });
     fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
     expect(await screen.findByRole("heading", { name: "新的项目名", level: 1 })).toBeTruthy();
   });

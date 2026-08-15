@@ -16,6 +16,7 @@ type PublicSettings struct {
 	GrokModel                   string   `json:"grok_model"`
 	RemixBaseURL                string   `json:"remix_base_url"`
 	RemixModel                  string   `json:"remix_model"`
+	RemixReasoningEffort        string   `json:"remix_reasoning_effort"`
 	ImageBaseURL                string   `json:"image_base_url"`
 	ImageModel                  string   `json:"image_model"`
 	ImageTextBaseURL            string   `json:"image_text_base_url"`

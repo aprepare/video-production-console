@@ -51,21 +51,22 @@ const (
 	secretRemixModel   = "REMIX_MODEL"
 )
 
-// ResolveOpenAICompatConfig prefers VIDEO_CONSOLE_OPENAI_*, then the dedicated
-// remix endpoint, then the settings-injected Grok endpoint.
+// ResolveOpenAICompatConfig prefers the dedicated remix endpoint from settings,
+// then process VIDEO_CONSOLE_OPENAI_*, then the settings-injected Grok endpoint.
+// A saved 二创 URL must win over a stale parent-process leftover.
 func ResolveOpenAICompatConfig(secrets map[string]string) (baseURL, apiKey, model string, ok bool) {
-	baseURL, apiKey = OpenAIConfigFromEnv()
 	model = firstNonEmpty(
 		secretValue(secrets, secretRemixModel),
 		strings.TrimSpace(os.Getenv(secretRemixModel)),
 		secretValue(secrets, secretGrokModel),
 		strings.TrimSpace(os.Getenv(secretGrokModel)),
 	)
+	baseURL = firstNonEmpty(secretValue(secrets, secretRemixBaseURL), strings.TrimSpace(os.Getenv(secretRemixBaseURL)))
+	apiKey = firstNonEmpty(secretValue(secrets, secretRemixAPIKey), strings.TrimSpace(os.Getenv(secretRemixAPIKey)))
 	if baseURL != "" && apiKey != "" {
 		return baseURL, apiKey, model, true
 	}
-	baseURL = firstNonEmpty(secretValue(secrets, secretRemixBaseURL), strings.TrimSpace(os.Getenv(secretRemixBaseURL)))
-	apiKey = firstNonEmpty(secretValue(secrets, secretRemixAPIKey), strings.TrimSpace(os.Getenv(secretRemixAPIKey)))
+	baseURL, apiKey = OpenAIConfigFromEnv()
 	if baseURL != "" && apiKey != "" {
 		return baseURL, apiKey, model, true
 	}
@@ -98,26 +99,15 @@ func LLMRuntimePreferred(secrets map[string]string) RuntimeName {
 	return RuntimeCodex
 }
 
-// CompatModelName keeps custom names such as cursor-grok-* unchanged.
-// Empty Codex defaults (gpt-*, codex*) fall back to the configured Grok model.
+// CompatModelName prefers the task's explicit model. Empty names fall back to
+// the configured remix/Grok model. gpt-* is a valid OpenAI-compatible name and
+// must not be rewritten to a cursor-* prefix.
 func CompatModelName(taskModel, configuredModel string) string {
 	taskModel = strings.TrimSpace(taskModel)
-	configuredModel = strings.TrimSpace(configuredModel)
-	if shouldSubstituteCompatModel(taskModel) && configuredModel != "" {
-		return configuredModel
-	}
 	if taskModel != "" {
 		return taskModel
 	}
-	return configuredModel
-}
-
-func shouldSubstituteCompatModel(taskModel string) bool {
-	if taskModel == "" {
-		return true
-	}
-	lower := strings.ToLower(taskModel)
-	return strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "codex")
+	return strings.TrimSpace(configuredModel)
 }
 
 func secretValue(secrets map[string]string, key string) string {

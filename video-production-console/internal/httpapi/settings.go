@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -46,27 +47,44 @@ func (h *settingsHandler) get(response http.ResponseWriter, request *http.Reques
 
 func (h *settingsHandler) put(response http.ResponseWriter, request *http.Request) {
 	var input struct {
-		Public  domain.PublicSettings `json:"public"`
-		Secrets map[string]string     `json:"secrets"`
+		Public  json.RawMessage   `json:"public"`
+		Secrets map[string]string `json:"secrets"`
 	}
 	if err := decodeJSON(response, request, maxSettingsRequestSize, &input); err != nil {
-		writeDecodeError(response, err, "invalid_settings", "The settings request is invalid.")
+		writeDecodeError(response, err, "invalid_settings", settingsDecodeMessage(err))
 		return
 	}
 	if input.Secrets == nil {
 		input.Secrets = map[string]string{}
 	}
-	view, err := h.service.Update(request.Context(), input.Public, input.Secrets)
+	current, err := h.service.Get(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "settings_read_failed", "当前设置读取失败，请刷新后重试。")
+		return
+	}
+	merged, err := consoleSettings.OverlayPublic(current.Public, input.Public)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_settings", consoleSettings.UserMessage(err))
+		return
+	}
+	view, err := h.service.Update(request.Context(), merged, input.Secrets)
 	switch {
 	case errors.Is(err, consoleSettings.ErrInvalidSettings), errors.Is(err, consoleSettings.ErrUnknownSecret), errors.Is(err, security.ErrSecretTooLarge), errors.Is(err, security.ErrSecretEmpty):
-		writeError(response, http.StatusBadRequest, "invalid_settings", "The settings request is invalid.")
+		writeError(response, http.StatusBadRequest, "invalid_settings", consoleSettings.UserMessage(err))
 		return
 	case err != nil:
-		writeError(response, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
+		writeError(response, http.StatusInternalServerError, "settings_update_failed", "设置保存失败，请稍后重试。")
 		return
 	default:
 		writeJSON(response, http.StatusOK, view)
 	}
+}
+
+func settingsDecodeMessage(err error) string {
+	if err != nil && strings.Contains(err.Error(), "unknown field") {
+		return "请求里有不支持的设置项，请刷新页面后重试。"
+	}
+	return "设置请求格式无效，请刷新页面后重试。"
 }
 
 func (h *settingsHandler) testDependency(response http.ResponseWriter, request *http.Request) {
