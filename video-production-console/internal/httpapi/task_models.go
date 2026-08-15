@@ -2,8 +2,20 @@ package httpapi
 
 import (
 	"context"
+
+	"video-production-console/internal/domain"
 	"video-production-console/internal/taskmodel"
 )
+
+func modelKindForAction(action domain.TaskAction) string {
+	switch action {
+	case domain.ActionTopicBrainstorm, domain.ActionTopicCommit, domain.ActionTopicDeepen,
+		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
+		return taskmodel.KindRemix
+	default:
+		return taskmodel.KindCodex
+	}
+}
 
 type TaskModelResolver interface {
 	ResolveTaskModel(context.Context, taskmodel.Selection) (taskmodel.Selection, error)

@@ -41,6 +41,45 @@ func TestParseSRTSentencesAggregatesWordLevelEntries(t *testing.T) {
 	}
 }
 
+func TestParseSRTSentencesTreatsLongCuesAsPhrases(t *testing.T) {
+	srt := strings.Join([]string{
+		"1",
+		"00:00:00,000 --> 00:00:02,439",
+		"听好了",
+		"",
+		"2",
+		"00:00:02,439 --> 00:00:04,878",
+		"下一波发财的名单正在重写",
+		"",
+		"3",
+		"00:00:04,878 --> 00:00:07,317",
+		"不是谁突然开窍了",
+		"",
+		"4",
+		"00:00:21,888 --> 00:00:24,316",
+		"百分之九十九还在看热闹",
+		"",
+		"5",
+		"00:00:26,891 --> 00:00:29,505",
+		"所以你点开这期就把心思收回来",
+		"",
+	}, "\n")
+	sentences, err := parseSRTSentences(strings.NewReader(srt))
+	if err != nil {
+		t.Fatalf("parseSRTSentences: %v", err)
+	}
+	if len(sentences) != 5 {
+		t.Fatalf("sentence count = %d, want 5: %#v", len(sentences), sentences)
+	}
+	if sentences[0].Text != "听好了" || sentences[4].Text != "所以你点开这期就把心思收回来" {
+		t.Fatalf("sentences = %#v", sentences)
+	}
+	items, _ := selectHighlightCaptions(sentences, 331668, CaptionHighlightsOnly)
+	if len(items) == 0 {
+		t.Fatal("phrase-level SRT must yield highlight captions")
+	}
+}
+
 func TestParseSRTSentencesFlushesTrailingTextWithoutBoundary(t *testing.T) {
 	srt := strings.Join([]string{
 		"1",

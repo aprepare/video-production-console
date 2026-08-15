@@ -65,6 +65,41 @@ func TestBuildManifestLocksMontageInputsAndUsesTaskAsJob(t *testing.T) {
 	}
 }
 
+func TestBuildManifestAcceptsMovieMontageSkill(t *testing.T) {
+	taskID, projectID, accountID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	root := t.TempDir()
+	paths := []string{filepath.Join(root, "continuous.md"), filepath.Join(root, "narration.wav"), filepath.Join(root, "subtitles.srt"), filepath.Join(root, "background.png")}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("input"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := filepath.Join(root, "machine-profile.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := domain.Project{ID: projectID, AccountID: accountID}
+	inputs := []domain.AssetVersion{
+		manifestVersion(projectID, accountID, domain.AssetContinuousScript, paths[0]),
+		manifestVersion(projectID, accountID, domain.AssetNarration, paths[1]),
+		manifestVersion(projectID, accountID, domain.AssetSubtitleSRT, paths[2]),
+		manifestVersion("", accountID, domain.AssetAccountBackground, paths[3]),
+	}
+	manifest, err := BuildManifest(BuildManifestInput{
+		Task: domain.CodexTask{ID: taskID, Type: "movie_montage", SkillName: MovieMontageSkill},
+		Project: &project, Inputs: inputs,
+		Action: domain.ActionMontageExecute, OutputDir: filepath.Join(root, "tasks", taskID, "output"),
+		SkillSnapshot:     domain.SkillSnapshot{ID: uuid.NewString(), Name: MovieMontageSkill},
+		NonSecretSettings: ManifestSettings{MediaRoot: `C:\media`, MachineProfilePath: profile, DraftDisplayName: "电影混剪_测试片名_b66205"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Skill != MovieMontageSkill || manifest.Action != domain.ActionMontageExecute {
+		t.Fatalf("movie montage manifest=%#v", manifest)
+	}
+}
+
 func TestBuildManifestUsesOneDomainToWireActionMapping(t *testing.T) {
 	tests := []struct {
 		action      domain.TaskAction

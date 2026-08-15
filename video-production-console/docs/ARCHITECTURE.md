@@ -2,7 +2,7 @@
 
 > 读这一份就能建立全局视角：项目在做什么、用什么技术、一条内容怎么从原文走到剪映草稿、每个代码目录是什么、关键机制怎么实现。
 >
-> 与其他文档的分工：本文是**现状描述**（是什么、怎么实现）；[AI 接手说明](AI-HANDOFF.md) 是**接手备忘**（近期改了什么、下一步做什么、工作区红线）；[使用说明](USER-GUIDE.md) 面向使用者；[优化工单](OPTIMIZATION-BACKLOG.md) 是待办改进。`docs/` 下不再保留历史设计稿与交付快照——那些内容已实现且与现状不符，需要考古请查 git 历史。
+> 与其他文档的分工：本文是**现状描述**（是什么、怎么实现）；[AI 接手说明](AI-HANDOFF.md) 是**接手备忘**（2026-08-15 进度、下一步、红线）；[使用说明](USER-GUIDE.md) 面向使用者；[优化工单](OPTIMIZATION-BACKLOG.md) 是待办改进。`docs/superpowers/` 历史设计稿已删除——内容已实现或会误导，考古走 git 历史。
 >
 > 结论都带 `file:line`。行号会随改动漂移，符号名比行号可靠；两者不一致时以代码为准。
 
@@ -13,7 +13,7 @@
 一个**本地单机**的视频生产控制台，包含两条互相隔离的生产线：
 
 - **混剪模式**：把「同行爆款原文 → 二创文案 → 混剪草稿 → 剪映可继续编辑的正式资产」固定为项目流水线；
-- **图文模式**：直接接收已经定稿的完整文案，不进行二创；先由可配置的 OpenAI 兼容文本模型给出最多 18 张的分段建议（第一张固定为封面），用户确认后再按段生成提示词，随后调用独立的 OpenAI 兼容生图服务，提供批量/单张生成、网页预览和 ZIP 下载。
+- **图文模式**：直接接收已经定稿的完整文案，不进行二创。默认入口 `/image-projects` 是一键生成：粘贴文案后由文本模型生成项目名、分段、提示词和 5 条发布候选，再按项目并发生图。`/image-projects/advanced` 保留原「分段建议 → 确认 → 提示词」手动流程。详情地址 `/image-projects/{id}` 刷新只恢复该项目，不回首页。
 
 Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的领域表、接口和页面状态，图文卡片不会进入混剪项目、素材资产或剪映草稿状态机。
 
@@ -24,14 +24,15 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 - **任务调度**：把一次生成封装成「任务清单（manifest）→ 排队 → 认领 → 子进程执行 → 结果严格校验 → 资产入库」，全程有阶段计时和事件流。
 - **对话工作台**：基于 Codex App Server 的长会话，与正式任务分开。
 - **混剪**：本机确定性算法生成 `production_plan.json`，Python skill 造出明文草稿，可信主机把它登记成剪映真实草稿目录，才算 `mix_draft` 资产就绪。
-- **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、封面/内容角色、提示词、状态与输出位置；`internal/imageproject` 负责校验 AI 分段完整覆盖原文、生成分段/提示词请求和 OpenAI 兼容图片请求；`internal/httpapi/imageprojects.go` 负责分段预览、确认创建、生成、预览、重生成、删除和 ZIP 清单。
+- **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、封面/内容角色、提示词、运行检查点、每项尝试次数与输出位置；`internal/imageproject` 负责一键规划、校验分段覆盖原文、生成提示词和 OpenAI 兼容图片请求（总尝试次数 1–4，多 URL 只取第一张）；`internal/httpapi/imageprojects.go` 与 `imageproject_quick.go` 负责一键 202 编排、resume、分段预览、确认创建、生成、预览、重生成、删除和 ZIP 清单。进程内 job guard 保证同一项目不同时跑两份编排；服务重启把遗留 `running` 一键任务标为 `interrupted`，需用户点「继续生成」。
+- **素材库与自动检索**：`media_root/catalog.db` 是镜头元数据权威库。控制台「开始建库」与 `catalog-builder` 都调用 `mediacatalog.RunHostedBuild`（扫描 → 切镜抽帧 → 打标向量）。混剪任务在 `montage-script-run` 里注入 Embedder/IntentAnalyzer，`BuildV2` 从 catalog 四级召回后再由确定性 planner 拍板。风景任务召回后只留风景/景观；电影任务不过滤。没有 `ready_shots` 时风景任务回退 `media_index.json` 风景打散，电影任务直接失败。
 
 它**不**管什么（这些是设计决定，不是缺口）：
 
-- 不打开微信视频号、不托管成片上传；成片导出在剪映侧完成（`docs/AI-HANDOFF.md:195`）。
+- 不打开微信视频号、不托管成片上传；成片导出在剪映侧完成。
 - 工作台不出现 `final_video`，进「审核」阶段的条件是剪映草稿 ready。
-- AgentRuntime 只能用环境变量切换，设置页**不做** runtime 选择。
-- 选片是**确定性稳定打散**，不是语义级镜头理解。计划 JSON 里的「前30秒语义匹配」是历史文案标签（`internal/agentruntime/montageplan/plan.go:173`、`:502-511`），不要误读为已实现语义选片。
+- 设置页**不做** runtime 下拉；二创三字段已经决定 remix 走 OpenAI 兼容接口。
+- v1 计划 JSON 里的「前30秒语义匹配」是历史文案标签，不是真语义选片。v2 才按 catalog 标签/向量召回，最终选择仍是确定性算法。
 
 ---
 
@@ -57,22 +58,24 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 3.1 业务阶段
 
-看板用 **6 段**：`topic → script → assets → mixing → review → published`（`web/src/projects/stages.ts:5-12`，中文标签 `:18-23`）。
-项目详情页的「生产轨」只画后 **5 段**：`script → assets → mixing → review → published`（`web/src/project-workbench/workflow.ts:3-9`）。
-文档里出现的「五阶段工作台」指的是后者；看板多一个 `topic` 前置段。阶段流转规则在 `internal/domain/stages.go:36`（`CanMove`）。工作台文案阶段把同行原文收纳为紧凑按钮，点击后才弹出原文与模型强度输入；根容器允许纵向滚动，避免制作状态和项目资产被固定视口裁切。
+看板与工作台都是 **5 段**：`script → assets → mixing → review → published`（`web/src/projects/stages.ts:5-11`，`web/src/project-workbench/workflow.ts:3-9`）。后端若仍返回遗留 `topic`，看板把它映射成 `script`（`boardStage`）。阶段流转规则在 `internal/domain/stages.go`（`CanMove`）。工作台文案阶段把同行原文收纳为紧凑按钮；根容器允许纵向滚动。首页 `/` 是制作方式选择（`web/src/production-modes/`），不再是直接看板。
 
-### 3.2 端到端走一遍
+### 3.2 端到端走一遍（日产主路径）
 
-1. **选题（可选）**：`topic.brainstorm` 产出 `topic_candidates` 工件 → 落成 idea session 与 3–5 个候选（`internal/httpapi/ideas.go` 的 `message`）。调用方若已明确选中爆款库正式作品，可在消息请求中传 `source_feed_ids`；控制台会在入队前通过爆款库 `/materials/bundle` 读取完整档案与转写，快照为任务 `engineering_inputs` 中的 `baokuan_source_bundle`。它是可验证的正式来源，任务不再依赖 Codex 运行环境里的 MCP 重取同一作品。`topic.commit` 在 Obsidian Vault 写下选题卡，控制台再把这份**已验证的工件**提升为项目的 `topic_card` 资产（`internal/codex/runner.go:338-355`）。
-2. **文案**：上传同行原文成 `source_script` 资产，或用 `topic_card`。当已登记选题卡需要从“候选”升级为“可写稿”时，使用 `POST /api/projects/{id}/topic-card/versions` 上传 Markdown 新版本；接口验证状态前进与交接简报，创建同一逻辑资产的新版本、更新项目卡片路径，并由资产依赖图把旧卡下游标记为 stale。随后发起 `remix.standard` 或 `remix.from_topic_card` → 产出 `continuous_script`（连续文案）资产。
-   - 幂等：同项目已有在跑的 remix 时，请求不带 `source_version_id` 或带的是同一个版本 → 返回既有任务 `200`；带的是**不同**版本 → `409 active_remix_conflict`（`internal/httpapi/tasks.go:164-177`）。
-   - 改稿有两条路：弹窗内直接改存（版本 +1，下游转 stale）；或 `remix.review` 带 `revision_notes` 让模型重写（`internal/httpapi/tasks.go:191-205`）。
-3. **素材**：`media_root` + `media_index_path` 指向本机素材库与索引（不是项目资产表）。发起 `montage.execute` 前会做**入队前严格预检**，素材缺失就根本不入队（§5.4）。
-4. **混剪**：`montage.execute` 默认走本机 script runtime：Go 算出 `production_plan.json` → Python skill `validate-plan` → `execute` 造出明文草稿工作区。此时**还没有** `mix_draft` 资产——校验器对两个 montage 动作的 `asset_outputs` 白名单是空集（`internal/codex/result_validator.go:618`），skill 无权自己铸造资产。
-5. **登记**：任务完成时走完成门 `Coordinator.HandleCompleted`（`internal/montage/coordinator.go:223`）：校验保留路径 → 入队 → 校验工作区摘要 → `python run_montage_job.py register` 把草稿搬进剪映根 → 逐项验证（回执、`draft_content.json` 三方哈希一致、`root_meta_info.json` 里有匹配条目、目录级哈希且拒绝符号链接，`internal/montage/validator.go:41-133`）→ 同一事务里插入 `mix_draft` 资产版本并把项目推进到 `review`（`internal/store/montage.go:495-559`）。
-6. **审核 / 发布**：有 `publishing_package` 时展示「视频描述」「短标题」供复制到视频号发布页。成片导出与上传在剪映和视频号侧，控制台不接。
+日常主路径**不经过选题**：
 
-失败路径都是可恢复的：登记失败/中断可 `POST /api/tasks/{id}/retry-registration` 重试（`internal/httpapi/montage.go:22`），且只从**最新一次** attempt 派生、路径全部取库中留存值（`internal/store/montage.go:179-222`）。
+1. **文案**：工作台粘贴同行原文 → 保存为 `source_script` → `remix.standard` 走 `openai-compat-run`（`internal/agentruntime/openaicompat`）→ 产出 `continuous_script` + `publishing_package.json`。
+   - 幂等：同项目已有在跑的 remix 时，请求不带 `source_version_id` 或带的是同一个版本 → 返回既有任务 `200`；带的是**不同**版本 → `409 active_remix_conflict`（`internal/httpapi/tasks.go`）。
+   - 改稿：弹窗内直接改存（版本 +1，下游转 stale）；或 `remix.review` 带 `revision_notes` 让模型重写。
+2. **配音字幕**：`POST /api/projects/{id}/narration` 调火山 TTS，成对登记 `narration` + 词级 `subtitle_srt`。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占（§5.6）。
+3. **素材**：本机 `media_root` + `catalog.db`（权威检索库）以及可选的 `media_index.json`（风景线降级）。发起 `montage.execute` 前做入队预检（§5.4）。建库后混剪**自动从 catalog 检索**，不必手工选片。
+4. **混剪**：`montage.execute` 默认走本机 script runtime：Go 写出 `production_plan.json` → Python skill `validate-plan` → `execute` 造明文草稿工作区。此时**还没有** `mix_draft` 资产——校验器对 montage 动作的 `asset_outputs` 白名单是空集，skill 无权自己铸造资产。
+5. **登记**：任务完成时走完成门 `Coordinator.HandleCompleted`（`internal/montage/coordinator.go`）：校验保留路径 → 入队 → 校验工作区摘要 → `python run_montage_job.py register` 把草稿搬进剪映根 → 逐项验证（回执、`draft_content.json` 三方哈希一致、`root_meta_info.json` 有匹配条目、目录级哈希且拒绝符号链接）→ 同一事务插入 `mix_draft` 并把项目推进到 `review`。
+6. **审核 / 发布**：有 `publishing_package` 时展示「视频描述」「短标题」供复制。成片导出与上传在剪映和视频号侧，控制台不接。可「重做混剪」（再发一条 `montage.execute`，不删旧草稿）。
+
+失败路径可恢复：登记失败/中断可 `POST /api/tasks/{id}/retry-registration`，只从**最新一次** attempt 派生。
+
+**遗留选题路径**（界面已卸，`web/src/idea/` 未挂载；后端 `/api/ideas` 仍在）：`topic.brainstorm` → idea session → `topic.commit` 写 Obsidian 选题卡 → `topic_card` 资产。openai_compat 二创只认 `source_script`，不要把选题当主路径接回。
 
 ---
 
@@ -84,8 +87,9 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 | 目录 | 职责 |
 |---|---|
-| `cmd/console` | 服务主程序；同时承载三个自调用子命令（`montage-script-run`/`openai-compat-run`/`pi-run`）。`main()` 在 `cmd/console/main.go:54` |
-| `cmd/maintenance` | 独立小工具：SQLite `backup` / `check` / `restore`（`cmd/maintenance/main.go:21`） |
+| `cmd/console` | 服务主程序；同时承载三个自调用子命令（`montage-script-run`/`openai-compat-run`/`pi-run`）。`main()` 在 `cmd/console/main.go` |
+| `cmd/maintenance` | 独立小工具：SQLite `backup` / `check` / `restore` |
+| `cmd/catalog-builder` | 云机/本机建库小站：完整三步建库、下载结果包、按 SHA-256 合并（默认 `127.0.0.1:2031`）。不读 `console.db` |
 
 `internal/`
 
@@ -104,9 +108,13 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | `conversation` | App Server 之上的对话：broker/outbox 投递、会话路由、任务↔对话适配 | `Broker` `conversation/broker.go:79`、`TaskAdapter` `conversation/task_adapter.go:22` |
 | `agentruntime` | 任务后端抽象与按 env 选路 | `Select` `agentruntime/router.go:46` |
 | `agentruntime/montageplan` | 确定性混剪计划：v1 打散取样与 v2 配额/召回时间线 | `Build`、`BuildV2`、`ValidateMediaLibrary` |
-| `agentruntime/montagescript` | `montage-script-run`：按 manifest `montage_plan_version` 选 `Build` 或 `BuildV2` | `Run` `montagescript/run.go` |
-| `mediacatalog` | 独立 `catalog.db`：切镜、关键帧、标签、召回、导入与权利元数据 | `Open`、`RecallByTags`、`Importer` |
-| `agentruntime/openaicompat`、`agentruntime/piruntime` | 两个 opt-in 的替代生成后端 | `Run` `openaicompat/run.go:34`、`piruntime/run.go:33` |
+| `agentruntime/montagescript` | `montage-script-run`：按冻结的 `montage_plan_version` 选 `Build`/`BuildV2`，并注入 catalog 客户端 | `Run`、`attachCatalogClients` |
+| `mediacatalog` | 独立 `catalog.db`：扫描、切镜抽帧、打标向量、召回、导入、权利元数据 | `RunHostedBuild`、`CompatEndpoint`、`RecallByTags`、`Importer` |
+| `catalogbuilder` | 独立建库小站：包装 `RunHostedBuild`、结果包、按哈希合并 | `Build`、`ExportPack`、`MergePack`、`NewServer` |
+| `agentruntime/openaicompat` | 二创主路径：OpenAI 兼容流式写稿 | `Run`、`buildWriterPrompt` |
+| `agentruntime/piruntime` | 可选 Pi 后端 | `Run` |
+| `imageproject` | 图文分段、提示词、生图客户端 | `SuggestSegments`、`SuggestPrompts`、`Generator` |
+| `narration` | 火山 TTS、词级 SRT、音色 | `produce.go`、`volcengine.go`、`srt.go` |
 | `montage` | 剪映登记：可信运行时解析、登记子进程、验证、恢复与审计 | `Coordinator` `montage/coordinator.go:49`、`ValidateRegisteredDraft` `montage/validator.go:41` |
 | `assets` | 资产落盘、体积/类型策略、目录清单、库↔盘对账、在资源管理器打开 | `Service` `assets/service.go:634`、`MaxSizeForType` `:36` |
 | `realtime` | 任务事件的 WebSocket 扇出与断线重放 | `Hub` `realtime/hub.go:22`、`Handler` `:141` |
@@ -126,27 +134,30 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 4.2 前端（`web/src/`）
 
-`App.tsx` 现在 **1086 行**（重构前约 2900），只保留**跨弹窗的全局关注点**：认证与 csrf、主题、当前选中项目、URL 与 History 同步、WebSocket 订阅、模态焦点陷阱与 Escape 分层、任务水合与轮询节奏。其余按目录切开：
+`App.tsx` 只保留**跨弹窗的全局关注点**：认证与 csrf、主题、当前选中项目、URL 与 History 同步、WebSocket 订阅、模态焦点陷阱与 Escape 分层、任务水合与轮询节奏。其余按目录切开：
 
 | 目录 | 职责 |
 |---|---|
-| `api` | 唯一 HTTP 出口 `apiRequest`：注入 `X-CSRF-Token`、`credentials: same-origin`、401 回调（`web/src/api/client.ts:6`） |
-| `query` | react-query 客户端默认值（`query/client.ts:3`）与集中式 query key 工厂（`query/keys.ts:3`） |
+| `api` | 唯一 HTTP 出口 `apiRequest`：注入 `X-CSRF-Token`、`credentials: same-origin`、401 回调 |
+| `query` | react-query 客户端与 query key 工厂 |
 | `auth` | 登录页 |
 | `accounts` | 账号切换与新建账号表单 |
-| `console` | `useConsoleData`：账号 + 项目两个列表查询，对外仍暴露命令式 `setAccounts`/`setProjects`（写 react-query 缓存） |
-| `shell` | `ConsoleHome`：未选中项目时的首页（顶栏 + 账号区 + 按阶段分组的项目看板） |
-| `projects` | `useProjectActions`（项目所有写操作，按项目做「单飞」互斥）、`stages.ts`（看板 6 阶段常量与折叠阈值）、新建表单 |
-| `project-workbench` | 项目详情页整体：生产轨、素材面板、会话卡、阶段推导 `workflow.ts`、URL 解析 `routes.ts`、自有类型 |
-| `tasks` | 任务详情弹窗、任务展示派生逻辑 `task-view.ts`、事件类型 |
-| `assets` | 素材预览弹窗、改稿弹窗、素材类型中文标签 |
-| `idea` | 选题规划弹窗 + `useIdeaPlanner` |
-| `settings` | 设置弹窗 + `useSettingsDialog` |
-| `runtime` | `useRuntimeQuery`：7 秒轮询并发额度 |
+| `console` | `useConsoleData`：账号 + 项目列表 |
+| `production-modes` | `/` 制作方式首页：混剪 / 电影混剪 / 图文（后两个混剪卡片目前同进 `/projects`） |
+| `shell` | `ConsoleHome`：`/projects` 看板（顶栏 + 账号 + 五阶段列） |
+| `projects` | `useProjectActions`、五阶段常量、新建表单 |
+| `project-workbench` | 混剪项目详情：生产轨、资产、`workflow.ts`、`routes.ts` |
+| `image-mode` | 图文一键表单、详情、发布编辑台 |
+| `media-library` | 素材库建库 / 外部图库导入面板（无独立 URL） |
+| `tasks` | 任务详情弹窗、`task-view.ts` |
+| `assets` | 素材预览、改稿弹窗 |
+| `idea` | **未挂载**。文件还在，`App.tsx` 不引用 |
+| `settings` | 设置弹窗（二创 / Codex / 图文 / 素材库 / 密钥） |
+| `runtime` | `useRuntimeQuery`：并发额度轮询 |
 
-顶层散文件：`main.tsx`（入口与首屏防闪主题）、`types.ts`（跨模块 API 类型）、`taskModel.ts`、`TaskModelFields.tsx`、`messageTone.ts`、样式。
+顶层散文件：`main.tsx`、`types.ts`、`taskModel.ts`、`TaskModelFields.tsx`、`RemixPromptStyleFields.tsx`、`messageTone.ts`、样式。
 
-自定义 hook 一共 5 个：`useConsoleData`、`useIdeaPlanner`、`useSettingsDialog`、`useProjectActions`、`useRuntimeQuery`。
+自定义 hook：`useConsoleData`、`useSettingsDialog`、`useProjectActions`、`useRuntimeQuery`。`useIdeaPlanner` 存在但未接线。
 
 ### 4.3 其他
 
@@ -201,13 +212,15 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | 任务 | 实际默认 | Opt-in | 失败行为 |
 |---|---|---|---|
 | `montage.execute` | `script`（本机确定性计划 + Python skill） | `VIDEO_CONSOLE_MONTAGE_RUNTIME=codex` | 构建失败 → 警告并回落 Codex |
-| `remix.*` / `topic.*` | `codex` | `VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 或 `pi` | 同上 |
-| `montage.plan` | **`codex`** | — | — |
+| `remix.*` / `topic.*` | **硬切 `openai_compat`**（设置了二创/Grok 地址+密钥时） | `VIDEO_CONSOLE_LLM_RUNTIME=pi` 可改 Pi；未配地址则任务直接失败，**不回退 Codex** | 见 `cmd/console/main.go` `makeCommand` |
+| `montage.plan` | **`codex`**（与 `Select` 声明不一致） | — | `CommandFactory` 只特判 `montage.execute` |
 | 其他 | `codex` | — | — |
 
-`montage.plan` 那一行值得单独记住：分发处的 `if` 只特判 `ActionMontageExecute`（`cmd/console/main.go:595`），`else` 分支的 switch 又只有 `RuntimeOpenAI`/`RuntimePi` 两个 case，所以**不论怎么设环境变量，`montage.plan` 都会构造 Codex 命令**，尽管 `Select` 对它会返回 `script`。
+`montage.plan`：`Select` 对它返回 `script`，但 `CommandFactory` 的 `if` 只特判 `ActionMontageExecute`，所以它仍构造 Codex 命令。
 
-替代 runtime 都是**控制台自己的子命令**（`os.Executable()` 再入），统一收 `--manifest`/`--skill-root`/`--output-last-message` 并在子进程环境里带 `VIDEO_CONSOLE_TASK_MANIFEST`，因此遵守同一套 manifest/结果契约。失败一律**警告 + 回落 Codex**，不会让任务失败（`cmd/console/main.go:603`、`:612`、`:618`）。
+`remix.*` 不再是「默认 Codex、env opt-in」。`makeCommand` 对 LLM action 直接进 `openai-compat-run`；`LLMRuntimePreferred` 只用来在 openai 与 pi 之间选。设置页「二创服务地址 / 二创模型 / 二创 API 密钥」写入 `REMIX_*`。
+
+替代 runtime 都是控制台自调用子命令，遵守同一套 manifest/结果契约。`montage.execute` 的 script 构建失败仍会警告并回落 Codex；remix 构建失败则返回错误。
 
 另外 `agentruntime.Runtime` / `LaunchRequest` / `RunHandle` 这组接口是**声明但无实现**的前瞻代码（`internal/agentruntime/runtime.go:48-79`），真正的选路发生在 `codex.CommandFactory` 里，别被接口误导。
 
@@ -227,7 +240,24 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.4 混剪：取样与登记
 
-**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 额外使用 `media_catalog_path` 指向的 `catalog.db`（相对 `media_root`），按文案意图做四级召回后再由确定性 planner 拍板时间线。catalog 只存相对路径；电影本体和音轨不上云。`media_index.json` 在无 catalog 或召回为空时仍是降级来源。
+**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / IntentAnalyzer，`BuildV2` 打开库做四级召回，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务召回后走 `filterLandscapeCandidates`；电影任务（`jianying-movie-montage` / `movie_catalog`）不过滤。风景任务在 catalog 无可用风景时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。
+
+**本机建库**：控制台「开始建库」与 `catalog-builder.Build` 都调用 `mediacatalog.RunHostedBuild`（`Indexer` → FFmpeg `Pipeline` → `AnalysisRunner`）。缺 FFmpeg 时 ingest 仍保留、错误码 `ffmpeg_not_configured`；缺视觉/向量时错误码 `vision_not_configured`；识别全失败返回 `ErrAnalysisAllFailed`，不得标 ready。OpenAI 兼容地址若只填主机名，`CompatEndpoint` 会补 `/v1`。云机结果包合并只在 `catalog-builder` 小站（`MergePack`），控制台无合并 API。
+
+**v2 自动检索（建库之后）**：
+
+1. `taskManifestPreparer` 把 `media_catalog_path`、视觉/向量地址写入 `non_secret_settings`（`internal/httpapi/task_manifest.go`）。
+2. `cmd/console` 的 `appendMontageCatalogEnv` 把 `VIDEO_CONSOLE_VISION_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_API_KEY` / `VIDEO_CONSOLE_INTENT_*` 注入 `montage-script-run` 子进程（不进 Codex allowlist）。
+3. `attachCatalogClients` 读 manifest：电影 skill `jianying-movie-montage` 时 `RestrictToLandscape=false`，风景线为 `true`；再构造 `HTTPEmbedder` 与 `HTTPIntentAnalyzer`（失败回落 `LocalIntentAnalyzer`）。
+4. `BuildV2` 打开 `catalog.db` → `IntentAnalyzer.Analyze` → `rankLibrary`：
+   - 四级召回（`recallForIntent`）：实体/话题标签 → 隐喻/视觉概念标签 → 情绪 → 任意就绪镜头。每级最多 50 条，去重后截断。
+   - 打分：标签命中 + 可选向量余弦；缺 embedding 不失败。
+5. **风景任务**再跑 `filterLandscapeCandidates`（只要 `Nature_Landscape` / 风景/景观）。catalog 有命中但滤完为空 → 失败提示，不拿办公室顶上。catalog 整体为空才回退 `media_index.json` 风景打散。
+6. **电影任务**（`SelectModeMovieCatalog` / `movie_catalog` 预设）不过滤风景；无可用镜头直接报错，不回退旧索引。配额用 `movieCatalogPolicy`（电影 70%–100%，同源可复用）。
+7. 默认 `captions.mode=off`，缩放约 1.20–1.26，不写窗内白色片头。`highlights_only` 仍在代码里，产品线不要打开。
+8. 最终时间线仍是确定性 `selectTimelineV2`，不是模型直接选片。
+
+**v1 取样**（skill snapshot 未声明 `2.0` 时）仍按下面的 `media_index.json` 打散规则，没有 catalog 召回。
 
 **计划版本门控**：`taskManifestPreparer` 读取**当前任务将冻结的** skill snapshot，用 `skillregistry.DecideMontagePlanVersion` 解析 `assets/capabilities.json`（必须出现在 `SkillSnapshot.Files` 且 SHA-256 与磁盘一致，`contract_version` 必须是已知的 `1.0`，且 `production_plan_versions` 明确含 `2.0`）。只有这时才把 `non_secret_settings.montage_plan_version` 写成 `2.0`。畸形/未知/缺文件/哈希不一致都写 `1.0` 并打 warning，任务仍可生成。已经 `EnsurePreparedTask` 的任务再次 Prepare 直接返回，不因 Latest snapshot 升级而改写 manifest。`montagescript.Run` 只看这份冻结字段：`2.0` 调 `BuildV2`，其余调 `Build`。
 
@@ -272,7 +302,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.7 设置与 machine profile
 
-设置是 `settings` 表里的 key/value，写入走显式键白名单（`internal/store/settings.go`）；图文生图新增 `image_base_url`、`image_model`、`max_image_concurrency`、`default_image_ratio`、`default_image_style`。密钥单独存在 `encrypted_secrets`，用 OS 保护（Windows 上 DPAPI）后 base64。一次更新里 public 与 secrets 在同一个 `BEGIN IMMEDIATE` 提交。
+设置是 `settings` 表里的 key/value，写入走显式键白名单（`internal/store/settings.go`）；图文生图新增 `image_base_url`、`image_model`、`max_image_concurrency`、`image_generation_attempts`、`default_image_ratio`、`default_image_style`。`image_generation_attempts` 表示每张图含首次请求在内的总次数，默认 2、范围 1–4，与并发数字段独立，保存后热更新、不要求重启。密钥单独存在 `encrypted_secrets`，用 OS 保护（Windows 上 DPAPI）后 base64。一次更新里 public 与 secrets 在同一个 `BEGIN IMMEDIATE` 提交。
 
 校验全部是手写 Go（`internal/settings/service.go:453-517`），包含几条有安全含义的约束：并发 1–4；路径必须是规范绝对路径且不经符号链接别名；`topic_cards_dir ⊂ obsidian_vault`、`media_index_path ⊂ media_root`；`baokuan_base_url` 只允许回环主机。
 
@@ -338,8 +368,8 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 | `ObsidianVault` | 空 | 设置键 `obsidian_vault` |
 | `max_codex_concurrency` | `2` | 设置键，1–4，**可热更** |
 | `codex_default_model` / `..._reasoning_effort` | `gpt-5.6-sol` / `medium` | 设置键，可热更 |
-| `image_model` / `max_image_concurrency` | `gpt-image-2` / `3` | 设置键；并发范围 1–18 且可热更，服务地址/模型/密钥变更需重启 |
-| `image_text_base_url` / `image_text_model` | 空 / 空 | 图文分段与提示词使用的 OpenAI 兼容文本模型；未单独配置时回落 Grok 配置 |
+| `image_model` / `max_image_concurrency` / `image_generation_attempts` | `gpt-image-2` / `3` / `2` | 设置键；并发 1–18、尝试次数 1–4（含首次），二者独立且可热更；服务地址/模型/密钥变更需重启 |
+| `image_text_base_url` / `image_text_model` / `image_text_reasoning_effort` | 空 / 空 / 空 | 图文分段与提示词使用的 OpenAI 兼容文本模型；思考强度可空（请求不带该字段）；未单独配置时回落 Grok 配置 |
 | `default_image_ratio` / `default_image_style` | `3:4` / `finance_documentary` | 设置键；用于新建图文项目默认值 |
 
 环境变量（进程启动时生效）：
@@ -348,9 +378,10 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 |---|---|---|
 | `VIDEO_CONSOLE_INITIAL_PASSWORD` | — | **仅首次安装**（尚无管理员）时必须提供，否则启动失败 |
 | `VIDEO_CONSOLE_LOG_LEVEL` | `info` | `debug`\|`warn`\|`error`，其他值回落 info |
-| `VIDEO_CONSOLE_MONTAGE_RUNTIME` | `script` | `script`\|`codex` |
-| `VIDEO_CONSOLE_LLM_RUNTIME` | `codex` | `codex`\|`openai_compat`\|`pi` |
-| `VIDEO_CONSOLE_OPENAI_BASE_URL` / `_API_KEY` | 空 | `openai_compat` 必填，缺任一即回落 Codex |
+| `VIDEO_CONSOLE_MONTAGE_RUNTIME` | `script` | `script`\|`codex`；script 构建失败才回落 Codex |
+| `VIDEO_CONSOLE_LLM_RUNTIME` | 空（remix **硬切** openai_compat） | 设为 `pi` 才改走 Pi；remix **不会**因缺配置回落 Codex，而是任务失败 |
+| `VIDEO_CONSOLE_OPENAI_BASE_URL` / `_API_KEY` | 空 | 可被设置页 `REMIX_*` / `GROK_*` 覆盖 |
+| `VIDEO_CONSOLE_VISION_API_KEY` / `_EMBEDDING_API_KEY` / `_INTENT_*` | 空 | 只注入 `montage-script-run`，用于建库检索与意图分析 |
 | `CODEX_DESKTOP_CWD` | `~/Documents/视频号混剪`（存在时） | 桌面对话的工作目录 |
 
 转发给 Codex 子进程的密钥：`GROK_SEARCH_BASE_URL`、`GROK_SEARCH_MODEL`、`GROK_SEARCH_API_KEY`、`PEXELS_API_KEY`（`cmd/console/main.go:44-49`），库里存的密钥优先于进程环境。
@@ -417,3 +448,130 @@ go run .\cmd\console
 - 禁止擅自 `git reset/checkout/restore/stash/clean`，禁止删除未跟踪的数据库与嵌入 dist。
 - 清理运行垃圾时保留：`video-console-data/`、`internal/webui/dist/`、当前正在监听的服务进程所用 exe。
 - `.gitignore` 已忽略 `.tmp/`、`dist/`、`video-console-data/`、日志、exe、Playwright 缓存等。
+
+---
+
+## 11. 模块与代码对照（给接手 AI）
+
+读代码时按模块进，不要按过期计划勾选框施工。符号名比行号可靠。
+
+### 11.1 进程与路由
+
+| 用户动作 | 进程 | 关键代码 |
+|---|---|---|
+| 打开控制台 | `cmd/console` `:2030` | `main()` → `app.New` 注册 mux |
+| 制作方式首页 `/` | 嵌入 SPA | `web/src/production-modes/ModeHome.tsx` + `catalog.ts`；路由 `project-workbench/routes.ts` `parseLocation` |
+| 混剪看板 `/projects` | 同上 | `web/src/shell/ConsoleHome.tsx` |
+| 项目工作台 `/projects/{id}` | 同上 | `web/src/project-workbench/ProjectWorkbench.tsx` |
+| 图文 `/image-projects` | 同上 | `web/src/image-mode/QuickGenerateForm.tsx` / `ImageModeWorkbench.tsx` |
+| 素材库面板 | 无独立 URL，弹层 | `web/src/media-library/MediaLibraryPanel.tsx` → `/api/media-catalog/*` |
+| 云机建库 | `cmd/catalog-builder` `:2031` | `internal/catalogbuilder/server.go` `web.go` |
+
+HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/projects` `/api/tasks` `/api/assets` `/api/settings` `/api/image-projects` `/api/media-catalog` `/api/skills` `/api/ideas` `/api/runtime` `/api/dependencies` `/api/library` `/api/obsidian` `/api/health`。未命中的 GET 回落 `index.html`。
+
+`POST /api/projects/{id}/narration` 与 `POST /api/projects/{id}/assets/narration` 必须由 `projectRouteHandler` 精确分流。
+
+### 11.2 二创（remix）
+
+| 步骤 | 代码 |
+|---|---|
+| 工作台保存原文并启动 | `web/src/projects/useProjectActions.ts` → `POST /api/projects/{id}/tasks` |
+| 任务创建 / 冲突 | `internal/httpapi/tasks.go` `remix.standard` / `remix.review` |
+| 工作流编排 | `internal/workflow/remix.go` |
+| 选路 | `cmd/console/main.go` `makeCommand`：LLM action **硬切** `openai-compat-run`，不回退 Codex |
+| 写稿 | `internal/agentruntime/openaicompat/run.go` `buildWriterPrompt`（财经爆款机器；禁止抄原稿金句） |
+| 落盘 | `openaicompat/deliver.go`：`continuous_script` + `publishing_package.json` |
+| 改稿弹窗 | `web/src/assets/ReviseDialog.tsx` |
+| 模型名 | 原样发送，不剥 `cursor-`；思考强度写在模型名里。`internal/taskmodel` 仍服务 Codex/图文文本 |
+
+设置页「二创服务地址 / 二创模型 / 二创 API 密钥」→ `REMIX_*`（可回落 `GROK_*`）。`finance-viral-remix/SKILL.md` 只作 ≤1800 字补充，不是主提示。
+
+### 11.3 配音与字幕
+
+| 步骤 | 代码 |
+|---|---|
+| 自动配音 | `internal/httpapi/narration.go` → `internal/narration/produce.go` `volcengine.go` |
+| 词级 SRT | `internal/narration/srt.go` `captions.go` |
+| 手动上传 | `internal/httpapi/projects.go` 资产上传，类型 `narration` |
+| 工作台按钮 | `web/src/project-workbench/ProjectWorkbench.tsx` / `ProjectAssets.tsx` |
+
+混剪草稿**默认不把 SRT 画进画面**（`CaptionOff`）。SRT 仍是资产，供配音对齐和以后的 highlights 模式。
+
+### 11.4 素材库建库
+
+| 步骤 | 代码 |
+|---|---|
+| 设置路径与模型 | `internal/settings/service.go`；前端 `web/src/settings/SettingsPanel.tsx` |
+| 开始建库 API | `internal/httpapi/media_catalog.go` → `internal/app/media_catalog_service.go` `runIndex` |
+| 三步流水线 | `internal/mediacatalog/build.go` `RunHostedBuild`：`Indexer` → `Pipeline`/`ffmpeg.go` → `AnalysisRunner`/`analyzer.go` |
+| URL 补 `/v1` | `internal/mediacatalog/compaturl.go` `CompatEndpoint` |
+| 库表 | `internal/mediacatalog` 的 `catalog.db`（与 `console.db` 分离） |
+| 状态/重试/导入 | `media_catalog.go`：status、sources、retry、Pexels/Pixabay search、local import |
+| 云机打包合并 | `internal/catalogbuilder/build.go` `pack.go` `merge.go` |
+| 前端文案 | `MediaLibraryPanel.tsx`：建好后混剪自动检索；`analysis_all_failed` 有独立提示 |
+
+错误码：`ffmpeg_not_configured` / `vision_not_configured` / `analysis_all_failed` / `index_failed`。看 `ready_shots`，不要只看 `state=ready`。
+
+### 11.5 混剪计划与自动检索
+
+| 步骤 | 代码 |
+|---|---|
+| 入队预检 | `internal/httpapi/task_manifest.go` `ValidateMediaLibrary` |
+| 计划版本门控 | `internal/skillregistry` `DecideMontagePlanVersion`（skill `assets/capabilities.json` 含 `2.0` 才冻结 v2） |
+| 电影 vs 风景 skill | `cmd/console` `skillFromTaskManifest`；电影用 `jianying-movie-montage` |
+| 执行入口 | `internal/agentruntime/montagescript/run.go` `Run` |
+| 注入检索客户端 | `montagescript/catalog_clients.go` `attachCatalogClients` |
+| v1 计划 | `montageplan/plan.go` `Build`：`media_index.json` 风景/建筑打散，缩放 1.4 |
+| v2 计划 | `montageplan/plan_v2.go` `BuildV2` |
+| 意图 | `montageplan/intent_analyze.go`：风景强制视觉概念「风景/景观」；电影跟实体/话题 |
+| 四级召回 | `montageplan/match.go` `recallForIntent` + `rankLibrary`；底层 `mediacatalog/recall.go` |
+| 风景过滤 | `montageplan/media.go` `filterLandscapeCandidates` |
+| 配额 | `montageplan/quota.go`：`movieMixPolicy` / `movieCatalogPolicy` / `imageVideoPolicy`（后者无用户入口） |
+| Python 造草稿 | skill `jianying-montage-draft` 或 `jianying-movie-montage` 的 `scripts/run_montage_job.py` |
+| 登记 | `internal/montage/coordinator.go` `validator.go` `registrar.go` |
+| 重试登记 | `internal/httpapi/montage.go` |
+| 工作台按钮 | `ProjectWorkbench.tsx`：「开始风景混剪」「开始电影混剪」「重做混剪」 |
+
+产品锁（风景/电影日产）：缩放约 1.20、`captions.mode=off`、无窗内白字标题。不要按旧 v2 计划把重点字幕加回来。
+
+### 11.6 图文
+
+| 步骤 | 代码 |
+|---|---|
+| 一键 202 | `internal/httpapi/imageproject_quick.go` + `imageproject_jobs.go` |
+| 手动分段 | `internal/httpapi/imageprojects.go` |
+| 规划/生图 | `internal/imageproject/planner.go` `client.go` `chat.go` `prompt_text_rules.go` |
+| 表 | `internal/store/imageprojects.go`；领域 `internal/domain/imageprojects.go` |
+| 前端 | `QuickGenerateForm.tsx`、`ImageModeWorkbench.tsx`、`PublishingDialog.tsx` |
+| 与混剪隔离 | 不用 `codex_tasks`；卡片不进混剪看板 |
+
+### 11.7 前端其余模块
+
+| 目录 | 要点 |
+|---|---|
+| `web/src/App.tsx` | 认证、主题、History、WS、弹窗分层、任务水合 |
+| `web/src/api/client.ts` | 唯一 HTTP 出口 |
+| `web/src/api/mediaCatalog.ts` | 素材库 API 封装 |
+| `web/src/query/` | react-query keys |
+| `web/src/auth/` `accounts/` | 登录与账号 |
+| `web/src/projects/stages.ts` | 五阶段常量；遗留 `topic` → `script` |
+| `web/src/project-workbench/workflow.ts` | 由资产推导阶段 |
+| `web/src/tasks/` | 任务详情 |
+| `web/src/settings/` | 二创 / Codex / 图文 / 素材库 / 火山 |
+| `web/src/idea/` | **未挂载**。`App.test.tsx` 禁止接回 |
+| `web/src/RemixPromptStyleFields.tsx` | 二创风格字段 |
+
+改前端后若要更新 exe 内页面：`npm --prefix web run build:embed`，再重建 `cmd/console`。
+
+### 11.8 明确不要当现状的东西
+
+| 误读 | 实际 |
+|---|---|
+| remix 默认 Codex，`VIDEO_CONSOLE_LLM_RUNTIME=openai_compat` 才切换 | 已硬切 openai_compat |
+| 控制台建库只扫描、catalog-builder 才打标 | 两边都走 `RunHostedBuild` |
+| 建库只是台账，混剪不会搜库 | 有 `ready_shots` 后 `BuildV2` 自动召回 |
+| 方式四「代码已落地待验收」 | 仅 `image_video` 预设，无用户入口，**不要做** |
+| 选题工作台 / 爆款库主路径 | UI 已卸 |
+| v2 计划里的 15%–25% 重点字幕、3–5 秒白字片头 | 产品已锁关闭 |
+| `docs/superpowers/` 勾选框 | 已删除；考古走 git |
+| `montage.plan` 走 script | `Select` 如此声明，`CommandFactory` 仍走 Codex |

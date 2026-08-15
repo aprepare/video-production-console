@@ -31,3 +31,14 @@ func TestHandlerStillServesStaticAssets(t *testing.T) {
 		t.Fatal("expected asset body")
 	}
 }
+
+func TestHandlerSPARoutesAndMethods(t *testing.T) {
+	h := Handler()
+	for _, path := range []string{"/", "/projects", "/projects/e8b33417-13bc-4a83-9d7d-7956a4b031de", "/image-projects", "/image-projects/e8b33417-13bc-4a83-9d7d-7956a4b031de"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			r := httptest.NewRecorder(); h.ServeHTTP(r, httptest.NewRequest(method, path, nil))
+			if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `<div id="root"></div>`) { t.Fatalf("%s %s status=%d", method, path, r.Code) }
+		}
+	}
+	r := httptest.NewRecorder(); h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/projects", nil)); if r.Code != http.StatusMethodNotAllowed { t.Fatalf("POST status=%d", r.Code) }
+}

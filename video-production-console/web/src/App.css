@@ -387,6 +387,50 @@ summary:focus-visible,
   transform: translateY(-1px);
 }
 
+.shell--image > header {
+  color: var(--ds-text);
+  background: var(--ds-surface);
+  border-bottom: 1px solid var(--ds-border);
+  box-shadow: none;
+}
+
+.shell--image > header::after {
+  content: none;
+}
+
+.shell--image > header h1 {
+  color: var(--ds-text);
+}
+
+.shell--image > header .eyebrow {
+  color: var(--ds-text-muted);
+}
+
+.shell--image .status {
+  color: var(--ds-text-muted);
+}
+
+.shell--image .header-button {
+  min-height: 44px;
+  color: var(--ds-text);
+  border-color: var(--ds-border);
+  background: var(--ds-surface);
+}
+
+.shell--image .header-button:hover {
+  color: var(--ds-text);
+  border-color: var(--ds-border-strong);
+  background: var(--ds-surface-muted);
+  transform: none;
+}
+
+.shell--image .theme-control select {
+  min-height: 44px;
+  color: var(--ds-text);
+  border-color: var(--ds-border);
+  background: var(--ds-surface);
+}
+
 /* ==========================================================================
    Account navigation and main content layout
    ========================================================================== */

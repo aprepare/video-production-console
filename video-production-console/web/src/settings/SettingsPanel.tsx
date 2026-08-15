@@ -9,13 +9,12 @@ import type { PublicSettings, PublicStringSettingKey, Settings } from "../types"
 const settingFields: Array<[PublicStringSettingKey, string, string]> = [
   ["baokuan_base_url", "爆款库地址", "http://127.0.0.1:2022"],
   ["obsidian_vault", "Obsidian Vault", "本地 Vault 目录"],
-  ["topic_cards_dir", "选题卡目录", "Vault 内选题卡目录"],
-  ["grok_base_url", "Grok 服务地址", "OpenAI 兼容 API 地址"],
-  ["grok_model", "Grok 模型", "模型名称"],
+  ["grok_base_url", "Grok 检索地址", "可选，仅留给旧检索回落"],
+  ["grok_model", "Grok 检索模型", "可选"],
   ["image_base_url", "生图服务地址", "OpenAI 兼容 Base URL"],
   ["image_model", "生图模型", "gpt-image-2"],
   ["image_text_base_url", "图文文本模型地址", "OpenAI 兼容 Chat Base URL"],
-  ["image_text_model", "图文文本模型", "用于分段建议和提示词"],
+  ["image_text_model", "图文文本模型", "例如 gpt-5.6-sol"],
   ["codex_binary_path", "Codex CLI 路径", "codex 可执行文件路径"],
   ["media_index_path", "素材索引", "媒体索引文件"],
   ["media_root", "媒体素材目录", "本地媒体根目录"],
@@ -42,13 +41,15 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   baokuan_base_url: "爆款库地址",
   baokuan_mcp_executable: "爆款库连接程序",
   obsidian_vault: "Obsidian 目录",
-  topic_cards_dir: "选题卡目录",
-  grok_base_url: "Grok 服务地址",
-  grok_model: "Grok 模型",
+  grok_base_url: "Grok 检索地址",
+  grok_model: "Grok 检索模型",
+  remix_base_url: "二创服务地址",
+  remix_model: "二创模型",
   image_base_url: "生图服务地址",
   image_model: "生图模型",
   image_text_base_url: "图文文本模型地址",
   image_text_model: "图文文本模型",
+  image_text_reasoning_effort: "图文文本思考强度",
   codex_binary_path: "Codex 程序路径",
   media_index_path: "素材索引",
   media_root: "媒体素材目录",
@@ -74,6 +75,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
 
 type SecretDraft = {
   grok_api_key: string;
+  remix_api_key: string;
   pexels_api_key: string;
   volc_speech_api_key: string;
   image_api_key: string;
@@ -84,7 +86,7 @@ type SecretDraft = {
 };
 
 const secretFields: Array<[keyof SecretDraft, string]> = [
-  ["grok_api_key", "Grok API 密钥"],
+  ["grok_api_key", "Grok 检索 API 密钥"],
   ["pexels_api_key", "Pexels API 密钥"],
   ["volc_speech_api_key", "火山语音 API Key"],
   ["image_api_key", "生图 API Key"],
@@ -162,6 +164,9 @@ export function SettingsPanel({
         <p className="settings-note">
           默认值只影响之后新建的任务，不会修改运行中任务，也不会改写本机 Codex 全局配置。
         </p>
+        <p className="settings-note">
+          二创模型单独配置：地址、模型名和 API Key 只用于写二创，不走 Codex CLI。模型名会原样发送。改地址或密钥后需要重启控制台。
+        </p>
         {feedback ? (
           <div
             className={`settings-feedback settings-feedback--${messageTone(feedback)}`}
@@ -181,8 +186,44 @@ export function SettingsPanel({
             ) : null}
           </div>
         ) : null}
+        <h3 className="settings-group-title">二创模型</h3>
+        <p className="settings-note">
+          只给「保存原文并开始二创」用。地址填 OpenAI 兼容根地址，例如 http://127.0.0.1:2001 或带 /v1。思考强度写在模型名里，请求不会再单独传 reasoning_effort。
+        </p>
+        <label className="settings-field">
+          二创服务地址
+          <input
+            value={draft.remix_base_url || ""}
+            placeholder="http://127.0.0.1:2001/v1"
+            onChange={(event) => onDraftChange({ ...draft, remix_base_url: event.target.value })}
+          />
+        </label>
+        <label className="settings-field">
+          二创模型
+          <input
+            value={draft.remix_model || ""}
+            placeholder="例如 gpt-5.6-sol"
+            onChange={(event) => onDraftChange({ ...draft, remix_model: event.target.value })}
+          />
+        </label>
+        <label className="settings-field">
+          二创 API 密钥
+          <small>
+            {settings?.secrets.remix_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+          </small>
+          <input
+            type="password"
+            aria-label="二创 API 密钥"
+            value={secretDraft.remix_api_key}
+            placeholder="留空保持不变"
+            onChange={(event) =>
+              onSecretDraftChange({ ...secretDraft, remix_api_key: event.target.value })
+            }
+          />
+        </label>
         <label className="settings-field">
           默认模型
+          <small>只给混剪等 Codex 任务。二创用上面的二创模型。</small>
           <input
             value={draft.codex_default_model || ""}
             onChange={(event) =>
@@ -192,7 +233,9 @@ export function SettingsPanel({
         </label>
         <label className="settings-field">
           默认推理强度
+          <small>只给混剪等 Codex 任务。二创不使用这项。</small>
           <select
+            aria-label="默认推理强度"
             value={draft.codex_default_reasoning_effort || "medium"}
             onChange={(event) =>
               onDraftChange({
@@ -234,6 +277,19 @@ export function SettingsPanel({
           <small>图文模式批量生成的最大并发，最多 18。</small>
         </label>
         <label className="settings-field">
+          每张图片最多请求次数
+          <select
+            value={draft.image_generation_attempts || 2}
+            onChange={(event) => onDraftChange({
+              ...draft,
+              image_generation_attempts: Number(event.target.value),
+            })}
+          >
+            {[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+          <small>包含首次请求；设置为 2 表示失败后最多再请求一次。</small>
+        </label>
+        <label className="settings-field">
           默认图片比例
           <select
             value={draft.default_image_ratio || "3:4"}
@@ -251,6 +307,26 @@ export function SettingsPanel({
             {imageStyles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
+        <label className="settings-field">
+          图文文本思考强度
+          <select
+            value={draft.image_text_reasoning_effort || ""}
+            onChange={(event) =>
+              onDraftChange({
+                ...draft,
+                image_text_reasoning_effort: event.target.value as PublicSettings["image_text_reasoning_effort"],
+              })
+            }
+          >
+            <option value="">不指定（请求里不带该字段）</option>
+            {reasoningEfforts.map((effort) => (
+              <option key={effort} value={effort}>
+                {effort}
+              </option>
+            ))}
+          </select>
+          <small>分段和提示词请求可带思考强度。留空可避免不支持该字段的供应商报错。</small>
+        </label>
         <label className="settings-field checkbox-field">
           <input
             type="checkbox"
@@ -261,6 +337,15 @@ export function SettingsPanel({
           />
           启用任务实时交互服务
           <small>用于正在运行的生产任务追问、回答与恢复；保存后需要重启控制台。</small>
+        </label>
+        <label className="settings-field checkbox-field">
+          <input
+            type="checkbox"
+            checked={draft.image_stream || false}
+            onChange={(event) => onDraftChange({ ...draft, image_stream: event.target.checked })}
+          />
+          生图流式保活（SSE）
+          <small>仅当兼容服务支持stream:true时开启，用于避免长时间无响应字节导致断线。</small>
         </label>
         <label className="settings-field">
           Codex 工作目录白名单（每行一个绝对路径）
@@ -317,9 +402,9 @@ export function SettingsPanel({
             </label>
           ))}
         </div>
-        {(draft.image_base_url || "").toLowerCase().startsWith("http://") || (draft.image_text_base_url || "").toLowerCase().startsWith("http://") ? (
+        {(draft.image_base_url || "").toLowerCase().startsWith("http://") || (draft.image_text_base_url || "").toLowerCase().startsWith("http://") || (draft.grok_base_url || "").toLowerCase().startsWith("http://") || (draft.remix_base_url || "").toLowerCase().startsWith("http://") ? (
           <p className="settings-feedback settings-feedback--danger" role="alert">
-            HTTP 会明文传输生图或图文文本模型 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
+            HTTP 会明文传输二创、Grok、生图或图文文本模型 API Key。系统允许保存；仅在你已明确接受风险且信任该服务与网络链路时继续，其他情况请改用 HTTPS。
           </p>
         ) : null}
         <button className="save-settings" type="submit">

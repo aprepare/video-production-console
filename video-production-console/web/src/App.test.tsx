@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render as testingRender, screen, waitFor, within } 
 import type { ReactElement } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
 import appSource from "./App.tsx?raw";
 import taskDialogSource from "./tasks/TaskDetailDialog.tsx?raw";
@@ -18,15 +18,18 @@ function render(ui: ReactElement) {
   );
 }
 
+beforeEach(() => { window.history.replaceState({}, "", "/projects"); });
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.removeItem("video-production-console-theme");
   delete document.documentElement.dataset.theme;
-  window.history.replaceState({}, "", "/");
+  window.history.replaceState({}, "", "/projects");
 });
 
 const routedProjectID = "814ebfde-7470-418a-a703-a33596f7e8fe";
+const routedImageProjectID = "659340f8-31c0-49d8-a92d-a250f5a23c48";
 
 test("keeps the global modal and notification layers above the mobile action bar", () => {
   const appCss = readFileSync(resolve(process.cwd(), "src/App.css"), "utf8");
@@ -66,17 +69,17 @@ test("keeps the global modal and notification layers above the mobile action bar
 });
 
 test("project location parsing accepts UUID detail paths and rejects invalid paths", () => {
-  expect(parseLocation("/")).toEqual({ view: "projects" });
+  expect(parseLocation("/")).toEqual({ view: "mode-home" });
   expect(parseLocation("/projects")).toEqual({ view: "projects" });
   expect(parseLocation(`/projects/${routedProjectID}`)).toEqual({
     view: "project",
     projectID: routedProjectID,
   });
-  expect(parseLocation("/projects/project-1")).toEqual({ view: "projects" });
-  expect(parseLocation("/projects/not-a-uuid/more")).toEqual({ view: "projects" });
+  expect(parseLocation("/projects/project-1")).toEqual({ view: "not-found" });
+  expect(parseLocation("/projects/not-a-uuid/more")).toEqual({ view: "not-found" });
 });
 
-test("an invalid direct path falls back to the projects board", async () => {
+test("an invalid direct path preserves URL", async () => {
   window.history.replaceState({}, "", "/projects/not-a-project");
   vi.stubGlobal(
     "fetch",
@@ -87,8 +90,118 @@ test("an invalid direct path falls back to the projects board", async () => {
 
   render(<App />);
 
-  await screen.findByRole("heading", { name: "视频项目" });
-  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+  const alert = await screen.findByRole("alert");
+  expect(within(alert).getByRole("heading", { name: "404", level: 1 })).toBeTruthy();
+  expect(within(alert).getByRole("button", { name: "返回制作方式" })).toBeTruthy();
+  await waitFor(() => expect(window.location.pathname).toBe("/projects/not-a-project"));
+});
+
+test("root chooser navigates to image mode and montage entry navigates to projects", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal("fetch", baseFetch((path) => path === "/api/projects" ? json([]) : path === "/api/image-projects" ? json([]) : undefined));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "进入图文制作" }));
+  expect(window.location.pathname).toBe("/image-projects");
+  expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
+  fireEvent.click(await screen.findByRole("button", { name: "进入混剪制作" }));
+  expect(window.location.pathname).toBe("/projects");
+});
+
+test("the root chooser does not load workflow-specific data", async () => {
+  const requests: string[] = [];
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    requests.push(path);
+    if (path === "/api/projects" || path === "/api/image-projects") return json([]);
+  }));
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  expect(requests).toEqual(["/api/auth/me"]);
+});
+
+test("the image project route does not load montage accounts, projects, or runtime", async () => {
+  const requests: string[] = [];
+  window.history.replaceState({}, "", "/image-projects");
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    requests.push(path);
+    if (path === "/api/projects" || path === "/api/image-projects") return json([]);
+  }));
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
+  expect(requests).not.toContain("/api/accounts");
+  expect(requests).not.toContain("/api/projects");
+  expect(requests).not.toContain("/api/runtime");
+  expect(requests).toContain("/api/settings");
+  expect(requests).toContain("/api/image-projects");
+});
+
+test("popstate returns to root chooser", async () => {
+  window.history.replaceState({}, "", "/image-projects");
+  vi.stubGlobal("fetch", baseFetch((path) => path === "/api/image-projects" ? json([]) : path === "/api/projects" ? json([]) : undefined));
+  render(<App />);
+  await screen.findByRole("heading", { name: "图文项目", level: 1 });
+  window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate"));
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+});
+
+test("a direct image project path restores detail and popstate returns to the image list", async () => {
+  const project = {
+    id: routedImageProjectID,
+    title: "养老现金流图文",
+    script: "先看现金流。",
+    image_count: 1,
+    ratio: "3:4",
+    style: "finance_documentary",
+    custom_style: "",
+    concurrency: 1,
+    status: "draft",
+    created_at: "2026-08-14T00:00:00Z",
+    updated_at: "2026-08-14T00:00:00Z",
+  };
+  window.history.replaceState({}, "", `/image-projects/${routedImageProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json([]);
+    if (path === "/api/image-projects") return json([project]);
+    if (path === `/api/image-projects/${routedImageProjectID}`) {
+      return json({ project, items: [], publishing_candidates: [] });
+    }
+  }));
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: project.title, level: 1 })).toBeTruthy();
+  window.history.pushState({}, "", "/image-projects");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
+});
+
+test("a missing direct image project keeps its image-specific 404 state", async () => {
+  window.history.replaceState({}, "", `/image-projects/${routedImageProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json([]);
+    if (path === "/api/image-projects") return json([]);
+    if (path === `/api/image-projects/${routedImageProjectID}`) return json({}, 404);
+  }));
+
+  render(<App />);
+
+  expect(await screen.findByText("图文项目不存在（404）")).toBeTruthy();
+  expect(window.location.pathname).toBe(`/image-projects/${routedImageProjectID}`);
+});
+
+test("the advanced image route stays on the image workbench instead of 404", async () => {
+  window.history.replaceState({}, "", "/image-projects/advanced");
+  vi.stubGlobal("fetch", baseFetch((path) => path === "/api/image-projects" ? json([]) : path === "/api/projects" ? json([]) : undefined));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "404", level: 1 })).toBeNull();
+  expect(window.location.pathname).toBe("/image-projects/advanced");
 });
 
 test("keeps the add-account action directly inside the account navigation", async () => {
@@ -161,7 +274,7 @@ test("clicking a project pushes a durable project path", async () => {
   expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
 });
 
-test("switches between montage and image modes and returns to the existing board", async () => {
+test("production pages return to the chooser without a binary mode switch", async () => {
   vi.stubGlobal("fetch", baseFetch((path) => {
     if (path === "/api/projects") return json([]);
     if (path === "/api/image-projects") return json([]);
@@ -169,19 +282,13 @@ test("switches between montage and image modes and returns to the existing board
 
   render(<App />);
   expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
-  const modeSwitch = screen.getByRole("group", { name: "生产模式" });
-  const montage = within(modeSwitch).getByRole("button", { name: "混剪模式" });
-  const image = within(modeSwitch).getByRole("button", { name: "图文模式" });
-  expect(montage.getAttribute("aria-pressed")).toBe("true");
-
-  fireEvent.click(image);
-  expect(await screen.findByRole("heading", { name: "图文项目" })).toBeTruthy();
-  const imageModeSwitch = screen.getByRole("group", { name: "生产模式" });
-  expect(within(imageModeSwitch).getByRole("button", { name: "图文模式" }).getAttribute("aria-pressed")).toBe("true");
-  expect(screen.queryByRole("heading", { name: "视频项目" })).toBeNull();
-
-  fireEvent.click(within(imageModeSwitch).getByRole("button", { name: "混剪模式" }));
-  expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
+  expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
+  fireEvent.click(await screen.findByRole("button", { name: "进入图文制作" }));
+  expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
+  expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
 });
 
 test("the standalone Codex conversation entry is not exposed", async () => {
@@ -215,20 +322,91 @@ test("a direct project path restores the same project", async () => {
   }
 });
 
-test("the project workbench connects remix to the automatic workflow endpoint", async () => {
+test("the project workbench starts remix.standard from a saved source script", async () => {
+  const taskBodies: Record<string, unknown>[] = [];
+  const project = {
+    id: routedProjectID,
+    account_id: "account-1",
+    title: "可恢复的视频项目",
+    stage: "script",
+  };
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
-  const fixture = routedProjectFetch("", true);
-  vi.stubGlobal("fetch", fixture.fetch);
-  render(<App />);
-
-  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
-
-  await waitFor(() =>
-    expect(fixture.fetch).toHaveBeenCalledWith(
-      `/api/projects/${routedProjectID}/remix`,
-      expect.objectContaining({ method: "POST" }),
-    ),
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path, method, init) => {
+      if (path === "/api/projects") return json([project]);
+      if (path === `/api/projects/${routedProjectID}`)
+        return json({
+          project,
+          assets: { source_script: sourceScriptAsset() },
+          missing_assets: [],
+        });
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+      if (path === "/api/assets/source-1/content") return new Response("同行原文正文", { status: 200 });
+      if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+        taskBodies.push(JSON.parse(String(init?.body)));
+        return json({ id: "task-remix-1" }, 201);
+      }
+    }),
   );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始正式二创" }));
+
+  await waitFor(() => expect(taskBodies).toHaveLength(1));
+  expect(taskBodies[0]).toMatchObject({
+    action: "remix.standard",
+    source_version_id: "source-1",
+    remix_prompt_style: "rewrite",
+  });
+});
+
+test("the project workbench starts remix.standard with the wash prompt style", async () => {
+  const taskBodies: Record<string, unknown>[] = [];
+  const project = {
+    id: routedProjectID,
+    account_id: "account-1",
+    title: "可恢复的视频项目",
+    stage: "script",
+  };
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path, method, init) => {
+      if (path === "/api/projects") return json([project]);
+      if (path === `/api/projects/${routedProjectID}`)
+        return json({
+          project,
+          assets: { source_script: sourceScriptAsset() },
+          missing_assets: [],
+        });
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+      if (path === "/api/assets/source-1/content") return new Response("同行原文正文", { status: 200 });
+      if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+        taskBodies.push(JSON.parse(String(init?.body)));
+        return json({ id: "task-remix-1" }, 201);
+      }
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(screen.getByRole("radio", { name: /洗稿/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始正式二创" }));
+
+  await waitFor(() => expect(taskBodies).toHaveLength(1));
+  expect(taskBodies[0]).toMatchObject({
+    action: "remix.standard",
+    source_version_id: "source-1",
+    remix_prompt_style: "wash",
+  });
 });
 
 test("the project workbench starts mixing through the formal montage task API", async () => {
@@ -255,11 +433,41 @@ test("the project workbench starts mixing through the formal montage task API", 
   }));
   render(<App />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "开始混剪" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始风景混剪" }));
 
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(requests[0].body).toMatchObject({ type: "montage" });
   expect(JSON.stringify(requests[0].body)).not.toContain("spoken");
+});
+
+test("the project workbench starts movie mixing through the movie montage task API", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "电影混剪项目", stage: "mixing" };
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({
+      project,
+      assets: {
+        continuous_script: testAsset("continuous_script"),
+        narration: testAsset("narration"),
+        subtitle_srt: testAsset("subtitle_srt"),
+      },
+      background_reference: testAsset("account_background"),
+      missing_assets: [],
+    });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      requests.push({ path, body: JSON.parse(String(init?.body)) });
+      return json({ id: "movie-montage-task" }, 202);
+    }
+  }));
+  render(<App />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: "开始电影混剪" }))[0]);
+
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0].body).toMatchObject({ type: "movie_montage" });
 });
 
 test("the assets stage generates narration and subtitles through the project narration endpoint", async () => {
@@ -328,6 +536,19 @@ function testAsset(type: string) {
   };
 }
 
+function sourceScriptAsset(id = "source-1") {
+  return {
+    id,
+    type: "source_script",
+    filename: "source-script.txt",
+    mime_type: "text/plain",
+    size: 12,
+    version: 1,
+    state: "ready",
+    created_at: "2026-08-08T00:00:00Z",
+  };
+}
+
 function deferredResponse() {
   let resolve!: (response: Response) => void;
   let reject!: (error: unknown) => void;
@@ -345,22 +566,29 @@ test("locks a pending remix against double click and unlocks after completion", 
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([project]);
-    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [], topic_context: {} });
+    if (path === `/api/projects/${routedProjectID}`)
+      return json({ project, assets: { source_script: sourceScriptAsset() }, missing_assets: [] });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
-    if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
+    if (path === "/api/assets/source-1/content") return new Response("同行原文正文", { status: 200 });
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
       remixRequests += 1;
       return pending.promise;
     }
   }));
   render(<App />);
-  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始二创文案" });
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始正式二创" });
 
   fireEvent.click(action);
   fireEvent.click(action);
 
   await waitFor(() => expect(remixRequests).toBe(1));
   expect(action.disabled).toBe(true);
-  pending.resolve(json({ id: "workflow-1" }, 201));
+  pending.resolve(json({ id: "task-1" }, 201));
   await waitFor(() => expect(action.disabled).toBe(false));
 });
 
@@ -374,14 +602,18 @@ test("serializes every mutation for one project while allowing another project t
   vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([projectA, projectB]);
-    if (path === `/api/projects/${projectA.id}`) return json({ project: projectA, assets: {}, missing_assets: [], topic_context: {} });
-    if (path === `/api/projects/${projectB.id}`) return json({ project: projectB, assets: {}, missing_assets: [], topic_context: {} });
+    if (path === `/api/projects/${projectA.id}`)
+      return json({ project: projectA, assets: { source_script: sourceScriptAsset("source-a") }, missing_assets: [] });
+    if (path === `/api/projects/${projectB.id}`)
+      return json({ project: projectB, assets: { source_script: sourceScriptAsset("source-b") }, missing_assets: [] });
     if (path === `/api/tasks?project_id=${projectA.id}` || path === `/api/tasks?project_id=${projectB.id}`) return json([]);
-    if (path === `/api/projects/${projectA.id}/remix` && method === "POST") {
+    if (path === "/api/assets/source-a/content" || path === "/api/assets/source-b/content")
+      return new Response("同行原文正文", { status: 200 });
+    if (path === `/api/projects/${projectA.id}/tasks` && method === "POST") {
       mutations.push("remix-a");
       return remixA.promise;
     }
-    if (path === `/api/projects/${projectB.id}/remix` && method === "POST") {
+    if (path === `/api/projects/${projectB.id}/tasks` && method === "POST") {
       mutations.push("remix-b");
       return remixB.promise;
     }
@@ -392,7 +624,12 @@ test("serializes every mutation for one project while allowing another project t
   }));
 
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始正式二创" }));
   await waitFor(() => expect(mutations).toEqual(["remix-a"]));
 
   const deleteButton = screen.getByRole<HTMLButtonElement>("button", { name: "删除当前项目" });
@@ -405,11 +642,16 @@ test("serializes every mutation for one project while allowing another project t
 
   fireEvent.click(screen.getByRole("button", { name: "返回项目看板" }));
   fireEvent.click(await screen.findByText("项目 B"));
-  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始正式二创" }));
   await waitFor(() => expect(mutations).toEqual(["remix-a", "remix-b"]));
 
-  remixA.resolve(json({ id: "workflow-a" }, 201));
-  remixB.resolve(json({ id: "workflow-b" }, 201));
+  remixA.resolve(json({ id: "task-a" }, 201));
+  remixB.resolve(json({ id: "task-b" }, 201));
 });
 
 test("turns a rejected remix request into an actionable error and allows retry", async () => {
@@ -418,21 +660,28 @@ test("turns a rejected remix request into an actionable error and allows retry",
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method) => {
     if (path === "/api/projects") return json([project]);
-    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [], topic_context: {} });
+    if (path === `/api/projects/${routedProjectID}`)
+      return json({ project, assets: { source_script: sourceScriptAsset() }, missing_assets: [] });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
-    if (path === `/api/projects/${routedProjectID}/remix` && method === "POST") {
+    if (path === "/api/assets/source-1/content") return new Response("同行原文正文", { status: 200 });
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
       attempts += 1;
       return attempts === 1
         ? Promise.reject(new Error("network down"))
-        : json({ id: "workflow-retry" }, 201);
+        : json({ id: "task-retry" }, 201);
     }
   }));
   render(<App />);
-  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始二创文案" });
+  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  const action = await screen.findByRole<HTMLButtonElement>("button", { name: "开始正式二创" });
 
   fireEvent.click(action);
 
-  expect(await screen.findByText("二创工作流启动失败，请检查网络连接后重试。")).toBeTruthy();
+  expect(await screen.findByText("原文保存或二创任务启动失败，请检查网络连接后重试。")).toBeTruthy();
   await waitFor(() => expect(action.disabled).toBe(false));
   fireEvent.click(action);
   await waitFor(() => expect(attempts).toBe(2));
@@ -478,7 +727,7 @@ test("does not let a completed project A publish request abort or replace projec
 test("contains no legacy project drawer or bypass production controls in App source", () => {
   const shellSources = [appSource, taskDialogSource];
   for (const source of shellSources) {
-    for (const forbidden of ["renderLegacyProjectDrawer", "remix.spoken_format", "口播稿", "topic_deepen", "spoken_format"]) {
+    for (const forbidden of ["renderLegacyProjectDrawer", "remix.spoken_format", "口播稿", "topic_deepen", "spoken_format", "给我选题", "IdeaPlannerDialog"]) {
       expect(source).not.toContain(forbidden);
     }
     expect(source).not.toContain("×");
@@ -596,6 +845,7 @@ test("saves a source script before starting remix.standard with its version id",
     type: "remix",
     action: "remix.standard",
     source_version_id: "source-version-1",
+    remix_prompt_style: "rewrite",
   });
   await waitFor(() => expect(detailReads).toBeGreaterThan(1));
 });
@@ -686,7 +936,7 @@ test("retries only remix after a saved matching source script task failure", asy
   const source = await screen.findByLabelText("同行原文");
   fireEvent.change(source, { target: { value: "正文" } });
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
-  await screen.findByText("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
+  await screen.findByText("原文已保存，但二创任务启动失败，请检查模型配置后重试。");
   await waitFor(() => expect(detailReads).toBeGreaterThan(1));
   fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
   fireEvent.click(screen.getByRole("button", { name: "保存原文并开始二创" }));
@@ -929,6 +1179,8 @@ const publicSettings = {
   topic_cards_dir: "",
   grok_base_url: "",
   grok_model: "",
+  remix_base_url: "",
+  remix_model: "",
   codex_binary_path: "codex",
   media_index_path: "",
   media_root: "",
@@ -1003,222 +1255,27 @@ test("settings show model defaults and use the PUT response as the saved draft",
   });
 });
 
-test("a project workflow uses the automatic remix endpoint without legacy task controls", async () => {
-  const workflowBodies: Record<string, unknown>[] = [];
-  const project = {
-    id: "project-1",
-    account_id: "account-1",
-    title: "养老金选题",
-    stage: "topic",
-  };
-  vi.stubGlobal(
-    "fetch",
-    baseFetch((path, method, init) => {
-      if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
-        return json({ project, assets: {}, missing_assets: [], topic_context: {} });
-      if (path === "/api/tasks?project_id=project-1") return json([]);
-      if (path === "/api/projects/project-1/remix" && method === "POST") {
-        workflowBodies.push(JSON.parse(String(init?.body)));
-        return json({ id: "workflow-new" }, 201);
-      }
-    }),
-  );
-
-  render(<App />);
-  fireEvent.click(await screen.findByText("养老金选题"));
-  expect(screen.queryByText("模型与推理强度（可选）")).toBeNull();
-  fireEvent.click(await screen.findByRole("button", { name: "开始二创文案" }));
-
-  await waitFor(() => expect(workflowBodies).toHaveLength(1));
-  expect(workflowBodies[0]).toEqual({});
-});
-
-test("the topic composer has an independent temporary model override", async () => {
-  let messageBody: Record<string, unknown> | undefined;
-  vi.stubGlobal(
-    "fetch",
-    baseFetch((path, method, init) => {
-      if (path === "/api/projects") return json([]);
-      if (path === "/api/ideas" && method === "GET") return json([]);
-      if (path === "/api/ideas" && method === "POST")
-        return json({
-          id: "idea-new",
-          account_id: "account-1",
-          title: "新选题规划",
-          status: "planning",
-        });
-      if (path === "/api/ideas/idea-new/messages" && method === "POST") {
-        messageBody = JSON.parse(String(init?.body));
-        return json({ task_id: "task-new" }, 202);
-      }
-      if (path === "/api/ideas/idea-new")
-        return json({
-          session: {
-            id: "idea-new",
-            account_id: "account-1",
-            title: "新选题规划",
-            status: "planning",
-          },
-          messages: [],
-          candidates: [],
-        });
-    }),
-  );
-
-  render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "给我选题" }));
-  fireEvent.click(await screen.findByText("模型与推理强度（可选）"));
-  fireEvent.change(screen.getByRole("textbox", { name: "选题临时模型" }), {
-    target: { value: "gpt-idea" },
-  });
-  fireEvent.change(screen.getByPlaceholderText("输入你的想法或追问"), {
-    target: { value: "给我一个养老选题" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "发送" }));
-
-  await waitFor(() => expect(messageBody).toBeDefined());
-  expect(messageBody).toMatchObject({ content: "给我一个养老选题", model: "gpt-idea" });
-  expect(messageBody).not.toHaveProperty("reasoning_effort");
-  expect(
-    (screen.getByRole("textbox", { name: "选题临时模型" }) as HTMLInputElement)
-      .value,
-  ).toBe("");
-});
-
-test("topic planner lets the user choose the account used for confirmation", async () => {
-  let confirmationBody: Record<string, unknown> | undefined;
-  const session = {
-    id: "idea-1",
-    account_id: "account-2",
-    title: "养老规划",
-    status: "planning",
-  };
-  vi.stubGlobal(
-    "fetch",
-    baseFetch((path, method, init) => {
-      if (path === "/api/accounts")
-        return json([
-          { id: "account-1", name: "账号一" },
-          { id: "account-2", name: "账号二" },
-        ]);
-      if (path === "/api/projects") return json([]);
-      if (path === "/api/ideas" && method === "GET") return json([session]);
-      if (path === "/api/ideas/idea-1")
-        return json({
-          session,
-          messages: [],
-          candidates: [
-            { id: "candidate-1", title: "存款到期", summary: "摘要" },
-          ],
-        });
-      if (path === "/api/ideas/idea-1/select" && method === "POST") {
-        confirmationBody = JSON.parse(String(init?.body));
-        return json({
-          project: {
-            id: "project-new",
-            account_id: "account-2",
-            title: "存款到期",
-            stage: "topic",
-          },
-        }, 201);
-      }
-      if (path === "/api/projects/project-new")
-        return json({
-          project: {
-            id: "project-new",
-            account_id: "account-2",
-            title: "存款到期",
-            stage: "topic",
-          },
-          assets: {},
-          missing_assets: [],
-        });
-      if (path === "/api/tasks?project_id=project-new") return json([]);
-    }),
-  );
-
-  render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "账号二" }));
-  fireEvent.click(screen.getByRole("button", { name: "给我选题" }));
-  const selector = await screen.findByRole("combobox", { name: "选题账号" });
-  fireEvent.change(selector, { target: { value: "account-2" } });
-  fireEvent.click(await screen.findByRole("button", { name: "确认并建项目" }));
-
-  await waitFor(() => expect(confirmationBody).toBeDefined());
-  expect(confirmationBody).toMatchObject({
-    candidate_id: "candidate-1",
-    account_id: "account-2",
-  });
-});
-
-test("topic planner keeps the sidebar account instead of restoring another account session", async () => {
-  const accountOneSession = {
-    id: "idea-account-one",
-    account_id: "account-1",
-    title: "账号一的旧选题",
-    status: "planning",
-  };
-  vi.stubGlobal(
-    "fetch",
-    baseFetch((path, method) => {
-      if (path === "/api/accounts")
-        return json([
-          { id: "account-1", name: "账号一" },
-          { id: "account-2", name: "账号二" },
-        ]);
-      if (path === "/api/projects") return json([]);
-      if (path === "/api/ideas" && method === "GET") return json([accountOneSession]);
-    }),
-  );
-
-  render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "账号二" }));
-  fireEvent.click(screen.getByRole("button", { name: "给我选题" }));
-
-  const selector = await screen.findByRole("combobox", { name: "选题账号" });
-  expect((selector as HTMLSelectElement).value).toBe("account-2");
-  expect(screen.getByRole("heading", { name: "新选题规划" })).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "账号一的旧选题" })).toBeNull();
-});
-
-test("a created project stays visible when its detail request fails", async () => {
+test("a project stays visible when its detail request fails", async () => {
   const requests: Array<{ path: string; method: string }> = [];
-  const session = {
-    id: "idea-1",
-    account_id: "account-1",
-    title: "养老规划",
-    status: "planning",
-  };
   const project = {
-    id: "project-created",
+    id: routedProjectID,
     account_id: "account-1",
     title: "存款到期新变化",
-    stage: "topic",
+    stage: "script",
   };
   vi.stubGlobal(
     "fetch",
     baseFetch((path, method) => {
       requests.push({ path, method });
-      if (path === "/api/projects") return json([]);
-      if (path === "/api/ideas" && method === "GET") return json([session]);
-      if (path === "/api/ideas/idea-1")
-        return json({
-          session,
-          messages: [],
-          candidates: [{ id: "candidate-1", title: project.title, summary: "摘要" }],
-        });
-      if (path === "/api/ideas/idea-1/select" && method === "POST")
-        return json({ project }, 201);
-      if (path === "/api/projects/project-created")
+      if (path === "/api/projects") return json([project]);
+      if (path === `/api/projects/${routedProjectID}`)
         return json({ message: "temporary failure" }, 500);
-      if (path === "/api/tasks?project_id=project-created") return json([]);
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
     }),
   );
 
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "给我选题" }));
-  fireEvent.click(await screen.findByRole("button", { name: "确认并建项目" }));
+  fireEvent.click(await screen.findByText(project.title));
 
   expect(await screen.findByRole("heading", { name: project.title })).toBeTruthy();
   expect(await screen.findByText("项目详情暂时无法读取")).toBeTruthy();
@@ -1228,14 +1285,14 @@ test("a created project stays visible when its detail request fails", async () =
 
 test("tasks show their actual model and awaiting replies keep it read-only", async () => {
   const project = {
-    id: "project-1",
+    id: routedProjectID,
     account_id: "account-1",
     title: "养老金选题",
     stage: "topic",
   };
   const task = {
     id: "task-1",
-    project_id: "project-1",
+    project_id: routedProjectID,
     type: "remix",
     skill_name: "二创",
     status: "awaiting_input",
@@ -1247,9 +1304,9 @@ test("tasks show their actual model and awaiting replies keep it read-only", asy
     "fetch",
     baseFetch((path) => {
       if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
+      if (path === `/api/projects/${routedProjectID}`)
         return json({ project, assets: {}, missing_assets: [] });
-      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([task]);
       if (path === "/api/tasks/task-1") return json(task);
       if (path === "/api/tasks/task-1/semantic-events?limit=20")
         return json({ events: [] });
@@ -1260,22 +1317,23 @@ test("tasks show their actual model and awaiting replies keep it read-only", asy
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
 
-  const actualModel = await screen.findByText("gpt-actual · max");
+  const actualModel = await screen.findByText("gpt-actual");
   expect(actualModel).toBeTruthy();
+  expect(screen.queryByText("gpt-actual · max")).toBeNull();
   expect(actualModel.parentElement?.querySelector("input, select")).toBeNull();
 });
 
 test("a running task exposes a stop action and sends the cancellation request", async () => {
   const requests: Array<{ path: string; method: string }> = [];
   const project = {
-    id: "project-1",
+    id: routedProjectID,
     account_id: "account-1",
     title: "养老金选题",
     stage: "script",
   };
   const task = {
     id: "task-running",
-    project_id: "project-1",
+    project_id: routedProjectID,
     type: "remix",
     skill_name: "finance-viral-remix",
     status: "running",
@@ -1289,9 +1347,9 @@ test("a running task exposes a stop action and sends the cancellation request", 
     baseFetch((path, method) => {
       requests.push({ path, method });
       if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
+      if (path === `/api/projects/${routedProjectID}`)
         return json({ project, assets: {}, missing_assets: [] });
-      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([task]);
       if (path === "/api/tasks/task-running") return json(task);
       if (path === "/api/tasks/task-running/semantic-events?limit=20")
         return json({ events: [] });
@@ -1315,7 +1373,7 @@ test("a running task exposes a stop action and sends the cancellation request", 
 
 test("a running task exposes a live phase duration instead of an empty persisted duration", async () => {
   const project = {
-    id: "project-1",
+    id: routedProjectID,
     account_id: "account-1",
     title: "实时耗时项目",
     stage: "script",
@@ -1323,7 +1381,7 @@ test("a running task exposes a live phase duration instead of an empty persisted
   const startedAt = new Date(Date.now() - 5000).toISOString();
   const task = {
     id: "task-timing-running",
-    project_id: "project-1",
+    project_id: routedProjectID,
     type: "remix",
     skill_name: "finance-viral-remix",
     status: "running",
@@ -1352,9 +1410,9 @@ test("a running task exposes a live phase duration instead of an empty persisted
     "fetch",
     baseFetch((path) => {
       if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
+      if (path === `/api/projects/${routedProjectID}`)
         return json({ project, assets: {}, missing_assets: [] });
-      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([task]);
       if (path === "/api/tasks/task-timing-running") return json(task);
       if (path === "/api/tasks/task-timing-running/semantic-events?limit=20")
         return json({ events: [] });
@@ -1367,7 +1425,7 @@ test("a running task exposes a live phase duration instead of an empty persisted
     await screen.findByRole("button", { name: /finance-viral-remix.*处理中/ }),
   );
 
-  expect(await screen.findByText("Codex 执行")).toBeTruthy();
+  expect(await screen.findByText("模型执行")).toBeTruthy();
   const timingRegion = screen.getByRole("region", { name: "任务阶段耗时" });
   expect(within(timingRegion).getByText("运行中")).toBeTruthy();
   expect(within(timingRegion).getByLabelText("运行时长").textContent).toMatch(/^\d+\.\d s$/);
@@ -1375,14 +1433,14 @@ test("a running task exposes a live phase duration instead of an empty persisted
 
 test("a timing summary with no phases preserves the legacy empty-phase meaning", async () => {
   const project = {
-    id: "project-1",
+    id: routedProjectID,
     account_id: "account-1",
     title: "旧任务项目",
     stage: "script",
   };
   const task = {
     id: "task-timing-legacy",
-    project_id: "project-1",
+    project_id: routedProjectID,
     type: "remix",
     skill_name: "finance-viral-remix",
     status: "completed",
@@ -1402,9 +1460,9 @@ test("a timing summary with no phases preserves the legacy empty-phase meaning",
     "fetch",
     baseFetch((path) => {
       if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
+      if (path === `/api/projects/${routedProjectID}`)
         return json({ project, assets: {}, missing_assets: [] });
-      if (path === "/api/tasks?project_id=project-1") return json([task]);
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([task]);
       if (path === "/api/tasks/task-timing-legacy") return json(task);
       if (path === "/api/tasks/task-timing-legacy/semantic-events?limit=20")
         return json({ events: [] });
@@ -1429,7 +1487,7 @@ test("a timing summary with no phases preserves the legacy empty-phase meaning",
 test("an existing continuous script advances to asset preparation without a second remix control", async () => {
   const taskRequests: string[] = [];
   const project = {
-    id: "project-1",
+    id: routedProjectID,
     account_id: "account-1",
     title: "养老金选题",
     stage: "script",
@@ -1439,7 +1497,7 @@ test("an existing continuous script advances to asset preparation without a seco
     "fetch",
     baseFetch((path, method) => {
       if (path === "/api/projects") return json([project]);
-      if (path === "/api/projects/project-1")
+      if (path === `/api/projects/${routedProjectID}`)
         return json({
           project,
           assets: {
@@ -1454,8 +1512,8 @@ test("an existing continuous script advances to asset preparation without a seco
           },
           missing_assets: [],
         });
-      if (path === "/api/tasks?project_id=project-1") return json([]);
-      if (path === "/api/projects/project-1/tasks" && method === "POST") {
+      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+      if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
         taskRequests.push(path);
         return json({ id: "task-new" }, 201);
       }
@@ -1470,99 +1528,12 @@ test("an existing continuous script advances to asset preparation without a seco
   expect(taskRequests).toHaveLength(0);
 });
 
-test("the topic planner lazily creates and can delete conversations", async () => {
-  const requests: Array<{ path: string; method: string }> = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = typeof input === "string" ? input : input.toString();
-      const method = (init?.method || "GET").toUpperCase();
-      requests.push({ path, method });
-      if (path === "/api/auth/me") return json({ csrfToken: "csrf" });
-      if (path === "/api/accounts")
-        return json([{ id: "account-1", name: "认知觉醒" }]);
-      if (path === "/api/projects") return json([]);
-      if (path === "/api/runtime") return json({ Limit: 4, Running: 0, Queued: 0 });
-      if (path === "/api/settings")
-        return json({ public: publicSettings, settings_version: 1, secrets: {} });
-      if (path === "/api/ideas" && method === "GET")
-        return json([
-          {
-            id: "idea-1",
-            account_id: "account-1",
-            title: "养老规划",
-            status: "planning",
-          },
-          {
-            id: "idea-2",
-            account_id: "account-1",
-            title: "存款到期",
-            status: "planning",
-          },
-        ]);
-      if (path === "/api/ideas/idea-1")
-        return json({
-          session: {
-            id: "idea-1",
-            account_id: "account-1",
-            title: "养老规划",
-            status: "planning",
-          },
-          messages: [],
-          candidates: [],
-        });
-      if (path === "/api/ideas" && method === "POST")
-        return json({
-          id: "idea-new",
-          account_id: "account-1",
-          title: "新选题规划",
-          status: "planning",
-        });
-      if (path === "/api/ideas/idea-new/messages" && method === "POST")
-        return json({ task_id: "task-new" }, 202);
-      if (path === "/api/ideas/idea-2" && method === "DELETE")
-        return new Response(null, { status: 204 });
-      if (path === "/api/ideas/idea-new")
-        return json({
-          session: {
-            id: "idea-new",
-            account_id: "account-1",
-            title: "新选题规划",
-            status: "planning",
-          },
-          messages: [],
-          candidates: [],
-        });
-      throw new Error(`unexpected request: ${method} ${path}`);
-    }),
-  );
-
+test("the home board no longer exposes topic planning", async () => {
+  vi.stubGlobal("fetch", baseFetch((path) => {
+    if (path === "/api/projects") return json([]);
+  }));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "给我选题" }));
-
-  expect(await screen.findByRole("button", { name: "新建对话" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "养老规划规划中" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "存款到期规划中" })).toBeTruthy();
-
-  fireEvent.click(screen.getByRole("button", { name: "新建对话" }));
-  expect(await screen.findByRole("heading", { name: "新选题规划" })).toBeTruthy();
-  expect(requests).not.toContainEqual({ path: "/api/ideas", method: "POST" });
-
-  fireEvent.change(screen.getByPlaceholderText("输入你的想法或追问"), {
-    target: { value: "给我一个养老选题" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "发送" }));
-  await waitFor(() =>
-    expect(requests).toContainEqual({ path: "/api/ideas", method: "POST" }),
-  );
-  expect(requests).toContainEqual({
-    path: "/api/ideas/idea-new/messages",
-    method: "POST",
-  });
-
-  vi.spyOn(window, "confirm").mockReturnValue(true);
-  fireEvent.click(screen.getByRole("button", { name: "删除对话 存款到期" }));
-  await waitFor(() =>
-    expect(requests).toContainEqual({ path: "/api/ideas/idea-2", method: "DELETE" }),
-  );
+  expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "给我选题" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "选题准备" })).toBeNull();
 });

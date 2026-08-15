@@ -829,7 +829,7 @@ func (r *TaskRepository) StartAppServerTurn(ctx context.Context, taskID, session
 			return err
 		}
 		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, attempt, "codex_execution", "Codex 执行", domain.PhaseSourceAppServer, domain.PhaseRunning, at, at, "app-server-execution", `{}`, at); err != nil {
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.NewString(), taskID, attempt, "codex_execution", "模型执行", domain.PhaseSourceAppServer, domain.PhaseRunning, at, at, "app-server-execution", `{}`, at); err != nil {
 			return err
 		}
 		updated, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,codex_thread_id=?,codex_turn_id=?,completion_phase=?,started_at=COALESCE(started_at,?)
@@ -1055,7 +1055,7 @@ func (r *TaskRepository) ClaimLegacyStart(ctx context.Context, id string, at tim
 			}
 		}
 		claim.ExecutionID = uuid.NewString()
-		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, claim.ExecutionID, id, claim.Attempt, "codex_execution", "Codex 执行", domain.PhaseSourceHost, domain.PhaseRunning, at, at, fmt.Sprintf("legacy-execution:%d", claim.Attempt), `{}`, at); err != nil {
+		if _, err := q.ExecContext(ctx, `INSERT INTO task_phase_runs(id,task_id,attempt,phase_key,display_name,source,state,started_at,running_at,external_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, claim.ExecutionID, id, claim.Attempt, "codex_execution", "模型执行", domain.PhaseSourceHost, domain.PhaseRunning, at, at, fmt.Sprintf("legacy-execution:%d", claim.Attempt), `{}`, at); err != nil {
 			return err
 		}
 		result, err := q.ExecContext(ctx, `UPDATE codex_tasks SET status=?,started_at=COALESCE(started_at,?),finished_at=NULL,error_code=NULL,error_message=NULL WHERE id=? AND status=?`, domain.TaskRunning, at, id, domain.TaskQueued)

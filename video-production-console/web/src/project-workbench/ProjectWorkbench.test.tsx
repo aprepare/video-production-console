@@ -73,8 +73,10 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onThemeChange: vi.fn(),
     onBack: vi.fn(),
     onDelete: vi.fn(),
-    onRemix: vi.fn(),
     onMix: vi.fn(),
+    onMovieMix: vi.fn(),
+    onRemakeMontage: vi.fn(),
+    onRemakeMovieMontage: vi.fn(),
     onPublish: vi.fn(),
     onUpload: vi.fn(),
     onSaveSourceScript: vi.fn(),
@@ -82,6 +84,8 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onGenerateNarration: vi.fn(),
     taskModel: { model: "", reasoningEffort: "" },
     onTaskModelChange: vi.fn(),
+    remixPromptStyle: "rewrite",
+    onRemixPromptStyleChange: vi.fn(),
     taskModelDefaults: {
       codex_default_model: "gpt-test",
       codex_default_reasoning_effort: "medium",
@@ -349,6 +353,7 @@ test("accepts a non-empty source script and starts source remix once", () => {
   expect(screen.queryByLabelText("同行原文")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "粘贴同行原文" }));
   expect(screen.getByRole("dialog", { name: "粘贴同行原文" })).toBeTruthy();
+  expect(screen.queryByLabelText("工作台临时推理强度")).toBeNull();
   const source = screen.getByLabelText<HTMLTextAreaElement>("同行原文");
   const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存原文并开始二创" });
 
@@ -359,6 +364,20 @@ test("accepts a non-empty source script and starts source remix once", () => {
 
   expect(props.onSaveSourceScript).toHaveBeenCalledOnce();
   expect(props.onSaveSourceScript).toHaveBeenCalledWith("同行原文正文");
+});
+
+test("lets the operator pick wash remix prompt style before starting", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = { source_script: asset("source_script") };
+  const props = renderWorkbench(detail);
+  const rewrite = screen.getByRole<HTMLInputElement>("radio", { name: /换说法/ });
+  const wash = screen.getByRole<HTMLInputElement>("radio", { name: /洗稿/ });
+
+  expect(rewrite.checked).toBe(true);
+  expect(wash.checked).toBe(false);
+  fireEvent.click(wash);
+  expect(props.onRemixPromptStyleChange).toHaveBeenCalledWith("wash");
 });
 
 test("keeps source entry compact and closes the dialog without saving", () => {
@@ -437,9 +456,59 @@ test("runs mixing from the single primary action when all formal inputs are read
   delete detail.assets.mix_draft;
   const props = renderWorkbench(detail);
 
-  fireEvent.click(screen.getByRole("button", { name: "开始混剪" }));
+  fireEvent.click(screen.getByRole("button", { name: "开始风景混剪" }));
 
   expect(props.onMix).toHaveBeenCalledOnce();
+});
+
+test("starts movie montage from the secondary mixing action", () => {
+  const detail = fixture();
+  detail.assets.narration = asset("narration");
+  detail.assets.subtitle_srt = asset("subtitle_srt");
+  delete detail.assets.mix_draft;
+  const props = renderWorkbench(detail);
+
+  fireEvent.click(screen.getAllByRole("button", { name: "开始电影混剪" })[0]);
+
+  expect(props.onMovieMix).toHaveBeenCalledOnce();
+  expect(props.onMix).not.toHaveBeenCalled();
+});
+
+test("exposes remake montage after a registered draft without replacing publish", () => {
+  const detail = fixture();
+  detail.project.stage = "review";
+  detail.assets = {
+    continuous_script: asset("continuous_script"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+    mix_draft: asset("mix_draft"),
+  };
+  detail.missing_assets = [];
+  const props = workbenchProps(detail);
+  props.tasks = [{ ...task, status: "completed" }];
+  render(<ProjectWorkbench {...props} />);
+
+  const remakeButtons = screen.getAllByRole("button", { name: "重做混剪" });
+  expect(remakeButtons.length).toBeGreaterThanOrEqual(2);
+  fireEvent.click(remakeButtons[0]);
+  expect(props.onRemakeMontage).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "将当前项目标记为已发布" })).toBeTruthy();
+});
+
+test("hides remake montage while a montage task is still running", () => {
+  const detail = fixture();
+  detail.project.stage = "review";
+  detail.assets = {
+    continuous_script: asset("continuous_script"),
+    narration: asset("narration"),
+    subtitle_srt: asset("subtitle_srt"),
+    mix_draft: asset("mix_draft"),
+  };
+  const props = workbenchProps(detail);
+  props.tasks = [{ ...task, status: "running" }];
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.queryAllByRole("button", { name: "重做混剪" })).toEqual([]);
 });
 
 test("keeps the published button wording while exposing its operation through aria-label", () => {
@@ -711,8 +780,8 @@ test("renders the mobile primary action bar as a direct workbench child with a s
   expect(mobileBar?.parentElement).toBe(workbench);
   expect(mobileBar?.closest(".primary-action-panel")).toBeNull();
   expect(desktopAction?.textContent).toBe(mobileAction?.textContent);
-  fireEvent.click(mobileAction!);
-  expect(props.onRemix).toHaveBeenCalledTimes(1);
+  expect(desktopAction?.textContent).toContain("先粘贴同行原文");
+  expect(mobileAction?.disabled).toBe(true);
 });
 
 test("shows this plan's QC summary and hides it when absent", () => {

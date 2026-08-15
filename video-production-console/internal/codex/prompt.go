@@ -13,13 +13,15 @@ var skills = map[string]string{
 	"topic_select": "finance-topic-selector",
 	"topic_commit": "finance-topic-selector",
 	"topic_deepen": "finance-topic-selector",
-	"remix":        "finance-viral-remix",
-	"montage":      "jianying-montage-draft",
+	"remix":         "finance-viral-remix",
+	"montage":       "jianying-montage-draft",
+	"movie_montage": "jianying-movie-montage",
 }
 
 var legacyWireActions = map[string]string{
 	"topic_select": "brainstorm", "topic_commit": "commit_topic", "topic_deepen": "deepen", "remix": "standard",
-	"montage": "execute",
+	"montage":       "execute",
+	"movie_montage": "execute",
 }
 
 var legacyTaskActions = map[string]domain.TaskAction{
@@ -27,7 +29,8 @@ var legacyTaskActions = map[string]domain.TaskAction{
 	"topic_commit": domain.ActionTopicCommit,
 	"topic_deepen": domain.ActionTopicDeepen,
 	"remix":        domain.ActionRemixStandard,
-	"montage":      domain.ActionMontageExecute,
+	"montage":       domain.ActionMontageExecute,
+	"movie_montage": domain.ActionMontageExecute,
 }
 
 // ResolveTaskAction bridges the original HTTP task type vocabulary to the
@@ -50,10 +53,39 @@ func ResolveTaskAction(taskType string, requested domain.TaskAction) (domain.Tas
 	if err != nil {
 		return "", ActionResolution{}, err
 	}
+	if requested == domain.ActionMontageExecute && MontageSkill(skill) {
+		return requested, ActionResolution{Skill: skill, WireAction: "execute"}, nil
+	}
 	if resolved.Skill != skill {
 		return "", ActionResolution{}, fmt.Errorf("action %q belongs to skill %q, not task type %q", requested, resolved.Skill, taskType)
 	}
 	return requested, resolved, nil
+}
+
+// MontageSkill reports whether name is a console montage draft skill.
+func MontageSkill(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "jianying-montage-draft", "jianying-movie-montage":
+		return true
+	default:
+		return false
+	}
+}
+
+// MovieMontageSkill is the catalog-backed method-three skill.
+const MovieMontageSkill = "jianying-movie-montage"
+
+// ResolveMontageSkill keeps montage.execute on the task's draft skill so
+// landscape and movie montage share the same action but freeze different skills.
+func ResolveMontageSkill(action domain.TaskAction, skillName string) (ActionResolution, error) {
+	resolved, err := ResolveAction(action)
+	if err != nil {
+		return ActionResolution{}, err
+	}
+	if action == domain.ActionMontageExecute && MontageSkill(skillName) {
+		return ActionResolution{Skill: strings.TrimSpace(skillName), WireAction: "execute"}, nil
+	}
+	return resolved, nil
 }
 
 // TaskContext is the complete, project-scoped context supplied to one Codex run.
@@ -120,7 +152,9 @@ func buildManifestPrompt(manifest TaskManifest, manifestPath string, useEnvironm
 	if err != nil {
 		return "", err
 	}
-	if manifest.Skill != resolved.Skill {
+	if manifest.Action == domain.ActionMontageExecute && MontageSkill(manifest.Skill) {
+		resolved = ActionResolution{Skill: manifest.Skill, WireAction: "execute"}
+	} else if manifest.Skill != resolved.Skill {
 		return "", fmt.Errorf("manifest skill %q does not match action %q", manifest.Skill, manifest.Action)
 	}
 	if strings.TrimSpace(manifestPath) == "" || secretValue.MatchString(strings.ReplaceAll(strings.ToLower(manifestPath), "%20", " ")) {
@@ -160,7 +194,7 @@ func formatManifestPrompt(skill, wireAction, manifestPath string) (string, error
 		manifestInstruction = fmt.Sprintf("Execute action=%s using the task manifest path from environment variable %s. Read the variable at runtime; do not retype or reconstruct the absolute path.", wireAction, taskManifestEnvironmentKey)
 	}
 	extra := ""
-	if skill == "jianying-montage-draft" && wireAction == "execute" {
+	if MontageSkill(skill) && wireAction == "execute" {
 		manifestStep := "2) Run scripts/run_montage_job.py validate-inputs --manifest %VIDEO_CONSOLE_TASK_MANIFEST% via cmd.exe."
 		if !useEnvironmentPath {
 			manifestStep = "2) Run scripts/run_montage_job.py validate-inputs --manifest <task_manifest_path_from_above> via cmd.exe."
@@ -177,7 +211,11 @@ Console montage.execute only:
 Console remix.review only:
 1) Read non_secret_settings.revision_notes from the task manifest.
 2) Rewrite the review_target continuous_script to satisfy those notes.
-3) Emit continuous_script under output_dir; refresh publishing_package when titles/description should change.`
+3) Emit continuous_script under output_dir; refresh publishing_package when titles/description should change.
+No web/Grok search.`
+	} else if skill == "finance-viral-remix" {
+		extra = `
+No web/Grok search. Do not run grok_search.py or baokuan tools.`
 	}
 	prompt := fmt.Sprintf(`Use the $%s skill.
 %s

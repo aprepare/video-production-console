@@ -3,7 +3,6 @@ import type { Account, Project } from "../types";
 export const PROJECT_COLLAPSE_LIMIT = 4;
 
 export const stages: Array<Project["stage"]> = [
-  "topic",
   "script",
   "assets",
   "mixing",
@@ -11,11 +10,15 @@ export const stages: Array<Project["stage"]> = [
   "published",
 ];
 
+export function boardStage(stage: Project["stage"]): Project["stage"] {
+  return stage === "topic" ? "script" : stage;
+}
+
 export function stageLabel(stage: Project["stage"]) {
   return (
     (
       {
-        topic: "选题准备",
+        topic: "文案制作",
         script: "文案制作",
         assets: "配音字幕",
         mixing: "混剪制作",
@@ -30,8 +33,8 @@ export function projectStageHint(stage: Project["stage"]) {
   return (
     (
       {
-        topic: "正在确定选题或生成选题卡",
-        script: "选题卡已就绪，正在制作文案",
+        topic: "先粘贴同行原文，再开始二创",
+        script: "先粘贴同行原文，再开始二创",
         assets: "文案已登记，正在准备配音和 SRT",
         mixing: "配音和 SRT 已齐，正在制作混剪",
         review: "检查发布文案并确认发布状态",

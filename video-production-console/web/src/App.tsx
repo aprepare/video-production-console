@@ -11,16 +11,15 @@ import { ImageModeWorkbench } from "./image-mode/ImageModeWorkbench";
 import { MediaLibraryPanel } from "./media-library/MediaLibraryPanel";
 import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
-import { IdeaPlannerDialog } from "./idea/IdeaPlannerDialog";
-import { useIdeaPlanner } from "./idea/useIdeaPlanner";
 import { queryKeys } from "./query/keys";
 import "./App.css";
-import "./idea.css";
 import { parseLocation } from "./project-workbench/routes";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { ConsoleHome } from "./shell/ConsoleHome";
+import { ModeHome } from "./production-modes/ModeHome";
+import { productionModes } from "./production-modes/catalog";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
 import {
@@ -90,7 +89,10 @@ function App() {
   const client = useQueryClient();
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
-  const [productionMode, setProductionMode] = useState<"montage" | "image">("montage");
+  const route = parseLocation(window.location.pathname);
+  const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
+  const montageRoute = route.view === "projects" || route.view === "project";
+  const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
   const [expandedStages, setExpandedStages] = useState<Set<Project["stage"]>>(
     () => new Set(),
   );
@@ -118,6 +120,12 @@ function App() {
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
   const [urlRevision, setURLRevision] = useState(0);
+  const navigate = useCallback((href: string, mode: "push" | "replace" = "push") => {
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === href) return;
+    window.history[mode === "push" ? "pushState" : "replaceState"]({}, "", href);
+    setURLRevision((value) => value + 1);
+  }, []);
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
   const detailRefreshTimerRef = useRef<number | null>(null);
@@ -153,8 +161,11 @@ function App() {
     [csrf],
   );
   const { accounts, projects, setProjects, loading, failed: consoleDataFailed } =
-    useConsoleData<Account, Project>(api, authenticated === true);
-  const { data: runtime = null } = useRuntimeQuery(api, authenticated === true);
+    useConsoleData<Account, Project>(api, authenticated === true && montageRoute);
+  const { data: runtime = null } = useRuntimeQuery(
+    api,
+    authenticated === true && montageRoute,
+  );
 
   const readSettings = useCallback(
     async (signal?: AbortSignal) => {
@@ -166,32 +177,11 @@ function App() {
   );
   const settingsQuery = useQuery({
     queryKey: queryKeys.settings(),
-    enabled: authenticated === true,
+    enabled: authenticated === true && (montageRoute || imageRoute),
     queryFn: ({ signal }) => readSettings(signal),
   });
   const settings = settingsQuery.data ?? null;
 
-  const accountIDs = useMemo(() => accounts.map((item) => item.id), [accounts]);
-  const idea = useIdeaPlanner({
-    api,
-    account,
-    accountIDs,
-    setMessage,
-    onProjectCreated: (project, topicCardTaskError) => {
-      setProjects((current) => [
-        project,
-        ...current.filter((item) => item.id !== project.id),
-      ]);
-      setAccount(project.account_id);
-      setMessage(
-        topicCardTaskError
-          ? `项目已创建，但正式选题卡任务未启动：${topicCardTaskError}`
-          : `项目已创建到“${accountName(project.account_id, accounts)}”，正在把正式选题卡写入 Obsidian。`,
-      );
-      openProject(project);
-    },
-  });
-  const { open: ideaOpen, setOpen: setIdeaOpen } = idea;
   const settingsPanel = useSettingsDialog({ api, readSettings, setMessage });
   const { open: settingsOpen, setOpen: setSettingsOpen } = settingsPanel;
 
@@ -274,7 +264,7 @@ function App() {
   // the way the hand-rolled fetch did.
   const detailQuery = useQuery({
     queryKey: queryKeys.project(selectedID),
-    enabled: authenticated === true && Boolean(selectedID),
+    enabled: authenticated === true && montageRoute && Boolean(selectedID),
     refetchInterval: detailPollInterval,
     retry: false,
     queryFn: async ({ signal }) => {
@@ -285,7 +275,7 @@ function App() {
   });
   const tasksQuery = useQuery({
     queryKey: queryKeys.tasks(selectedID),
-    enabled: authenticated === true && Boolean(selectedID),
+    enabled: authenticated === true && montageRoute && Boolean(selectedID),
     refetchInterval: detailPollInterval,
     retry: false,
     queryFn: ({ signal }) => hydrateTasks(selectedID, signal),
@@ -398,7 +388,7 @@ function App() {
     })();
   }, []);
   useEffect(() => {
-    if (!selected || !activeTaskIDs) return;
+    if (!montageRoute || !selected || !activeTaskIDs) return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const sockets = new Map<string, WebSocket>();
     const retryTimers = new Map<string, number>();
@@ -427,7 +417,7 @@ function App() {
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       sockets.forEach((socket) => socket.close());
     };
-  }, [selected, activeTaskIDs, scheduleDetailRefresh]);
+  }, [montageRoute, selected, activeTaskIDs, scheduleDetailRefresh]);
   useEffect(() => {
     taskOpenIDRef.current = taskOpen?.id || "";
     if (!taskOpen) return;
@@ -526,6 +516,16 @@ function App() {
       handledURLRevisionRef.current = urlRevision;
       return;
     }
+    if (
+      route.view === "mode-home"
+      || route.view === "not-found"
+      || route.view === "image-projects"
+      || route.view === "image-projects-advanced"
+      || route.view === "image-project"
+    ) {
+      handledURLRevisionRef.current = urlRevision;
+      return;
+    }
     const project = projects.find((item) => item.id === route.projectID);
     if (!project) {
       taskRestoreAbortRef.current?.abort();
@@ -574,7 +574,7 @@ function App() {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
     const dialogOpen = Boolean(
-      preview || reviseOpen || settingsOpen || ideaOpen || taskOpen,
+      preview || reviseOpen || settingsOpen || taskOpen,
     );
     if (!dialogOpen) {
       if (dialogWasOpenRef.current) previousFocusRef.current?.focus();
@@ -657,8 +657,7 @@ function App() {
       if (taskOpen) {
         setTaskOpen(null);
         writeTaskQuery("", "replace");
-      } else if (ideaOpen) setIdeaOpen(false);
-      else if (settingsOpen) setSettingsOpen(false);
+      } else if (settingsOpen) setSettingsOpen(false);
       else if (reviseOpen) setReviseOpen(false);
       else if (preview) setPreview(null);
       else if (selected) {
@@ -682,7 +681,7 @@ function App() {
         }
       });
     };
-  }, [clearProjectSelection, ideaOpen, preview, reviseOpen, selected, setIdeaOpen, setSettingsOpen, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, preview, reviseOpen, selected, setSettingsOpen, settingsOpen, taskOpen]);
   useEffect(() => () => {
     taskRestoreAbortRef.current?.abort();
     if (detailRefreshTimerRef.current !== null)
@@ -745,7 +744,7 @@ function App() {
     writeProjectLocation("", "push");
   };
   useEffect(() => {
-    if (!selected || preview || settingsOpen || ideaOpen || taskOpen) return;
+    if (!selected || preview || settingsOpen || taskOpen) return;
     const returnToBoard = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -757,7 +756,7 @@ function App() {
     };
     window.addEventListener("keydown", returnToBoard);
     return () => window.removeEventListener("keydown", returnToBoard);
-  }, [clearProjectSelection, ideaOpen, preview, selected, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, preview, selected, settingsOpen, taskOpen]);
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
     if (!newAccount.trim() || !accountBackground) {
@@ -883,7 +882,7 @@ function App() {
     );
 
   const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || idea.open || taskOpen || mediaLibraryOpen,
+    preview || reviseOpen || settingsOpen || taskOpen || mediaLibraryOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -895,8 +894,16 @@ function App() {
     : [];
 
   return (
-    <div className="shell">
-      {productionMode === "image" && !selected ? (
+    <div className={imageRoute ? "shell shell--image" : "shell"}>
+      {route.view === "mode-home" ? (
+        <ModeHome modes={productionModes} onNavigate={navigate} />
+      ) : route.view === "not-found" ? (
+        <main className="notice" role="alert">
+          <h1>404</h1>
+          <p>页面不存在</p>
+          <button type="button" onClick={() => navigate("/")}>返回制作方式</button>
+        </main>
+      ) : imageRoute ? (
         <>
           <header>
             <div><span className="eyebrow">本机视频工作台</span><h1>视频生产控制台</h1></div>
@@ -912,20 +919,25 @@ function App() {
                   <option value="dark">夜间</option>
                 </select>
               </label>
-              <div className="mode-switch" role="group" aria-label="生产模式">
-                <button type="button" aria-pressed={false} onClick={() => setProductionMode("montage")}>混剪模式</button>
-                <button type="button" aria-pressed className="active" onClick={() => setProductionMode("image")}>图文模式</button>
-              </div>
+              <button type="button" className="header-button" onClick={() => navigate("/")}>制作方式</button>
               <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
               <button className="header-button" onClick={() => void logout()}>退出</button>
             </div>
           </header>
           <ImageModeWorkbench
             api={api}
+            mode={route.view === "image-projects-advanced" ? "advanced" : "quick"}
+            initialProjectID={imageProjectID}
+            onProjectOpen={(id) => navigate(`/image-projects/${id}`)}
+            onProjectClose={() => navigate("/image-projects")}
             defaultRatio={settings?.public.default_image_ratio}
             defaultStyle={settings?.public.default_image_style}
             defaultConcurrency={settings?.public.max_image_concurrency}
-            defaultTextModel={settings?.public.image_text_model}
+            defaultTextModel={settings?.public.image_text_model || "gpt-5.6-sol"}
+            defaultReasoningEffort={settings?.public.image_text_reasoning_effort}
+            defaultImageModel={settings?.public.image_model}
+            defaultImageAttempts={settings?.public.image_generation_attempts}
+            onAdvancedMode={() => navigate("/image-projects/advanced")}
           />
         </>
       ) : selected && detail && detailReady ? (
@@ -938,8 +950,10 @@ function App() {
           onThemeChange={setTheme}
           onBack={closeProject}
           onDelete={() => void projectActions.deleteProject()}
-          onRemix={() => void projectActions.startRemixWorkflow()}
           onMix={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
+          onMovieMix={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库生成混剪草稿。")}
+          onRemakeMontage={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图重新生成混剪草稿。", { remake: true })}
+          onRemakeMovieMontage={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库重新生成混剪草稿。", { remake: true })}
           onPublish={() => void projectActions.publishProject()}
           onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
           onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
@@ -949,6 +963,8 @@ function App() {
           taskModel={projectActions.taskModel}
           onTaskModelChange={(value) => projectActions.setTaskModel(value)}
           taskModelDefaults={settings?.public}
+          remixPromptStyle={projectActions.remixPromptStyle}
+          onRemixPromptStyleChange={projectActions.setRemixPromptStyle}
           onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenTask={(task) => openTask(task as Task)}
@@ -970,8 +986,8 @@ function App() {
           hidden={modalLayerOpen}
           theme={theme}
           onThemeChange={setTheme}
+          onChooseProductionMode={() => navigate("/")}
           runtime={runtime}
-          onOpenIdeaPlanner={() => void idea.openPlanner()}
           onOpenMediaLibrary={() => setMediaLibraryOpen(true)}
           onOpenSettings={() => void settingsPanel.openDialog()}
           onLogout={() => void logout()}
@@ -995,8 +1011,6 @@ function App() {
           expandedStages={expandedStages}
           onExpandedStagesChange={setExpandedStages}
           onOpenProject={openProject}
-          mode={productionMode}
-          onModeChange={setProductionMode}
         />
       )}
       {preview && (
@@ -1045,28 +1059,6 @@ function App() {
           onSubmit={settingsPanel.save}
         />
       )}
-      {ideaOpen && idea.session && (
-        <IdeaPlannerDialog
-          session={idea.session}
-          onSessionChange={idea.setSession}
-          sessions={idea.sessions}
-          draft={Boolean(idea.draft)}
-          accounts={accounts}
-          task={idea.task}
-          creatingProject={idea.creatingProject}
-          input={idea.input}
-          onInputChange={idea.setInput}
-          taskModel={idea.taskModel}
-          onTaskModelChange={idea.setTaskModel}
-          taskModelDefaults={settings?.public}
-          onClose={() => setIdeaOpen(false)}
-          onCreateConversation={() => void idea.createConversation()}
-          onSwitchConversation={(session) => void idea.switchConversation(session)}
-          onDeleteConversation={(session) => void idea.deleteConversation(session)}
-          onSelectCandidate={(candidate) => void idea.selectCandidate(candidate)}
-          onSubmit={idea.sendMessage}
-        />
-      )}
       {taskOpen && (
         <TaskDetailDialog
           task={taskOpen}
@@ -1081,6 +1073,10 @@ function App() {
           onClose={closeTask}
           onCancelTask={(task) => void cancelTask(task)}
           onRetryRegistration={(task) => void retryMontageRegistration(task)}
+          onRemakeMontage={() => {
+            closeTask();
+            void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图重新生成混剪草稿。", { remake: true });
+          }}
           onOpenDirectory={(assetID) => void openRegisteredDirectory(assetID)}
           onAnswer={(task, answer) => void answerTask(task, answer)}
         />

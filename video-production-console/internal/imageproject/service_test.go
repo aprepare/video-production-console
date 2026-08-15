@@ -56,9 +56,12 @@ func TestBuildPromptUsesStyleRatioAndForbidsInventedText(t *testing.T) {
 		Ratio:      "3:4",
 		Style:      "ledger_investigation",
 	})
-	for _, required := range []string{"退休前五年", "3:4", "账本", "中国", "不要生成可读文字", "日期"} {
+	for _, required := range []string{"退休前五年", "3:4", "账本", "中国", "画面文字规则", "主标题 6-14 字", "日期", "人物面部和核心主体"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
+	}
+	if strings.Contains(prompt, "不要生成可读文字") {
+		t.Fatal("legacy no-readable-text prohibition must be absent")
 	}
 }

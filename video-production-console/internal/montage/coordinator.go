@@ -659,33 +659,41 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 	if err != nil {
 		return RegisterRequest{}, err
 	}
-	var skillRoot, skillFilesJSON string
-	err = c.tasks.DB().QueryRow(`SELECT snapshot.path,snapshot.files_json FROM codex_tasks task JOIN skill_snapshots snapshot ON snapshot.id=task.skill_snapshot_id WHERE task.id=? AND task.manifest_path=? AND snapshot.name='jianying-montage-draft'`, attempt.TaskID, manifestPath).Scan(&skillRoot, &skillFilesJSON)
+	var skillRoot, skillFilesJSON, skillName string
+	err = c.tasks.DB().QueryRow(`SELECT snapshot.path,snapshot.files_json,snapshot.name FROM codex_tasks task JOIN skill_snapshots snapshot ON snapshot.id=task.skill_snapshot_id WHERE task.id=? AND task.manifest_path=? AND snapshot.name IN ('jianying-montage-draft','jianying-movie-montage')`, attempt.TaskID, manifestPath).Scan(&skillRoot, &skillFilesJSON, &skillName)
 	if err != nil {
 		return RegisterRequest{}, fmt.Errorf("resolve montage Skill snapshot: %w", err)
 	}
-	skillRoot, err = canonicalNoFollow(skillRoot, true)
-	if err != nil {
-		return RegisterRequest{}, errors.New("task-bound Skill snapshot is not a canonical no-follow directory")
-	}
-	scriptPath, err := canonicalNoFollow(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), false)
-	if err != nil || !WithinJianyingRoot(skillRoot, scriptPath) {
-		return RegisterRequest{}, errors.New("task-bound registration script is unavailable")
-	}
-	var skillFiles []domain.SkillFileSnapshot
-	if json.Unmarshal([]byte(skillFilesJSON), &skillFiles) != nil {
-		return RegisterRequest{}, errors.New("task-bound Skill file identity is invalid")
-	}
-	expectedScriptHash := ""
-	for _, file := range skillFiles {
-		if filepath.ToSlash(file.Path) == "scripts/run_montage_job.py" {
-			expectedScriptHash = file.SHA256
-			break
+	var scriptPath string
+	if skillName == "jianying-movie-montage" {
+		skillRoot, scriptPath, err = trustedReconciliationSkill(c.runtime)
+		if err != nil {
+			return RegisterRequest{}, fmt.Errorf("movie montage registration requires current Jianying draft Skill: %w", err)
 		}
-	}
-	actualScriptHash, hashErr := hashFile(scriptPath)
-	if hashErr != nil || expectedScriptHash == "" || !strings.EqualFold(actualScriptHash, expectedScriptHash) {
-		return RegisterRequest{}, errors.New("task-bound registration script fingerprint changed")
+	} else {
+		skillRoot, err = canonicalNoFollow(skillRoot, true)
+		if err != nil {
+			return RegisterRequest{}, errors.New("task-bound Skill snapshot is not a canonical no-follow directory")
+		}
+		scriptPath, err = canonicalNoFollow(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), false)
+		if err != nil || !WithinJianyingRoot(skillRoot, scriptPath) {
+			return RegisterRequest{}, errors.New("task-bound registration script is unavailable")
+		}
+		var skillFiles []domain.SkillFileSnapshot
+		if json.Unmarshal([]byte(skillFilesJSON), &skillFiles) != nil {
+			return RegisterRequest{}, errors.New("task-bound Skill file identity is invalid")
+		}
+		expectedScriptHash := ""
+		for _, file := range skillFiles {
+			if filepath.ToSlash(file.Path) == "scripts/run_montage_job.py" {
+				expectedScriptHash = file.SHA256
+				break
+			}
+		}
+		actualScriptHash, hashErr := hashFile(scriptPath)
+		if hashErr != nil || expectedScriptHash == "" || !strings.EqualFold(actualScriptHash, expectedScriptHash) {
+			return RegisterRequest{}, errors.New("task-bound registration script fingerprint changed")
+		}
 	}
 	manifestData, err := readBounded(manifestPath, 4<<20)
 	if err != nil {

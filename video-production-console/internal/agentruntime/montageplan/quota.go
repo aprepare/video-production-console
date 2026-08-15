@@ -26,8 +26,8 @@ type quotaWarning struct {
 }
 
 // rankedCandidate carries one selectable media item and its recall score.
-// P0 has no AI scores yet, so Score is zero and ordering falls back to
-// category diversity, underuse and the seeded stable hash.
+// Score comes from rankLibrary (tag + optional embedding). Equal scores
+// fall back to category diversity, underuse and the seeded stable hash.
 type rankedCandidate struct {
 	Item  mediaItem
 	Score float64
@@ -67,10 +67,22 @@ func movieMixPolicy() mixPolicy {
 	}
 }
 
-// imageVideoPolicy is the image_video preset (roadmap method four): stills
-// dominate the timeline, movie footage is excluded from direct selection.
-// Build keeps using movieMixPolicy; this preset is passed in by callers that
-// plan an image-first video.
+// movieCatalogPolicy is method three: one local movie library fills the
+// timeline. Source reuse is high because a single film is the expected input.
+func movieCatalogPolicy() mixPolicy {
+	return mixPolicy{
+		Targets: map[mediaKind]quotaRange{
+			mediaKindMovie: {Min: 0.70, Max: 1.00},
+			mediaKindBroll: {Min: 0, Max: 0.20},
+			mediaKindImage: {Min: 0, Max: 0.10},
+		},
+		MaxSourceUses:           80,
+		MinSegmentsBetweenReuse: 1,
+	}
+}
+
+// imageVideoPolicy is the parked image_video preset (method four). No user
+// entry should call this; movieMixPolicy remains the scenic default.
 func imageVideoPolicy() mixPolicy {
 	return mixPolicy{
 		Targets: map[mediaKind]quotaRange{

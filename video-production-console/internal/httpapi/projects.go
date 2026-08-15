@@ -315,7 +315,7 @@ func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "project_remix_unavailable", "Project remix is unavailable.")
 		return
 	}
-	selection, err := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort})
+	selection, err := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: taskmodel.KindRemix})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_task_model", "Task model selection is invalid.")
 		return

@@ -73,6 +73,7 @@ type ProjectAssetsProps = {
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onReviseContinuousScript?: () => void;
+  onRemakeMontage?: () => void;
   onGenerateNarration?: () => void;
   pendingActions: string[];
   uploadRequest: AssetUploadRequest;
@@ -85,6 +86,7 @@ export function ProjectAssets({
   onReplaceBackground,
   onViewAsset,
   onReviseContinuousScript,
+  onRemakeMontage,
   onGenerateNarration,
   pendingActions,
   uploadRequest,
@@ -185,6 +187,12 @@ export function ProjectAssets({
                 ) : null}
                 {asset && definition.type === "continuous_script" && onReviseContinuousScript ? (
                   <button type="button" onClick={onReviseContinuousScript} aria-label="打回重做连续文案">
+                    <RotateCcw size={15} aria-hidden="true" />
+                    重做
+                  </button>
+                ) : null}
+                {definition.type === "mix_draft" && onRemakeMontage ? (
+                  <button type="button" onClick={onRemakeMontage} aria-label="重做混剪">
                     <RotateCcw size={15} aria-hidden="true" />
                     重做
                   </button>

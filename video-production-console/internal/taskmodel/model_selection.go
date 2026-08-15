@@ -9,6 +9,8 @@ import (
 const (
 	DefaultModel           = "gpt-5.6-sol"
 	DefaultReasoningEffort = "medium"
+	KindCodex              = "codex"
+	KindRemix              = "remix"
 )
 
 var (
@@ -23,6 +25,7 @@ var (
 type Selection struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort"`
+	Kind            string `json:"-"`
 }
 
 func Normalize(selection Selection) (Selection, error) {

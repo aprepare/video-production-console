@@ -1,4 +1,5 @@
 import { Bot, ChevronDown, MessageSquare } from "lucide-react";
+import { taskModelLabel } from "../tasks/task-view";
 import type { ProjectTask } from "./types";
 
 const statusLabels: Record<string, string> = {
@@ -22,7 +23,9 @@ function statusTone(status: string) {
 }
 
 function taskLabel(task: ProjectTask) {
-  if (task.action === "montage.execute") return "生成混剪草稿";
+  if (task.action === "montage.execute") {
+    return task.skill_name === "jianying-movie-montage" ? "生成电影混剪草稿" : "生成混剪草稿";
+  }
   if (task.action?.startsWith("remix.")) return "生成二创文案";
   return task.skill_name || "生产任务";
 }
@@ -64,8 +67,8 @@ export function ProjectTaskSummary({ task, onOpenTask }: ProjectTaskSummaryProps
                   {statusLabels[task.status] || task.status}
                 </span>
               </button>
-              {task.model || task.reasoning_effort ? (
-                <p className="task-summary-model">{[task.model, task.reasoning_effort].filter(Boolean).join(" · ")}</p>
+              {taskModelLabel(task) ? (
+                <p className="task-summary-model">{taskModelLabel(task)}</p>
               ) : null}
               <div className="task-summary-message">
                 <span className="task-summary-message__author"><Bot size={14} aria-hidden="true" /> 任务结果</span>

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,11 +36,32 @@ var (
 )
 
 const (
-	analyzerMaxRetries = 3
-	visionTagNamespace = "vision"
-	minShotKeyframes   = 2
-	maxShotKeyframes   = 3
+	analyzerMaxRetries           = 3
+	visionTagNamespace           = "vision"
+	minShotKeyframes             = 2
+	maxShotKeyframes             = 3
+	DefaultAnalysisConcurrency   = 64
+	MaxAnalysisConcurrency       = 1000
+	analyzerHTTPTimeout          = 2 * time.Minute
 )
+
+func ClampAnalysisConcurrency(value int) int {
+	if value < 1 {
+		return DefaultAnalysisConcurrency
+	}
+	if value > MaxAnalysisConcurrency {
+		return MaxAnalysisConcurrency
+	}
+	return value
+}
+
+func analyzerHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = MaxAnalysisConcurrency
+	transport.MaxIdleConnsPerHost = MaxAnalysisConcurrency
+	transport.MaxConnsPerHost = MaxAnalysisConcurrency
+	return &http.Client{Timeout: analyzerHTTPTimeout, Transport: transport}
+}
 
 var analyzerBackoffs = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
@@ -163,7 +185,7 @@ func (v *HTTPVisionAnalyzer) Analyze(ctx context.Context, keyframes []KeyframeIn
 	if err != nil {
 		return ShotAnalysis{}, fmt.Errorf("encode vision request: %w", err)
 	}
-	body, err := v.client.postJSON(ctx, v.baseURL+"/chat/completions", v.apiKey, payload)
+	body, err := v.client.postJSON(ctx, CompatEndpoint(v.baseURL, "chat/completions"), v.apiKey, payload)
 	if err != nil {
 		return ShotAnalysis{}, err
 	}
@@ -235,7 +257,7 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, input string) ([]float32, erro
 	if err != nil {
 		return nil, fmt.Errorf("encode embedding request: %w", err)
 	}
-	body, err := e.client.postJSON(ctx, e.baseURL+"/embeddings", e.apiKey, payload)
+	body, err := e.client.postJSON(ctx, CompatEndpoint(e.baseURL, "embeddings"), e.apiKey, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +285,7 @@ type retryingHTTPClient struct {
 
 func newRetryingHTTPClient(client *http.Client, sleep func(time.Duration)) retryingHTTPClient {
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = analyzerHTTPClient()
 	}
 	if sleep == nil {
 		sleep = time.Sleep
@@ -310,13 +332,22 @@ type AnalysisRunner struct {
 	vision         VisionAnalyzer
 	embedder       Embedder
 	embeddingModel string
+	concurrency    int
+	persistMu      sync.Mutex
 }
 
 func NewAnalysisRunner(repo *Repository, vision VisionAnalyzer, embedder Embedder, embeddingModel string) (*AnalysisRunner, error) {
+	return NewAnalysisRunnerWithConcurrency(repo, vision, embedder, embeddingModel, DefaultAnalysisConcurrency)
+}
+
+func NewAnalysisRunnerWithConcurrency(repo *Repository, vision VisionAnalyzer, embedder Embedder, embeddingModel string, concurrency int) (*AnalysisRunner, error) {
 	if repo == nil || vision == nil || embedder == nil || strings.TrimSpace(embeddingModel) == "" {
 		return nil, fmt.Errorf("%w: analysis runner requires repository, analyzer, embedder, and embedding model", ErrInvalidValue)
 	}
-	return &AnalysisRunner{repo: repo, vision: vision, embedder: embedder, embeddingModel: embeddingModel}, nil
+	return &AnalysisRunner{
+		repo: repo, vision: vision, embedder: embedder, embeddingModel: embeddingModel,
+		concurrency: ClampAnalysisConcurrency(concurrency),
+	}, nil
 }
 
 type AnalysisSummary struct {
@@ -331,30 +362,82 @@ func (a *AnalysisRunner) Run(ctx context.Context) (AnalysisSummary, error) {
 	if err != nil {
 		return summary, err
 	}
-	for _, shot := range shots {
-		keyframes, err := a.repo.KeyframesByShot(ctx, shot.ID)
-		if err != nil {
-			return summary, err
-		}
-		if len(keyframes) == 0 {
-			// No extracted keyframes yet (for example degenerate image
-			// shots); leave the shot pending instead of failing it.
-			summary.SkippedShots++
-			continue
-		}
-		if err := a.analyzeShot(ctx, shot, keyframes); err != nil {
-			summary.FailedShots++
-			if markErr := a.repo.MarkShotAnalysisFailed(ctx, shot.ID); markErr != nil {
-				return summary, errors.Join(err, markErr)
-			}
-			if ctx.Err() != nil {
-				return summary, err
-			}
-			continue
-		}
-		summary.AnalyzedShots++
+	workers := a.concurrency
+	if workers < 1 {
+		workers = DefaultAnalysisConcurrency
 	}
-	return summary, nil
+	if len(shots) > 0 && workers > len(shots) {
+		workers = len(shots)
+	}
+	jobs := make(chan Shot)
+	var (
+		mu         sync.Mutex
+		firstFatal error
+		wg         sync.WaitGroup
+	)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for shot := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				keyframes, err := a.repo.KeyframesByShot(ctx, shot.ID)
+				if err != nil {
+					mu.Lock()
+					if firstFatal == nil {
+						firstFatal = err
+					}
+					mu.Unlock()
+					return
+				}
+				if len(keyframes) == 0 {
+					mu.Lock()
+					summary.SkippedShots++
+					mu.Unlock()
+					continue
+				}
+				if err := a.analyzeShot(ctx, shot, keyframes); err != nil {
+					mu.Lock()
+					summary.FailedShots++
+					mu.Unlock()
+					a.persistMu.Lock()
+					markErr := a.repo.MarkShotAnalysisFailed(ctx, shot.ID)
+					a.persistMu.Unlock()
+					if markErr != nil {
+						mu.Lock()
+						if firstFatal == nil {
+							firstFatal = errors.Join(err, markErr)
+						}
+						mu.Unlock()
+						return
+					}
+					if ctx.Err() != nil {
+						mu.Lock()
+						if firstFatal == nil {
+							firstFatal = err
+						}
+						mu.Unlock()
+						return
+					}
+					continue
+				}
+				mu.Lock()
+				summary.AnalyzedShots++
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, shot := range shots {
+		if ctx.Err() != nil {
+			break
+		}
+		jobs <- shot
+	}
+	close(jobs)
+	wg.Wait()
+	return summary, firstFatal
 }
 
 func (a *AnalysisRunner) analyzeShot(ctx context.Context, shot Shot, keyframes []Keyframe) error {
@@ -377,6 +460,8 @@ func (a *AnalysisRunner) analyzeShot(ctx context.Context, shot Shot, keyframes [
 	if err != nil {
 		return err
 	}
+	a.persistMu.Lock()
+	defer a.persistMu.Unlock()
 	storedDimension, err := a.repo.EmbeddingDimensionForModel(ctx, a.embeddingModel)
 	if err != nil {
 		return err

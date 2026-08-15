@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -57,8 +58,8 @@ func newAnalyzerServer(t *testing.T) *analyzerServer {
 		_, _ = body.ReadFrom(r.Body)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		switch r.URL.Path {
-		case "/chat/completions":
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 			s.visionBodies = append(s.visionBodies, body.String())
 			s.visionAuth = append(s.visionAuth, r.Header.Get("Authorization"))
 			if len(s.visionStatuses) > 0 {
@@ -73,7 +74,7 @@ func newAnalyzerServer(t *testing.T) *analyzerServer {
 				"choices": []map[string]any{{"message": map[string]any{"content": s.visionContent}}},
 			})
 			_, _ = w.Write(payload)
-		case "/embeddings":
+		case strings.HasSuffix(r.URL.Path, "/embeddings"):
 			s.embedBodies = append(s.embedBodies, body.String())
 			vector := s.embedVectors[0]
 			if len(s.embedVectors) > 1 {
@@ -497,5 +498,72 @@ func TestAnalysisRunnerRejectsTamperedKeyframes(t *testing.T) {
 	}
 	if server.visionRequestCount() != 0 {
 		t.Fatal("tampered keyframes must never be uploaded")
+	}
+}
+
+type concurrentVision struct {
+	inflight atomic.Int32
+	peak     atomic.Int32
+}
+
+func (v *concurrentVision) Analyze(ctx context.Context, keyframes []KeyframeInput) (ShotAnalysis, error) {
+	current := v.inflight.Add(1)
+	for {
+		peak := v.peak.Load()
+		if current <= peak || v.peak.CompareAndSwap(peak, current) {
+			break
+		}
+	}
+	time.Sleep(80 * time.Millisecond)
+	v.inflight.Add(-1)
+	return ShotAnalysis{
+		Summary: "a person reviews documents at a desk", Mood: "calm", Setting: "office",
+		PeopleCount: 1, MotionLevel: "low",
+	}, nil
+}
+
+type staticEmbedder struct{}
+
+func (staticEmbedder) Embed(context.Context, string) ([]float32, error) {
+	return []float32{0.1, 0.2, 0.3}, nil
+}
+
+func TestClampAnalysisConcurrency(t *testing.T) {
+	if got := ClampAnalysisConcurrency(0); got != DefaultAnalysisConcurrency {
+		t.Fatalf("zero=%d", got)
+	}
+	if got := ClampAnalysisConcurrency(1000); got != 1000 {
+		t.Fatalf("1000=%d", got)
+	}
+	if got := ClampAnalysisConcurrency(1001); got != MaxAnalysisConcurrency {
+		t.Fatalf("over max=%d", got)
+	}
+}
+
+func TestAnalysisRunnerRunsShotsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepository(t)
+	for i := 0; i < 4; i++ {
+		seedAnalyzableShot(t, repo, fmt.Sprintf("parallel-%d", i), SceneBoundary{InMS: 0, OutMS: 4000})
+	}
+	vision := &concurrentVision{}
+	runner, err := NewAnalysisRunnerWithConcurrency(repo, vision, staticEmbedder{}, "test-embed-model", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	summary, err := runner.Run(ctx)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.AnalyzedShots != 4 || summary.FailedShots != 0 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	if vision.peak.Load() < 3 {
+		t.Fatalf("peak concurrency=%d, want at least 3", vision.peak.Load())
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("elapsed %s, concurrent analysis should finish near one shot latency", elapsed)
 	}
 }

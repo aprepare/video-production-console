@@ -111,6 +111,7 @@ type ManifestSettings struct {
 	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
 	DraftDisplayName     string `json:"draft_display_name,omitempty"`
 	RevisionNotes        string `json:"revision_notes,omitempty"`
+	RemixPromptStyle     string `json:"remix_prompt_style,omitempty"`
 	MediaCatalogPath     string `json:"media_catalog_path,omitempty"`
 	FFmpegPath           string `json:"ffmpeg_path,omitempty"`
 	FFprobePath          string `json:"ffprobe_path,omitempty"`
@@ -135,7 +136,7 @@ type BuildManifestInput struct {
 }
 
 func BuildManifest(in BuildManifestInput) (TaskManifest, error) {
-	resolved, err := ResolveAction(in.Action)
+	resolved, err := ResolveMontageSkill(in.Action, in.Task.SkillName)
 	if err != nil {
 		return TaskManifest{}, err
 	}
@@ -281,7 +282,7 @@ func WriteManifest(manifest TaskManifest, roots ManifestRoots) (string, error) {
 	if err := validateManifestSchemaValues(manifest); err != nil {
 		return "", err
 	}
-	resolved, err := ResolveAction(manifest.Action)
+	resolved, err := ResolveMontageSkill(manifest.Action, manifest.Skill)
 	if err != nil {
 		return "", err
 	}

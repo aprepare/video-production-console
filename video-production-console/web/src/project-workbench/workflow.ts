@@ -63,20 +63,29 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
   return [...new Set([...backendMissing, ...computed])].filter((type) => type !== "final_video");
 }
 
+export function montageInputsReady(detail: ProjectDetail): boolean {
+  return isReady(detail, "continuous_script")
+    && isReady(detail, "narration")
+    && isReady(detail, "subtitle_srt")
+    && isBackgroundReady(detail);
+}
+
+export function canRemakeMontage(detail: ProjectDetail): boolean {
+  if (!montageInputsReady(detail)) return false;
+  return isReady(detail, "mix_draft") || deriveProductionStage(detail) === "published";
+}
+
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
   const stage = deriveProductionStage(detail);
   if (stage === "published") return null;
-  const canStartTopicRemix = Boolean(detail.topic_context || detail.active_workflow);
   const base: PrimaryAction = stage === "script"
     ? isReady(detail, "source_script")
       ? { id: "start-source-remix", label: "开始正式二创", disabled: false }
-      : canStartTopicRemix
-        ? { id: "start-remix", label: "开始二创文案", disabled: false }
-        : { id: "start-source-remix", label: "先粘贴同行原文", disabled: true }
+      : { id: "start-source-remix", label: "先粘贴同行原文", disabled: true }
     : stage === "assets"
       ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
       : stage === "mixing"
-        ? { id: "start-mixing", label: "开始混剪", disabled: false }
+        ? { id: "start-mixing", label: "开始风景混剪", disabled: false }
         : { id: "publish", label: "确认已发布", disabled: false };
   const workflow = detail.active_workflow;
   const activeLabel = workflow?.state === "running" ? activeStepLabels[workflow.current_step] : undefined;

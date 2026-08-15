@@ -42,6 +42,11 @@ export const taskPhaseStateLabels: Record<string, string> = {
   interrupted: "已中断",
 };
 
+export function taskModelLabel(task: { type?: string; model?: string; reasoning_effort?: string }) {
+  if (task.type === "remix") return task.model || "";
+  return [task.model, task.reasoning_effort].filter(Boolean).join(" · ");
+}
+
 export const taskActionLabels: Record<string, string> = {
   "topic.brainstorm": "选题分析",
   "topic.commit": "保存选题卡",
@@ -102,6 +107,9 @@ export function montageHeadline(montage: MontageResult, phase: string) {
 }
 
 export function taskTitle(task: Task) {
+  if (task.action === "montage.execute" && task.skill_name === "jianying-movie-montage") {
+    return "电影混剪草稿";
+  }
   return taskActionLabels[task.action || ""] || task.skill_name || task.type || "Codex 任务";
 }
 
@@ -131,10 +139,30 @@ export function taskMessageContent(content: string) {
   }
 }
 
-export function taskEventProgress(event: TaskEvent) {
+export function phaseDisplayName(phaseKey: string, displayName: string, action = "") {
+  if (phaseKey === "codex_execution" || displayName === "Codex 执行") return "模型执行";
+  if (
+    action.startsWith("remix.") &&
+    (phaseKey === "web_research" || displayName === "联网研究")
+  ) {
+    return "模型执行";
+  }
+  return displayName || phaseKey || "未命名阶段";
+}
+
+export function remixProgressText(text: string) {
+  if (/Grok 联网|爆款库|选题/.test(text)) return "正在写二创文案";
+  return text;
+}
+
+export function taskEventProgress(event: TaskEvent, action = "") {
   const kind = event.kind || "";
   const displayText = event.display_text || "";
   const raw = event.raw_json || "";
+  if (action.startsWith("remix.")) {
+    if (displayText) return remixProgressText(taskMessageContent(displayText));
+    return "正在写二创文案";
+  }
   if (displayText) return taskMessageContent(displayText);
   if (/baokuan_search_materials/i.test(raw)) return "正在检索爆款库素材";
   if (/baokuan_list_snippets/i.test(raw)) return "正在筛选可借鉴的爆款片段";
@@ -142,7 +170,7 @@ export function taskEventProgress(event: TaskEvent) {
     /thread\.started|turn\.started/i.test(kind) ||
     /thread\.started|turn\.started/i.test(raw)
   )
-    return "Codex 已启动，正在分析选题";
+    return "模型已启动，正在写二创文案";
   if (/turn\.completed/i.test(kind) || /turn\.completed/i.test(raw))
     return "正在整理候选选题";
   if (/error|failed/i.test(kind) || /error|failed/i.test(raw))
@@ -155,10 +183,12 @@ export function taskEventProgress(event: TaskEvent) {
 export function taskProgressStatus(task: Task) {
   if (task.status === "failed") return task.error_message || "任务失败，请查看任务详情";
   if (task.status === "awaiting_input" || task.status === "waiting_input")
-    return "Codex 正在等待你的回复";
+    return "正在等待你的回复";
   if (task.status === "completed") {
     if (task.action === "topic.brainstorm") return "候选选题已生成";
-    if (task.action === "montage.execute") return "混剪草稿已处理完成";
+    if (task.action === "montage.execute") {
+      return task.skill_name === "jianying-movie-montage" ? "电影混剪草稿已处理完成" : "混剪草稿已处理完成";
+    }
     return "任务已完成";
   }
   return statusLabels[task.status] || task.status;
@@ -182,8 +212,12 @@ export function taskTimeline(task: Task): string[] {
     .filter((event) => event.title)
     .sort((left, right) => left.sequence - right.sequence);
   const messages = semantic.length
-    ? semantic.map((event) => event.title)
-    : (task.events || []).map(taskEventProgress);
+    ? semantic.map((event) =>
+        (task.action || "").startsWith("remix.")
+          ? remixProgressText(event.title)
+          : event.title,
+      )
+    : (task.events || []).map((event) => taskEventProgress(event, task.action));
   const unique = messages.filter(
     (message, index) => message && messages.indexOf(message) === index,
   );

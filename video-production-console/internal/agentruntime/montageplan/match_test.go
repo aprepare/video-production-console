@@ -184,13 +184,43 @@ func (f fakeCatalog) RecallReadyShots(context.Context, int) ([]matchShot, error)
 	return f.shots, f.err
 }
 
+func landscapeCatalogShots() []matchShot {
+	out := make([]matchShot, 0, 12)
+	kinds := []mediaKind{mediaKindBroll, mediaKindMovie, mediaKindImage}
+	for i := 0; i < 12; i++ {
+		kind := kinds[i%len(kinds)]
+		item := mediaItem{
+			ID:              fmt.Sprintf("src-land-%02d", i),
+			Kind:            kind,
+			RelativePath:    fmt.Sprintf("landscape/%02d.mp4", i),
+			DurationSeconds: 40,
+			ShotID:          fmt.Sprintf("shot-land-%02d", i),
+			Category:        "Nature_Landscape",
+			Tags:            []string{"风景", "景观"},
+		}
+		if kind == mediaKindMovie {
+			item.SourceInSeconds = 10
+			item.SourceOutSeconds = 22
+		}
+		if kind == mediaKindImage {
+			item.DurationSeconds = 0
+			item.RelativePath = fmt.Sprintf("landscape/%02d.png", i)
+		}
+		out = append(out, matchShot{
+			item: item, tags: []string{"风景", "景观"}, mood: "neutral",
+			setting: "nature", embedding: []float32{0.1, 0.1, 0.1},
+		})
+	}
+	return out
+}
+
 func TestBuildV2UsesCatalogMatchEvidence(t *testing.T) {
 	manifest, planPath := v2Fixture(t)
 	err := BuildV2(Options{
 		ManifestPath: manifest,
 		PlanPath:     planPath,
 		Duration:     func(string) (float64, error) { return 16, nil },
-		Catalog:      fakeCatalog{shots: expandFixtureLibrary(fixtureShots())},
+		Catalog:      fakeCatalog{shots: append(expandFixtureLibrary(fixtureShots()), landscapeCatalogShots()...)},
 		Analyzer:     LocalIntentAnalyzer{},
 		Embedder:     mapEmbedder{},
 	})
@@ -214,6 +244,108 @@ func TestBuildV2UsesCatalogMatchEvidence(t *testing.T) {
 	}
 	if !sawReal {
 		t.Fatalf("expected real match evidence, notes=%v first=%#v", plan.PlannerNotes, plan.Timeline[0].Match)
+	}
+	for _, shot := range plan.Timeline {
+		if strings.HasPrefix(shot.SourceID, "src-bank") || strings.HasPrefix(shot.SourceID, "src-door") ||
+			strings.HasPrefix(shot.SourceID, "src-night") || strings.HasPrefix(shot.SourceID, "src-traffic") {
+			t.Fatalf("non-landscape catalog shot leaked into timeline: %s", shot.SourceID)
+		}
+	}
+}
+
+func TestBuildV2DropsNonLandscapeCatalogMatches(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 16, nil },
+		Catalog:      fakeCatalog{shots: expandFixtureLibrary(fixtureShots())},
+		Analyzer:     LocalIntentAnalyzer{},
+		Embedder:     mapEmbedder{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if !strings.Contains(joined, "match_candidates_not_landscape") {
+		t.Fatalf("expected landscape fallback note, got %v", plan.PlannerNotes)
+	}
+	for _, shot := range plan.Timeline {
+		switch shot.SourceID {
+		case "broll-03", "broll-07", "broll-11", "movie-02-0", "movie-02-1", "movie-05-0", "movie-05-1", "image-09":
+			t.Fatalf("fallback used a non-landscape index clip %q", shot.SourceID)
+		}
+		if strings.HasPrefix(shot.SourceID, "src-") {
+			t.Fatalf("office/city catalog shot leaked after filter: %s", shot.SourceID)
+		}
+	}
+}
+
+func TestBuildV2MovieCatalogKeepsNonLandscapeShots(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 16, nil },
+		Catalog:      fakeCatalog{shots: expandFixtureLibrary(fixtureShots())},
+		Analyzer:     LocalIntentAnalyzer{},
+		Embedder:     mapEmbedder{},
+		SelectMode:   SelectModeMovieCatalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.MediaMixPolicy.Preset != mixPresetMovieCatalog {
+		t.Fatalf("preset=%q", plan.MediaMixPolicy.Preset)
+	}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if strings.Contains(joined, "match_candidates_not_landscape") {
+		t.Fatalf("movie catalog must not apply landscape filter notes: %v", plan.PlannerNotes)
+	}
+	sawMovie := false
+	for _, shot := range plan.Timeline {
+		if shot.MediaKind == string(mediaKindMovie) {
+			sawMovie = true
+		}
+		if strings.HasPrefix(shot.SourceID, "src-bank") || strings.HasPrefix(shot.SourceID, "src-door") ||
+			strings.HasPrefix(shot.SourceID, "src-night") || strings.HasPrefix(shot.SourceID, "src-traffic") {
+			return
+		}
+	}
+	if !sawMovie {
+		t.Fatalf("expected movie catalog shots on the timeline, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
+	}
+}
+
+func TestBuildV2MovieCatalogEmptyFailsWithoutLandscapeFallback(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 16, nil },
+		Catalog:      fakeCatalog{},
+		Analyzer:     LocalIntentAnalyzer{},
+		Embedder:     mapEmbedder{},
+		SelectMode:   SelectModeMovieCatalog,
+	})
+	if err == nil || !strings.Contains(err.Error(), "movie catalog produced no usable shots") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

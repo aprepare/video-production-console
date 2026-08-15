@@ -740,7 +740,7 @@ func draftDisplayNameFromManifest(path, taskID string) (string, error) {
 			DraftDisplayName json.RawMessage `json:"draft_display_name"`
 		} `json:"non_secret_settings"`
 	}
-	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != "2.0" || manifest.Skill != "jianying-montage-draft" || manifest.Action != string(domain.ActionMontageExecute) || manifest.TaskID != taskID || manifest.JobID != taskID || !sameStorePath(manifest.OutputDir, filepath.Join(filepath.Dir(path), "output")) {
+	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != "2.0" || !isMontageDraftSkill(manifest.Skill) || manifest.Action != string(domain.ActionMontageExecute) || manifest.TaskID != taskID || manifest.JobID != taskID || !sameStorePath(manifest.OutputDir, filepath.Join(filepath.Dir(path), "output")) {
 		return "", os.ErrInvalid
 	}
 	if len(manifest.Settings.DraftDisplayName) == 0 {
@@ -751,6 +751,15 @@ func draftDisplayNameFromManifest(path, taskID string) (string, error) {
 		return "", os.ErrInvalid
 	}
 	return displayName, nil
+}
+
+func isMontageDraftSkill(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "jianying-montage-draft", "jianying-movie-montage":
+		return true
+	default:
+		return false
+	}
 }
 
 func validDraftDisplayName(value string) bool {

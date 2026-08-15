@@ -53,6 +53,7 @@ const errorCodeMessages: Record<string, string> = {
   catalog_import_invalid: "导入请求无效，请检查文件或来源信息",
   rights_unknown: "部分素材缺少版权信息，导入时请补齐授权",
   index_failed: "上次建库未完成，请重新开始建库",
+  analysis_all_failed: "识别全部失败。请确认视觉/向量地址带 /v1，再点开始建库重试失败镜头",
   probe_failed: "视频探测失败，请检查文件与 FFmpeg 配置",
   image_shot_failed: "图片登记失败，可尝试单项重试",
   source_failed: "素材处理失败，可尝试单项重试",
@@ -204,6 +205,9 @@ export function MediaLibraryPanel({ api, onClose }: MediaLibraryPanelProps) {
               >
                 开始建库
               </button>
+              <p className="muted">
+                本机建库会扫描 originals、切镜抽帧、视觉打标和向量。建好后混剪会自动从库里检索镜头，不必再手工选片。
+              </p>
             </div>
             <div className="media-stats">
               <div className="media-stat"><strong>{status.counts.sources}</strong><span>素材源</span></div>

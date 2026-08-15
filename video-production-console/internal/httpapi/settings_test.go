@@ -222,6 +222,7 @@ func newSettingsHTTPTest(t *testing.T, options consoleSettings.Options) (http.Ha
 		BaokuanBaseURL: "http://127.0.0.1:2022", BaokuanMCPExecutable: filepath.Join(root, "baokuan.exe"),
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
+		ImageGenerationAttempts: 2,
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 	}

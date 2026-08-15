@@ -38,7 +38,7 @@ var phaseNames = map[string]string{
 	"media_search":         "媒体素材检索",
 	"production_plan":      "生产计划校验",
 	"plaintext_validation": "混剪草稿校验",
-	"codex_execution":      "Codex 执行",
+	"codex_execution":      "模型执行",
 }
 
 // Classify maps only explicitly recognized, observable protocol evidence.

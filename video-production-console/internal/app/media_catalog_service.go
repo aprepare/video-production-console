@@ -174,18 +174,50 @@ func (s *mediaCatalogService) StartIndex(ctx context.Context) (httpapi.CatalogSt
 	return s.snapshot(ctx, repo)
 }
 
-// runIndex executes the whole build outside the request. The request context
-// must not cancel a library build that other clients can already observe.
+// runIndex executes ingest → probe → analysis outside the request. The
+// request context must not cancel a library build that other clients can
+// already observe. After this finishes, montage tasks can recall ready shots
+// from catalog.db.
 func (s *mediaCatalogService) runIndex(repo *mediacatalog.Repository) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Hour)
 	defer cancel()
-	_, err := mediacatalog.NewIndexer(repo).Run(ctx)
+	runtime, runtimeErr := s.settings.Runtime(ctx)
+	var err error
+	if runtimeErr != nil {
+		err = runtimeErr
+	} else {
+		_, err = mediacatalog.RunHostedBuild(ctx, repo, mediacatalog.HostedBuildConfig{
+			FFmpegPath:          runtime.FFmpegPath,
+			FFprobePath:         runtime.FFprobePath,
+			VisionBaseURL:       runtime.VisionBaseURL,
+			VisionModel:         runtime.VisionModel,
+			VisionAPIKey:        runtime.VisionAPIKey,
+			EmbeddingBaseURL:    runtime.EmbeddingBaseURL,
+			EmbeddingModel:      runtime.EmbeddingModel,
+			EmbeddingAPIKey:     runtime.EmbeddingAPIKey,
+			AnalysisConcurrency: 64,
+			OnPhase: func(phase string) {
+				s.mu.Lock()
+				if s.activeJob != nil {
+					s.activeJob.Phase = phase
+				}
+				s.mu.Unlock()
+			},
+		})
+	}
 	s.mu.Lock()
 	s.activeJob = nil
-	if err != nil {
-		s.lastRunError = "index_failed"
-	} else {
+	switch {
+	case err == nil:
 		s.lastRunError = ""
+	case errors.Is(err, mediacatalog.ErrFFmpegRequired):
+		s.lastRunError = "ffmpeg_not_configured"
+	case errors.Is(err, mediacatalog.ErrVisionRequired):
+		s.lastRunError = "vision_not_configured"
+	case errors.Is(err, mediacatalog.ErrAnalysisAllFailed):
+		s.lastRunError = "analysis_all_failed"
+	default:
+		s.lastRunError = "index_failed"
 	}
 	s.mu.Unlock()
 }
@@ -242,6 +274,14 @@ func (s *mediaCatalogService) RetrySource(ctx context.Context, id string) (httpa
 	// code also removes it from the warning aggregation.
 	if err := repo.UpdateSourceStatus(ctx, id, mediacatalog.SourceStatusPendingProbe, ""); err != nil {
 		return httpapi.CatalogStatus{}, err
+	}
+	s.mu.Lock()
+	if s.activeJob == nil {
+		s.activeJob = &httpapi.CatalogActiveJob{ID: uuid.NewString(), Phase: mediacatalog.PhaseIngest}
+		s.mu.Unlock()
+		go s.runIndex(repo)
+	} else {
+		s.mu.Unlock()
 	}
 	return s.snapshot(ctx, repo)
 }

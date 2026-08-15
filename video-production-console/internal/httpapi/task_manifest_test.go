@@ -394,6 +394,52 @@ func TestTaskManifestPreparerRejectsMissingIndexedClipBeforePersist(t *testing.T
 	}
 }
 
+func TestTaskManifestPreparerRejectsMissingMovieCatalog(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	task.Type = "movie_montage"
+	task.SkillName = "jianying-movie-montage"
+	snapshot := preparer.skills.(manifestTestSkills).snapshot
+	snapshot.Name = "jianying-movie-montage"
+	preparer.skills = manifestTestSkills{snapshot: snapshot}
+	err := preparer.Prepare(context.Background(), task, TaskManifestRequest{})
+	if err == nil || !strings.Contains(err.Error(), "movie catalog preflight") {
+		t.Fatalf("preflight error=%v", err)
+	}
+	if _, statErr := os.Stat(manifestPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("manifest must not be written after failed movie catalog preflight: %v", statErr)
+	}
+}
+
+func TestTaskManifestPreparerAcceptsMovieCatalogFile(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	task.Type = "movie_montage"
+	task.SkillName = "jianying-movie-montage"
+	snapshot := preparer.skills.(manifestTestSkills).snapshot
+	snapshot.Name = "jianying-movie-montage"
+	preparer.skills = manifestTestSkills{snapshot: snapshot}
+	runtime := preparer.settings.(manifestTestSettings).runtime
+	catalog := filepath.Join(runtime.MediaRoot, "catalog.db")
+	if err := os.WriteFile(catalog, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.MediaCatalogPath = catalog
+	preparer.settings = manifestTestSettings{runtime: runtime}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Skill != "jianying-movie-montage" {
+		t.Fatalf("manifest skill=%q", manifest.Skill)
+	}
+}
+
 func TestTaskManifestPreparerLogsPreflightRejectionWithTaskID(t *testing.T) {
 	preparer, task, _ := prepareMontageManifestFixture(t, false)
 	runtime := preparer.settings.(manifestTestSettings).runtime
@@ -517,6 +563,42 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 	if manifest.Action != domain.ActionRemixEnhanced || manifest.Skill != "finance-viral-remix" || len(manifest.Inputs) != 1 || manifest.Inputs[0].Role != "primary_source" {
 		t.Fatalf("manifest=%+v", manifest)
+	}
+	if manifest.NonSecretSettings.RemixPromptStyle != "rewrite" {
+		t.Fatalf("default remix style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+}
+
+func TestTaskManifestPreparerFreezesWashRemixPromptStyle(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{RemixPromptStyle: "wash"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.RemixPromptStyle != "wash" {
+		t.Fatalf("remix style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+}
+
+func TestCreateRemixTaskRejectsUnknownPromptStyle(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, true)
+	handler := NewTasksHandler(db.db, &manifestTestScheduler{}, nil, nil)
+	body := `{"account_id":"` + accountID + `","type":"remix","action":"remix.standard","prompt":"go","remix_prompt_style":"paraphrase"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "invalid_remix_prompt_style") {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }
 

@@ -189,6 +189,7 @@ export function IdeaPlannerDialog({
                 onChange={onTaskModelChange}
                 defaults={taskModelDefaults}
                 labelPrefix="选题"
+                purpose="remix"
               />
               <label htmlFor="idea-message-input">发送选题消息</label>
               <input

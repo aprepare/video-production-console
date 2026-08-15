@@ -879,6 +879,28 @@ ALTER TABLE image_projects_v2 RENAME TO image_projects;
 ALTER TABLE image_project_items_v2 RENAME TO image_project_items;
 CREATE INDEX image_projects_updated_idx ON image_projects(updated_at DESC, id);
 CREATE INDEX image_project_items_project_idx ON image_project_items(project_id, sequence);`,
+	`ALTER TABLE image_projects ADD COLUMN selected_position INTEGER;
+CREATE TABLE image_project_publishing_candidates (
+ id TEXT PRIMARY KEY,
+ project_id TEXT NOT NULL REFERENCES image_projects(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 5),
+ title TEXT NOT NULL,
+ description TEXT NOT NULL,
+ UNIQUE(project_id, position)
+);
+CREATE INDEX image_project_publishing_project_idx ON image_project_publishing_candidates(project_id, position);`,
+	`ALTER TABLE image_projects ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'manual' CHECK(run_mode IN ('manual','quick'));
+ALTER TABLE image_projects ADD COLUMN run_phase TEXT NOT NULL DEFAULT 'idle' CHECK(run_phase IN ('idle','planning','prompting','imaging','completed'));
+ALTER TABLE image_projects ADD COLUMN run_status TEXT NOT NULL DEFAULT 'idle' CHECK(run_status IN ('idle','running','failed','completed','interrupted'));
+ALTER TABLE image_projects ADD COLUMN phase_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_projects ADD COLUMN publishing_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_projects ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0 CHECK(success_count >= 0);
+ALTER TABLE image_projects ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0 CHECK(failure_count >= 0);
+ALTER TABLE image_projects ADD COLUMN image_attempts INTEGER NOT NULL DEFAULT 2 CHECK(image_attempts BETWEEN 1 AND 4);
+ALTER TABLE image_projects ADD COLUMN text_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_projects ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_projects ADD COLUMN image_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_project_items ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0);`,
 }
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup

@@ -48,6 +48,68 @@ func TestLLMRuntimeFromEnvDefaultsToCodex(t *testing.T) {
 	}
 }
 
+func TestLLMRuntimePreferredUsesGrokWhenEnvEmpty(t *testing.T) {
+	t.Setenv(EnvLLMRuntime, "")
+	t.Setenv(EnvOpenAIBaseURL, "")
+	t.Setenv(EnvOpenAIAPIKey, "")
+	t.Setenv("GROK_SEARCH_BASE_URL", "")
+	t.Setenv("GROK_SEARCH_API_KEY", "")
+	t.Setenv("REMIX_BASE_URL", "")
+	t.Setenv("REMIX_API_KEY", "")
+	t.Setenv("REMIX_MODEL", "")
+	if got := LLMRuntimePreferred(nil); got != RuntimeCodex {
+		t.Fatalf("empty secrets = %q", got)
+	}
+	if got := LLMRuntimePreferred(map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://127.0.0.1:2001",
+		"GROK_SEARCH_API_KEY":  "test-key",
+		"GROK_SEARCH_MODEL":    "cursor-grok-4.6-xhigh-fast",
+	}); got != RuntimeOpenAI {
+		t.Fatalf("grok secrets = %q", got)
+	}
+	t.Setenv(EnvLLMRuntime, "codex")
+	if got := LLMRuntimePreferred(map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://127.0.0.1:2001",
+		"GROK_SEARCH_API_KEY":  "test-key",
+	}); got != RuntimeCodex {
+		t.Fatalf("explicit codex = %q", got)
+	}
+}
+
+func TestResolveOpenAICompatConfigPrefersRemixSettings(t *testing.T) {
+	t.Setenv(EnvOpenAIBaseURL, "")
+	t.Setenv(EnvOpenAIAPIKey, "")
+	t.Setenv("GROK_SEARCH_BASE_URL", "")
+	t.Setenv("GROK_SEARCH_API_KEY", "")
+	t.Setenv("GROK_SEARCH_MODEL", "")
+	t.Setenv("REMIX_BASE_URL", "")
+	t.Setenv("REMIX_API_KEY", "")
+	t.Setenv("REMIX_MODEL", "")
+	baseURL, apiKey, model, ok := ResolveOpenAICompatConfig(map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://grok.invalid/v1",
+		"GROK_SEARCH_API_KEY":  "grok-key",
+		"GROK_SEARCH_MODEL":    "grok-old",
+		"REMIX_BASE_URL":       "http://23.138.12.112:2001/v1",
+		"REMIX_API_KEY":        "remix-key",
+		"REMIX_MODEL":          "gpt-5.6-sol",
+	})
+	if !ok || baseURL != "http://23.138.12.112:2001/v1" || apiKey != "remix-key" || model != "gpt-5.6-sol" {
+		t.Fatalf("remix config = %q %q %q ok=%t", baseURL, apiKey, model, ok)
+	}
+}
+
+func TestCompatModelNameKeepsCursorPrefix(t *testing.T) {
+	if got := CompatModelName("cursor-grok-4.6-xhigh-fast", "grok-fallback"); got != "cursor-grok-4.6-xhigh-fast" {
+		t.Fatalf("custom cursor model rewritten: %q", got)
+	}
+	if got := CompatModelName("gpt-5.6-sol", "cursor-grok-4.6-xhigh-fast"); got != "cursor-grok-4.6-xhigh-fast" {
+		t.Fatalf("codex default not substituted: %q", got)
+	}
+	if got := CompatModelName("", "cursor-grok-4.6-xhigh-fast"); got != "cursor-grok-4.6-xhigh-fast" {
+		t.Fatalf("empty task model = %q", got)
+	}
+}
+
 func TestSelectRemixOpenAIWhenPreferred(t *testing.T) {
 	if got := Select(domain.ActionRemixStandard, RuntimeOpenAI); got != RuntimeOpenAI {
 		t.Fatalf("got %q", got)

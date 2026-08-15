@@ -687,7 +687,7 @@ func (b *Broker) consumeNotifications(notifications <-chan codexapp.Notification
 			if err := b.persistAssistantNotification(context.Background(), sessionID, turnID, notification); err != nil {
 				b.recordCompletionError(sessionID, turnID, "assistant_persist_failed", err)
 			}
-			if err := b.projectNotification(context.Background(), sessionID, notification); err != nil {
+			if err := b.projectNotification(context.Background(), sessionID, turnID, notification); err != nil {
 				b.recordCompletionError(sessionID, turnID, "semantic_projection_failed", err)
 			}
 		}
@@ -725,7 +725,7 @@ func (b *Broker) interruptActiveTimings(ctx context.Context) error {
 			result = errors.Join(result, err)
 			continue
 		}
-		classification := phasetiming.Classification{PhaseKey: "codex_execution", DisplayName: "Codex 执行", Boundary: phasetiming.BoundaryInterrupt, ExternalItemID: turnID, DetailJSON: `{"classification":"turn_boundary"}`}
+		classification := phasetiming.Classification{PhaseKey: "codex_execution", DisplayName: "模型执行", Boundary: phasetiming.BoundaryInterrupt, ExternalItemID: turnID, DetailJSON: `{"classification":"turn_boundary"}`}
 		result = errors.Join(result, phasetiming.Record(ctx, store.NewTaskTimingRepository(b.repo.DB()), task.ID, domain.PhaseSourceAppServer, classification, time.Now().UTC()))
 	}
 	return result
@@ -780,8 +780,14 @@ func turnCompletionFailure(raw json.RawMessage) error {
 	return errors.New(strings.TrimSpace(completionErr.Message))
 }
 
-func (b *Broker) projectNotification(ctx context.Context, sessionID string, notification codexapp.Notification) error {
-	projected := progress.Project(progress.Input{Method: notification.Method, RawJSON: string(notification.Params)})
+func (b *Broker) projectNotification(ctx context.Context, sessionID, turnID string, notification codexapp.Notification) error {
+	var action domain.TaskAction
+	if strings.TrimSpace(turnID) != "" {
+		if task, err := store.NewTaskRepository(b.repo.DB()).GetByCodexTurn(ctx, turnID); err == nil {
+			action = task.Action
+		}
+	}
+	projected := progress.Project(progress.Input{Action: action, Method: notification.Method, RawJSON: string(notification.Params)})
 	if !projected.Visible {
 		return nil
 	}

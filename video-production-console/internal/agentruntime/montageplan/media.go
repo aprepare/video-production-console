@@ -102,6 +102,42 @@ func normalizeMediaItem(item *mediaItem) error {
 
 // resolveMediaPath joins a declared relative path with the canonical media
 // root and rejects absolute paths and any traversal outside the root.
+func isLandscapeItem(item mediaItem) bool {
+	raw := strings.TrimSpace(item.Category)
+	key := strings.ToLower(strings.ReplaceAll(raw, " ", "_"))
+	switch key {
+	case "nature_landscape", "scenery", "landscape", "nature":
+		return true
+	}
+	if strings.Contains(raw, "风景") || strings.Contains(raw, "景观") {
+		return true
+	}
+	path := strings.ToLower(filepath.ToSlash(item.RelativePath + " " + item.AbsPath))
+	for _, token := range []string{"nature_landscape", "/scenery/", "/landscape/", "风景", "景观"} {
+		if strings.Contains(path, token) {
+			return true
+		}
+	}
+	for _, tag := range item.Tags {
+		tag = strings.TrimSpace(tag)
+		lower := strings.ToLower(tag)
+		if lower == "landscape" || lower == "scenery" || strings.Contains(tag, "风景") || strings.Contains(tag, "景观") {
+			return true
+		}
+	}
+	return false
+}
+
+func filterLandscapeCandidates(candidates []rankedCandidate) []rankedCandidate {
+	out := make([]rankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if isLandscapeItem(candidate.Item) {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
 func resolveMediaPath(mediaRoot, relative string) (string, error) {
 	cleaned := filepath.FromSlash(strings.TrimSpace(relative))
 	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" ||

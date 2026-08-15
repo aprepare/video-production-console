@@ -74,7 +74,7 @@ func NewService(repo Repository, optionValues ...Options) *Service {
 }
 
 func DefaultRoots(skillsBase string) []Root {
-	names := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"}
+	names := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
 	roots := make([]Root, 0, len(names))
 	for _, name := range names {
 		roots = append(roots, Root{Name: name, Path: filepath.Join(skillsBase, name)})
@@ -224,6 +224,9 @@ func (s *Service) ScanAll(ctx context.Context) ([]domain.SkillSnapshot, error) {
 	for _, root := range s.roots {
 		snapshot, err := s.ScanContext(ctx, root.Name, root.Path)
 		if err != nil {
+			if root.Name == "jianying-movie-montage" && errors.Is(err, ErrSkillNotFound) {
+				continue
+			}
 			return nil, err
 		}
 		snapshots = append(snapshots, snapshot)

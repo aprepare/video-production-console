@@ -29,7 +29,7 @@ import (
 func TestNewServerHasDefensiveTimeouts(t *testing.T) {
 	server := newServer("127.0.0.1:2030", http.NewServeMux())
 	if server.ReadHeaderTimeout != 10*time.Second || server.ReadTimeout != 2*time.Minute ||
-		server.WriteTimeout != 2*time.Minute || server.IdleTimeout != time.Minute || server.MaxHeaderBytes != 1<<20 {
+		server.WriteTimeout != 15*time.Minute || server.IdleTimeout != time.Minute || server.MaxHeaderBytes != 1<<20 {
 		t.Fatalf("server limits = header:%v read:%v write:%v idle:%v max-header:%d",
 			server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout, server.MaxHeaderBytes)
 	}
@@ -279,7 +279,21 @@ func TestCodexCommandFactoryUsesPreparedManifestAction(t *testing.T) {
 	dataRoot := t.TempDir()
 	schema := filepath.Join(t.TempDir(), "codex-result.schema.json")
 	base := testCodexCommandConfig(t, schema)
-	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, nil)
+	base.SecretEnvironment = map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://127.0.0.1:2001",
+		"GROK_SEARCH_API_KEY":  "test-key",
+		"GROK_SEARCH_MODEL":    "gpt-5.6-sol",
+	}
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		if name != "finance-viral-remix" {
+			t.Fatalf("skill=%q", name)
+		}
+		return skillRoot, nil
+	})
 
 	projectID := uuid.NewString()
 	accountID := uuid.NewString()
@@ -321,12 +335,12 @@ func TestCodexCommandFactoryUsesPreparedManifestAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("make command: %v", err)
 	}
-	prompt, err := codex.StdinText(cmd.Stdin)
-	if err != nil {
-		t.Fatal(err)
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "task_manifest.json") {
+		t.Fatalf("remix must use openai-compat with prepared manifest, got %#v", cmd.Args)
 	}
-	if !strings.Contains(prompt, "action=enhanced") || strings.Contains(prompt, "action=standard") {
-		t.Fatalf("command did not use manifest action: %q", prompt)
+	if strings.Contains(joined, "codex.exe") || strings.Contains(joined, " exec ") {
+		t.Fatalf("remix launched Codex CLI: %#v", cmd.Args)
 	}
 }
 
@@ -545,10 +559,98 @@ func TestCodexCommandFactoryUsesOpenAICompatWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestCodexCommandFactoryUsesGrokSettingsWhenEnvEmpty(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "")
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	base.SecretEnvironment = map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://23.138.12.112:2001",
+		"GROK_SEARCH_API_KEY":  "test-key",
+		"GROK_SEARCH_MODEL":    "cursor-grok-4.6-xhigh-fast",
+	}
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		if name != "finance-viral-remix" {
+			t.Fatalf("skill=%q", name)
+		}
+		return skillRoot, nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-grok-1"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-5.6-sol"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-grok-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "openai-compat-run") || !strings.Contains(joined, "cursor-grok-4.6-xhigh-fast") {
+		t.Fatalf("args=%#v", cmd.Args)
+	}
+	if strings.Contains(joined, "gpt-5.6-sol") {
+		t.Fatalf("codex default model leaked into grok request: %#v", cmd.Args)
+	}
+}
+
+func TestCodexCommandFactoryKeepsCursorGrokModelName(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "openai_compat")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "http://23.138.12.112:2001")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "test-key")
+	dataRoot := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "finance-viral-remix")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(name string) (string, error) {
+		return skillRoot, nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-cursor-1"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "cursor-grok-4.6-xhigh-fast"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-cursor-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--model") || !strings.Contains(joined, "cursor-grok-4.6-xhigh-fast") {
+		t.Fatalf("cursor prefix stripped: %#v", cmd.Args)
+	}
+}
+
 func TestCodexCommandFactoryFallsBackWhenOpenAIKeyMissing(t *testing.T) {
 	t.Setenv(agentruntime.EnvLLMRuntime, "openai_compat")
 	t.Setenv(agentruntime.EnvOpenAIBaseURL, "https://example.invalid/v1")
 	t.Setenv(agentruntime.EnvOpenAIAPIKey, "")
+	t.Setenv("GROK_SEARCH_BASE_URL", "")
+	t.Setenv("GROK_SEARCH_API_KEY", "")
+	t.Setenv("GROK_SEARCH_MODEL", "")
 	dataRoot := t.TempDir()
 	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
 	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
@@ -565,11 +667,11 @@ func TestCodexCommandFactoryFallsBackWhenOpenAIKeyMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd, _, err := makeCommand(task)
-	if err != nil {
-		t.Fatalf("makeCommand: %v", err)
+	if err == nil {
+		t.Fatalf("remix must not fall back to Codex, got %#v", cmd.Args)
 	}
-	if strings.Contains(strings.Join(cmd.Args, " "), "openai-compat-run") {
-		t.Fatalf("expected Codex fallback, got %#v", cmd.Args)
+	if !strings.Contains(err.Error(), "remix requires Grok / OpenAI-compatible settings") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -644,11 +746,45 @@ func TestCodexCommandFactoryFallsBackWhenPiMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd, _, err := makeCommand(task)
+	if err == nil {
+		t.Fatalf("remix must not fall back to Codex when pi is missing, got %#v", cmd.Args)
+	}
+}
+
+func TestCodexFallbackStripsGrokSecretsForRemix(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "codex")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "")
+	dataRoot := t.TempDir()
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	base.SecretEnvironment = map[string]string{
+		"GROK_SEARCH_BASE_URL": "http://23.138.12.112:2001",
+		"GROK_SEARCH_API_KEY":  "secret",
+		"GROK_SEARCH_MODEL":    "cursor-grok-4.6-xhigh-fast",
+	}
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
+		return t.TempDir(), nil
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-codex-fallback"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-5.6-sol"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-codex-fallback"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
 	if err != nil {
 		t.Fatalf("makeCommand: %v", err)
 	}
-	if strings.Contains(strings.Join(cmd.Args, " "), "pi-run") {
-		t.Fatalf("expected Codex fallback, got %#v", cmd.Args)
+	if !strings.Contains(strings.Join(cmd.Args, " "), "openai-compat-run") {
+		t.Fatalf("explicit VIDEO_CONSOLE_LLM_RUNTIME=codex must not launch Codex CLI for remix, got %#v", cmd.Args)
 	}
 }
 

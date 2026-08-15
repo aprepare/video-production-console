@@ -182,12 +182,20 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id := uuid.NewString()
 	p := pid
-	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort})
+	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: modelKindForAction(action)})
 	if e != nil {
 		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
 		return
 	}
 	manifestRequest := in.TaskManifestRequest
+	if remixActionOmitsGrok(action) {
+		style, err := normalizeRemixPromptStyle(manifestRequest.RemixPromptStyle)
+		if err != nil {
+			writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite or wash.")
+			return
+		}
+		manifestRequest.RemixPromptStyle = style
+	}
 	if action == domain.ActionRemixReview {
 		notes := strings.TrimSpace(manifestRequest.RevisionNotes)
 		if notes == "" {

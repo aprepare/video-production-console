@@ -42,6 +42,10 @@ const (
 	// The skill parser caps one highlight caption at 4s (CAPTION_ITEM_MAX_S),
 	// stricter than the plan document's 5s; the parser wins.
 	captionItemMaxMS = int64(4000)
+	// Phrase-level SRT cues from the console TTS pipeline last ~2-4s and
+	// usually have no 。！？. Treat those as finished sentences so they are
+	// not glued into one 0s-start blob.
+	phraseCueMinMS = int64(1800)
 
 	captionCoverageMin = 0.15
 	captionCoverageMax = 0.25
@@ -54,8 +58,9 @@ const sentenceBoundaryRunes = "。！？!?；;"
 var conclusionMarkers = []string{"所以", "因此", "记住", "结论", "最后"}
 var turningPointMarkers = []string{"但是", "然而", "真正", "其实", "可惜"}
 
-// parseSRTSentences reads word-level or sentence-level SRT and aggregates
-// entries into sentences at Chinese/Latin sentence boundaries.
+// parseSRTSentences reads word-level, phrase-level, or sentence-level SRT.
+// Word-level cues stay glued until 。！？; cues longer than phraseCueMinMS
+// are treated as finished phrases even without punctuation.
 func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -114,7 +119,7 @@ func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 		}
 		curEnd = entry.endMS
 		builder.WriteString(entry.text)
-		if endsWithSentenceBoundary(entry.text) {
+		if endsWithSentenceBoundary(entry.text) || entry.endMS-entry.startMS >= phraseCueMinMS {
 			sentences = append(sentences, TimedSentence{StartMS: curStart, EndMS: curEnd, Text: builder.String()})
 			open = false
 		}

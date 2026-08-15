@@ -146,6 +146,7 @@ func enqueueTopicCommit(ctx context.Context, db *sql.DB, scheduler codex.Schedul
 		}
 	}
 	prepareStartedAt := now
+	requested.Kind = taskmodel.KindRemix
 	model, err := resolveTaskModel(ctx, models, requested)
 	if err != nil {
 		return domain.CodexTask{}, err

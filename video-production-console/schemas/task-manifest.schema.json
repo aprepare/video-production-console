@@ -93,6 +93,7 @@
         "machine_profile_path": {"type": "string", "minLength": 1},
         "draft_display_name": {"type": "string", "minLength": 1},
         "revision_notes": {"type": "string"},
+        "remix_prompt_style": {"type": "string", "enum": ["rewrite", "wash"]},
         "media_catalog_path": {"type": "string"},
         "ffmpeg_path": {"type": "string"},
         "ffprobe_path": {"type": "string"},

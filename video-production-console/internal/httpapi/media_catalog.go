@@ -10,8 +10,7 @@ import (
 )
 
 // The media catalog handler only sees the narrow CatalogService surface below.
-// The real implementation lives behind internal/app so this package never
-// imports internal/mediacatalog while that package is still growing.
+// The implementation lives in internal/app so httpapi does not import mediacatalog.
 
 // Sentinel errors a CatalogService implementation returns to drive the fixed
 // HTTP error contract. Wrapping them is allowed; the response body always uses

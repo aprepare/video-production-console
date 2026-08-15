@@ -76,6 +76,12 @@
           "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
         },
         "grok_model": { "type": "string", "maxLength": 256 },
+        "remix_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
+        "remix_model": { "type": "string", "maxLength": 256 },
         "image_base_url": {
           "type": "string",
           "maxLength": 2048,
@@ -94,7 +100,13 @@
           "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
         },
         "image_text_model": { "type": "string", "maxLength": 128 },
+        "image_text_reasoning_effort": {
+          "type": "string",
+          "enum": ["", "low", "medium", "high", "xhigh", "max", "ultra"]
+        },
+        "image_stream": { "type": "boolean", "default": false },
         "max_image_concurrency": { "type": "integer", "minimum": 1, "maximum": 18, "default": 3 },
+        "image_generation_attempts": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2 },
         "default_image_ratio": { "type": "string", "enum": ["3:4", "4:3", "9:16", "1:1"], "default": "3:4" },
         "default_image_style": {
           "type": "string",
@@ -191,11 +203,16 @@
             "topic_cards_dir",
             "grok_base_url",
             "grok_model",
+            "remix_base_url",
+            "remix_model",
             "image_base_url",
             "image_model",
             "image_text_base_url",
             "image_text_model",
+            "image_text_reasoning_effort",
+            "image_stream",
             "max_image_concurrency",
+            "image_generation_attempts",
             "default_image_ratio",
             "default_image_style",
             "codex_binary_path",
@@ -227,6 +244,7 @@
       "additionalProperties": false,
       "properties": {
         "grok_api_key": { "type": "string", "maxLength": 16384 },
+        "remix_api_key": { "type": "string", "maxLength": 16384 },
         "pexels_api_key": { "type": "string", "maxLength": 16384 },
         "volc_speech_api_key": { "type": "string", "maxLength": 16384 },
         "image_api_key": { "type": "string", "maxLength": 16384 },
@@ -258,9 +276,10 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"],
+      "required": ["grok_api_key", "remix_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
+        "remix_api_key": { "$ref": "#/$defs/secretStatus" },
         "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
         "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" },
         "image_api_key": { "$ref": "#/$defs/secretStatus" },

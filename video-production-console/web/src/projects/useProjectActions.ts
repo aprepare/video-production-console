@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { FormEvent, RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query/keys";
+import type { RemixPromptStyle } from "../RemixPromptStyleFields";
 import type { TaskModelOverride } from "../taskModel";
 import type { Asset, NarrationGeneration, Project, ProjectDetail } from "../types";
 
@@ -62,6 +63,7 @@ export function useProjectActions({
     model: "",
     reasoningEffort: "",
   });
+  const [remixPromptStyle, setRemixPromptStyle] = useState<RemixPromptStyle>("rewrite");
 
   const lockAction = useCallback((projectID: string, action: string) => {
     const key = `${projectID}:${action}`;
@@ -115,18 +117,6 @@ export function useProjectActions({
     onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
   });
 
-  const startRemixWorkflowMutation = useMutation({
-    mutationFn: async (input: { projectID: string; body: Record<string, unknown> }) => {
-      const response = await api(`/api/projects/${input.projectID}/remix`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input.body),
-      });
-      return response.ok;
-    },
-    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
-  });
-
   // Saving a revision bumps the asset version and marks downstream assets stale,
   // so the refresh has to cover the project detail as well as the task list.
   const saveContinuousScriptMutation = useMutation({
@@ -163,9 +153,9 @@ export function useProjectActions({
     onSuccess: (outcome, input) => (outcome.ok ? refreshProject(input.projectID) : undefined),
   });
 
-  const modelOverrideBody = () => ({
+  const modelOverrideBody = (includeEffort = true) => ({
     ...(taskModel.model.trim() ? { model: taskModel.model.trim() } : {}),
-    ...(taskModel.reasoningEffort ? { reasoning_effort: taskModel.reasoningEffort } : {}),
+    ...(includeEffort && taskModel.reasoningEffort ? { reasoning_effort: taskModel.reasoningEffort } : {}),
   });
 
   const createProject = async (event: FormEvent) => {
@@ -227,12 +217,13 @@ export function useProjectActions({
           action: "remix.standard",
           prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
           source_version_id: sourceVersionID,
-          ...modelOverrideBody(),
+          remix_prompt_style: remixPromptStyle,
+          ...modelOverrideBody(false),
         },
       });
       if (selectedIDRef.current !== projectID) return;
       if (!started) {
-        setMessage("原文已保存，但二创任务启动失败，请检查 Codex 配置后重试。");
+        setMessage("原文已保存，但二创任务启动失败，请检查模型配置后重试。");
         await loadDetail(project);
         return;
       }
@@ -246,7 +237,7 @@ export function useProjectActions({
     }
   };
 
-  const startMontageTask = async (prompt: string) => {
+  const startMontageTask = async (prompt: string, options?: { remake?: boolean }) => {
     if (!selected) return;
     const project = selected;
     const projectDetail = detail;
@@ -274,6 +265,9 @@ export function useProjectActions({
       }
       if (selectedIDRef.current !== projectID) return;
       setTaskModel({ model: "", reasoningEffort: "" });
+      if (options?.remake) {
+        setMessage("已重新排队混剪，会生成新的剪映草稿；旧草稿不会被删。");
+      }
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("混剪任务启动失败，请检查网络连接后重试。");
@@ -282,33 +276,40 @@ export function useProjectActions({
     }
   };
 
-  const startRemixWorkflow = async () => {
-    if (!selected || !detail) return;
+  const startMovieMontageTask = async (prompt: string, options?: { remake?: boolean }) => {
+    if (!selected) return;
     const project = selected;
-    const projectID = project.id;
-    if (detail.assets?.continuous_script) {
-      const confirmed = window.confirm(
-        `当前项目已有连续文案 v${detail.assets.continuous_script.version}。再次二创会生成新版本，旧版本仍会保留。确定继续吗？`,
-      );
-      if (!confirmed) return;
+    const projectDetail = detail;
+    if (!projectDetail || projectDetail.project.id !== project.id) {
+      setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
+      return;
     }
-    const lockKey = lockAction(projectID, "remix");
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "montage");
     if (!lockKey) return;
     try {
-      const started = await startRemixWorkflowMutation.mutateAsync({
+      const started = await startProjectTaskMutation.mutateAsync({
         projectID,
-        body: modelOverrideBody(),
+        body: {
+          account_id: project.account_id,
+          type: "movie_montage",
+          prompt,
+          ...modelOverrideBody(),
+        },
       });
       if (!started) {
         if (selectedIDRef.current === projectID)
-          setMessage("二创工作流启动失败，请检查当前项目与 Codex 配置后重试。");
+          setMessage("电影混剪任务启动失败，请检查电影切镜库与项目素材后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
       setTaskModel({ model: "", reasoningEffort: "" });
+      if (options?.remake) {
+        setMessage("已重新排队电影混剪，会生成新的剪映草稿；旧草稿不会被删。");
+      }
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
-        setMessage("二创工作流启动失败，请检查网络连接后重试。");
+        setMessage("电影混剪任务启动失败，请检查网络连接后重试。");
     } finally {
       unlockAction(lockKey);
     }
@@ -387,7 +388,7 @@ export function useProjectActions({
           action: "remix.review",
           prompt: `按修改要求重写当前连续文案。\n\n修改要求：\n${revisionNotes}`,
           revision_notes: revisionNotes,
-          ...modelOverrideBody(),
+          ...modelOverrideBody(false),
         },
       });
       if (!started) {
@@ -554,11 +555,13 @@ export function useProjectActions({
     pendingActions,
     taskModel,
     setTaskModel,
+    remixPromptStyle,
+    setRemixPromptStyle,
     createProject,
     loadSourceScriptContent,
     saveSourceScriptAndStartRemix,
     startMontageTask,
-    startRemixWorkflow,
+    startMovieMontageTask,
     publishProject,
     saveContinuousScript,
     startRemixReview,

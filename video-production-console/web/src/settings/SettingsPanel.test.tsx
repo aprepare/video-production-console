@@ -20,11 +20,16 @@ const draft: PublicSettings = {
   topic_cards_dir: "",
   grok_base_url: "",
   grok_model: "",
+  remix_base_url: "",
+  remix_model: "",
   image_base_url: "http://images.example.test/v1",
   image_model: "gpt-image-2",
   image_text_base_url: "http://text.example.test/v1",
   image_text_model: "planner-test",
+  image_text_reasoning_effort: "high",
   max_image_concurrency: 3,
+  image_generation_attempts: 2,
+  image_stream: false,
   default_image_ratio: "3:4",
   default_image_style: "finance_documentary",
   codex_binary_path: "",
@@ -50,8 +55,18 @@ const draft: PublicSettings = {
   max_external_results_per_query: 20,
 };
 
+test("image stream keepalive toggle is editable and defaults off", () => {
+  const { onDraftChange } = renderPanel();
+  const toggle = screen.getByRole("checkbox", { name: /生图流式保活/ }) as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  expect(screen.getByText(/仅当兼容服务支持stream:true时开启/)).toBeTruthy();
+  fireEvent.click(toggle);
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_stream: true });
+});
+
 const emptySecretDraft = {
   grok_api_key: "",
+  remix_api_key: "",
   pexels_api_key: "",
   volc_speech_api_key: "",
   image_api_key: "",
@@ -66,6 +81,7 @@ const settings: Settings = {
   settings_version: 1,
   secrets: {
     grok_api_key: { configured: false, masked: "" },
+    remix_api_key: { configured: false, masked: "" },
     pexels_api_key: { configured: false, masked: "" },
     volc_speech_api_key: { configured: true, masked: "********" },
     image_api_key: { configured: false, masked: "" },
@@ -94,6 +110,28 @@ function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {
   );
   return { onDraftChange, onSecretDraftChange };
 }
+
+test("remix model fields are editable independently", () => {
+  const { onDraftChange, onSecretDraftChange } = renderPanel();
+  fireEvent.change(screen.getByRole("textbox", { name: "二创服务地址" }), {
+    target: { value: "http://127.0.0.1:2001/v1" },
+  });
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    remix_base_url: "http://127.0.0.1:2001/v1",
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "二创模型" }), {
+    target: { value: "gpt-5.6-sol" },
+  });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
+  fireEvent.change(screen.getByLabelText("二创 API 密钥"), {
+    target: { value: "new-remix-key" },
+  });
+  expect(onSecretDraftChange).toHaveBeenCalledWith({
+    ...emptySecretDraft,
+    remix_api_key: "new-remix-key",
+  });
+});
 
 test("the Volcengine voice IDs are editable public fields", () => {
   const { onDraftChange } = renderPanel();
@@ -138,7 +176,13 @@ test("image generation settings and secret are editable", () => {
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_base_url: "https://images.example.test/v1" });
   fireEvent.change(screen.getByRole("combobox", { name: /同时生成图片数/ }), { target: { value: "18" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, max_image_concurrency: 18 });
+  expect((screen.getByRole("combobox", { name: /每张图片最多请求次数/ }) as HTMLSelectElement).value).toBe("2");
+  fireEvent.change(screen.getByRole("combobox", { name: /每张图片最多请求次数/ }), { target: { value: "4" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_generation_attempts: 4 });
   expect((screen.getByRole("textbox", { name: "图文文本模型" }) as HTMLInputElement).value).toBe("planner-test");
+  expect((screen.getByRole("combobox", { name: /图文文本思考强度/ }) as HTMLSelectElement).value).toBe("high");
+  fireEvent.change(screen.getByRole("combobox", { name: /图文文本思考强度/ }), { target: { value: "xhigh" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_text_reasoning_effort: "xhigh" });
   fireEvent.change(screen.getByRole("combobox", { name: "默认图片比例" }), { target: { value: "9:16" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, default_image_ratio: "9:16" });
   fireEvent.change(screen.getByRole("combobox", { name: "默认视觉风格" }), { target: { value: "red_ink" } });
@@ -153,7 +197,7 @@ test("image generation settings and secret are editable", () => {
     ...emptySecretDraft,
     image_text_api_key: "new-text-key",
   });
-  expect(screen.getByText(/HTTP 会明文传输生图或图文文本模型 API Key/)).toBeTruthy();
+  expect(screen.getByText(/HTTP 会明文传输二创、Grok、生图或图文文本模型 API Key/)).toBeTruthy();
 });
 
 test("the media library settings group exposes catalog, FFmpeg, and analysis fields", () => {

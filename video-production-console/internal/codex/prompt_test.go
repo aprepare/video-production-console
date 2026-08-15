@@ -18,7 +18,7 @@ func TestPromptUsesManifestPathWithoutExpandingAssetsOrSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"$finance-viral-remix", "action=enhanced", taskManifestEnvironmentKey, "manifest inputs as authoritative", "output_dir", "exactly one JSON object", "never pipe non-ASCII", "Do not open WeChat Channels", "Do not launch Jianying"} {
+	for _, want := range []string{"$finance-viral-remix", "action=enhanced", taskManifestEnvironmentKey, "manifest inputs as authoritative", "output_dir", "exactly one JSON object", "never pipe non-ASCII", "Do not open WeChat Channels", "Do not launch Jianying", "No web/Grok search"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q: %s", want, prompt)
 		}
@@ -114,6 +114,21 @@ func TestResolveTaskActionMapsLegacyTypesAndRejectsSkillCrossovers(t *testing.T)
 	}
 	if _, _, err := ResolveTaskAction("remix", domain.ActionMontagePlan); err == nil {
 		t.Fatal("expected a cross-skill action to be rejected")
+	}
+}
+
+func TestSkillForTaskAndResolveActionMovieMontage(t *testing.T) {
+	skill, err := SkillForTask("movie_montage")
+	if err != nil || skill != MovieMontageSkill {
+		t.Fatalf("SkillForTask(movie_montage)=%q %v", skill, err)
+	}
+	action, resolved, err := ResolveTaskAction("movie_montage", "")
+	if err != nil || action != domain.ActionMontageExecute || resolved.Skill != MovieMontageSkill || resolved.WireAction != "execute" {
+		t.Fatalf("ResolveTaskAction(movie_montage)=%q %#v %v", action, resolved, err)
+	}
+	resolved, err = ResolveMontageSkill(domain.ActionMontageExecute, MovieMontageSkill)
+	if err != nil || resolved.Skill != MovieMontageSkill {
+		t.Fatalf("ResolveMontageSkill=%#v %v", resolved, err)
 	}
 }
 

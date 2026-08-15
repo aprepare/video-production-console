@@ -20,8 +20,10 @@ const (
 	PhaseIngest = "ingest"
 	// PhaseImageShot creates the degenerate whole-image shot for images.
 	PhaseImageShot = "image_shot"
-	// PhaseProbe stays pending here; Task 7 wires FFmpeg probing/scene cuts.
+	// PhaseProbe covers ffprobe + scene cuts + keyframe extract.
 	PhaseProbe = "probe"
+	// PhaseAnalysis covers vision tags and embeddings.
+	PhaseAnalysis = "analysis"
 )
 
 // Indexer discovers original media files below media_root/originals and

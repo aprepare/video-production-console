@@ -181,10 +181,10 @@ func TestSkillScanRejectsSymlinkEscapeAndPersistsSnapshot(t *testing.T) {
 	}
 }
 
-func TestDefaultRootsRegisterExactlyThreeProductionSkills(t *testing.T) {
+func TestDefaultRootsRegisterProductionSkills(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "skills")
 	got := DefaultRoots(base)
-	wantNames := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"}
+	wantNames := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
 	if len(got) != len(wantNames) {
 		t.Fatalf("roots=%+v", got)
 	}
@@ -206,6 +206,36 @@ func (f failingSkillRepository) Latest(context.Context, string) (domain.SkillSna
 }
 func (f failingSkillRepository) ListLatest(context.Context) ([]domain.SkillSnapshot, error) {
 	return nil, f.err
+}
+
+func TestScanAllSkipsMissingMovieMontageSkill(t *testing.T) {
+	base := t.TempDir()
+	for _, name := range []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"} {
+		writeSkillFile(t, filepath.Join(base, name, "SKILL.md"), "skill")
+	}
+	service := NewService(nil, Options{Roots: DefaultRoots(base)})
+	snapshots, err := service.ScanAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 3 {
+		t.Fatalf("snapshots=%d, want 3 required skills", len(snapshots))
+	}
+}
+
+func TestScanAllRegistersMovieMontageWhenPresent(t *testing.T) {
+	base := t.TempDir()
+	for _, name := range []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"} {
+		writeSkillFile(t, filepath.Join(base, name, "SKILL.md"), "skill")
+	}
+	service := NewService(nil, Options{Roots: DefaultRoots(base)})
+	snapshots, err := service.ScanAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 4 {
+		t.Fatalf("snapshots=%d, want all production skills", len(snapshots))
+	}
 }
 
 func TestSkillLatestPreservesRepositoryFailures(t *testing.T) {

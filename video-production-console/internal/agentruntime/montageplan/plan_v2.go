@@ -26,8 +26,12 @@ const (
 
 // Known media_mix_policy presets; unknown names fail instead of defaulting.
 const (
-	mixPresetMovieMix   = "movie_mix"
-	mixPresetImageVideo = "image_video"
+	mixPresetMovieMix     = "movie_mix"
+	mixPresetImageVideo   = "image_video"
+	mixPresetMovieCatalog = "movie_catalog"
+
+	SelectModeLandscape    = "landscape"
+	SelectModeMovieCatalog = "movie_catalog"
 )
 
 // The only transition on the conservative whitelist is the verified
@@ -37,11 +41,7 @@ const (
 	v2TransitionDurationS = 0.466666
 )
 
-// v2OpeningTitleEndS keeps the opening title inside the 3-5s window.
-const v2OpeningTitleEndS = 4.0
-
-// v2NeutralMatchReason is the P1 template reason; Task 9 replaces it with
-// real recall evidence. The structure is already parser-complete.
+// v2NeutralMatchReason is the fallback when a shot has no recall evidence.
 const v2NeutralMatchReason = "P1中性过渡镜头：语义匹配接入前使用模板理由"
 
 // ProductionPlanV2 is the typed v2 plan written to production_plan.json.
@@ -145,8 +145,28 @@ type TransitionV2 struct {
 	DurationS float64 `json:"duration_s"`
 }
 
+type BrandTextV2 struct {
+	Text         string  `json:"text"`
+	CharsMin     int     `json:"chars_min"`
+	CharsMax     int     `json:"chars_max"`
+	SizeMin      float64 `json:"size_min"`
+	Y            float64 `json:"y"`
+	FullDuration bool    `json:"full_duration"`
+}
+
+type BoundaryLinesV2 struct {
+	AssetWidthPx  int     `json:"asset_width_px"`
+	AssetHeightPx int     `json:"asset_height_px"`
+	TopY          float64 `json:"top_y"`
+	BottomY       float64 `json:"bottom_y"`
+	FullDuration  bool    `json:"full_duration"`
+}
+
 type GraphicsV2 struct {
-	OpeningTitle  TextOverlayV2   `json:"opening_title"`
+	OpeningTitle  *TextOverlayV2  `json:"opening_title,omitempty"`
+	Title         BrandTextV2     `json:"title"`
+	Subtitle      BrandTextV2     `json:"subtitle"`
+	BoundaryLines BoundaryLinesV2 `json:"boundary_lines"`
 	ChapterLabels []TextOverlayV2 `json:"chapter_labels"`
 	Captions      CaptionPolicy   `json:"captions"`
 }
@@ -199,6 +219,8 @@ func mixPolicyForPreset(preset string) (mixPolicy, string, error) {
 		return movieMixPolicy(), mixPresetMovieMix, nil
 	case mixPresetImageVideo:
 		return imageVideoPolicy(), mixPresetImageVideo, nil
+	case mixPresetMovieCatalog:
+		return movieCatalogPolicy(), mixPresetMovieCatalog, nil
 	default:
 		return mixPolicy{}, "", fmt.Errorf("unknown media mix preset %q", preset)
 	}
@@ -216,12 +238,22 @@ func mixTargetsV2(policy mixPolicy) MixTargetsV2 {
 	}
 }
 
-// BuildV2 writes an approved typed production_plan.json (plan_version 2.0).
-// Build (v1) stays the production path until Task 12 wires this in.
+func movieCatalogSelect(opts Options) bool {
+	mode := strings.TrimSpace(opts.SelectMode)
+	preset := strings.TrimSpace(opts.MixPreset)
+	return mode == SelectModeMovieCatalog || preset == mixPresetMovieCatalog
+}
+
+// BuildV2 writes production_plan.json (plan_version 2.0) with catalog recall
+// when media_catalog_path is set. Scenic tasks still filter to landscape;
+// movie_catalog tasks do not. CaptionMode defaults to off.
 func BuildV2(opts Options) error {
 	ctx, err := loadPlanContext(opts)
 	if err != nil {
 		return err
+	}
+	if movieCatalogSelect(opts) && strings.TrimSpace(opts.MixPreset) == "" {
+		opts.MixPreset = mixPresetMovieCatalog
 	}
 	policy, presetName, err := mixPolicyForPreset(opts.MixPreset)
 	if err != nil {
@@ -229,7 +261,7 @@ func BuildV2(opts Options) error {
 	}
 	mode := opts.CaptionMode
 	if mode == "" {
-		mode = CaptionHighlightsOnly
+		mode = CaptionOff
 	}
 	if mode != CaptionOff && mode != CaptionHighlightsOnly {
 		return fmt.Errorf("unknown caption mode %q", mode)
@@ -253,7 +285,7 @@ func BuildV2(opts Options) error {
 		}
 		analyzer := opts.Analyzer
 		if analyzer == nil {
-			analyzer = LocalIntentAnalyzer{}
+			analyzer = LocalIntentAnalyzer{RestrictToLandscape: !movieCatalogSelect(opts)}
 		}
 		intents, intentErr := analyzer.Analyze(context.Background(), sentences)
 		if intentErr != nil || len(intents) == 0 {
@@ -263,16 +295,27 @@ func BuildV2(opts Options) error {
 		if rankErr != nil {
 			return rankErr
 		}
-		candidates = resolveCandidatePaths(ranked, ctx.mediaRoot)
+		resolved := resolveCandidatePaths(ranked, ctx.mediaRoot)
+		if movieCatalogSelect(opts) {
+			candidates = resolved
+		} else {
+			candidates = filterLandscapeCandidates(resolved)
+			if len(ranked) > 0 && len(candidates) == 0 {
+				notes = append(notes, "match_candidates_not_landscape: catalog recall had no 风景/景观 clips")
+			}
+		}
 		notes = append(notes, matchWarnings...)
 	}
 	if len(candidates) == 0 {
-		clips, sampleErr := sampleMedia(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false)
+		if movieCatalogSelect(opts) {
+			return fmt.Errorf("movie catalog produced no usable shots")
+		}
+		clips, sampleErr := sampleMediaMatching(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false, isLandscapeItem)
 		if sampleErr != nil {
 			return sampleErr
 		}
 		if len(clips) == 0 {
-			return fmt.Errorf("media index produced no usable clips")
+			return fmt.Errorf("media index produced no 风景/景观 clips")
 		}
 		candidates = make([]rankedCandidate, 0, len(clips))
 		for _, clip := range clips {
@@ -288,14 +331,7 @@ func BuildV2(opts Options) error {
 	}
 	timeline := buildV2Timeline(selection)
 
-	title, _ := titlePair(onScreenTitleSource(ctx.manifest.NonSecretSettings.DraftDisplayName))
-	openingTitle := TextOverlayV2{
-		Text:   title,
-		StartS: 0,
-		EndS:   v2OpeningTitleEndS,
-		Style:  "opening_title_v1",
-		Intro:  "none",
-	}
+	title, subtitle := titlePair(onScreenTitleSource(ctx.manifest.NonSecretSettings.DraftDisplayName))
 
 	captions := CaptionPolicy{Mode: mode, Items: []CaptionItem{}}
 	var captionWarnings []string
@@ -314,17 +350,8 @@ func BuildV2(opts Options) error {
 				return fmt.Errorf("parse subtitle srt: %w", err)
 			}
 		}
-		// The parser rejects captions overlapping the opening title, so
-		// sentences that start under the title never become candidates.
-		titleEndMS := int64(math.Round(openingTitle.EndS * 1000))
-		eligible := make([]TimedSentence, 0, len(sentences))
-		for _, sentence := range sentences {
-			if sentence.StartMS >= titleEndMS {
-				eligible = append(eligible, sentence)
-			}
-		}
 		narrationMS := int64(math.Round(ctx.duration * 1000))
-		captions.Items, captionWarnings = selectHighlightCaptions(eligible, narrationMS, mode)
+		captions.Items, captionWarnings = selectHighlightCaptions(sentences, narrationMS, mode)
 	}
 
 	for _, warning := range quotaWarnings {
@@ -363,7 +390,15 @@ func BuildV2(opts Options) error {
 		},
 		Timeline: timeline,
 		Graphics: GraphicsV2{
-			OpeningTitle:  openingTitle,
+			Title: BrandTextV2{
+				Text: title, CharsMin: 6, CharsMax: 8, SizeMin: 16, Y: 0.6, FullDuration: true,
+			},
+			Subtitle: BrandTextV2{
+				Text: subtitle, CharsMin: 6, CharsMax: 8, SizeMin: 9.2, Y: 0.49, FullDuration: true,
+			},
+			BoundaryLines: BoundaryLinesV2{
+				AssetWidthPx: 1080, AssetHeightPx: 6, TopY: 0.38, BottomY: -0.38, FullDuration: true,
+			},
 			ChapterLabels: []TextOverlayV2{},
 			Captions:      captions,
 		},
@@ -381,9 +416,9 @@ func BuildV2(opts Options) error {
 			"按timeline创建静音画面片段并按motion设置缩放与关键帧",
 			"图片使用首尾uniform_scale关键帧实现Ken Burns",
 			"添加每个相邻镜头之间0.467秒 verified 叠化",
-			"片头标题仅3-5秒；章节标签短暂出现；重点字幕逐条独立可编辑",
+			"添加贯穿全片的背景框架、标题、副标题和上下红线",
+			"不创建片头标题、章节标签和重点字幕",
 			"添加用户旁白、verified BGM和稀疏verified SFX并设置目标dB",
-			"不创建文稿匹配轨或自动听写轨",
 			"运行草稿和方案验证器",
 		},
 		KnownMissingAssets: []any{},
@@ -479,23 +514,22 @@ func v2SourceWindow(item mediaItem, slot float64) (in, out float64) {
 // stills do not all push the same way; pans stay within 3% of the frame.
 func imageMotionPlan(ordinal int) MotionPlan {
 	if ordinal%2 == 0 {
-		return MotionPlan{Preset: "kenburns_in", ScaleFrom: 1.00, ScaleTo: 1.06, XFrom: 0, XTo: 0.02}
+		return MotionPlan{Preset: "kenburns_in", ScaleFrom: 1.20, ScaleTo: 1.26, XFrom: 0, XTo: 0.02}
 	}
-	return MotionPlan{Preset: "kenburns_out", ScaleFrom: 1.06, ScaleTo: 1.00, XFrom: 0, XTo: -0.02}
+	return MotionPlan{Preset: "kenburns_out", ScaleFrom: 1.26, ScaleTo: 1.20, XFrom: 0, XTo: -0.02}
 }
 
-// movieMotionPlan keeps movie footage steady inside the 1.00-1.05 scale
-// window with full opacity, replacing v1's uniform 1.4x/0.5 treatment.
+// movieMotionPlan keeps movie footage at 1.2x so 16:9 fills the 1080×730 window.
 func movieMotionPlan() MotionPlan {
-	return MotionPlan{Preset: "steady", ScaleFrom: 1.02, ScaleTo: 1.02}
+	return MotionPlan{Preset: "steady", ScaleFrom: 1.20, ScaleTo: 1.20}
 }
 
 // brollMotionCycle rotates steady/push/pull so no preset ever runs more than
 // twice in a row across consecutive B-roll shots.
 var brollMotionCycle = [3]MotionPlan{
-	{Preset: "steady", ScaleFrom: 1.03, ScaleTo: 1.03},
-	{Preset: "push", ScaleFrom: 1.00, ScaleTo: 1.05},
-	{Preset: "pull", ScaleFrom: 1.05, ScaleTo: 1.00},
+	{Preset: "steady", ScaleFrom: 1.20, ScaleTo: 1.20},
+	{Preset: "push", ScaleFrom: 1.20, ScaleTo: 1.26},
+	{Preset: "pull", ScaleFrom: 1.26, ScaleTo: 1.20},
 }
 
 func brollMotionPlan(ordinal int) MotionPlan {

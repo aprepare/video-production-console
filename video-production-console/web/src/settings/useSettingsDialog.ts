@@ -6,6 +6,7 @@ import type { PublicSettings, Settings } from "../types";
 
 const emptySecretDraft = {
   grok_api_key: "",
+  remix_api_key: "",
   pexels_api_key: "",
   volc_speech_api_key: "",
   image_api_key: "",

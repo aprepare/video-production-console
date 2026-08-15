@@ -21,7 +21,7 @@ func v2Fixture(t *testing.T) (manifestPath, planPath string) {
 		}
 	}
 	index := []map[string]any{}
-	brollCategories := []string{"Nature_Landscape", "Architecture", "City_Traffic", "Family_Life"}
+	brollCategories := []string{"Nature_Landscape", "Nature_Landscape", "Nature_Landscape", "City_Traffic"}
 	for i := 0; i < 12; i++ {
 		rel := fmt.Sprintf("broll/b%02d.mp4", i)
 		if err := os.WriteFile(filepath.Join(mediaRoot, filepath.FromSlash(rel)), []byte("b"), 0o644); err != nil {
@@ -33,7 +33,7 @@ func v2Fixture(t *testing.T) (manifestPath, planPath string) {
 			"duration_seconds": 30,
 		})
 	}
-	movieCategories := []string{"office", "street", "home"}
+	movieCategories := []string{"Nature_Landscape", "Nature_Landscape", "office"}
 	for s := 0; s < 6; s++ {
 		rel := fmt.Sprintf("movies/m%02d.mp4", s)
 		if err := os.WriteFile(filepath.Join(mediaRoot, filepath.FromSlash(rel)), []byte("m"), 0o644); err != nil {
@@ -49,15 +49,18 @@ func v2Fixture(t *testing.T) (manifestPath, planPath string) {
 			})
 		}
 	}
-	imageCategories := []string{"ledger", "chart", "people"}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 10; i++ {
 		rel := fmt.Sprintf("images/i%02d.png", i)
 		if err := os.WriteFile(filepath.Join(mediaRoot, filepath.FromSlash(rel)), []byte("i"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		category := "Nature_Landscape"
+		if i == 9 {
+			category = "ledger"
+		}
 		index = append(index, map[string]any{
 			"id": fmt.Sprintf("image-%02d", i), "kind": "image",
-			"category": imageCategories[i%len(imageCategories)], "relative_path": rel,
+			"category": category, "relative_path": rel,
 			"duration_seconds": 0,
 		})
 	}
@@ -153,6 +156,27 @@ func v2Options(manifestPath, planPath string) Options {
 	}
 }
 
+func TestValidateMovieCatalog(t *testing.T) {
+	if err := ValidateMovieCatalog(""); err == nil {
+		t.Fatal("empty catalog path must fail")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.db")
+	if err := ValidateMovieCatalog(missing); err == nil {
+		t.Fatal("missing catalog file must fail")
+	}
+	dir := t.TempDir()
+	if err := ValidateMovieCatalog(dir); err == nil {
+		t.Fatal("directory catalog path must fail")
+	}
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	if err := os.WriteFile(path, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateMovieCatalog(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBuildV2ProducesTypedPlan(t *testing.T) {
 	manifestPath, planPath := v2Fixture(t)
 	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
@@ -160,6 +184,7 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 	if plan["plan_version"] != "2.0" || plan["status"] != "approved" || plan["model_role"] != "planner" {
 		t.Fatalf("header = %v/%v/%v", plan["plan_version"], plan["status"], plan["model_role"])
 	}
+	assertSafeExecutionActions(t, plan["execution_actions"])
 	if plan["project_duration_s"].(float64) != 120 {
 		t.Fatalf("duration = %v", plan["project_duration_s"])
 	}
@@ -221,6 +246,10 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 		if match["intent_id"].(string) == "" || match["reason"].(string) == "" {
 			t.Fatalf("shot %d match evidence incomplete: %#v", i, match)
 		}
+		switch shot["source_id"] {
+		case "broll-03", "broll-07", "broll-11", "movie-02-0", "movie-02-1", "movie-05-0", "movie-05-1", "image-09":
+			t.Fatalf("shot %d used a non-landscape source %q", i, shot["source_id"])
+		}
 		motion := shot["motion"].(map[string]any)
 		preset := motion["preset"].(string)
 		scaleFrom := motion["scale_from"].(float64)
@@ -240,7 +269,7 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 			if preset != "kenburns_in" && preset != "kenburns_out" {
 				t.Fatalf("image shot %d motion preset = %q", i, preset)
 			}
-			if scaleFrom < 1.0 || scaleFrom > 1.06 || scaleTo < 1.0 || scaleTo > 1.06 {
+			if scaleFrom < 1.18 || scaleFrom > 1.30 || scaleTo < 1.18 || scaleTo > 1.30 {
 				t.Fatalf("image shot %d scale = %v..%v", i, scaleFrom, scaleTo)
 			}
 			if preset == "kenburns_in" && scaleFrom >= scaleTo {
@@ -261,11 +290,7 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 			if preset != "steady" && preset != "push" && preset != "pull" {
 				t.Fatalf("%s shot %d motion preset = %q", kind, i, preset)
 			}
-			maxScale := 1.06
-			if kind == "movie" {
-				maxScale = 1.05
-			}
-			if scaleFrom < 1.0 || scaleFrom > maxScale || scaleTo < 1.0 || scaleTo > maxScale {
+			if scaleFrom < 1.18 || scaleFrom > 1.30 || scaleTo < 1.18 || scaleTo > 1.30 {
 				t.Fatalf("%s shot %d scale = %v..%v", kind, i, scaleFrom, scaleTo)
 			}
 			if preset == "steady" && scaleFrom != scaleTo {
@@ -286,31 +311,33 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 
 	graphics := plan["graphics"].(map[string]any)
 	captions := graphics["captions"].(map[string]any)
-	if captions["mode"] != "highlights_only" {
+	if captions["mode"] != "off" {
 		t.Fatalf("captions mode = %v", captions["mode"])
 	}
-	if captions["target_coverage_min"].(float64) != 0.15 || captions["target_coverage_max"].(float64) != 0.25 {
-		t.Fatalf("caption targets = %#v", captions)
+	if captions["target_coverage_min"].(float64) != 0 || captions["target_coverage_max"].(float64) != 0 {
+		t.Fatalf("off mode coverage targets = %#v", captions)
 	}
-	items := captions["items"].([]any)
-	if len(items) == 0 {
-		t.Fatal("highlights_only must select caption items from the SRT")
+	items, ok := captions["items"].([]any)
+	if !ok {
+		t.Fatalf("items must be an empty list, got %#v", captions["items"])
 	}
-	for i, rawItem := range items {
-		item := rawItem.(map[string]any)
-		kind := item["kind"].(string)
-		if kind != "number" && kind != "turning_point" && kind != "conclusion" {
-			t.Fatalf("caption %d kind = %q", i, kind)
-		}
-		if item["style"] != "highlight_v1" {
-			t.Fatalf("caption %d style = %v", i, item["style"])
-		}
+	if len(items) != 0 {
+		t.Fatalf("default plan must not add highlight captions: %#v", items)
 	}
 	if _, forbidden := graphics["caption_tracks"]; forbidden {
 		t.Fatal("v2 graphics must not carry the v1 caption_tracks marker")
 	}
-	if _, forbidden := graphics["subtitle"]; forbidden {
-		t.Fatal("v2 graphics must not carry the v1 full-length subtitle")
+	titleOverlay, ok := graphics["title"].(map[string]any)
+	if !ok || titleOverlay["full_duration"] != true || titleOverlay["text"] == "" {
+		t.Fatalf("v2 graphics.title must be the full-duration board title: %#v", graphics["title"])
+	}
+	subtitleOverlay, ok := graphics["subtitle"].(map[string]any)
+	if !ok || subtitleOverlay["full_duration"] != true || subtitleOverlay["text"] == "" {
+		t.Fatalf("v2 graphics.subtitle must be the full-duration board subtitle: %#v", graphics["subtitle"])
+	}
+	lines, ok := graphics["boundary_lines"].(map[string]any)
+	if !ok || lines["asset_width_px"].(float64) != 1080 || lines["asset_height_px"].(float64) != 6 {
+		t.Fatalf("v2 graphics.boundary_lines = %#v", graphics["boundary_lines"])
 	}
 	labels, ok := graphics["chapter_labels"].([]any)
 	if !ok {
@@ -332,47 +359,43 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 	}
 }
 
-func TestCaptionModeOffProducesNoCaptionItems(t *testing.T) {
+func TestCaptionModeHighlightsOnlySelectsFromSRT(t *testing.T) {
 	manifestPath, planPath := v2Fixture(t)
 	opts := v2Options(manifestPath, planPath)
-	opts.CaptionMode = CaptionOff
+	opts.CaptionMode = CaptionHighlightsOnly
 	plan := buildV2PlanJSON(t, opts)
 	captions := plan["graphics"].(map[string]any)["captions"].(map[string]any)
-	if captions["mode"] != "off" {
+	if captions["mode"] != "highlights_only" {
 		t.Fatalf("mode = %v", captions["mode"])
 	}
-	if captions["target_coverage_min"].(float64) != 0 || captions["target_coverage_max"].(float64) != 0 {
-		t.Fatalf("off mode coverage targets = %#v", captions)
+	if captions["target_coverage_min"].(float64) != 0.15 || captions["target_coverage_max"].(float64) != 0.25 {
+		t.Fatalf("caption targets = %#v", captions)
 	}
-	items, ok := captions["items"].([]any)
-	if !ok {
-		t.Fatalf("items must be an empty list, got %#v", captions["items"])
+	items := captions["items"].([]any)
+	if len(items) == 0 {
+		t.Fatal("highlights_only must select caption items from the SRT")
 	}
-	if len(items) != 0 {
-		t.Fatalf("off mode items = %#v", items)
+	for i, rawItem := range items {
+		item := rawItem.(map[string]any)
+		kind := item["kind"].(string)
+		if kind != "number" && kind != "turning_point" && kind != "conclusion" {
+			t.Fatalf("caption %d kind = %q", i, kind)
+		}
+		if item["style"] != "highlight_v1" {
+			t.Fatalf("caption %d style = %v", i, item["style"])
+		}
 	}
 }
 
-func TestOpeningTitleEndsWithinFiveSeconds(t *testing.T) {
+func TestV2PlanOmitsWindowOpeningTitle(t *testing.T) {
 	manifestPath, planPath := v2Fixture(t)
 	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
 	graphics := plan["graphics"].(map[string]any)
-	title := graphics["opening_title"].(map[string]any)
-	if title["start_s"].(float64) != 0 {
-		t.Fatalf("opening title start = %v", title["start_s"])
+	if _, present := graphics["opening_title"]; present {
+		t.Fatalf("v2 plan must not declare a window opening title: %#v", graphics["opening_title"])
 	}
-	end := title["end_s"].(float64)
-	if end < 3 || end > 5 {
-		t.Fatalf("opening title end = %v, want 3-5s", end)
-	}
-	if title["style"] != "opening_title_v1" || title["text"].(string) == "" {
-		t.Fatalf("opening title = %#v", title)
-	}
-	for i, rawItem := range graphics["captions"].(map[string]any)["items"].([]any) {
-		item := rawItem.(map[string]any)
-		if item["start_s"].(float64) < end {
-			t.Fatalf("caption %d overlaps the opening title: %#v", i, item)
-		}
+	if graphics["title"].(map[string]any)["text"] == "" || graphics["subtitle"].(map[string]any)["text"] == "" {
+		t.Fatalf("board title/subtitle missing: %#v", graphics)
 	}
 }
 
@@ -503,9 +526,9 @@ func TestBuildV2ImageVideoPresetWritesPresetName(t *testing.T) {
 	if movie["min"].(float64) != 0 || movie["max"].(float64) != 0 {
 		t.Fatalf("image_video movie target = %#v", movie)
 	}
-	// The fixture has only 8 stills, so the substitution matrix may degrade
-	// onto video kinds; the preset must still dominate the selection order:
-	// every still gets used before any degradation happens.
+	// The fixture keeps 9 landscape stills (one ledger poison pill is
+	// filtered out). The preset must still dominate: landscape stills
+	// get used before any degradation onto video kinds.
 	imageShots := 0
 	for _, rawShot := range plan["timeline"].([]any) {
 		if rawShot.(map[string]any)["media_kind"] == "image" {
@@ -513,7 +536,34 @@ func TestBuildV2ImageVideoPresetWritesPresetName(t *testing.T) {
 		}
 	}
 	if imageShots < 8 {
-		t.Fatalf("image_video must consume the whole still library first, used %d of 8", imageShots)
+		t.Fatalf("image_video must consume the landscape still library first, used %d", imageShots)
+	}
+}
+
+func TestIsLandscapeItemAcceptsOnlyScenery(t *testing.T) {
+	keep := []mediaItem{
+		{Category: "Nature_Landscape"},
+		{Category: "风景"},
+		{Category: "城市景观"},
+		{RelativePath: "14_Pexels/landscape/lake.mp4"},
+		{Tags: []string{"风景"}},
+	}
+	drop := []mediaItem{
+		{Category: "City_Traffic"},
+		{Category: "office"},
+		{Category: "Family_Life"},
+		{Category: "ledger"},
+		{RelativePath: "movies/bank.mp4", Tags: []string{"银行柜台"}},
+	}
+	for _, item := range keep {
+		if !isLandscapeItem(item) {
+			t.Fatalf("should keep %#v", item)
+		}
+	}
+	for _, item := range drop {
+		if isLandscapeItem(item) {
+			t.Fatalf("should drop %#v", item)
+		}
 	}
 }
 

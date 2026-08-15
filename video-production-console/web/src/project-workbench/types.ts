@@ -136,7 +136,6 @@ export type ProjectDetail = {
 };
 
 export type PrimaryActionID =
-  | "start-remix"
   | "start-source-remix"
   | "prepare-assets"
   | "start-mixing"

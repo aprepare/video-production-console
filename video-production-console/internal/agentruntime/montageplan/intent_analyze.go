@@ -52,9 +52,14 @@ var metaphorLexicon = []struct {
 
 // LocalIntentAnalyzer extracts entities, turning points and moods with
 // offline rules so a missing model never blocks a task.
-type LocalIntentAnalyzer struct{}
+type LocalIntentAnalyzer struct {
+	// RestrictToLandscape keeps scenic montage from asking the catalog for
+	// offices, ledgers, or portraits. Movie montage leaves this false so
+	// recall can follow the narration.
+	RestrictToLandscape bool
+}
 
-func (LocalIntentAnalyzer) Analyze(_ context.Context, sentences []TimedSentence) ([]NarrativeIntent, error) {
+func (a LocalIntentAnalyzer) Analyze(_ context.Context, sentences []TimedSentence) ([]NarrativeIntent, error) {
 	segments := buildVisualSegments(sentences)
 	intents := make([]NarrativeIntent, 0, len(segments))
 	for i, segment := range segments {
@@ -72,7 +77,7 @@ func (LocalIntentAnalyzer) Analyze(_ context.Context, sentences []TimedSentence)
 			Entities:       extractEntities(segment.Text),
 			Topics:         inferTopics(segment.Text),
 			Mood:           inferMood(segment.Text, kind),
-			VisualConcepts: inferVisualConcepts(segment.Text),
+			VisualConcepts: inferVisualConcepts(segment.Text, a.RestrictToLandscape),
 			Metaphors:      inferMetaphors(segment.Text),
 			Importance:     importanceFor(kind),
 			CaptionKind:    kind,
@@ -123,18 +128,18 @@ func inferMood(text string, kind CaptionKind) string {
 	}
 }
 
-func inferVisualConcepts(text string) []string {
-	concepts := make([]string, 0, 3)
-	if strings.Contains(text, "家庭") || strings.Contains(text, "现金流") {
-		concepts = append(concepts, "账本", "空钱包")
+func inferVisualConcepts(text string, landscapeOnly bool) []string {
+	if landscapeOnly {
+		return []string{"风景", "景观"}
 	}
-	if strings.Contains(text, "银行") {
-		concepts = append(concepts, "银行柜台")
+	concepts := append([]string{}, extractEntities(text)...)
+	for _, entry := range metaphorLexicon {
+		if strings.Contains(text, entry.cue) {
+			concepts = append(concepts, entry.concept)
+		}
 	}
-	if strings.Contains(text, "深夜") {
-		concepts = append(concepts, "深夜家庭")
-	}
-	return concepts
+	concepts = append(concepts, inferTopics(text)...)
+	return uniqueStrings(concepts)
 }
 
 func inferMetaphors(text string) []string {
@@ -177,27 +182,29 @@ func uniqueStrings(values []string) []string {
 // IntentAnalyzerConfig configures the OpenAI-compatible chat analyzer.
 // Endpoint, model and key are injected; nothing is read from the environment.
 type IntentAnalyzerConfig struct {
-	BaseURL    string
-	Model      string
-	APIKey     string
-	HTTPClient *http.Client
-	Fallback   IntentAnalyzer
+	BaseURL             string
+	Model               string
+	APIKey              string
+	HTTPClient          *http.Client
+	Fallback            IntentAnalyzer
+	RestrictToLandscape bool
 }
 
 // HTTPIntentAnalyzer calls a chat endpoint for strict JSON intents and
 // falls back to LocalIntentAnalyzer on any failure.
 type HTTPIntentAnalyzer struct {
-	baseURL  string
-	model    string
-	apiKey   string
-	client   *http.Client
-	fallback IntentAnalyzer
+	baseURL             string
+	model               string
+	apiKey              string
+	client              *http.Client
+	fallback            IntentAnalyzer
+	restrictToLandscape bool
 }
 
 func NewHTTPIntentAnalyzer(cfg IntentAnalyzerConfig) IntentAnalyzer {
 	fallback := cfg.Fallback
 	if fallback == nil {
-		fallback = LocalIntentAnalyzer{}
+		fallback = LocalIntentAnalyzer{RestrictToLandscape: cfg.RestrictToLandscape}
 	}
 	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.Model) == "" {
 		return fallback
@@ -207,11 +214,12 @@ func NewHTTPIntentAnalyzer(cfg IntentAnalyzerConfig) IntentAnalyzer {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
 	return HTTPIntentAnalyzer{
-		baseURL:  strings.TrimRight(cfg.BaseURL, "/"),
-		model:    cfg.Model,
-		apiKey:   cfg.APIKey,
-		client:   client,
-		fallback: fallback,
+		baseURL:             strings.TrimRight(cfg.BaseURL, "/"),
+		model:               cfg.Model,
+		apiKey:              cfg.APIKey,
+		client:              client,
+		fallback:            fallback,
+		restrictToLandscape: cfg.RestrictToLandscape,
 	}
 }
 
@@ -227,7 +235,7 @@ func (a HTTPIntentAnalyzer) analyzeRemote(ctx context.Context, sentences []Timed
 	payload, err := json.Marshal(map[string]any{
 		"model": a.model,
 		"messages": []map[string]string{
-			{"role": "system", "content": intentSystemPrompt},
+			{"role": "system", "content": intentSystemPrompt(a.restrictToLandscape)},
 			{"role": "user", "content": intentUserPrompt(sentences)},
 		},
 		"temperature": 0,
@@ -235,7 +243,7 @@ func (a HTTPIntentAnalyzer) analyzeRemote(ctx context.Context, sentences []Timed
 	if err != nil {
 		return nil, err
 	}
-	endpoint := a.baseURL + "/chat/completions"
+	endpoint := intentChatURL(a.baseURL)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -269,7 +277,24 @@ func (a HTTPIntentAnalyzer) analyzeRemote(ctx context.Context, sentences []Timed
 	return parseIntentJSON(envelope.Choices[0].Message.Content)
 }
 
-const intentSystemPrompt = `你把旁白句子转成 NarrativeIntent JSON 数组。只输出 JSON，不要解释。每个对象必须含 segment_id,start_ms,end_ms,text,entities,topics,mood,visual_concepts,metaphors,importance,caption_kind。caption_kind 只能是 number、turning_point、conclusion 或空字符串。`
+func intentChatURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/chat/completions") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/chat/completions"
+	}
+	return base + "/v1/chat/completions"
+}
+
+func intentSystemPrompt(landscapeOnly bool) string {
+	visualRule := "visual_concepts 填写与口播对应的画面概念，例如车间、街道、家庭、柜台、夜景、人群；不要只填风景。"
+	if landscapeOnly {
+		visualRule = "visual_concepts 只能填风景或景观，不要填办公室、家庭、账本、银行、街道或人像。"
+	}
+	return "你把旁白句子转成 NarrativeIntent JSON 数组。只输出 JSON，不要解释。每个对象必须含 segment_id,start_ms,end_ms,text,entities,topics,mood,visual_concepts,metaphors,importance,caption_kind。caption_kind 只能是 number、turning_point、conclusion 或空字符串。" + visualRule
+}
 
 func intentUserPrompt(sentences []TimedSentence) string {
 	raw, _ := json.Marshal(sentences)

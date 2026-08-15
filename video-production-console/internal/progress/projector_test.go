@@ -13,6 +13,29 @@ func TestProjectShowsGrokResearchInChinese(t *testing.T) {
 	}
 }
 
+func TestProjectDoesNotTreatGrokModelNameAsWebSearchWithoutRemix(t *testing.T) {
+	event := Project(Input{
+		TaskID:  "task",
+		Method:  "item.started",
+		RawJSON: `{"model":"cursor-grok-4.6-xhigh-fast","grok_model":"cursor-grok-4.6-xhigh-fast"}`,
+	})
+	if event.DisplayText == "正在使用 Grok 联网核对最新信息" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestProjectDoesNotTreatGrokModelNameAsWebSearch(t *testing.T) {
+	event := Project(Input{
+		TaskID:  "task",
+		Action:  "remix.standard",
+		Method:  "item.started",
+		RawJSON: `{"model":"cursor-grok-4.6-xhigh-fast","grok_model":"cursor-grok-4.6-xhigh-fast"}`,
+	})
+	if event.DisplayText != "正在写二创文案" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
 func TestTimingProjectionUsesTheSharedObservableClassifier(t *testing.T) {
 	got, ok := ProjectTiming(Input{Method: "item.started", RawJSON: `{"item":{"id":"search-1","command":"python grok_search.py --query private"}}`})
 	if !ok || got.PhaseKey != "web_research" || got.Boundary != phasetiming.BoundaryStart || got.ExternalItemID != "search-1" {

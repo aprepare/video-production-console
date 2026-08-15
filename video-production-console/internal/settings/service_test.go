@@ -155,6 +155,38 @@ func TestSettingsPublicCodexDefaultsRoundTripAndResolveTaskModel(t *testing.T) {
 	}
 }
 
+func TestResolveTaskModelPrefersRemixModel(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexDefaultModel = "cursor-grok-4.6-xhigh-fast"
+	public.RemixModel = "gpt-5.6-sol"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := service.ResolveTaskModel(t.Context(), taskmodel.Selection{Kind: taskmodel.KindRemix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Model != "gpt-5.6-sol" {
+		t.Fatalf("ResolveTaskModel()=%+v, want remix model", selection)
+	}
+}
+
+func TestResolveTaskModelUsesCodexDefaultForMontage(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexDefaultModel = "gpt-5.6-sol"
+	public.RemixModel = "cursor-grok-4.6-xhigh-fast"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := service.ResolveTaskModel(t.Context(), taskmodel.Selection{Kind: taskmodel.KindCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Model != "gpt-5.6-sol" {
+		t.Fatalf("ResolveTaskModel()=%+v, want Codex default", selection)
+	}
+}
+
 func TestResolveTaskModelUsesSavedDefaultsAfterRuntimeWasCached(t *testing.T) {
 	service, _, _, public := newSettingsTestService(t, Options{})
 	public.CodexDefaultModel = "gpt-5.6-terra"
@@ -813,16 +845,52 @@ func TestSettingsImageGenerationConfigurationIsEncryptedAndRuntimeOnly(t *testin
 	}
 }
 
+func TestSettingsImageGenerationAttemptsDefaultRoundTripAndValidation(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.ImageGenerationAttempts = 4
+	view, err := service.Update(t.Context(), public, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageGenerationAttempts != 4 {
+		t.Fatalf("attempts=%d", view.Public.ImageGenerationAttempts)
+	}
+	public.ImageGenerationAttempts = 1
+	view, err = service.Update(t.Context(), public, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageGenerationAttempts != 1 {
+		t.Fatalf("attempts=%d", view.Public.ImageGenerationAttempts)
+	}
+	legacy := public
+	legacy.ImageGenerationAttempts = 0
+	view, err = service.Update(t.Context(), legacy, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageGenerationAttempts != defaultImageGenerationAttempts {
+		t.Fatalf("legacy zero attempts=%d", view.Public.ImageGenerationAttempts)
+	}
+	for _, invalidValue := range []int{-1, 5} {
+		candidate := public
+		candidate.ImageGenerationAttempts = invalidValue
+		if _, err := service.PutPublic(t.Context(), candidate); !errors.Is(err, ErrInvalidSettings) {
+			t.Fatalf("attempts=%d error=%v", invalidValue, err)
+		}
+	}
+}
+
 func TestLegacySettingsDefaultImageGenerationValues(t *testing.T) {
 	service, db, _, _ := newSettingsTestService(t, Options{})
-	if _, err := db.Exec(`DELETE FROM settings WHERE key IN ('image_base_url','image_model','max_image_concurrency')`); err != nil {
+	if _, err := db.Exec(`DELETE FROM settings WHERE key IN ('image_base_url','image_model','max_image_concurrency','image_generation_attempts')`); err != nil {
 		t.Fatal(err)
 	}
 	view, err := service.Get(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Public.ImageBaseURL != "" || view.Public.ImageModel != defaultImageModel || view.Public.MaxImageConcurrency != defaultMaxImageConcurrency || view.Public.DefaultImageRatio != defaultImageRatio || view.Public.DefaultImageStyle != defaultImageStyle {
+	if view.Public.ImageBaseURL != "" || view.Public.ImageModel != defaultImageModel || view.Public.MaxImageConcurrency != defaultMaxImageConcurrency || view.Public.DefaultImageRatio != defaultImageRatio || view.Public.DefaultImageStyle != defaultImageStyle || view.Public.ImageGenerationAttempts != defaultImageGenerationAttempts {
 		t.Fatalf("legacy image defaults=%+v", view.Public)
 	}
 }
@@ -1054,7 +1122,7 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		BaokuanBaseURL: "http://127.0.0.1:2022", BaokuanMCPExecutable: filepath.Join(root, "baokuan.exe"),
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
-		ImageModel: "gpt-image-2", MaxImageConcurrency: 3, DefaultImageRatio: "3:4", DefaultImageStyle: "finance_documentary",
+		ImageModel: "gpt-image-2", MaxImageConcurrency: 3, ImageGenerationAttempts: 2, DefaultImageRatio: "3:4", DefaultImageStyle: "finance_documentary",
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 		PexelsAPIBaseURL: "https://api.pexels.com", PixabayAPIBaseURL: "https://pixabay.com",

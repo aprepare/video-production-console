@@ -608,20 +608,20 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 				}
 				slog.Warn("montage script runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", scriptErr)
 			}
-		} else {
-			switch agentruntime.Select(task.Action, agentruntime.LLMRuntimeFromEnv()) {
-			case agentruntime.RuntimeOpenAI:
-				cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
-				if openaiErr == nil {
-					return cmd, root, nil
-				}
-				slog.Warn("openai_compat runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", openaiErr)
+		} else if agentruntime.Select(task.Action, agentruntime.RuntimeOpenAI) == agentruntime.RuntimeOpenAI {
+			switch agentruntime.LLMRuntimePreferred(cfg.SecretEnvironment) {
 			case agentruntime.RuntimePi:
 				cmd, piErr := buildPiCommand(cfg, task, manifestPath, resolveSkillRoot)
-				if piErr == nil {
-					return cmd, root, nil
+				if piErr != nil {
+					return nil, "", piErr
 				}
-				slog.Warn("pi runtime unavailable, falling back to Codex", "task_id", task.ID, "action", string(task.Action), "error", piErr)
+				return cmd, root, nil
+			default:
+				cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
+				if openaiErr != nil {
+					return nil, "", fmt.Errorf("remix requires Grok / OpenAI-compatible settings: %w", openaiErr)
+				}
+				return cmd, root, nil
 			}
 		}
 		ctx := codex.TaskContext{
@@ -649,6 +649,10 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 			return nil, "", err
 		}
 		ctx.ProjectDirGuard = guard
+		if agentruntime.Select(task.Action, agentruntime.RuntimeOpenAI) == agentruntime.RuntimeOpenAI {
+			// Remix/topic Codex fallback must not inherit Grok search credentials.
+			cfg.SecretEnvironment = copyStringMapWithoutPrefix(cfg.SecretEnvironment, "GROK_")
+		}
 		cmd, buildErr := codex.BuildExecCommand(cfg, ctx)
 		closeErr := guard.Close()
 		if buildErr != nil {
@@ -707,6 +711,13 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	if err != nil {
 		return nil, err
 	}
+	if movieSkill, movieErr := resolveSkillRoot("jianying-movie-montage"); movieErr == nil {
+		if skillFromTaskManifest(manifestPath) == "jianying-movie-montage" {
+			if _, statErr := os.Stat(filepath.Join(movieSkill, "scripts", "run_montage_job.py")); statErr == nil {
+				skillRoot = movieSkill
+			}
+		}
+	}
 	cmd := exec.Command(exe, "montage-script-run",
 		"--manifest", manifestPath,
 		"--skill-root", skillRoot,
@@ -715,7 +726,40 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	)
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
+	cmd.Env = appendMontageCatalogEnv(cmd.Env, cfg.SecretEnvironment)
 	return cmd, nil
+}
+
+func skillFromTaskManifest(manifestPath string) string {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Skill string `json:"skill"`
+	}
+	if json.Unmarshal(raw, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Skill)
+}
+
+func appendMontageCatalogEnv(env []string, secrets map[string]string) []string {
+	if secrets == nil {
+		return env
+	}
+	for _, key := range []string{
+		"VIDEO_CONSOLE_VISION_API_KEY",
+		"VIDEO_CONSOLE_EMBEDDING_API_KEY",
+		"VIDEO_CONSOLE_INTENT_API_KEY",
+		"VIDEO_CONSOLE_INTENT_BASE_URL",
+		"VIDEO_CONSOLE_INTENT_MODEL",
+	} {
+		if value := strings.TrimSpace(secrets[key]); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
 }
 
 func montagePythonBinary(profilePath string) (string, error) {
@@ -746,9 +790,9 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 	if resolveSkillRoot == nil {
 		return nil, fmt.Errorf("skill root resolver is nil")
 	}
-	baseURL, apiKey := agentruntime.OpenAIConfigFromEnv()
-	if baseURL == "" || apiKey == "" {
-		return nil, fmt.Errorf("VIDEO_CONSOLE_OPENAI_BASE_URL and VIDEO_CONSOLE_OPENAI_API_KEY are required")
+	baseURL, apiKey, configuredModel, ok := agentruntime.ResolveOpenAICompatConfig(cfg.SecretEnvironment)
+	if !ok {
+		return nil, fmt.Errorf("openai-compatible base url and api key are required")
 	}
 	if info, err := os.Lstat(manifestPath); err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("openai_compat runtime requires task_manifest.json")
@@ -768,7 +812,7 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
 		return nil, fmt.Errorf("openai_compat command requires working directory and output-last-message")
 	}
-	model := strings.TrimSpace(task.ModelName)
+	model := agentruntime.CompatModelName(task.ModelName, configuredModel)
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
@@ -955,8 +999,38 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 	if runtime.GrokModel != "" {
 		environment["GROK_SEARCH_MODEL"] = runtime.GrokModel
 	}
+	if runtime.RemixAPIKey != "" {
+		environment["REMIX_API_KEY"] = runtime.RemixAPIKey
+	}
+	if runtime.RemixBaseURL != "" {
+		environment["REMIX_BASE_URL"] = runtime.RemixBaseURL
+	}
+	if runtime.RemixModel != "" {
+		environment["REMIX_MODEL"] = runtime.RemixModel
+	}
 	if runtime.PexelsAPIKey != "" {
 		environment["PEXELS_API_KEY"] = runtime.PexelsAPIKey
+	}
+	if runtime.VisionAPIKey != "" {
+		environment["VIDEO_CONSOLE_VISION_API_KEY"] = runtime.VisionAPIKey
+	}
+	if runtime.EmbeddingAPIKey != "" {
+		environment["VIDEO_CONSOLE_EMBEDDING_API_KEY"] = runtime.EmbeddingAPIKey
+	}
+	if runtime.RemixAPIKey != "" {
+		environment["VIDEO_CONSOLE_INTENT_API_KEY"] = runtime.RemixAPIKey
+	} else if runtime.GrokAPIKey != "" {
+		environment["VIDEO_CONSOLE_INTENT_API_KEY"] = runtime.GrokAPIKey
+	}
+	if runtime.RemixBaseURL != "" {
+		environment["VIDEO_CONSOLE_INTENT_BASE_URL"] = runtime.RemixBaseURL
+	} else if runtime.GrokBaseURL != "" {
+		environment["VIDEO_CONSOLE_INTENT_BASE_URL"] = runtime.GrokBaseURL
+	}
+	if runtime.RemixModel != "" {
+		environment["VIDEO_CONSOLE_INTENT_MODEL"] = runtime.RemixModel
+	} else if runtime.GrokModel != "" {
+		environment["VIDEO_CONSOLE_INTENT_MODEL"] = runtime.GrokModel
 	}
 	return environment
 }
@@ -1009,7 +1083,7 @@ func newServer(address string, handler http.Handler) *http.Server {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
+		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       time.Minute,
 		MaxHeaderBytes:    1 << 20,
 	}

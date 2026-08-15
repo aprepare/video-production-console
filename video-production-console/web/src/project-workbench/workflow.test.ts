@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { ProjectDetail } from "./types";
 import {
+  canRemakeMontage,
   deriveProductionStage,
   missingProductionInputs,
   nextPrimaryAction,
@@ -209,13 +210,13 @@ describe("production workflow view model", () => {
 
   test("maps active workflow steps to a disabled primary action", () => {
     expect(nextPrimaryAction(detail("script", {}, "topic_card"))).toMatchObject({
-      id: "start-remix",
+      id: "start-source-remix",
       label: "正在生成选题卡",
       disabled: true,
       activeStep: "topic_card",
     });
     expect(nextPrimaryAction(detail("script", {}, "remix"))).toMatchObject({
-      id: "start-remix",
+      id: "start-source-remix",
       label: "正在二创文案",
       disabled: true,
       activeStep: "remix",
@@ -262,6 +263,22 @@ describe("production workflow view model", () => {
       disabled: false,
     });
     expect(nextPrimaryAction(detail("published"))).toBeNull();
+  });
+
+  test("allows remaking a montage after a registered draft exists", () => {
+    const readyInputs = {
+      continuous_script: "ready" as const,
+      narration: "ready" as const,
+      subtitle_srt: "ready" as const,
+      mix_draft: "ready" as const,
+    };
+    expect(canRemakeMontage(detail("review", readyInputs, undefined, "ready"))).toBe(true);
+    expect(canRemakeMontage(detail("mixing", {
+      continuous_script: "ready",
+      narration: "ready",
+      subtitle_srt: "ready",
+    }, undefined, "ready"))).toBe(false);
+    expect(canRemakeMontage(detail("review", { mix_draft: "ready" }))).toBe(false);
   });
 
   test("allows publishing after mix draft without any final video asset", () => {

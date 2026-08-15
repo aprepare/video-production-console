@@ -68,10 +68,7 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
             assets: {},
             missing_assets: [],
             active_workflow: null,
-            // A topic card unlocks the "开始二创文案" primary action; without it the
-            // script stage falls back to "先粘贴同行原文" and this test's mobile
-            // action-bar assertion cannot match.
-            topic_context: { id: "topic-1", title: "浏览器验收选题" },
+            topic_context: null,
           };
     } else if (path === `/api/tasks?project_id=${projectID}`) {
       body = review
@@ -134,7 +131,7 @@ test("project workbench exposes landmarks, current step, focus and mobile layout
   await expect(page.locator('[aria-current="step"]')).toContainText("文案");
   await expect(page.getByRole("region", { name: "当前项目资产" })).toBeVisible();
   await expect(page.getByRole("region", { name: "当前任务摘要" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "移动端：开始二创文案" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "移动端：先粘贴同行原文" })).toBeVisible();
 
   await page.getByRole("button", { name: "返回项目看板" }).focus();
   await expect(page.getByRole("button", { name: "返回项目看板" })).toHaveCSS("outline-style", "solid");

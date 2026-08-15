@@ -7,11 +7,13 @@ import {
   formatSize,
   montageHeadline,
   montagePhaseLabels,
+  phaseDisplayName,
   phaseDurationMS,
   phaseStringValue,
   statusLabels,
   taskElapsedMS,
   taskMessageContent,
+  taskModelLabel,
   taskPhaseStateLabels,
   taskQuestions,
   taskTimeline,
@@ -33,6 +35,7 @@ type TaskDetailDialogProps = {
   onClose: () => void;
   onCancelTask: (task: Task) => void;
   onRetryRegistration: (task: Task) => void;
+  onRemakeMontage?: (task: Task) => void;
   onOpenDirectory: (assetID: string) => void;
   onAnswer: (task: Task, answer: string) => void;
 };
@@ -50,6 +53,7 @@ export function TaskDetailDialog({
   onClose,
   onCancelTask,
   onRetryRegistration,
+  onRemakeMontage,
   onOpenDirectory,
   onAnswer,
 }: TaskDetailDialogProps) {
@@ -70,7 +74,7 @@ export function TaskDetailDialog({
       >
         <div className="modal-head">
           <div>
-            <span className="muted">Codex 任务详情</span>
+            <span className="muted">任务详情</span>
             <h2 id="task-dialog-title">{taskTitle(task)}</h2>
             {projectTitle ? <p className="task-project-context">当前项目：{projectTitle}</p> : null}
           </div>
@@ -83,9 +87,7 @@ export function TaskDetailDialog({
             {statusLabels[task.status] || task.status}
           </span>
           <span>{task.id}</span>
-          {(task.model || task.reasoning_effort) && (
-            <span>{[task.model, task.reasoning_effort].filter(Boolean).join(" · ")}</span>
-          )}
+          {taskModelLabel(task) ? <span>{taskModelLabel(task)}</span> : null}
           {typeof elapsed === "number" ? (
             <span aria-label="任务总耗时">总耗时 {formatDuration(elapsed)}</span>
           ) : null}
@@ -166,6 +168,12 @@ export function TaskDetailDialog({
             {task.montage.can_retry_registration ? (
               <button onClick={() => onRetryRegistration(task)}>只重试剪映登记</button>
             ) : null}
+            {onRemakeMontage
+              && ["completed", "failed", "cancelled"].includes(task.status) ? (
+              <button type="button" className="secondary" onClick={() => onRemakeMontage(task)}>
+                重做混剪
+              </button>
+            ) : null}
           </section>
         ) : null}
         {task.timing_summary || task.timing_runs?.length || typeof elapsed === "number" ? (
@@ -187,7 +195,7 @@ export function TaskDetailDialog({
                 return (
                   <li key={phaseID || `${phaseKey}-${index}`}>
                     <strong>
-                      {phaseStringValue(phase, "display_name") || phaseKey || "未命名阶段"}
+                      {phaseDisplayName(phaseKey, phaseStringValue(phase, "display_name"), task.action)}
                     </strong>
                     <span>{taskPhaseStateLabels[state] || state || "暂无状态"}</span>
                     <time aria-label={state === "running" ? "运行时长" : "阶段耗时"}>

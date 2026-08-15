@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+func assertSafeExecutionActions(t *testing.T, raw any) {
+	t.Helper()
+	actions, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("execution_actions=%T", raw)
+	}
+	forbidden := []string{"文稿匹配", "tts", "asr", "caption", "subtitle", "自动字幕", "改写文案", "重写文案", "合成配音"}
+	for _, action := range actions {
+		text, _ := action.(string)
+		value := strings.ToLower(text)
+		for _, term := range forbidden {
+			if strings.Contains(value, strings.ToLower(term)) {
+				t.Fatalf("execution_actions %q contains forbidden %q", action, term)
+			}
+		}
+	}
+}
+
 func TestBuildProducesApprovedPlan(t *testing.T) {
 	root := t.TempDir()
 	mediaRoot := filepath.Join(root, "media")
@@ -75,6 +93,7 @@ func TestBuildProducesApprovedPlan(t *testing.T) {
 	if plan["status"] != "approved" || plan["model_role"] != "planner" {
 		t.Fatalf("status/role = %v/%v", plan["status"], plan["model_role"])
 	}
+	assertSafeExecutionActions(t, plan["execution_actions"])
 	if plan["project_duration_s"].(float64) != 25 {
 		t.Fatalf("duration = %v", plan["project_duration_s"])
 	}

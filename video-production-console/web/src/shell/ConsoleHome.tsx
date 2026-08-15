@@ -7,6 +7,7 @@ import {
   accountName,
   formatDate,
   projectStageHint,
+  boardStage,
   stageLabel,
   stages,
 } from "../projects/stages";
@@ -18,8 +19,8 @@ type ConsoleHomeProps = {
   hidden: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  onChooseProductionMode: () => void;
   runtime: RuntimeState | null | undefined;
-  onOpenIdeaPlanner: () => void;
   onOpenMediaLibrary: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
@@ -43,16 +44,14 @@ type ConsoleHomeProps = {
   expandedStages: Set<Project["stage"]>;
   onExpandedStagesChange: Dispatch<SetStateAction<Set<Project["stage"]>>>;
   onOpenProject: (project: Project) => void;
-  mode: "montage" | "image";
-  onModeChange: (mode: "montage" | "image") => void;
 };
 
 export function ConsoleHome({
   hidden,
   theme,
   onThemeChange,
+  onChooseProductionMode,
   runtime,
-  onOpenIdeaPlanner,
   onOpenMediaLibrary,
   onOpenSettings,
   onLogout,
@@ -76,8 +75,6 @@ export function ConsoleHome({
   expandedStages,
   onExpandedStagesChange,
   onOpenProject,
-  mode,
-  onModeChange,
 }: ConsoleHomeProps) {
   const tone = messageTone(message);
   const urgent = tone === "danger";
@@ -101,10 +98,9 @@ export function ConsoleHome({
               <option value="dark">夜间</option>
             </select>
           </label>
-          <div className="mode-switch" role="group" aria-label="生产模式">
-            <button type="button" aria-pressed={mode === "montage"} className={mode === "montage" ? "active" : ""} onClick={() => onModeChange("montage")}>混剪模式</button>
-            <button type="button" aria-pressed={mode === "image"} className={mode === "image" ? "active" : ""} onClick={() => onModeChange("image")}>图文模式</button>
-          </div>
+          <button type="button" className="header-button" onClick={onChooseProductionMode}>
+            制作方式
+          </button>
           {runtime && (
             <span
               className={
@@ -117,9 +113,6 @@ export function ConsoleHome({
               {runtime.Queued > 0 ? ` · 排队 ${runtime.Queued}` : ""}
             </span>
           )}
-          <button className="header-button" onClick={onOpenIdeaPlanner}>
-            给我选题
-          </button>
           <button className="header-button" onClick={onOpenMediaLibrary}>
             素材库
           </button>
@@ -182,7 +175,7 @@ export function ConsoleHome({
               </div>
               <div className="board">
                 {stages.map((stage) => {
-                  const stageProjects = projects.filter((project) => project.stage === stage);
+                  const stageProjects = projects.filter((project) => boardStage(project.stage) === stage);
                   const expanded = expandedStages.has(stage);
                   const shownProjects = expanded
                     ? stageProjects

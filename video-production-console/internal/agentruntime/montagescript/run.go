@@ -71,6 +71,8 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-inputs: %w", err))
 	}
 
+	attachCatalogClients(&opts)
+
 	planPath, err := planPathFromManifest(manifestPath)
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
@@ -141,10 +143,29 @@ func probeDurationViaSkill(pythonBinary, skillRoot, audioPath string) (float64, 
 }
 
 func buildMontagePlan(manifestPath string, opts montageplan.Options) error {
+	if skillFromManifest(manifestPath) == "jianying-movie-montage" {
+		opts.SelectMode = montageplan.SelectModeMovieCatalog
+		opts.MixPreset = "movie_catalog"
+		return montageplan.BuildV2(opts)
+	}
 	if planVersionFromManifest(manifestPath) == "2.0" {
 		return montageplan.BuildV2(opts)
 	}
 	return montageplan.Build(opts)
+}
+
+func skillFromManifest(manifestPath string) string {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Skill string `json:"skill"`
+	}
+	if json.Unmarshal(raw, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Skill)
 }
 
 func planVersionFromManifest(manifestPath string) string {

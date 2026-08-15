@@ -43,11 +43,14 @@ type Options struct {
 	Catalog      CatalogReader
 	Analyzer     IntentAnalyzer
 	Embedder     Embedder
+	// SelectMode is landscape (method one, default) or movie_catalog (method three).
+	SelectMode string
 }
 
 type manifestFile struct {
 	TaskID    string `json:"task_id"`
 	JobID     string `json:"job_id"`
+	Skill     string `json:"skill"`
 	Action    string `json:"action"`
 	OutputDir string `json:"output_dir"`
 	Inputs    []struct {
@@ -267,7 +270,6 @@ func Build(opts Options) error {
 			"添加每个相邻镜头之间0.467秒 verified 叠化",
 			"添加贯穿全片的标题、副标题和上下红线",
 			"添加用户旁白、verified BGM和稀疏verified SFX并设置目标dB",
-			"不创建文稿匹配轨或自动听写轨",
 			"运行草稿和方案验证器",
 			"登记全新剪映草稿；UI冒烟测试仅在用户明确要求时执行",
 		},
@@ -445,6 +447,10 @@ func probeDurationWith(binary, path string) (float64, error) {
 }
 
 func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict bool) ([]mediaItem, error) {
+	return sampleMediaMatching(indexPath, mediaRoot, limit, seed, strict, nil)
+}
+
+func sampleMediaMatching(indexPath, mediaRoot string, limit int, seed string, strict bool, keep func(mediaItem) bool) ([]mediaItem, error) {
 	scan, err := scanMediaIndex(indexPath, mediaRoot, strict)
 	if err != nil {
 		return nil, err
@@ -453,6 +459,9 @@ func sampleMedia(indexPath, mediaRoot string, limit int, seed string, strict boo
 	// mix immediately, and the quota selector decides the final balance.
 	pool := make([]mediaItem, 0, len(scan.rows))
 	for _, row := range scan.rows {
+		if keep != nil && !keep(row.item) {
+			continue
+		}
 		if !row.usable {
 			// An unusable row always precedes the error that ended the scan,
 			// so strict keeps reporting it first.
@@ -509,6 +518,22 @@ func ValidateMediaLibrary(indexPath, mediaRoot, profilePath string) error {
 	}
 	if len(clips) == 0 {
 		return fmt.Errorf("media index produced no usable clips")
+	}
+	return nil
+}
+
+// ValidateMovieCatalog checks that the method-three catalog file exists.
+func ValidateMovieCatalog(catalogPath string) error {
+	catalogPath = strings.TrimSpace(catalogPath)
+	if catalogPath == "" {
+		return fmt.Errorf("media_catalog_path is required for movie montage")
+	}
+	info, err := os.Stat(catalogPath)
+	if err != nil {
+		return fmt.Errorf("movie catalog missing: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("media_catalog_path must be a regular file")
 	}
 	return nil
 }

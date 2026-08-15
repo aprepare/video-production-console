@@ -8,6 +8,32 @@ import (
 	"testing"
 )
 
+func TestLocalIntentAnalyzerMovieModeUsesNarrationConcepts(t *testing.T) {
+	intents, err := LocalIntentAnalyzer{}.Analyze(context.Background(), []TimedSentence{
+		{StartMS: 0, EndMS: 4000, Text: "真正危险的是家庭现金流越来越薄。"},
+	})
+	if err != nil || len(intents) == 0 {
+		t.Fatalf("intents=%v err=%v", intents, err)
+	}
+	joined := strings.Join(intents[0].VisualConcepts, " ")
+	if !strings.Contains(joined, "家庭") && !strings.Contains(joined, "现金流") {
+		t.Fatalf("movie concepts=%q", joined)
+	}
+}
+
+func TestLocalIntentAnalyzerLandscapeModeStaysScenic(t *testing.T) {
+	intents, err := LocalIntentAnalyzer{RestrictToLandscape: true}.Analyze(context.Background(), []TimedSentence{
+		{StartMS: 0, EndMS: 4000, Text: "真正危险的是家庭现金流越来越薄。"},
+	})
+	if err != nil || len(intents) == 0 {
+		t.Fatalf("intents=%v err=%v", intents, err)
+	}
+	joined := strings.Join(intents[0].VisualConcepts, " ")
+	if joined != "风景 景观" {
+		t.Fatalf("landscape concepts=%q", joined)
+	}
+}
+
 func TestLocalIntentAnalyzerExtractsFinanceCues(t *testing.T) {
 	sentences := []TimedSentence{
 		{StartMS: 0, EndMS: 4000, Text: "真正危险的是家庭现金流越来越薄。"},

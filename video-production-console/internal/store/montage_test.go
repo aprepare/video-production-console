@@ -67,6 +67,40 @@ func displayReconcileFixture(t *testing.T, displayName string) (*MontageReposito
 	return repo, assets, version, root, manifest
 }
 
+func TestDraftDisplayNameFromManifestAcceptsMovieSkill(t *testing.T) {
+	taskID := uuid.NewString()
+	root := t.TempDir()
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(output, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(root, "task_manifest.json")
+	data, err := json.Marshal(map[string]any{
+		"schema_version": "2.0",
+		"skill":          "jianying-movie-montage",
+		"action":         domain.ActionMontageExecute,
+		"task_id":        taskID,
+		"job_id":         taskID,
+		"output_dir":     output,
+		"non_secret_settings": map[string]any{
+			"draft_display_name": "电影混剪_测试片名_b66205",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := draftDisplayNameFromManifest(manifest, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "电影混剪_测试片名_b66205" {
+		t.Fatalf("display name=%q", got)
+	}
+}
+
 func TestDraftsNeedingDisplayNameReturnsOnlyValidReadyCompletedUUIDDraft(t *testing.T) {
 	displayName := "财富觉醒02_存款大搬家_b66205"
 	repo, _, version, root, _ := displayReconcileFixture(t, displayName)

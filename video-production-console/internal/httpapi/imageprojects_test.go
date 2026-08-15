@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/imageproject"
 	consoleSettings "video-production-console/internal/settings"
@@ -41,21 +43,92 @@ func (s imageRuntimeStub) Runtime(context.Context) (consoleSettings.Runtime, err
 }
 
 type imageGeneratorStub struct {
-	result imageproject.GenerateResult
-	err    error
+	result   imageproject.GenerateResult
+	err      error
+	requests []imageproject.GenerateRequest
 }
 
 func (s imageGeneratorStub) Generate(context.Context, imageproject.GenerateRequest) (imageproject.GenerateResult, error) {
 	return s.result, s.err
 }
 
-type imagePlannerStub struct{}
+type capturingImageGenerator struct {
+	requests []imageproject.GenerateRequest
+}
 
-func (imagePlannerStub) Complete(_ context.Context, input imageproject.ChatRequest) (string, error) {
-	if strings.Contains(input.System, "分镜编辑") {
+func (g *capturingImageGenerator) Generate(_ context.Context, req imageproject.GenerateRequest) (imageproject.GenerateResult, error) {
+	g.requests = append(g.requests, req)
+	return imageproject.GenerateResult{Bytes: []byte("bad")}, errors.New("capture")
+}
+
+func TestImageProjectsGeneratePropagatesImageStream(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	gen := &capturingImageGenerator{}
+	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: "https://img.test/v1", ImageModel: "m", ImageStream: true, MaxImageConcurrency: 1}, ImageAPIKey: "k"}}
+	h := testImageHandler(db, runtime, gen)
+	create := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("t", "s", map[string]any{"image_count": 1})))
+	create.Header.Set("Content-Type", "application/json")
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, create)
+	if r.Code != http.StatusCreated {
+		t.Fatalf("create=%d", r.Code)
+	}
+	var d domain.ImageProjectDetail
+	_ = json.Unmarshal(r.Body.Bytes(), &d)
+	if d.Project.ImageAttempts != 2 {
+		t.Fatalf("default image attempts=%d", d.Project.ImageAttempts)
+	}
+	r = httptest.NewRecorder()
+	h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/api/image-projects/"+d.Project.ID+"/generate", nil))
+	if len(gen.requests) != 1 || !gen.requests[0].Stream {
+		t.Fatalf("requests=%+v", gen.requests)
+	}
+}
+
+func TestImageProjectsPublishingGeneratePersistsFiveCandidates(t *testing.T) {
+	db, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	defer db.Close()
+	now := time.Now().UTC()
+	p := domain.ImageProject{ID: uuid.NewString(), Title: "t", Script: "hello", ImageCount: 1, Ratio: "3:4", Style: "red_ink", Concurrency: 1, Status: "draft", CreatedAt: now, UpdatedAt: now}
+	repo := store.NewImageProjectRepository(db)
+	item := domain.ImageProjectItem{ID: uuid.NewString(), ProjectID: p.ID, Sequence: 1, SourceText: "hello", Title: "h", Prompt: "p", Status: "pending", CreatedAt: now, UpdatedAt: now}
+	if err := repo.Create(context.Background(), p, []domain.ImageProjectItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	h := testImageHandler(db, imageRuntimeStub{}, nil)
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/api/image-projects/"+p.ID+"/publishing-candidates/generate", nil))
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
+	}
+}
+
+type imagePlannerStub struct {
+	last imageproject.ChatRequest
+}
+
+func (s *imagePlannerStub) Complete(_ context.Context, input imageproject.ChatRequest) (string, error) {
+	s.last = input
+	if strings.HasPrefix(input.ResponseSchemaName, "image_segments") {
 		script := input.User
 		if idx := strings.LastIndex(script, "原文：\n"); idx >= 0 {
 			script = script[idx+len("原文：\n"):]
+		}
+		if idx := strings.LastIndex(script, "\n"); idx >= 0 {
+			var decoded string
+			if json.Unmarshal([]byte(script[idx+1:]), &decoded) == nil {
+				script = decoded
+			}
+		}
+		if input.ResponseSchemaName == "image_segments_and_publishing" {
+			segments := testSegmentsForScript(script)
+			pubs := []map[string]any{{"position": 1, "title": "标题一", "description": "描述一 #存款 #财富管理 #思维提升"}, {"position": 2, "title": "标题二", "description": "描述二 #存款 #理财 #认知"}, {"position": 3, "title": "标题三", "description": "描述三 #存款 #财富 #干货"}, {"position": 4, "title": "标题四", "description": "描述四 #复利 #理财 #思维"}, {"position": 5, "title": "标题五", "description": "描述五 #风险 #存款 #认知"}}
+			out, _ := json.Marshal(map[string]any{"segments": segments, "publishing_candidates": pubs})
+			return string(out), nil
 		}
 		return defaultTestSegmentJSON(script), nil
 	}
@@ -65,7 +138,16 @@ func (imagePlannerStub) Complete(_ context.Context, input imageproject.ChatReque
 	}
 	var segments []imageproject.Segment
 	if err := json.Unmarshal([]byte(raw), &segments); err != nil || len(segments) == 0 {
-		return "", errors.New("planner stub missing segments")
+		segments = make([]imageproject.Segment, 0)
+		for _, s := range testSegmentsForScript(input.User) {
+			b, _ := json.Marshal(s)
+			var seg imageproject.Segment
+			_ = json.Unmarshal(b, &seg)
+			segments = append(segments, seg)
+		}
+		pubs := []map[string]any{{"position": 1, "title": "标题一", "description": "描述一 #存款 #财富管理 #思维提升"}, {"position": 2, "title": "标题二", "description": "描述二 #存款 #理财 #认知"}, {"position": 3, "title": "标题三", "description": "描述三 #存款 #财富 #干货"}, {"position": 4, "title": "标题四", "description": "描述四 #复利 #理财 #思维"}, {"position": 5, "title": "标题五", "description": "描述五 #风险 #存款 #认知"}}
+		out, _ := json.Marshal(map[string]any{"segments": segments, "publishing_candidates": pubs})
+		return string(out), nil
 	}
 	prompts := make([]map[string]any, 0, len(segments))
 	for _, segment := range segments {
@@ -108,7 +190,7 @@ func imageCreatePayload(title, script string, extra map[string]any) []byte {
 }
 
 func testImageHandler(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator) http.Handler {
-	return NewImageProjectsHandlerWithPlanner(db, runtime, generator, imagePlannerStub{})
+	return NewImageProjectsHandlerWithPlanner(db, runtime, generator, &imagePlannerStub{})
 }
 
 func testImagePNG(t *testing.T) string {
@@ -261,6 +343,86 @@ func TestImageProjectsHTTPCreatePreservesFinalScriptExactly(t *testing.T) {
 	}
 }
 
+func TestImageProjectsHTTPCreateAcceptsSelectedPublishingPosition(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	handler := testImageHandler(db, imageRuntimeStub{}, nil)
+	candidates := []domain.PublishingCandidate{
+		{Position: 1, Title: "标题一", Description: "描述一"},
+		{Position: 2, Title: "标题二", Description: "描述二"},
+		{Position: 3, Title: "标题三", Description: "描述三"},
+		{Position: 4, Title: "标题四", Description: "描述四"},
+		{Position: 5, Title: "标题五", Description: "描述五"},
+	}
+	body := imageCreatePayload("原文", "第一句。第二句。", map[string]any{
+		"publishing_candidates": candidates,
+		"selected_position":     1,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var detail domain.ImageProjectDetail
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Project.SelectedPosition == nil || *detail.Project.SelectedPosition != 1 {
+		t.Fatalf("selected position=%v", detail.Project.SelectedPosition)
+	}
+}
+
+func TestImageProjectsHTTPSegmentPreviewUsesReasoningEffort(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	planner := &imagePlannerStub{}
+	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{
+		DataRoot: t.TempDir(), ImageModel: "gpt-image-2", MaxImageConcurrency: 1, ImageTextReasoningEffort: "medium",
+	}}}
+	handler := NewImageProjectsHandlerWithPlanner(db, runtime, nil, planner)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects/segment-preview", bytes.NewReader(imageCreatePayload("养老", "第一句。第二句。", map[string]any{"reasoning_effort": "high"})))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", response.Code, response.Body.String())
+	}
+	if planner.last.ReasoningEffort != "high" {
+		t.Fatalf("request effort not forwarded: %+v", planner.last)
+	}
+	if planner.last.System == "" || !strings.Contains(planner.last.User, "原文数据") {
+		t.Fatalf("segment preview bypassed planner instructions: system=%q user=%q", planner.last.System, planner.last.User)
+	}
+	if planner.last.ResponseSchemaName != "image_segments_and_publishing" || planner.last.ResponseSchema == nil {
+		t.Fatalf("segment preview omitted structured response schema: name=%q schema=%#v", planner.last.ResponseSchemaName, planner.last.ResponseSchema)
+	}
+
+	fallback := httptest.NewRequest(http.MethodPost, "/api/image-projects/segment-preview", bytes.NewReader(imageCreatePayload("养老", "第一句。第二句。", nil)))
+	fallback.Header.Set("Content-Type", "application/json")
+	fallbackResponse := httptest.NewRecorder()
+	handler.ServeHTTP(fallbackResponse, fallback)
+	if fallbackResponse.Code != http.StatusOK || planner.last.ReasoningEffort != "medium" {
+		t.Fatalf("settings default effort not used: status=%d effort=%q body=%s", fallbackResponse.Code, planner.last.ReasoningEffort, fallbackResponse.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodPost, "/api/image-projects/segment-preview", bytes.NewReader(imageCreatePayload("养老", "第一句。第二句。", map[string]any{"reasoning_effort": "impossible"})))
+	invalid.Header.Set("Content-Type", "application/json")
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid effort status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
 func TestImageProjectsHTTPRejectsEmptyCustomStyle(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
 	if err != nil {
@@ -274,6 +436,41 @@ func TestImageProjectsHTTPRejectsEmptyCustomStyle(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("empty custom style status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestImageProjectsHTTPPersistsExplicitImageAttempts(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	runtime := imageRuntimeStub{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: t.TempDir(), ImageBaseURL: "https://api.example.com/v1", ImageModel: "gpt-image-2", MaxImageConcurrency: 2, ImageGenerationAttempts: 2}, ImageAPIKey: "configured"}}
+	handler := testImageHandler(db, runtime, imageGeneratorStub{err: errors.New("fail")})
+	request := httptest.NewRequest(http.MethodPost, "/api/image-projects", bytes.NewReader(imageCreatePayload("x", "第一句。", map[string]any{"image_count": 1, "image_attempts": 3})))
+	request.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, request)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var detail domain.ImageProjectDetail
+	if err := json.Unmarshal(created.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Project.ImageAttempts != 3 {
+		t.Fatalf("image attempts=%d", detail.Project.ImageAttempts)
+	}
+	generated := httptest.NewRecorder()
+	handler.ServeHTTP(generated, httptest.NewRequest(http.MethodPost, "/api/image-projects/"+detail.Project.ID+"/generate", nil))
+	if generated.Code != http.StatusOK {
+		t.Fatalf("partial generate status=%d body=%s", generated.Code, generated.Body.String())
+	}
+	if err := json.Unmarshal(generated.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Items[0].AttemptCount < 1 || detail.Items[0].Status != "failed" {
+		t.Fatalf("item=%+v", detail.Items[0])
 	}
 }
 

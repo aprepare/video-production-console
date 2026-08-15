@@ -36,6 +36,7 @@ type TaskManifestRequest struct {
 	MachineProfilePath   string    `json:"machine_profile_path,omitempty"`
 	ApprovalMode         string    `json:"approval_mode,omitempty"`
 	RevisionNotes        string    `json:"revision_notes,omitempty"`
+	RemixPromptStyle     string    `json:"remix_prompt_style,omitempty"`
 	SourceFeedIDs        []string  `json:"source_feed_ids,omitempty"`
 	PreparationStartedAt time.Time `json:"-"`
 }
@@ -86,7 +87,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	if err != nil {
 		return fmt.Errorf("runtime settings unavailable: %w", err)
 	}
-	resolved, err := codex.ResolveAction(task.Action)
+	resolved, err := codex.ResolveMontageSkill(task.Action, task.SkillName)
 	if err != nil {
 		return err
 	}
@@ -166,6 +167,15 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		VisionBaseURL: runtime.VisionBaseURL, VisionModel: runtime.VisionModel,
 		EmbeddingBaseURL: runtime.EmbeddingBaseURL, EmbeddingModel: runtime.EmbeddingModel,
 	}
+	if remixActionOmitsGrok(task.Action) {
+		settings.GrokBaseURL = ""
+		settings.GrokModel = ""
+		style, err := normalizeRemixPromptStyle(req.RemixPromptStyle)
+		if err != nil {
+			return err
+		}
+		settings.RemixPromptStyle = style
+	}
 	if task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute {
 		decision := skillregistry.DecideMontagePlanVersion(snapshot)
 		settings.MontagePlanVersion = decision.Version
@@ -179,7 +189,14 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		if err != nil {
 			return fmt.Errorf("resolve draft display name: %w", err)
 		}
-		if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
+		if task.SkillName == "jianying-movie-montage" {
+			if err := montageplan.ValidateMovieCatalog(settings.MediaCatalogPath); err != nil {
+				logging.LoggerFrom(ctx).Error("movie catalog preflight rejected",
+					"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
+					"media_catalog_path", settings.MediaCatalogPath, "error", err)
+				return fmt.Errorf("movie catalog preflight: %w", err)
+			}
+		} else if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
 			logging.LoggerFrom(ctx).Error("montage media preflight rejected",
 				"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
 				"media_index_path", settings.MediaIndexPath, "media_root", settings.MediaRoot,
@@ -535,3 +552,24 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 	}
 	return inputs, nil
 }
+
+func remixActionOmitsGrok(action domain.TaskAction) bool {
+	switch action {
+	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRemixPromptStyle(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "rewrite":
+		return "rewrite", nil
+	case "wash":
+		return "wash", nil
+	default:
+		return "", fmt.Errorf("remix_prompt_style must be rewrite or wash")
+	}
+}
+

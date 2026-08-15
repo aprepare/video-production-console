@@ -64,7 +64,7 @@ func (l *workflowTaskLauncher) LaunchRemixFromTopicCard(ctx context.Context, in 
 	if prepareStartedAt.IsZero() {
 		prepareStartedAt = time.Now().UTC()
 	}
-	model, err := resolveTaskModel(ctx, l.models, taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort})
+	model, err := resolveTaskModel(ctx, l.models, taskmodel.Selection{Model: in.ModelName, ReasoningEffort: in.ReasoningEffort, Kind: taskmodel.KindRemix})
 	if err != nil {
 		return domain.CodexTask{}, err
 	}

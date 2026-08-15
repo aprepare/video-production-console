@@ -162,7 +162,7 @@ func (h *ideasHandler) message(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 202, msg)
 		return
 	}
-	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort})
+	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: taskmodel.KindRemix})
 	if e != nil {
 		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
 		return

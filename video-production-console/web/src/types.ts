@@ -81,11 +81,16 @@ export type PublicSettings = {
   topic_cards_dir: string;
   grok_base_url: string;
   grok_model: string;
+  remix_base_url: string;
+  remix_model: string;
   image_base_url: string;
   image_model: string;
   image_text_base_url: string;
   image_text_model: string;
+  image_text_reasoning_effort: ReasoningEffort | "";
   max_image_concurrency: number;
+  image_generation_attempts: number;
+  image_stream: boolean;
   default_image_ratio: "3:4" | "4:3" | "9:16" | "1:1";
   default_image_style: string;
   codex_binary_path: string;
@@ -120,6 +125,11 @@ export type Settings = {
   secrets: Record<string, { configured: boolean; masked: string }>;
 };
 
+export type ImageRunPhase = "idle" | "planning" | "prompting" | "imaging" | "completed";
+export type ImageRunStatus = "idle" | "running" | "failed" | "completed" | "interrupted";
+
+export type PublishingCandidate = { position: number; title: string; description: string };
+
 export type ImageProject = {
   id: string;
   title: string;
@@ -130,8 +140,39 @@ export type ImageProject = {
   custom_style: string;
   concurrency: number;
   status: "draft" | "generating" | "ready" | "partial" | "failed";
+  run_mode?: "manual" | "quick";
+  run_phase?: ImageRunPhase;
+  run_status?: ImageRunStatus;
+  phase_error?: string;
+  publishing_error?: string;
+  success_count?: number;
+  failure_count?: number;
+  image_attempts?: number;
+  text_model?: string;
+  reasoning_effort?: ReasoningEffort | "";
+  image_model?: string;
+  publishing_candidates?: PublishingCandidate[];
+  selected_position?: number;
   created_at: string;
   updated_at: string;
+};
+
+export type QuickImageProjectRequest = {
+  script: string;
+  image_count: number;
+  ratio: ImageProject["ratio"];
+  style: string;
+  custom_style: string;
+  concurrency: number;
+  text_model: string;
+  reasoning_effort: ReasoningEffort | "";
+  image_model: string;
+  image_attempts: number;
+};
+
+export type QuickImageProjectResponse = {
+  project_id: string;
+  run_status: ImageRunStatus;
 };
 
 export type ImageProjectItem = {
@@ -147,10 +188,11 @@ export type ImageProjectItem = {
   width?: number;
   height?: number;
   error_message?: string;
+  attempt_count?: number;
   updated_at?: string;
 };
 
-export type ImageProjectDetail = { project: ImageProject; items: ImageProjectItem[] };
+export type ImageProjectDetail = { project: ImageProject; items: ImageProjectItem[]; publishing_candidates?: PublishingCandidate[]; selected_position?: number; publishing?: { current?: PublishingCandidate; all?: PublishingCandidate[] } };
 
 export type IdeaMessage = {
   id: string;
