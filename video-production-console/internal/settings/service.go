@@ -1,0 +1,1421 @@
+package settings
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"video-production-console/internal/domain"
+	"video-production-console/internal/security"
+	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
+)
+
+const (
+	SecretGrokAPIKey       = "grok_api_key"
+	SecretRemixAPIKey      = "remix_api_key"
+	SecretPexelsAPIKey     = "pexels_api_key"
+	SecretVolcSpeechAPIKey = "volc_speech_api_key"
+	SecretAuraSTDTTsAPIKey = "aurastd_tts_api_key"
+	SecretImageAPIKey      = "image_api_key"
+	SecretImageTextAPIKey  = "image_text_api_key"
+	SecretVisionAPIKey     = "vision_api_key"
+	SecretEmbeddingAPIKey  = "embedding_api_key"
+	SecretPixabayAPIKey    = "pixabay_api_key"
+
+	secretMask                     = "********"
+	defaultImageModel              = "gpt-image-2"
+	defaultMaxImageConcurrency     = 3
+	maxImageConcurrency            = 18
+	defaultImageGenerationAttempts = 2
+	maxImageGenerationAttempts     = 4
+
+	defaultPexelsAPIBaseURL           = "https://api.pexels.com"
+	defaultPixabayAPIBaseURL          = "https://pixabay.com"
+	defaultMaxExternalResultsPerQuery = 20
+	maxExternalResultsPerQuery        = 50
+	defaultTTSProvider                = "aurastd"
+	defaultAuraSTDBaseURL             = "https://tts.aurastd.com"
+	defaultAuraSTDModel               = "speech-2.8-hd"
+	defaultAuraSTDVoiceID             = "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67"
+	defaultAuraSTDSpeed               = 1.21
+	defaultAuraSTDVolume              = 1.4
+	defaultAuraSTDPitch               = 1
+	defaultAuraSTDModifyIntensity     = 5
+	defaultAuraSTDModifyTimbre        = 6
+	defaultAuraSTDLanguageBoost       = "Chinese"
+	defaultImageRatio                 = "3:4"
+	defaultImageStyle                 = "finance_documentary"
+	probeTimeout                      = 5 * time.Second
+	maxProbeBodySize                  = 64 << 10
+	maxCommandOutputSize              = 64 << 10
+)
+
+var (
+	ErrInvalidSettings = errors.New("settings are invalid")
+	ErrUnknownSecret   = errors.New("secret key is not supported")
+	ErrNotConfigured   = errors.New("settings are not configured")
+)
+
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
+
+type Repository interface {
+	Public(context.Context) (map[string]string, int64, error)
+	InitializeBoot(context.Context, map[string]string) error
+	UpdatePublic(context.Context, map[string]string) (int64, error)
+	UpdateAtomic(context.Context, map[string]string, map[string]string, time.Time) (int64, error)
+	PutSecret(context.Context, string, string, time.Time) (int64, error)
+	Secret(context.Context, string) (store.EncryptedSecret, error)
+}
+
+type CommandRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+type HTTPClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type Options struct {
+	Now        func() time.Time
+	Runner     CommandRunner
+	HTTPClient HTTPClient
+}
+
+type Service struct {
+	repo      Repository
+	protector security.Protector
+	now       func() time.Time
+	runner    CommandRunner
+	http      HTTPClient
+	activeMu  sync.RWMutex
+	active    *Runtime
+}
+
+type BootSettings struct {
+	ListenAddr           string
+	DataRoot             string
+	CodexBinaryPath      string
+	BaokuanMCPExecutable string
+	ObsidianVault        string
+	TopicCardsDir        string
+	MediaIndexPath       string
+	MediaRoot            string
+	JianyingRoot         string
+	MachineProfilePath   string
+	CodexTaskProjectRoot string
+	CodexWorkspaceRoots  []string
+}
+
+type View struct {
+	Public           domain.PublicSettings          `json:"public"`
+	ConfiguredPublic domain.PublicSettings          `json:"configured_public"`
+	ActivePublic     domain.PublicSettings          `json:"active_public"`
+	SettingsVersion  int64                          `json:"settings_version"`
+	Secrets          map[string]domain.SecretStatus `json:"secrets"`
+	RestartRequired  bool                           `json:"restart_required"`
+}
+
+// Runtime is process-only configuration. It intentionally has no JSON tags
+// and must never be used as an HTTP response or task snapshot.
+type Runtime struct {
+	domain.PublicSettings
+	GrokAPIKey       string           `json:"-"`
+	RemixAPIKey      string           `json:"-"`
+	PexelsAPIKey     string           `json:"-"`
+	VolcSpeechAPIKey string           `json:"-"`
+	AuraSTDTTsAPIKey string           `json:"-"`
+	ImageAPIKey      string           `json:"-"`
+	ImageTextAPIKey  string           `json:"-"`
+	VisionAPIKey     string           `json:"-"`
+	EmbeddingAPIKey  string           `json:"-"`
+	PixabayAPIKey    string           `json:"-"`
+	SecretVersions   map[string]int64 `json:"-"`
+}
+
+type HealthStatus string
+
+const (
+	HealthOK            HealthStatus = "ok"
+	HealthNotConfigured HealthStatus = "not_configured"
+	HealthOffline       HealthStatus = "offline"
+)
+
+type Health struct {
+	Status  HealthStatus `json:"status"`
+	Message string       `json:"message"`
+}
+
+func NewService(repo Repository, protector security.Protector, optionValues ...Options) *Service {
+	options := Options{}
+	if len(optionValues) > 0 {
+		options = optionValues[0]
+	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+	if options.Runner == nil {
+		options.Runner = directCommandRunner{}
+	}
+	if options.HTTPClient == nil {
+		options.HTTPClient = &http.Client{Timeout: probeTimeout}
+	}
+	options.HTTPClient = noRedirectHTTPClient(options.HTTPClient)
+	return &Service{repo: repo, protector: protector, now: options.Now, runner: options.Runner, http: options.HTTPClient}
+}
+
+func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings) error {
+	if boot.DataRoot == "" || boot.CodexBinaryPath == "" {
+		return ErrNotConfigured
+	}
+	if boot.ListenAddr != "" {
+		if err := validateListenAddr(boot.ListenAddr); err != nil {
+			return invalid("listen_addr")
+		}
+	}
+	paths := []struct{ name, value string }{
+		{"data_root", boot.DataRoot},
+		{"codex_binary_path", boot.CodexBinaryPath},
+		{"baokuan_mcp_executable", boot.BaokuanMCPExecutable},
+		{"obsidian_vault", boot.ObsidianVault},
+		{"topic_cards_dir", boot.TopicCardsDir},
+		{"media_index_path", boot.MediaIndexPath},
+		{"media_root", boot.MediaRoot},
+		{"jianying_root", boot.JianyingRoot},
+		{"machine_profile_path", boot.MachineProfilePath},
+		{"codex_task_project_root", boot.CodexTaskProjectRoot},
+	}
+	values := make(map[string]string, len(paths)+1)
+	if boot.ListenAddr != "" {
+		values["listen_addr"] = boot.ListenAddr
+	}
+	for _, path := range paths {
+		if path.value == "" {
+			continue
+		}
+		if err := validateCanonicalAbsolutePath(path.value); err != nil {
+			return invalid(path.name)
+		}
+		values[path.name] = path.value
+	}
+	if len(boot.CodexWorkspaceRoots) > 0 {
+		roots := make([]string, 0, len(boot.CodexWorkspaceRoots))
+		for _, root := range boot.CodexWorkspaceRoots {
+			if err := validateCanonicalAbsolutePath(root); err != nil {
+				return invalid("codex_workspace_roots")
+			}
+			roots = append(roots, root)
+		}
+		encoded, err := json.Marshal(roots)
+		if err != nil {
+			return invalid("codex_workspace_roots")
+		}
+		values["codex_workspace_roots"] = string(encoded)
+	}
+	// The App Server powers formal task interaction and recovery. New
+	// installations enable it so task questions do not require a hidden opt-in.
+	values["app_server_enabled"] = "true"
+	return s.repo.InitializeBoot(ctx, values)
+}
+
+func (s *Service) Get(ctx context.Context) (View, error) {
+	values, version, err := s.repo.Public(ctx)
+	if err != nil {
+		return View{}, err
+	}
+	view := View{
+		Public:          publicFromValues(values),
+		SettingsVersion: version,
+		Secrets:         make(map[string]domain.SecretStatus, len(secretKeys)),
+	}
+	view.ConfiguredPublic = clonePublic(view.Public)
+	configuredSecretVersions := map[string]int64{}
+	for _, key := range secretKeys {
+		secret, err := s.repo.Secret(ctx, key)
+		switch {
+		case err == nil:
+			view.Secrets[key] = domain.SecretStatus{Configured: true, Masked: secretMask}
+			configuredSecretVersions[key] = secret.Version
+		case errors.Is(err, store.ErrSecretNotFound):
+			view.Secrets[key] = domain.SecretStatus{}
+		default:
+			return View{}, err
+		}
+	}
+	s.activeMu.RLock()
+	if s.active == nil {
+		view.ActivePublic = view.Public
+	} else {
+		view.ActivePublic = clonePublic(s.active.PublicSettings)
+		view.RestartRequired = restartSensitiveChanged(view.Public, s.active.PublicSettings) || !sameSecretVersions(configuredSecretVersions, s.active.SecretVersions)
+	}
+	s.activeMu.RUnlock()
+	return view, nil
+}
+
+func (s *Service) PutPublic(ctx context.Context, value domain.PublicSettings) (int64, error) {
+	value = sanitizePublicModels(value)
+	if err := validatePublic(value); err != nil {
+		return 0, err
+	}
+	version, err := s.repo.UpdatePublic(ctx, publicValues(value))
+	if err == nil {
+		s.applyHotSettings(value)
+	}
+	return version, err
+}
+
+func (s *Service) ResolveTaskModel(ctx context.Context, override taskmodel.Selection) (taskmodel.Selection, error) {
+	runtime, err := s.Runtime(ctx)
+	if err != nil {
+		return taskmodel.Selection{}, err
+	}
+	model := strings.TrimSpace(runtime.CodexDefaultModel)
+	if override.Kind == taskmodel.KindRemix {
+		model = firstNonEmpty(runtime.RemixModel, runtime.CodexDefaultModel)
+	}
+	defaults := taskmodel.Selection{
+		Model:           model,
+		ReasoningEffort: runtime.CodexDefaultReasoningEffort,
+		Kind:            override.Kind,
+	}
+	if override.Kind == taskmodel.KindRemix {
+		defaults.ReasoningEffort = strings.TrimSpace(runtime.RemixReasoningEffort)
+	}
+	return taskmodel.Resolve(defaults, override)
+}
+
+// Update validates the complete request before changing public settings.
+// Empty secret values deliberately mean "leave unchanged".
+func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secrets map[string]string) (View, error) {
+	public = sanitizePublicModels(public)
+	if err := validatePublic(public); err != nil {
+		return View{}, err
+	}
+	for key, value := range secrets {
+		if err := validateSecretUpdate(key, value); err != nil {
+			return View{}, err
+		}
+	}
+	encrypted := make(map[string]string, len(secrets))
+	for _, key := range secretKeys {
+		if value, ok := secrets[key]; ok && value != "" {
+			ciphertext, err := s.protectSecret(value)
+			if err != nil {
+				return View{}, err
+			}
+			encrypted[key] = ciphertext
+		}
+	}
+	if _, err := s.repo.UpdateAtomic(ctx, publicValues(public), encrypted, s.now().UTC()); err != nil {
+		return View{}, errors.New("settings could not be stored")
+	}
+	s.applyHotSettings(public)
+	s.applyHotVoiceSecrets(ctx, secrets)
+	return s.Get(ctx)
+}
+
+func (s *Service) applyHotSettings(configured domain.PublicSettings) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.active == nil {
+		return
+	}
+	s.active.MaxCodexConcurrency = configured.MaxCodexConcurrency
+	s.active.MaxImageConcurrency = normalizedImageConcurrency(configured.MaxImageConcurrency)
+	s.active.ImageGenerationAttempts = normalizedImageGenerationAttempts(configured.ImageGenerationAttempts)
+	s.active.CodexDefaultModel = configured.CodexDefaultModel
+	s.active.CodexDefaultReasoningEffort = configured.CodexDefaultReasoningEffort
+	s.active.RemixBaseURL = configured.RemixBaseURL
+	s.active.RemixModel = configured.RemixModel
+	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
+	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
+	s.active.ImageStream = configured.ImageStream
+	copyVoiceHotSettings(s.active, configured)
+}
+
+func copyVoiceHotSettings(active *Runtime, configured domain.PublicSettings) {
+	if active == nil {
+		return
+	}
+	active.TTSProvider = configured.TTSProvider
+	active.AuraSTDBaseURL = configured.AuraSTDBaseURL
+	active.AuraSTDModel = configured.AuraSTDModel
+	active.AuraSTDVoiceID = configured.AuraSTDVoiceID
+	active.AuraSTDSpeed = configured.AuraSTDSpeed
+	active.AuraSTDVolume = configured.AuraSTDVolume
+	active.AuraSTDPitch = configured.AuraSTDPitch
+	active.AuraSTDEmotion = configured.AuraSTDEmotion
+	active.AuraSTDLanguageBoost = configured.AuraSTDLanguageBoost
+	active.AuraSTDModifyPitch = configured.AuraSTDModifyPitch
+	active.AuraSTDModifyIntensity = configured.AuraSTDModifyIntensity
+	active.AuraSTDModifyTimbre = configured.AuraSTDModifyTimbre
+	active.AuraSTDSoundEffects = configured.AuraSTDSoundEffects
+	active.VolcSpeechSpeakerID = configured.VolcSpeechSpeakerID
+	active.VolcSpeechResourceID = configured.VolcSpeechResourceID
+}
+
+func clearVoiceHotSettings(value *domain.PublicSettings) {
+	if value == nil {
+		return
+	}
+	value.TTSProvider = ""
+	value.AuraSTDBaseURL = ""
+	value.AuraSTDModel = ""
+	value.AuraSTDVoiceID = ""
+	value.AuraSTDSpeed = 0
+	value.AuraSTDVolume = 0
+	value.AuraSTDPitch = 0
+	value.AuraSTDEmotion = ""
+	value.AuraSTDLanguageBoost = ""
+	value.AuraSTDModifyPitch = 0
+	value.AuraSTDModifyIntensity = 0
+	value.AuraSTDModifyTimbre = 0
+	value.AuraSTDSoundEffects = ""
+	value.VolcSpeechSpeakerID = ""
+	value.VolcSpeechResourceID = ""
+}
+
+func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]string) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.active == nil {
+		return
+	}
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey} {
+		value, ok := secrets[key]
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case SecretAuraSTDTTsAPIKey:
+			s.active.AuraSTDTTsAPIKey = value
+		case SecretVolcSpeechAPIKey:
+			s.active.VolcSpeechAPIKey = value
+		}
+		_, version, configured, err := s.secretValue(ctx, key)
+		if err != nil || !configured {
+			continue
+		}
+		if s.active.SecretVersions == nil {
+			s.active.SecretVersions = map[string]int64{}
+		}
+		s.active.SecretVersions[key] = version
+	}
+}
+
+func (s *Service) PutSecret(ctx context.Context, key, value string) error {
+	if err := validateSecretUpdate(key, value); err != nil {
+		return err
+	}
+	if value == "" {
+		return nil
+	}
+	encoded, err := s.protectSecret(value)
+	if err != nil {
+		return err
+	}
+	if _, err := s.repo.PutSecret(ctx, key, encoded, s.now().UTC()); err != nil {
+		return errors.New("encrypted secret could not be stored")
+	}
+	return nil
+}
+
+func (s *Service) protectSecret(value string) (string, error) {
+	if s.protector == nil {
+		return "", security.ErrSecretStoreUnsupported
+	}
+	plain := []byte(value)
+	defer clear(plain)
+	ciphertext, err := s.protector.Protect(plain)
+	if err != nil {
+		if errors.Is(err, security.ErrSecretStoreUnsupported) {
+			return "", security.ErrSecretStoreUnsupported
+		}
+		return "", security.ErrSecretProtection
+	}
+	defer clear(ciphertext)
+	if len(ciphertext) == 0 {
+		return "", security.ErrSecretProtection
+	}
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func (s *Service) Runtime(ctx context.Context) (Runtime, error) {
+	s.activeMu.RLock()
+	if s.active != nil {
+		runtime := cloneRuntime(*s.active)
+		s.activeMu.RUnlock()
+		return runtime, nil
+	}
+	s.activeMu.RUnlock()
+	runtime, err := s.configuredRuntime(ctx)
+	if err != nil {
+		return Runtime{}, err
+	}
+	s.activeMu.Lock()
+	if s.active == nil {
+		copy := cloneRuntime(runtime)
+		s.active = &copy
+	}
+	result := cloneRuntime(*s.active)
+	s.activeMu.Unlock()
+	return result, nil
+}
+
+func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
+	view, err := s.Get(ctx)
+	if err != nil {
+		return Runtime{}, err
+	}
+	if view.Public.DataRoot == "" || view.Public.CodexBinaryPath == "" || !filepath.IsAbs(view.Public.DataRoot) || !filepath.IsAbs(view.Public.CodexBinaryPath) {
+		return Runtime{}, ErrNotConfigured
+	}
+	if err := validatePublic(view.Public); err != nil {
+		return Runtime{}, err
+	}
+	runtime := Runtime{PublicSettings: view.Public, SecretVersions: make(map[string]int64, len(secretKeys))}
+	for _, key := range secretKeys {
+		value, version, configured, err := s.secretValue(ctx, key)
+		if !configured && err == nil {
+			continue
+		}
+		if err != nil {
+			return Runtime{}, err
+		}
+		switch key {
+		case SecretGrokAPIKey:
+			runtime.GrokAPIKey = value
+		case SecretRemixAPIKey:
+			runtime.RemixAPIKey = value
+		case SecretPexelsAPIKey:
+			runtime.PexelsAPIKey = value
+		case SecretVolcSpeechAPIKey:
+			runtime.VolcSpeechAPIKey = value
+		case SecretAuraSTDTTsAPIKey:
+			runtime.AuraSTDTTsAPIKey = value
+		case SecretImageAPIKey:
+			runtime.ImageAPIKey = value
+		case SecretImageTextAPIKey:
+			runtime.ImageTextAPIKey = value
+		case SecretVisionAPIKey:
+			runtime.VisionAPIKey = value
+		case SecretEmbeddingAPIKey:
+			runtime.EmbeddingAPIKey = value
+		case SecretPixabayAPIKey:
+			runtime.PixabayAPIKey = value
+		}
+		runtime.SecretVersions[key] = version
+	}
+	return runtime, nil
+}
+
+func clonePublic(value domain.PublicSettings) domain.PublicSettings {
+	value.CodexWorkspaceRoots = append([]string(nil), value.CodexWorkspaceRoots...)
+	return value
+}
+
+func cloneRuntime(value Runtime) Runtime {
+	value.PublicSettings = clonePublic(value.PublicSettings)
+	versions := make(map[string]int64, len(value.SecretVersions))
+	for key, version := range value.SecretVersions {
+		versions[key] = version
+	}
+	value.SecretVersions = versions
+	return value
+}
+
+func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
+	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
+	configured.MaxImageConcurrency, active.MaxImageConcurrency = 0, 0
+	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0
+	clearVoiceHotSettings(&configured)
+	clearVoiceHotSettings(&active)
+	return !reflect.DeepEqual(configured, active)
+}
+
+func sameSecretVersions(configured, active map[string]int64) bool {
+	return reflect.DeepEqual(configured, active)
+}
+
+func (s *Service) secretValue(ctx context.Context, key string) (string, int64, bool, error) {
+	secret, err := s.repo.Secret(ctx, key)
+	if errors.Is(err, store.ErrSecretNotFound) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, errors.New("encrypted secret could not be read")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(secret.Ciphertext)
+	if err != nil || len(decoded) == 0 || s.protector == nil {
+		clear(decoded)
+		return "", 0, false, security.ErrSecretInvalid
+	}
+	plain, err := s.protector.Unprotect(decoded)
+	clear(decoded)
+	if err != nil || len(plain) == 0 || len(plain) > security.MaxSecretSize {
+		clear(plain)
+		return "", 0, false, errors.New("encrypted secret could not be decrypted")
+	}
+	value := string(plain)
+	clear(plain)
+	return value, secret.Version, true, nil
+}
+
+func validateSecretUpdate(key, value string) error {
+	known := false
+	for _, allowed := range secretKeys {
+		if key == allowed {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return ErrUnknownSecret
+	}
+	if len([]byte(value)) > security.MaxSecretSize {
+		return security.ErrSecretTooLarge
+	}
+	return nil
+}
+
+func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
+	value.RemixModel = strings.TrimSpace(value.RemixModel)
+	value.RemixReasoningEffort = strings.ToLower(strings.TrimSpace(value.RemixReasoningEffort))
+	return value
+}
+
+func validatePublic(value domain.PublicSettings) error {
+	if value.ImageGenerationAttempts == 0 {
+		value.ImageGenerationAttempts = defaultImageGenerationAttempts
+	}
+	if value.ImageGenerationAttempts < 1 || value.ImageGenerationAttempts > maxImageGenerationAttempts {
+		return invalid("image_generation_attempts")
+	}
+	value = withImageDefaults(value)
+	value = withMediaIntelligenceDefaults(value)
+	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
+		return invalid("max_codex_concurrency")
+	}
+	if value.MaxImageConcurrency < 1 || value.MaxImageConcurrency > maxImageConcurrency {
+		return invalid("max_image_concurrency")
+	}
+	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
+	if err != nil || normalizedModel.Model != value.CodexDefaultModel {
+		return invalid("codex_default_model")
+	}
+	normalizedEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.CodexDefaultReasoningEffort})
+	if err != nil || normalizedEffort.ReasoningEffort != value.CodexDefaultReasoningEffort {
+		return invalid("codex_default_reasoning_effort")
+	}
+	if err := validateListenAddr(value.ListenAddr); err != nil {
+		return invalid("listen_addr")
+	}
+	if value.BaokuanBaseURL != "" {
+		if err := validateLoopbackURL(value.BaokuanBaseURL); err != nil {
+			return invalid("baokuan_base_url")
+		}
+	}
+	if value.GrokBaseURL != "" {
+		if err := validateHTTPURL(value.GrokBaseURL); err != nil {
+			return invalid("grok_base_url")
+		}
+	}
+	if value.RemixBaseURL != "" {
+		if err := validateHTTPURL(value.RemixBaseURL); err != nil {
+			return invalid("remix_base_url")
+		}
+	}
+	if len(value.RemixModel) > 256 {
+		return invalid("remix_model")
+	}
+	if value.RemixReasoningEffort != "" {
+		normalizedRemixEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.RemixReasoningEffort})
+		if err != nil || normalizedRemixEffort.ReasoningEffort != value.RemixReasoningEffort {
+			return invalid("remix_reasoning_effort")
+		}
+	}
+	if value.ImageBaseURL != "" {
+		parsed, err := parseHTTPURL(value.ImageBaseURL)
+		if len(value.ImageBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("image_base_url")
+		}
+	}
+	if value.ImageModel != strings.TrimSpace(value.ImageModel) || len(value.ImageModel) > 128 {
+		return invalid("image_model")
+	}
+	if value.ImageTextBaseURL != "" {
+		parsed, err := parseHTTPURL(value.ImageTextBaseURL)
+		if len(value.ImageTextBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("image_text_base_url")
+		}
+	}
+	if value.ImageTextModel != strings.TrimSpace(value.ImageTextModel) || len(value.ImageTextModel) > 128 {
+		return invalid("image_text_model")
+	}
+	if value.ImageTextReasoningEffort != "" {
+		normalizedEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.ImageTextReasoningEffort})
+		if err != nil || normalizedEffort.ReasoningEffort != value.ImageTextReasoningEffort {
+			return invalid("image_text_reasoning_effort")
+		}
+	}
+	if !validImageRatio(value.DefaultImageRatio) {
+		return invalid("default_image_ratio")
+	}
+	if !validImageStyle(value.DefaultImageStyle) {
+		return invalid("default_image_style")
+	}
+	if value.MaxExternalResultsPerQuery < 1 || value.MaxExternalResultsPerQuery > maxExternalResultsPerQuery {
+		return invalid("max_external_results_per_query")
+	}
+	if err := validateFixedHTTPSHost(value.PexelsAPIBaseURL, "api.pexels.com"); err != nil {
+		return invalid("pexels_api_base_url")
+	}
+	if err := validateFixedHTTPSHost(value.PixabayAPIBaseURL, "pixabay.com"); err != nil {
+		return invalid("pixabay_api_base_url")
+	}
+	if value.VisionBaseURL != "" {
+		parsed, err := parseHTTPURL(value.VisionBaseURL)
+		if len(value.VisionBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("vision_base_url")
+		}
+	}
+	if value.VisionModel != strings.TrimSpace(value.VisionModel) || len(value.VisionModel) > 128 {
+		return invalid("vision_model")
+	}
+	if value.EmbeddingBaseURL != "" {
+		parsed, err := parseHTTPURL(value.EmbeddingBaseURL)
+		if len(value.EmbeddingBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("embedding_base_url")
+		}
+	}
+	if value.EmbeddingModel != strings.TrimSpace(value.EmbeddingModel) || len(value.EmbeddingModel) > 128 {
+		return invalid("embedding_model")
+	}
+	value = withAuraSTDDefaults(value)
+	switch value.TTSProvider {
+	case "aurastd", "volc":
+	default:
+		return invalid("tts_provider")
+	}
+	if value.AuraSTDBaseURL != "" {
+		if err := validateHTTPURL(value.AuraSTDBaseURL); err != nil {
+			return invalid("aurastd_base_url")
+		}
+	}
+	if value.AuraSTDModel != strings.TrimSpace(value.AuraSTDModel) || len(value.AuraSTDModel) > 128 {
+		return invalid("aurastd_model")
+	}
+	if value.AuraSTDVoiceID != strings.TrimSpace(value.AuraSTDVoiceID) || len(value.AuraSTDVoiceID) > 256 {
+		return invalid("aurastd_voice_id")
+	}
+	if value.AuraSTDSpeed < 0.5 || value.AuraSTDSpeed > 2 {
+		return invalid("aurastd_speed")
+	}
+	if value.AuraSTDVolume < 0 || value.AuraSTDVolume > 10 {
+		return invalid("aurastd_volume")
+	}
+	if value.AuraSTDPitch < -12 || value.AuraSTDPitch > 12 {
+		return invalid("aurastd_pitch")
+	}
+	if len(value.AuraSTDEmotion) > 32 {
+		return invalid("aurastd_emotion")
+	}
+	if len(value.AuraSTDLanguageBoost) > 64 {
+		return invalid("aurastd_language_boost")
+	}
+	if value.AuraSTDModifyPitch < -100 || value.AuraSTDModifyPitch > 100 {
+		return invalid("aurastd_modify_pitch")
+	}
+	if value.AuraSTDModifyIntensity < -100 || value.AuraSTDModifyIntensity > 100 {
+		return invalid("aurastd_modify_intensity")
+	}
+	if value.AuraSTDModifyTimbre < -100 || value.AuraSTDModifyTimbre > 100 {
+		return invalid("aurastd_modify_timbre")
+	}
+	if !validAuraSTDSoundEffect(value.AuraSTDSoundEffects) {
+		return invalid("aurastd_sound_effects")
+	}
+	// FFmpeg binaries are optional, but a configured path must name an
+	// existing regular file so tasks never shell out to a guessed location.
+	for _, binary := range []struct{ name, value string }{
+		{"ffmpeg_path", value.FFmpegPath},
+		{"ffprobe_path", value.FFprobePath},
+	} {
+		if binary.value == "" {
+			continue
+		}
+		if err := validateCanonicalAbsolutePath(binary.value); err != nil {
+			return invalid(binary.name)
+		}
+		info, err := os.Stat(binary.value)
+		if err != nil || !info.Mode().IsRegular() {
+			return invalid(binary.name)
+		}
+	}
+	paths := []struct {
+		name     string
+		value    string
+		required bool
+	}{
+		{"data_root", value.DataRoot, true},
+		{"baokuan_mcp_executable", value.BaokuanMCPExecutable, false},
+		{"obsidian_vault", value.ObsidianVault, false},
+		{"topic_cards_dir", value.TopicCardsDir, false},
+		{"codex_binary_path", value.CodexBinaryPath, false},
+		{"media_index_path", value.MediaIndexPath, false},
+		{"media_root", value.MediaRoot, false},
+		{"jianying_root", value.JianyingRoot, false},
+		{"machine_profile_path", value.MachineProfilePath, false},
+		{"codex_task_project_root", value.CodexTaskProjectRoot, false},
+		{"media_catalog_path", value.MediaCatalogPath, false},
+	}
+	for _, path := range paths {
+		if path.value == "" && !path.required {
+			continue
+		}
+		if err := validateCanonicalAbsolutePath(path.value); err != nil {
+			return invalid(path.name)
+		}
+	}
+	if value.TopicCardsDir != "" && (value.ObsidianVault == "" || !pathWithin(value.ObsidianVault, value.TopicCardsDir)) {
+		return invalid("topic_cards_dir")
+	}
+	if value.MediaIndexPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaIndexPath)) {
+		return invalid("media_index_path")
+	}
+	if value.MediaCatalogPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaCatalogPath)) {
+		return invalid("media_catalog_path")
+	}
+	for _, root := range value.CodexWorkspaceRoots {
+		if err := validateCanonicalAbsolutePath(root); err != nil {
+			return invalid("codex_workspace_roots")
+		}
+	}
+	return nil
+}
+
+func invalid(field string) error { return fmt.Errorf("%w: %s", ErrInvalidSettings, field) }
+
+func validateListenAddr(value string) error {
+	if value == "" || value != strings.TrimSpace(value) || strings.Contains(value, "://") {
+		return errors.New("invalid listen address")
+	}
+	host, rawPort, err := net.SplitHostPort(value)
+	if err != nil || host == "" {
+		return errors.New("invalid listen address")
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("invalid listen port")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return errors.New("listen host must be an IP address or localhost")
+	}
+	return nil
+}
+
+func validateLoopbackURL(value string) error {
+	u, err := parseHTTPURL(value)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("URL host must be loopback")
+	}
+	return nil
+}
+
+func validateHTTPURL(value string) error {
+	_, err := parseHTTPURL(value)
+	return err
+}
+
+// validateFixedHTTPSHost pins an external provider base URL to HTTPS on one
+// exact host. Tests exercise providers through fake transports instead of
+// loosening this restriction.
+func validateFixedHTTPSHost(value, host string) error {
+	parsed, err := parseHTTPURL(value)
+	if err != nil {
+		return err
+	}
+	if len(value) > 2048 || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, host) || parsed.RawQuery != "" {
+		return errors.New("URL host is not allowed")
+	}
+	return nil
+}
+
+func parseHTTPURL(value string) (*url.URL, error) {
+	if value == "" || value != strings.TrimSpace(value) {
+		return nil, errors.New("invalid URL")
+	}
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return nil, errors.New("invalid HTTP URL")
+	}
+	return u, nil
+}
+
+func validateCanonicalAbsolutePath(value string) error {
+	if value == "" || value != strings.TrimSpace(value) || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return errors.New("path must be canonical and absolute")
+	}
+	if err := validatePlatformLocalPath(value); err != nil {
+		return err
+	}
+	resolved := canonicalPath(value)
+	if !samePath(resolved, value) {
+		return errors.New("path resolves through an alias")
+	}
+	return nil
+}
+
+func canonicalPath(value string) string {
+	current := filepath.Clean(value)
+	remaining := make([]string, 0)
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(remaining) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, remaining[i])
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(value)
+		}
+		remaining = append(remaining, filepath.Base(current))
+		current = parent
+	}
+}
+
+func samePath(left, right string) bool {
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathWithin(root, target string) bool {
+	root = canonicalPath(root)
+	target = canonicalPath(target)
+	relative, err := filepath.Rel(root, target)
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func publicValues(value domain.PublicSettings) map[string]string {
+	value = withImageDefaults(value)
+	value = withMediaIntelligenceDefaults(value)
+	value = withAuraSTDDefaults(value)
+	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
+	return map[string]string{
+		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
+		"max_codex_concurrency": strconv.Itoa(value.MaxCodexConcurrency),
+		"codex_default_model":   value.CodexDefaultModel, "codex_default_reasoning_effort": value.CodexDefaultReasoningEffort,
+		"baokuan_base_url": value.BaokuanBaseURL, "baokuan_mcp_executable": value.BaokuanMCPExecutable,
+		"obsidian_vault": value.ObsidianVault, "topic_cards_dir": value.TopicCardsDir,
+		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
+		"remix_base_url": value.RemixBaseURL, "remix_model": value.RemixModel,
+		"remix_reasoning_effort": value.RemixReasoningEffort,
+		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
+		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
+		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
+		"image_stream":                strconv.FormatBool(value.ImageStream),
+		"max_image_concurrency":       strconv.Itoa(value.MaxImageConcurrency),
+		"image_generation_attempts":   strconv.Itoa(value.ImageGenerationAttempts),
+		"default_image_ratio":         value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
+		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
+		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
+		"machine_profile_path":     value.MachineProfilePath,
+		"app_server_enabled":       strconv.FormatBool(value.AppServerEnabled),
+		"codex_workspace_roots":    string(workspaceRoots),
+		"codex_task_project_root":  value.CodexTaskProjectRoot,
+		"volc_speech_speaker_id":   value.VolcSpeechSpeakerID,
+		"volc_speech_resource_id":  value.VolcSpeechResourceID,
+		"tts_provider":             value.TTSProvider,
+		"aurastd_base_url":         value.AuraSTDBaseURL,
+		"aurastd_model":            value.AuraSTDModel,
+		"aurastd_voice_id":         value.AuraSTDVoiceID,
+		"aurastd_speed":            formatSettingFloat(value.AuraSTDSpeed),
+		"aurastd_volume":           formatSettingFloat(value.AuraSTDVolume),
+		"aurastd_pitch":            strconv.Itoa(value.AuraSTDPitch),
+		"aurastd_emotion":          value.AuraSTDEmotion,
+		"aurastd_language_boost":   value.AuraSTDLanguageBoost,
+		"aurastd_modify_pitch":     strconv.Itoa(value.AuraSTDModifyPitch),
+		"aurastd_modify_intensity": strconv.Itoa(value.AuraSTDModifyIntensity),
+		"aurastd_modify_timbre":    strconv.Itoa(value.AuraSTDModifyTimbre),
+		"aurastd_sound_effects":    value.AuraSTDSoundEffects,
+		"media_catalog_path":       value.MediaCatalogPath,
+		"ffmpeg_path":              value.FFmpegPath, "ffprobe_path": value.FFprobePath,
+		"vision_base_url": value.VisionBaseURL, "vision_model": value.VisionModel,
+		"embedding_base_url": value.EmbeddingBaseURL, "embedding_model": value.EmbeddingModel,
+		"pexels_api_base_url":            value.PexelsAPIBaseURL,
+		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
+		"max_external_results_per_query": strconv.Itoa(value.MaxExternalResultsPerQuery),
+	}
+}
+
+func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if value.MaxImageConcurrency == 0 {
+		value.MaxImageConcurrency = defaultMaxImageConcurrency
+	}
+	if value.ImageGenerationAttempts == 0 {
+		value.ImageGenerationAttempts = defaultImageGenerationAttempts
+	}
+	if strings.TrimSpace(value.ImageModel) == "" {
+		value.ImageModel = defaultImageModel
+	}
+	if value.DefaultImageRatio == "" {
+		value.DefaultImageRatio = defaultImageRatio
+	}
+	if value.DefaultImageStyle == "" {
+		value.DefaultImageStyle = defaultImageStyle
+	}
+	return value
+}
+
+func withMediaIntelligenceDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if strings.TrimSpace(value.PexelsAPIBaseURL) == "" {
+		value.PexelsAPIBaseURL = defaultPexelsAPIBaseURL
+	}
+	if strings.TrimSpace(value.PixabayAPIBaseURL) == "" {
+		value.PixabayAPIBaseURL = defaultPixabayAPIBaseURL
+	}
+	if value.MaxExternalResultsPerQuery == 0 {
+		value.MaxExternalResultsPerQuery = defaultMaxExternalResultsPerQuery
+	}
+	return value
+}
+
+func withAuraSTDDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if strings.TrimSpace(value.TTSProvider) == "" {
+		value.TTSProvider = defaultTTSProvider
+	}
+	if strings.TrimSpace(value.AuraSTDBaseURL) == "" {
+		value.AuraSTDBaseURL = defaultAuraSTDBaseURL
+	}
+	if strings.TrimSpace(value.AuraSTDModel) == "" {
+		value.AuraSTDModel = defaultAuraSTDModel
+	}
+	if strings.TrimSpace(value.AuraSTDVoiceID) == "" {
+		value.AuraSTDVoiceID = defaultAuraSTDVoiceID
+	}
+	if value.AuraSTDSpeed == 0 {
+		value.AuraSTDSpeed = defaultAuraSTDSpeed
+	}
+	if value.AuraSTDVolume == 0 {
+		value.AuraSTDVolume = defaultAuraSTDVolume
+	}
+	if strings.TrimSpace(value.AuraSTDLanguageBoost) == "" {
+		value.AuraSTDLanguageBoost = defaultAuraSTDLanguageBoost
+	}
+	return value
+}
+
+func formatSettingFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func floatSetting(values map[string]string, key string, fallback float64) float64 {
+	raw, ok := values[key]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func intSetting(values map[string]string, key string, fallback int) int {
+	raw, ok := values[key]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func normalizedImageConcurrency(value int) int {
+	if value < 1 || value > maxImageConcurrency {
+		return defaultMaxImageConcurrency
+	}
+	return value
+}
+
+func normalizedImageGenerationAttempts(value int) int {
+	if value < 1 || value > maxImageGenerationAttempts {
+		return defaultImageGenerationAttempts
+	}
+	return value
+}
+
+func validImageRatio(value string) bool {
+	switch value {
+	case "3:4", "4:3", "9:16", "1:1":
+		return true
+	default:
+		return false
+	}
+}
+
+func validImageStyle(value string) bool {
+	switch value {
+	case "finance_documentary", "red_ink", "old_newspaper", "ledger_investigation", "dark_crisis", "city_era", "blackboard":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAuraSTDSoundEffect(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "", "spacious_echo", "auditorium_echo", "lofi_telephone", "robotic":
+		return true
+	default:
+		return false
+	}
+}
+
+func publicFromValues(values map[string]string) domain.PublicSettings {
+	concurrency, _ := strconv.Atoi(values["max_codex_concurrency"])
+	codexDefaultModel := values["codex_default_model"]
+	if strings.TrimSpace(codexDefaultModel) == "" {
+		codexDefaultModel = taskmodel.DefaultModel
+	}
+	codexDefaultReasoningEffort := values["codex_default_reasoning_effort"]
+	if strings.TrimSpace(codexDefaultReasoningEffort) == "" {
+		codexDefaultReasoningEffort = taskmodel.DefaultReasoningEffort
+	}
+	workspaceRoots := []string{}
+	if raw := strings.TrimSpace(values["codex_workspace_roots"]); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &workspaceRoots)
+	}
+	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
+	imageStream, _ := strconv.ParseBool(values["image_stream"])
+	imageConcurrency, _ := strconv.Atoi(values["max_image_concurrency"])
+	if imageConcurrency < 1 || imageConcurrency > maxImageConcurrency {
+		imageConcurrency = defaultMaxImageConcurrency
+	}
+	imageAttempts, _ := strconv.Atoi(values["image_generation_attempts"])
+	if imageAttempts < 1 || imageAttempts > maxImageGenerationAttempts {
+		imageAttempts = defaultImageGenerationAttempts
+	}
+	imageModel := strings.TrimSpace(values["image_model"])
+	if imageModel == "" {
+		imageModel = defaultImageModel
+	}
+	imageRatio := values["default_image_ratio"]
+	if !validImageRatio(imageRatio) {
+		imageRatio = defaultImageRatio
+	}
+	imageStyle := values["default_image_style"]
+	if !validImageStyle(imageStyle) {
+		imageStyle = defaultImageStyle
+	}
+	externalResults, _ := strconv.Atoi(values["max_external_results_per_query"])
+	if externalResults < 1 || externalResults > maxExternalResultsPerQuery {
+		externalResults = defaultMaxExternalResultsPerQuery
+	}
+	pexelsBaseURL := strings.TrimSpace(values["pexels_api_base_url"])
+	if pexelsBaseURL == "" {
+		pexelsBaseURL = defaultPexelsAPIBaseURL
+	}
+	pixabayBaseURL := strings.TrimSpace(values["pixabay_api_base_url"])
+	if pixabayBaseURL == "" {
+		pixabayBaseURL = defaultPixabayAPIBaseURL
+	}
+	ttsProvider := strings.TrimSpace(values["tts_provider"])
+	if ttsProvider == "" {
+		ttsProvider = defaultTTSProvider
+	}
+	aurastdBaseURL := strings.TrimSpace(values["aurastd_base_url"])
+	if aurastdBaseURL == "" {
+		aurastdBaseURL = defaultAuraSTDBaseURL
+	}
+	aurastdModel := strings.TrimSpace(values["aurastd_model"])
+	if aurastdModel == "" {
+		aurastdModel = defaultAuraSTDModel
+	}
+	aurastdVoiceID := strings.TrimSpace(values["aurastd_voice_id"])
+	if aurastdVoiceID == "" {
+		aurastdVoiceID = defaultAuraSTDVoiceID
+	}
+	aurastdLanguageBoost := strings.TrimSpace(values["aurastd_language_boost"])
+	if aurastdLanguageBoost == "" {
+		aurastdLanguageBoost = defaultAuraSTDLanguageBoost
+	}
+	return domain.PublicSettings{
+		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
+		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
+		BaokuanBaseURL: values["baokuan_base_url"], BaokuanMCPExecutable: values["baokuan_mcp_executable"],
+		ObsidianVault: values["obsidian_vault"], TopicCardsDir: values["topic_cards_dir"],
+		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
+		RemixBaseURL: values["remix_base_url"], RemixModel: strings.TrimSpace(values["remix_model"]),
+		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
+		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,
+		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
+		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
+		ImageStream:              imageStream,
+		MaxImageConcurrency:      imageConcurrency,
+		ImageGenerationAttempts:  imageAttempts,
+		DefaultImageRatio:        imageRatio, DefaultImageStyle: imageStyle,
+		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
+		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
+		MachineProfilePath: values["machine_profile_path"],
+		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots,
+		CodexTaskProjectRoot:   values["codex_task_project_root"],
+		VolcSpeechSpeakerID:    values["volc_speech_speaker_id"],
+		VolcSpeechResourceID:   values["volc_speech_resource_id"],
+		TTSProvider:            ttsProvider,
+		AuraSTDBaseURL:         aurastdBaseURL,
+		AuraSTDModel:           aurastdModel,
+		AuraSTDVoiceID:         aurastdVoiceID,
+		AuraSTDSpeed:           floatSetting(values, "aurastd_speed", defaultAuraSTDSpeed),
+		AuraSTDVolume:          floatSetting(values, "aurastd_volume", defaultAuraSTDVolume),
+		AuraSTDPitch:           intSetting(values, "aurastd_pitch", defaultAuraSTDPitch),
+		AuraSTDEmotion:         strings.TrimSpace(values["aurastd_emotion"]),
+		AuraSTDLanguageBoost:   aurastdLanguageBoost,
+		AuraSTDModifyPitch:     intSetting(values, "aurastd_modify_pitch", 0),
+		AuraSTDModifyIntensity: intSetting(values, "aurastd_modify_intensity", defaultAuraSTDModifyIntensity),
+		AuraSTDModifyTimbre:    intSetting(values, "aurastd_modify_timbre", defaultAuraSTDModifyTimbre),
+		AuraSTDSoundEffects:    strings.TrimSpace(values["aurastd_sound_effects"]),
+		MediaCatalogPath:       values["media_catalog_path"],
+		FFmpegPath:             values["ffmpeg_path"], FFprobePath: values["ffprobe_path"],
+		VisionBaseURL: values["vision_base_url"], VisionModel: strings.TrimSpace(values["vision_model"]),
+		EmbeddingBaseURL: values["embedding_base_url"], EmbeddingModel: strings.TrimSpace(values["embedding_model"]),
+		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
+		MaxExternalResultsPerQuery: externalResults,
+	}
+}
+
+func (s *Service) TestDependency(ctx context.Context, dependency string) Health {
+	values, _, err := s.repo.Public(ctx)
+	if err != nil {
+		return offlineHealth()
+	}
+	public := publicFromValues(values)
+	switch dependency {
+	case "baokuan", "baokuan-mcp", "baokuan_http":
+		if public.BaokuanBaseURL == "" || public.BaokuanMCPExecutable == "" || public.CodexBinaryPath == "" {
+			return notConfiguredHealth()
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+		request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, strings.TrimRight(public.BaokuanBaseURL, "/")+"/api/channels/library/materials/search?limit=1", nil)
+		if err != nil {
+			return offlineHealth()
+		}
+		response, err := s.http.Do(request)
+		if err != nil {
+			return offlineHealth()
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 || !s.baokuanMCPRegistered(probeCtx, public.CodexBinaryPath) {
+			return offlineHealth()
+		}
+		return okHealth()
+	case "codex":
+		if public.CodexBinaryPath == "" {
+			return notConfiguredHealth()
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+		if _, err := s.runner.Run(probeCtx, public.CodexBinaryPath, "--version"); err != nil {
+			return offlineHealth()
+		}
+		return okHealth()
+	case "obsidian":
+		return directoryHealth(public.ObsidianVault)
+	case "media":
+		return directoryHealth(public.MediaRoot)
+	case "jianying":
+		return directoryHealth(public.JianyingRoot)
+	case "grok":
+		if public.GrokBaseURL == "" || public.GrokModel == "" {
+			return notConfiguredHealth()
+		}
+		key, _, configured, err := s.secretValue(ctx, SecretGrokAPIKey)
+		if !configured && err == nil {
+			return notConfiguredHealth()
+		}
+		if err != nil {
+			return offlineHealth()
+		}
+		probeURL, err := grokModelsURL(public.GrokBaseURL)
+		if err != nil {
+			return offlineHealth()
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+		request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			return offlineHealth()
+		}
+		request.Header.Set("Authorization", "Bearer "+key)
+		request.Header.Set("Accept", "application/json")
+		response, err := s.http.Do(request)
+		if err != nil {
+			return offlineHealth()
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxProbeBodySize))
+		_ = response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return offlineHealth()
+		}
+		return okHealth()
+	default:
+		return notConfiguredHealth()
+	}
+}
+
+func (s *Service) RepairBaokuanMCP(ctx context.Context) Health {
+	values, _, err := s.repo.Public(ctx)
+	if err != nil {
+		return offlineHealth()
+	}
+	public := publicFromValues(values)
+	if public.BaokuanBaseURL == "" || public.BaokuanMCPExecutable == "" || public.CodexBinaryPath == "" {
+		return notConfiguredHealth()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	_, err = s.runner.Run(probeCtx, public.CodexBinaryPath, "mcp", "add", "baokuan", "--", public.BaokuanMCPExecutable, "mcp", "--base", public.BaokuanBaseURL)
+	if err != nil || !s.baokuanMCPRegistered(probeCtx, public.CodexBinaryPath) {
+		return offlineHealth()
+	}
+	return okHealth()
+}
+
+var baokuanMCPPattern = regexp.MustCompile(`(?mi)(^|\s)baokuan(\s|$)`)
+
+func (s *Service) baokuanMCPRegistered(ctx context.Context, executable string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	output, err := s.runner.Run(probeCtx, executable, "mcp", "list")
+	return err == nil && baokuanMCPPattern.Match(output)
+}
+
+func directoryHealth(path string) Health {
+	if path == "" {
+		return notConfiguredHealth()
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return offlineHealth()
+	}
+	return okHealth()
+}
+
+func okHealth() Health { return Health{Status: HealthOK, Message: "Available."} }
+func notConfiguredHealth() Health {
+	return Health{Status: HealthNotConfigured, Message: "Not configured."}
+}
+func offlineHealth() Health { return Health{Status: HealthOffline, Message: "Offline."} }
+
+type directCommandRunner struct{}
+
+func (directCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	command := exec.CommandContext(probeCtx, executable, args...)
+	output := newBoundedOutput(maxCommandOutputSize)
+	command.Stdout = output
+	command.Stderr = io.Discard
+	err := command.Run()
+	return append([]byte(nil), output.Bytes()...), err
+}
+
+type boundedOutput struct {
+	limit  int
+	buffer bytes.Buffer
+}
+
+func newBoundedOutput(limit int) *boundedOutput { return &boundedOutput{limit: limit} }
+
+func (output *boundedOutput) Write(value []byte) (int, error) {
+	originalLength := len(value)
+	remaining := output.limit - output.buffer.Len()
+	if remaining > 0 {
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		_, _ = output.buffer.Write(value)
+	}
+	return originalLength, nil
+}
+
+func (output *boundedOutput) Bytes() []byte { return output.buffer.Bytes() }
+
+func noRedirectHTTPClient(client HTTPClient) HTTPClient {
+	concrete, ok := client.(*http.Client)
+	if !ok {
+		return client
+	}
+	clone := *concrete
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if clone.Timeout <= 0 || clone.Timeout > probeTimeout {
+		clone.Timeout = probeTimeout
+	}
+	return &clone
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func grokModelsURL(base string) (string, error) {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(strings.ToLower(path), "/v1") {
+		parsed.Path = path + "/models"
+	} else {
+		parsed.Path = path + "/v1/models"
+	}
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}

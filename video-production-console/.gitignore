@@ -1,0 +1,23 @@
+.tmp/
+node_modules/
+web/node_modules/
+video-console-data/
+video-console.db
+/dist/
+web/dist/
+release/
+# Embedded production frontend must stay versioned.
+!internal/webui/dist/
+!internal/webui/dist/**
+.kun-canvas/
+.playwright-cli/
+.superpowers/
+web/test-results/
+web/playwright-report/
+*.log
+console.exe
+publish*.exe
+*-output*.txt
+web/*-output*.txt
+web/test-target*.txt
+task5-*

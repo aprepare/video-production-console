@@ -1,0 +1,220 @@
+package montagescript
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"video-production-console/internal/agentruntime/montageplan"
+)
+
+func TestRunWritesEnvelopeWithFakePython(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), []byte("# fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mediaRoot := filepath.Join(root, "media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clip := filepath.Join(mediaRoot, "clip.mp4")
+	_ = os.WriteFile(clip, []byte("v"), 0o644)
+	indexPath := filepath.Join(root, "index.json")
+	_ = os.WriteFile(indexPath, []byte(`[{"id":"c1","category":"Nature_Landscape","relative_path":"clip.mp4","duration_seconds":20}]`), 0o644)
+	narration := filepath.Join(root, "n.mp3")
+	bg := filepath.Join(root, "bg.png")
+	_ = os.WriteFile(narration, []byte("a"), 0o644)
+	_ = os.WriteFile(bg, []byte("b"), 0o644)
+	taskID := "task-script-run-01"
+	outputDir := filepath.Join(root, "output")
+	workspace := filepath.Join(outputDir, "workspace", taskID)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	manifest := map[string]any{
+		"schema_version": "2.0", "task_id": taskID, "job_id": taskID,
+		"action": "montage.execute", "output_dir": outputDir,
+		"inputs": []map[string]string{
+			{"role": "narration", "path": narration},
+			{"role": "account_background", "path": bg},
+		},
+		"non_secret_settings": map[string]string{"media_root": mediaRoot, "media_index_path": indexPath},
+	}
+	raw, _ := json.Marshal(manifest)
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	last := filepath.Join(root, "output-last-message.json")
+
+	calls := 0
+	err := Run(Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: last,
+		Duration:          func(string) (float64, error) { return 12, nil },
+		CatalogPath:       filepath.Join(root, "unused-catalog"),
+		FFprobePath:       "ffprobe-from-options",
+		Analyzer:          montageplan.LocalIntentAnalyzer{},
+		CommandRunner: func(name string, args ...string) ([]byte, error) {
+			calls++
+			phase := args[1]
+			switch phase {
+			case "validate-inputs", "validate-plan":
+				return []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[],"asset_outputs":[],"warnings":[]}`), nil
+			case "execute":
+				envelope := map[string]any{
+					"schema_version": "2.0", "task_id": taskID, "action": "montage.execute",
+					"status": "completed", "summary": "done", "questions": []any{}, "warnings": []any{},
+					"artifacts": []map[string]any{{
+						"type": "plaintext_workspace", "kind": "directory", "path": `\\?\` + workspace,
+					}},
+					"asset_outputs": []any{},
+				}
+				raw, _ := json.Marshal(envelope)
+				_ = os.WriteFile(filepath.Join(outputDir, "result.json"), raw, 0o644)
+				return []byte("noise before json"), nil
+			default:
+				t.Fatalf("unexpected phase %q", phase)
+				return nil, nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("calls=%d", calls)
+	}
+	body, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"plaintext_workspace"`) {
+		t.Fatalf("envelope=%s", body)
+	}
+	if !strings.Contains(string(body), taskID) {
+		t.Fatalf("missing task id in %s", body)
+	}
+	if strings.Contains(string(body), `\\?\\`) || strings.Contains(string(body), `\\\\?\\`) {
+		t.Fatalf("extended path prefix should be stripped: %s", body)
+	}
+	if !strings.Contains(string(body), filepath.ToSlash(workspace)) && !strings.Contains(string(body), strings.ReplaceAll(workspace, `\`, `\\`)) {
+		t.Fatalf("workspace path missing from envelope: %s", body)
+	}
+	plan, err := os.ReadFile(filepath.Join(outputDir, "production_plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plan), `"plan_version": "1.0"`) && !strings.Contains(string(plan), `"plan_version":"1.0"`) {
+		t.Fatalf("default run must keep v1 plan, got %s", plan)
+	}
+}
+
+func TestRunUsesBuildV2WhenManifestFreezesPlanVersion2(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), []byte("# fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mediaRoot := filepath.Join(root, "media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(mediaRoot, "clip.mp4"), []byte("v"), 0o644)
+	indexPath := filepath.Join(root, "index.json")
+	_ = os.WriteFile(indexPath, []byte(`[{"id":"c1","category":"Nature_Landscape","relative_path":"clip.mp4","duration_seconds":20}]`), 0o644)
+	narration := filepath.Join(root, "n.mp3")
+	bg := filepath.Join(root, "bg.png")
+	_ = os.WriteFile(narration, []byte("a"), 0o644)
+	_ = os.WriteFile(bg, []byte("b"), 0o644)
+	taskID := "task-script-run-v2"
+	outputDir := filepath.Join(root, "output")
+	if err := os.MkdirAll(filepath.Join(outputDir, "workspace", taskID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	manifest := map[string]any{
+		"schema_version": "2.0", "task_id": taskID, "job_id": taskID,
+		"action": "montage.execute", "output_dir": outputDir,
+		"inputs": []map[string]string{
+			{"role": "narration", "path": narration},
+			{"role": "account_background", "path": bg},
+		},
+		"non_secret_settings": map[string]string{
+			"media_root": mediaRoot, "media_index_path": indexPath, "montage_plan_version": "2.0",
+		},
+	}
+	raw, _ := json.Marshal(manifest)
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	last := filepath.Join(root, "output-last-message.json")
+	err := Run(Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: last,
+		Duration:          func(string) (float64, error) { return 12, nil },
+		CommandRunner: func(name string, args ...string) ([]byte, error) {
+			phase := args[1]
+			if phase == "execute" {
+				envelope := map[string]any{
+					"schema_version": "2.0", "task_id": taskID, "action": "montage.execute",
+					"status": "completed", "summary": "done", "questions": []any{}, "warnings": []any{},
+					"artifacts": []any{}, "asset_outputs": []any{},
+				}
+				raw, _ := json.Marshal(envelope)
+				_ = os.WriteFile(filepath.Join(outputDir, "result.json"), raw, 0o644)
+				return raw, nil
+			}
+			return []byte(`{"schema_version":"2.0","task_id":"` + taskID + `","action":"montage.execute","status":"completed","summary":"ok","questions":[],"artifacts":[],"asset_outputs":[],"warnings":[]}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	plan, err := os.ReadFile(filepath.Join(outputDir, "production_plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plan), `"plan_version": "2.0"`) && !strings.Contains(string(plan), `"plan_version":"2.0"`) {
+		t.Fatalf("v2 manifest must call BuildV2, got %s", plan)
+	}
+}
+
+func TestWriteFailureStillWritesEnvelope(t *testing.T) {
+	root := t.TempDir()
+	last := filepath.Join(root, "out.json")
+	manifest := filepath.Join(root, "m.json")
+	_ = os.WriteFile(manifest, []byte(`{"task_id":"abc","action":"montage.execute"}`), 0o644)
+	if err := writeFailure(last, manifest, errString("boom")); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(last)
+	if !strings.Contains(string(body), `"failed"`) || !strings.Contains(string(body), "boom") {
+		t.Fatalf("%s", body)
+	}
+}
+
+func TestMixPresetFromManifest(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "task_manifest.json")
+	if err := os.WriteFile(path, []byte(`{"non_secret_settings":{"mix_preset":"image_video"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mixPresetFromManifest(path); got != "image_video" {
+		t.Fatalf("mix preset=%q", got)
+	}
+	if got := mixPresetFromManifest(filepath.Join(root, "missing.json")); got != "" {
+		t.Fatalf("missing manifest preset=%q", got)
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>素材建库工作台</title>
+  <style>
+    :root {
+      --ink: #1b1712;
+      --paper: #f3ead6;
+      --panel: #fff8ea;
+      --line: #c9b89a;
+      --muted: #6d6253;
+      --brass: #b45312;
+      --brass-ink: #fff7ed;
+      --teal: #0f5c5c;
+      --teal-ink: #ecfeff;
+      --danger: #9f1239;
+      --ok: #3f6212;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", serif;
+      background:
+        radial-gradient(circle at 12% 8%, #fffdf6 0 18%, transparent 19%),
+        repeating-linear-gradient(90deg, rgba(27,23,18,.03) 0 1px, transparent 1px 48px),
+        var(--paper);
+      color: var(--ink);
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      border-bottom: 3px solid var(--ink);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    header p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+    h1 { margin: 0; font-size: 34px; letter-spacing: .02em; }
+    h2 { margin: 0 0 12px; font-size: 22px; }
+    .stamp {
+      font-family: "Cascadia Mono", "Sarasa Mono SC", Consolas, monospace;
+      font-size: 12px;
+      border: 1px dashed var(--brass);
+      color: var(--brass);
+      padding: 6px 8px;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 6px 6px 0 rgba(27,23,18,.08);
+      padding: 18px;
+    }
+    label { display: block; margin: 10px 0 4px; font-size: 14px; color: var(--muted); }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fffdf8;
+      padding: 8px 10px;
+      font: 13px/1.4 "Cascadia Mono", "Sarasa Mono SC", Consolas, monospace;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    button {
+      border: 0;
+      cursor: pointer;
+      padding: 9px 14px;
+      font: 600 14px/1 "Iowan Old Style", Palatino, serif;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .brass { background: var(--brass); color: var(--brass-ink); }
+    .teal { background: var(--teal); color: var(--teal-ink); }
+    .ghost { background: transparent; border: 1px solid var(--ink); }
+    #status {
+      margin: 20px 0 0;
+      padding: 14px 16px;
+      border: 1px solid var(--ink);
+      background: #1b1712;
+      color: #f3ead6;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+      min-height: 7em;
+    }
+    .ok { color: #d9f99d; }
+    .bad { color: #fecdd3; }
+    .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>素材建库工作台</h1>
+        <p>云机只建库并下载结果包，本机用同一页面把包并进素材库。电影原片不进包。</p>
+      </div>
+      <div class="stamp">catalog-pack-v1 · 127.0.0.1</div>
+    </header>
+    <div class="grid">
+      <section>
+        <h2>云机建库</h2>
+        <label for="media_root">素材根（默认 E:\data\media，会自动创建 originals/movies）</label>
+        <input id="media_root" placeholder="E:\data\media" autocomplete="off">
+        <div class="row">
+          <div>
+            <label for="ffmpeg_path">FFmpeg</label>
+            <input id="ffmpeg_path" placeholder="可填文件夹或 ffmpeg.exe" autocomplete="off">
+          </div>
+          <div>
+            <label for="ffprobe_path">FFprobe</label>
+            <input id="ffprobe_path" placeholder="可填文件夹或 ffprobe.exe" autocomplete="off">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="vision_base_url">视觉接口</label>
+            <input id="vision_base_url" autocomplete="off">
+          </div>
+          <div>
+            <label for="vision_model">视觉模型</label>
+            <input id="vision_model" autocomplete="off">
+          </div>
+        </div>
+        <label for="vision_api_key">视觉密钥</label>
+        <input id="vision_api_key" type="password" autocomplete="off">
+        <div class="row">
+          <div>
+            <label for="embedding_base_url">向量接口</label>
+            <input id="embedding_base_url" autocomplete="off">
+          </div>
+          <div>
+            <label for="embedding_model">向量模型</label>
+            <input id="embedding_model" autocomplete="off">
+          </div>
+        </div>
+        <label for="embedding_api_key">向量密钥</label>
+        <input id="embedding_api_key" type="password" autocomplete="off">
+        <label for="analysis_concurrency">识别并发（最高 1000）</label>
+        <input id="analysis_concurrency" type="number" min="1" max="1000" placeholder="64" autocomplete="off">
+        <div class="actions">
+          <button class="ghost" id="save" type="button">保存配置</button>
+          <button class="brass" id="build" type="button">开始建库</button>
+          <button class="ghost" id="download" type="button">下载结果包</button>
+          <button class="ghost" id="download_log" type="button">下载错误日志</button>
+        </div>
+        <p class="hint">空着素材根会用 E:\data\media。识别并发默认 64，硅基流动可填到 1000。出错看底部 last_error_detail，或把 catalog-builder.log 发回来。</p>
+      </section>
+      <section>
+        <h2>本机合并</h2>
+        <label for="merge_root">本机素材根</label>
+        <input id="merge_root" autocomplete="off">
+        <label for="pack_path">结果包路径</label>
+        <input id="pack_path" placeholder="例如 D:\inbox\catalog-pack.zip" autocomplete="off">
+        <label for="pack_file">或者直接选 zip</label>
+        <input id="pack_file" type="file" accept=".zip">
+        <div class="actions">
+          <button class="teal" id="merge" type="button">合并到本机</button>
+        </div>
+        <p class="hint">按文件哈希去重。本机原片要放在相同相对路径，才能拿去剪映成片。</p>
+      </section>
+    </div>
+    <pre id="status">正在读取状态…</pre>
+  </main>
+  <script>
+    const fields = [
+      "media_root", "ffmpeg_path", "ffprobe_path",
+      "vision_base_url", "vision_model", "vision_api_key",
+      "embedding_base_url", "embedding_model", "embedding_api_key"
+    ];
+    const statusEl = document.getElementById("status");
+
+    function formConfig() {
+      const cfg = {};
+      for (const name of fields) cfg[name] = document.getElementById(name).value.trim();
+      const n = Number(document.getElementById("analysis_concurrency").value);
+      cfg.analysis_concurrency = Number.isFinite(n) && n > 0 ? Math.min(1000, Math.floor(n)) : 64;
+      return cfg;
+    }
+
+    function fillConfig(cfg) {
+      for (const name of fields) {
+        if (cfg[name] != null) document.getElementById(name).value = cfg[name];
+      }
+      if (cfg.analysis_concurrency != null) {
+        document.getElementById("analysis_concurrency").value = cfg.analysis_concurrency || 64;
+      }
+      if (!document.getElementById("merge_root").value && cfg.media_root) {
+        document.getElementById("merge_root").value = cfg.media_root;
+      }
+    }
+
+    async function readJSON(resp) {
+      const text = await resp.text();
+      try { return JSON.parse(text); } catch { return { error: text || resp.status }; }
+    }
+
+    function show(data, bad) {
+      statusEl.className = bad ? "bad" : "ok";
+      statusEl.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }
+
+    async function refresh() {
+      const resp = await fetch("/api/status");
+      const data = await readJSON(resp);
+      show(data, !resp.ok);
+    }
+
+    document.getElementById("save").onclick = async () => {
+      const resp = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formConfig())
+      });
+      const data = await readJSON(resp);
+      if (resp.ok) fillConfig(data);
+      show(data, !resp.ok);
+    };
+
+    document.getElementById("build").onclick = async () => {
+      const save = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formConfig())
+      });
+      if (!save.ok) {
+        show(await readJSON(save), true);
+        return;
+      }
+      const resp = await fetch("/api/build", { method: "POST" });
+      show(await readJSON(resp), !resp.ok);
+    };
+
+    document.getElementById("download").onclick = () => {
+      window.location.href = "/api/pack";
+    };
+    document.getElementById("download_log").onclick = () => {
+      window.location.href = "/api/log";
+    };
+
+    document.getElementById("merge").onclick = async () => {
+      const body = new FormData();
+      const root = document.getElementById("merge_root").value.trim();
+      const packPath = document.getElementById("pack_path").value.trim();
+      const file = document.getElementById("pack_file").files[0];
+      if (root) body.set("media_root", root);
+      if (packPath) body.set("pack_path", packPath);
+      if (file) body.set("pack", file);
+      const resp = await fetch("/api/merge", { method: "POST", body });
+      show(await readJSON(resp), !resp.ok);
+    };
+
+    fetch("/api/config").then(readJSON).then((cfg) => {
+      if (cfg && !cfg.error) fillConfig(cfg);
+    }).finally(refresh);
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

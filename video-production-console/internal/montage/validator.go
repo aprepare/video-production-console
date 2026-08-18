@@ -1,0 +1,337 @@
+package montage
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+type ValidationRequest struct{ TaskID, DisplayName, WorkspacePath, ReceiptPath, JianyingRoot string }
+
+type ReconcileValidationRequest struct {
+	TaskID, DisplayName, WorkspacePath, RegisteredPath, ReceiptPath, JianyingRoot string
+	ExpectedDirectorySHA256                                                       string
+}
+
+type ReconcileResult struct {
+	RegisteredPath, ReceiptPath, DraftID, DisplayName, SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256 string
+}
+
+type registrationReceipt struct {
+	Status                  string          `json:"status"`
+	TaskID                  json.RawMessage `json:"task_id"`
+	DraftDisplayName        json.RawMessage `json:"draft_display_name"`
+	RegisteredPath          string          `json:"registered_path"`
+	DraftID                 string          `json:"draft_id"`
+	SourceDraftID           string          `json:"source_draft_id"`
+	DraftIDRekeyed          *bool           `json:"draft_id_rekeyed"`
+	DurationUS              int64           `json:"duration_us"`
+	SourceContentSHA256     string          `json:"source_content_sha256"`
+	RegisteredContentSHA256 string          `json:"registered_content_sha256"`
+}
+
+func ValidateRegisteredDraft(request ValidationRequest) (RegisterResult, error) {
+	if strings.TrimSpace(request.TaskID) == "" || strings.TrimSpace(request.DisplayName) == "" {
+		return RegisterResult{}, invalidRegistration("task identity or display name is missing")
+	}
+	workspace, err := canonicalDirectory(request.WorkspacePath)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("workspace is unavailable")
+	}
+	root, err := canonicalDirectory(request.JianyingRoot)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("Jianying root is unavailable")
+	}
+	receiptPath, err := canonicalRegularFile(request.ReceiptPath)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("registration receipt is unavailable")
+	}
+	outputRoot := filepath.Dir(filepath.Dir(workspace))
+	if !WithinJianyingRoot(outputRoot, receiptPath) {
+		return RegisterResult{}, invalidRegistration("registration receipt is outside task output")
+	}
+	receiptBytes, err := readBounded(receiptPath, 1<<20)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("registration receipt could not be read")
+	}
+	var receipt registrationReceipt
+	if json.Unmarshal(bytes.TrimPrefix(receiptBytes, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil {
+		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
+	}
+	if receipt.Status != "completed" || !receiptIdentityMatches(receipt, request) || receipt.DraftID == "" || receipt.DurationUS <= 0 {
+		return RegisterResult{}, invalidRegistration("registration receipt fields are invalid")
+	}
+	registered, err := canonicalDirectory(receipt.RegisteredPath)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("registered draft is unavailable")
+	}
+	expected := filepath.Join(root, request.TaskID)
+	expected, err = canonicalNoFollow(expected, true)
+	if err != nil || !samePath(expected, registered) || samePath(workspace, registered) || !WithinJianyingRoot(root, registered) {
+		return RegisterResult{}, invalidRegistration("registered draft path is not authoritative")
+	}
+	sourceContent, err := canonicalRegularFile(filepath.Join(workspace, "draft_content.json"))
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("source draft content is missing")
+	}
+	registeredContent, err := canonicalRegularFile(filepath.Join(registered, "draft_content.json"))
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("registered draft content is missing")
+	}
+	sourceHash, err := hashFile(sourceContent)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	registeredHash, err := hashFile(registeredContent)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	if !validHash(receipt.SourceContentSHA256) || !validHash(receipt.RegisteredContentSHA256) || !strings.EqualFold(sourceHash, receipt.SourceContentSHA256) || !strings.EqualFold(registeredHash, receipt.RegisteredContentSHA256) || !strings.EqualFold(sourceHash, registeredHash) {
+		return RegisterResult{}, invalidRegistration("registered content fingerprint does not match source")
+	}
+	sourceDraftID, err := readDraftID(filepath.Join(workspace, "draft_meta_info.json"))
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("source draft ID is unavailable")
+	}
+	registeredDraftID, registeredDisplayName, err := readDraftMeta(filepath.Join(registered, "draft_meta_info.json"))
+	if err != nil || registeredDraftID != receipt.DraftID {
+		return RegisterResult{}, invalidRegistration("registered draft ID does not match registration receipt")
+	}
+	if registeredDisplayName != request.DisplayName {
+		return RegisterResult{}, invalidRegistration("registered draft display name does not match task manifest")
+	}
+	hasSourceDraftID := strings.TrimSpace(receipt.SourceDraftID) != ""
+	hasRekeyFlag := receipt.DraftIDRekeyed != nil
+	if hasSourceDraftID != hasRekeyFlag {
+		return RegisterResult{}, invalidRegistration("draft ID rekey receipt fields are incomplete")
+	}
+	if hasSourceDraftID {
+		if receipt.SourceDraftID != sourceDraftID {
+			return RegisterResult{}, invalidRegistration("source draft ID does not match registration receipt")
+		}
+		actuallyRekeyed := sourceDraftID != registeredDraftID
+		if *receipt.DraftIDRekeyed != actuallyRekeyed {
+			return RegisterResult{}, invalidRegistration("draft ID rekey flag does not match registered draft")
+		}
+	}
+	if err := validateRootIndex(filepath.Join(root, "root_meta_info.json"), receipt.DraftID, request.DisplayName, registered); err != nil {
+		return RegisterResult{}, err
+	}
+	directoryHash, err := hashDirectory(registered)
+	if err != nil {
+		return RegisterResult{}, invalidRegistration("registered directory could not be hashed")
+	}
+	return RegisterResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: receipt.DraftID, DisplayName: request.DisplayName, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash, DurationUS: receipt.DurationUS}, nil
+}
+
+func receiptIdentityMatches(receipt registrationReceipt, request ValidationRequest) bool {
+	taskPresent := len(receipt.TaskID) != 0
+	displayPresent := len(receipt.DraftDisplayName) != 0
+	if !taskPresent || !displayPresent {
+		return !taskPresent && !displayPresent && request.DisplayName == request.TaskID
+	}
+	var taskID, displayName string
+	if json.Unmarshal(receipt.TaskID, &taskID) != nil || json.Unmarshal(receipt.DraftDisplayName, &displayName) != nil {
+		return false
+	}
+	return taskID == request.TaskID && displayName == request.DisplayName
+}
+
+func ValidateReconciledDraft(request ReconcileValidationRequest) (ReconcileResult, error) {
+	workspace, err := canonicalDirectory(request.WorkspacePath)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("workspace is unavailable")
+	}
+	root, err := canonicalDirectory(request.JianyingRoot)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("Jianying root is unavailable")
+	}
+	registered, err := canonicalDirectory(request.RegisteredPath)
+	if err != nil || !samePath(registered, filepath.Join(root, request.TaskID)) {
+		return ReconcileResult{}, invalidRegistration("reconciled draft path is not authoritative")
+	}
+	receiptPath, err := canonicalRegularFile(request.ReceiptPath)
+	if err != nil || !WithinJianyingRoot(filepath.Dir(filepath.Dir(workspace)), receiptPath) {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt is unavailable")
+	}
+	data, err := readBounded(receiptPath, 1<<20)
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt could not be read")
+	}
+	var receipt struct {
+		Status, TaskID, DisplayName, RegisteredPath, DraftID                                 string
+		SourceContentSHA256, RegisteredContentSHA256, DirectorySHA256Before, DirectorySHA256 string
+	}
+	var raw struct {
+		Status                  string `json:"status"`
+		TaskID                  string `json:"task_id"`
+		DisplayName             string `json:"draft_display_name"`
+		RegisteredPath          string `json:"registered_path"`
+		DraftID                 string `json:"draft_id"`
+		SourceContentSHA256     string `json:"source_content_sha256"`
+		RegisteredContentSHA256 string `json:"registered_content_sha256"`
+		DirectorySHA256Before   string `json:"directory_sha256_before"`
+		DirectorySHA256         string `json:"directory_sha256"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &raw) != nil {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt is invalid")
+	}
+	receipt.Status, receipt.TaskID, receipt.DisplayName, receipt.RegisteredPath, receipt.DraftID = raw.Status, raw.TaskID, raw.DisplayName, raw.RegisteredPath, raw.DraftID
+	receipt.SourceContentSHA256, receipt.RegisteredContentSHA256, receipt.DirectorySHA256Before, receipt.DirectorySHA256 = raw.SourceContentSHA256, raw.RegisteredContentSHA256, raw.DirectorySHA256Before, raw.DirectorySHA256
+	if receipt.Status != "completed" || receipt.TaskID != request.TaskID || receipt.DisplayName != request.DisplayName || !samePath(receipt.RegisteredPath, registered) || receipt.DraftID == "" {
+		return ReconcileResult{}, invalidRegistration("reconciliation receipt identity is invalid")
+	}
+	if !validHash(request.ExpectedDirectorySHA256) || !validHash(receipt.DirectorySHA256Before) || !strings.EqualFold(receipt.DirectorySHA256Before, request.ExpectedDirectorySHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciliation source directory fingerprint is invalid")
+	}
+	sourceHash, err := hashFile(filepath.Join(workspace, "draft_content.json"))
+	if err != nil {
+		return ReconcileResult{}, invalidRegistration("source draft content is unavailable")
+	}
+	registeredHash, err := hashFile(filepath.Join(registered, "draft_content.json"))
+	if err != nil || sourceHash != registeredHash || !strings.EqualFold(sourceHash, receipt.SourceContentSHA256) || !strings.EqualFold(registeredHash, receipt.RegisteredContentSHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciled content fingerprint changed")
+	}
+	draftID, displayName, err := readDraftMeta(filepath.Join(registered, "draft_meta_info.json"))
+	if err != nil || draftID != receipt.DraftID || displayName != request.DisplayName {
+		return ReconcileResult{}, invalidRegistration("reconciled draft metadata is invalid")
+	}
+	if err := validateRootIndex(filepath.Join(root, "root_meta_info.json"), draftID, request.DisplayName, registered); err != nil {
+		return ReconcileResult{}, err
+	}
+	directoryHash, err := hashDirectory(registered)
+	if err != nil || !strings.EqualFold(directoryHash, receipt.DirectorySHA256) {
+		return ReconcileResult{}, invalidRegistration("reconciled directory fingerprint is invalid")
+	}
+	return ReconcileResult{RegisteredPath: registered, ReceiptPath: receiptPath, DraftID: draftID, DisplayName: request.DisplayName, SourceContentSHA256: sourceHash, RegisteredContentSHA256: registeredHash, DirectorySHA256: directoryHash}, nil
+}
+
+func readDraftID(path string) (string, error) {
+	draftID, _, err := readDraftMeta(path)
+	return draftID, err
+}
+
+func readDraftMeta(path string) (string, string, error) {
+	data, err := readBounded(path, 4<<20)
+	if err != nil {
+		return "", "", err
+	}
+	var meta struct {
+		DraftID   string `json:"draft_id"`
+		DraftName string `json:"draft_name"`
+	}
+	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &meta); err != nil || strings.TrimSpace(meta.DraftID) == "" {
+		return "", "", errors.New("draft_meta_info.json has no draft_id")
+	}
+	return meta.DraftID, meta.DraftName, nil
+}
+
+func validateRootIndex(path, draftID, displayName, registered string) error {
+	data, err := readBounded(path, 16<<20)
+	if err != nil {
+		return invalidRegistration("Jianying root index is unavailable")
+	}
+	var raw struct {
+		Entries []map[string]any `json:"all_draft_store"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &raw) != nil {
+		return invalidRegistration("Jianying root index is invalid")
+	}
+	for _, entry := range raw.Entries {
+		id, _ := entry["draft_id"].(string)
+		pathValue, _ := entry["draft_fold_path"].(string)
+		name, _ := entry["draft_name"].(string)
+		// Jianying may persist draft paths with the Windows extended-length
+		// prefix while the validator has already canonicalized the target.
+		// Normalize both representations before comparing identities.
+		pathValue = stripWindowsExtendedPath(strings.TrimSpace(pathValue))
+		if id == draftID && name == displayName && samePath(filepath.Clean(pathValue), registered) {
+			return nil
+		}
+	}
+	return invalidRegistration("registered draft is absent from Jianying root index")
+}
+
+func canonicalDirectory(path string) (string, error) {
+	return canonicalNoFollow(path, true)
+}
+func canonicalRegularFile(path string) (string, error) {
+	return canonicalNoFollow(path, false)
+}
+func readBounded(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file exceeds %d-byte limit", limit)
+	}
+	return data, nil
+}
+func hashFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+func hashDirectory(root string) (string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return invalidRegistration("registered draft contains a symlink")
+		}
+		if !entry.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(files)
+	hash := sha256.New()
+	for _, path := range files {
+		rel, _ := filepath.Rel(root, path)
+		fileHash, err := hashFile(path)
+		if err != nil {
+			return "", err
+		}
+		_, _ = fmt.Fprintf(hash, "%s\x00%s\n", filepath.ToSlash(rel), fileHash)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+func validHash(value string) bool {
+	_, err := hex.DecodeString(value)
+	return len(value) == 64 && err == nil
+}
+func samePath(left, right string) bool {
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+func invalidRegistration(message string) error {
+	return fmt.Errorf("%w: %s", ErrInvalidRegistration, message)
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.video-console/schemas/topic-candidates-2.0.json",
+  "title": "Finance Topic Candidates 2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "session_id", "candidates"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "session_id": {"type": "string", "format": "uuid"},
+    "candidates": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "topic", "mother_theme", "family_conflict", "anomaly_framing", "narrative_entry", "score", "source_refs", "fragment_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "topic": {"type": "string", "minLength": 1},
+          "mother_theme": {"type": "string", "minLength": 1},
+          "family_conflict": {"type": "string", "minLength": 1},
+          "anomaly_framing": {"type": "string", "minLength": 1},
+          "narrative_entry": {"type": "string", "minLength": 1},
+          "score": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["audience", "evidence", "freshness", "distance", "course_fit", "total"],
+            "properties": {
+              "audience": {"type": "number"},
+              "evidence": {"type": "number"},
+              "freshness": {"type": "number"},
+              "distance": {"type": "number"},
+              "course_fit": {"type": "number"},
+              "total": {"type": "number"}
+            }
+          },
+          "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "fragment_refs": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    }
+  }
+}

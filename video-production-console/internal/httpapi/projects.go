@@ -1,0 +1,1022 @@
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"video-production-console/internal/assets"
+	"video-production-console/internal/domain"
+	"video-production-console/internal/logging"
+	"video-production-console/internal/publishing"
+	"video-production-console/internal/store"
+	"video-production-console/internal/taskmodel"
+	"video-production-console/internal/workflow"
+)
+
+// RemixCoordinator is the narrow project-workflow dependency used by the HTTP API.
+type RemixCoordinator interface {
+	Start(context.Context, workflow.StartRemix) (domain.ProjectWorkflowRun, error)
+}
+
+type projectStore interface {
+	CreateProject(context.Context, domain.Project) error
+	ListProjects(context.Context, string, domain.ProjectStage, string) ([]domain.Project, error)
+	GetProject(context.Context, string) (domain.Project, error)
+	MoveProject(context.Context, string, domain.ProjectStage, domain.ProjectStage, time.Time) (domain.Project, error)
+	SetTopicCardPath(context.Context, string, string, time.Time) error
+	AddAsset(context.Context, *domain.Asset) (store.CommitState, error)
+	ListAssets(context.Context, string) ([]domain.Asset, error)
+	Background(context.Context, string) (domain.Asset, error)
+}
+type projectsHandler struct {
+	repository projectStore
+	assets     *assets.Service
+	db         *sql.DB
+	remix      RemixCoordinator
+	models     TaskModelResolver
+	workflows  *store.WorkflowRepository
+	tasks      *store.TaskRepository
+	notes      *store.ProjectStepNotesRepository
+}
+
+func NewProjectsHandler(db *sql.DB, service *assets.Service, remix RemixCoordinator, models TaskModelResolver) http.Handler {
+	return newProjectsHandlerWithDB(store.NewProjectRepository(db), service, db, remix, models)
+}
+func newProjectsHandler(repository projectStore, service *assets.Service) http.Handler {
+	return newProjectsHandlerWithDB(repository, service, nil, nil, nil)
+}
+func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, db *sql.DB, remix RemixCoordinator, models TaskModelResolver) http.Handler {
+	h := &projectsHandler{repository: repository, assets: service, db: db, remix: remix, models: models}
+	if db != nil {
+		h.workflows = store.NewWorkflowRepository(db)
+		h.tasks = store.NewTaskRepository(db)
+		h.notes = store.NewProjectStepNotesRepository(db)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/projects", h.create)
+	mux.HandleFunc("GET /api/projects", h.list)
+	mux.HandleFunc("POST /api/projects/batch-delete", h.batchDelete)
+	mux.HandleFunc("GET /api/projects/{id}", h.get)
+	mux.HandleFunc("DELETE /api/projects/{id}", h.delete)
+	mux.HandleFunc("POST /api/projects/{id}/assets/{type}", h.upload)
+	mux.HandleFunc("POST /api/projects/{id}/topic-card/versions", h.uploadTopicCardVersion)
+	mux.HandleFunc("POST /api/projects/{id}/move", h.move)
+	mux.HandleFunc("POST /api/projects/{id}/remix", h.startRemix)
+	mux.HandleFunc("POST /api/projects/{id}/publish", h.publish)
+	mux.HandleFunc("GET /api/projects/{id}/notes/{step}", h.getStepNotes)
+	mux.HandleFunc("PUT /api/projects/{id}/notes/{step}", h.putStepNotes)
+	return mux
+}
+
+func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	err := h.deleteOne(r.Context(), id)
+	switch {
+	case errors.Is(err, errProjectDeleteUnavailable):
+		writeError(w, http.StatusNotImplemented, "project_delete_unavailable", "Project deletion is unavailable.")
+		return
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	case errors.Is(err, store.ErrProjectBusy):
+		writeError(w, http.StatusConflict, "project_active_task", "Stop the active Codex task before deleting this project.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "project_delete_failed", "Project could not be deleted.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+const maxBatchDeleteProjects = 100
+
+var errProjectDeleteUnavailable = errors.New("project deletion is unavailable")
+
+func (h *projectsHandler) deleteOne(ctx context.Context, id string) error {
+	deleter, ok := h.repository.(interface {
+		DeleteProject(context.Context, string) error
+	})
+	if !ok {
+		return errProjectDeleteUnavailable
+	}
+	if err := deleter.DeleteProject(ctx, id); err != nil {
+		return err
+	}
+	if h.assets != nil {
+		if err := h.assets.DeleteProjectData(id); err != nil {
+			logging.LoggerFrom(ctx).Error("remove deleted project data", "project_id", id, "error", err)
+		}
+	}
+	return nil
+}
+
+func (h *projectsHandler) batchDelete(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		return
+	}
+	if len(in.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_project_ids", "Select at least one project.")
+		return
+	}
+	if len(in.IDs) > maxBatchDeleteProjects {
+		writeError(w, http.StatusBadRequest, "too_many_projects", "Delete at most 100 projects at a time.")
+		return
+	}
+	seen := make(map[string]bool, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, raw := range in.IDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_project_id", "Project ID must be a UUID.")
+			return
+		}
+		value := id.String()
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		ids = append(ids, value)
+	}
+	deleted := make([]string, 0, len(ids))
+	failed := make([]map[string]string, 0)
+	for _, id := range ids {
+		err := h.deleteOne(r.Context(), id)
+		switch {
+		case err == nil:
+			deleted = append(deleted, id)
+		case errors.Is(err, store.ErrProjectNotFound):
+			failed = append(failed, map[string]string{"id": id, "code": "project_not_found"})
+		case errors.Is(err, store.ErrProjectBusy):
+			failed = append(failed, map[string]string{"id": id, "code": "project_active_task"})
+		default:
+			failed = append(failed, map[string]string{"id": id, "code": "project_delete_failed"})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
+}
+
+type projectView struct {
+	ID                string               `json:"id"`
+	AccountID         string               `json:"account_id"`
+	Title             string               `json:"title"`
+	Stage             domain.ProjectStage  `json:"stage"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+	ReadyAt           *time.Time           `json:"ready_at"`
+	PublishedAt       *time.Time           `json:"published_at"`
+	PublishNote       *string              `json:"publish_note"`
+	PublicationStatus domain.ProjectStatus `json:"publication_status"`
+}
+
+type workflowView struct {
+	ID              string               `json:"id"`
+	ProjectID       string               `json:"project_id"`
+	AccountID       string               `json:"account_id"`
+	Kind            domain.WorkflowKind  `json:"kind"`
+	State           domain.WorkflowState `json:"state"`
+	CurrentStep     domain.WorkflowStep  `json:"current_step"`
+	TopicTaskID     *string              `json:"topic_task_id,omitempty"`
+	RemixTaskID     *string              `json:"remix_task_id,omitempty"`
+	Model           string               `json:"model"`
+	ReasoningEffort string               `json:"reasoning_effort"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	CurrentTask     *taskView            `json:"current_task"`
+}
+type assetView struct {
+	ID        string            `json:"id"`
+	Type      domain.AssetType  `json:"type"`
+	State     domain.AssetState `json:"state"`
+	Filename  string            `json:"filename"`
+	MIMEType  string            `json:"mime_type"`
+	Size      int64             `json:"size"`
+	SHA256    string            `json:"sha256"`
+	Version   int               `json:"version"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+func (h *projectsHandler) create(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AccountID string `json:"account_id"`
+		Title     string `json:"title"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_json", "A JSON project is required.")
+		return
+	}
+	accountID, err := uuid.Parse(in.AccountID)
+	if err != nil {
+		writeError(w, 400, "invalid_account_id", "Account ID must be a UUID.")
+		return
+	}
+	id := uuid.NewString()
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = "Untitled-" + id[:8]
+	}
+	now := time.Now().UTC()
+	p := domain.Project{ID: id, AccountID: accountID.String(), Title: title, Stage: domain.StageScript, Status: domain.ProjectDraft, CreatedAt: now, UpdatedAt: now}
+	err = h.repository.CreateProject(r.Context(), p)
+	if errors.Is(err, store.ErrAccountInactive) {
+		writeError(w, http.StatusConflict, "account_inactive", "An active account is required.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "project_create_failed", "Project could not be created.")
+		return
+	}
+	writeJSON(w, 201, toProjectView(p))
+}
+func (h *projectsHandler) list(w http.ResponseWriter, r *http.Request) {
+	projects, err := h.repository.ListProjects(r.Context(), r.URL.Query().Get("account_id"), domain.ProjectStage(r.URL.Query().Get("stage")), strings.TrimSpace(r.URL.Query().Get("q")))
+	if err != nil {
+		writeError(w, 500, "projects_list_failed", "Projects could not be listed.")
+		return
+	}
+	out := make([]projectView, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, toProjectView(p))
+	}
+	writeJSON(w, 200, out)
+}
+func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	p, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	all, err := h.repository.ListAssets(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, "project_assets_failed", "Project assets could not be read.")
+		return
+	}
+	background, backgroundErr := h.repository.Background(r.Context(), id)
+	if backgroundErr != nil && !errors.Is(backgroundErr, sql.ErrNoRows) {
+		writeError(w, 500, "project_background_failed", "Project background could not be read.")
+		return
+	}
+	current := map[string]assetView{}
+	history := map[string][]assetView{}
+	available := map[domain.AssetType]bool{}
+	for _, a := range all {
+		history[string(a.Type)] = append(history[string(a.Type)], toAssetView(a))
+	}
+	latest := latestAssetsByType(all)
+	for _, a := range latest {
+		current[string(a.Type)] = toAssetView(a)
+		if a.Status != string(domain.AssetReady) {
+			continue
+		}
+		available[a.Type] = true
+		if a.Type == domain.AssetNarration {
+			available[domain.AssetAudio] = true
+		}
+		if a.Type == domain.AssetSubtitleSRT {
+			available[domain.AssetSubtitle] = true
+		}
+	}
+	var bg any = nil
+	if background.ID != "" {
+		backgroundAvailable := true
+		if h.assets != nil {
+			file, _, openErr := h.assets.OpenAsset(background)
+			if openErr != nil {
+				backgroundAvailable = false
+				background.Status = "missing"
+			} else {
+				_ = file.Close()
+			}
+		}
+		if backgroundAvailable {
+			available[domain.AssetAccountBackground] = true
+		}
+		v := toAssetView(background)
+		bg = v
+		if background.Status != string(domain.AssetReady) || !backgroundAvailable {
+			delete(available, domain.AssetAccountBackground)
+		}
+	}
+	missing := missingForStage(p.Stage, available)
+	var topicContext any = nil
+	if h.db != nil {
+		if selection, topicErr := findProjectTopicSelection(r.Context(), h.db, p); topicErr == nil {
+			topicContext = selection.Candidate
+		}
+	}
+	var activeWorkflow any = nil
+	if h.workflows != nil {
+		run, workflowErr := h.workflows.ActiveForProject(r.Context(), id, domain.WorkflowRemix)
+		if workflowErr == nil {
+			view, viewErr := h.toWorkflowView(r.Context(), run)
+			if viewErr != nil {
+				writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+				return
+			}
+			activeWorkflow = view
+		} else if !errors.Is(workflowErr, store.ErrWorkflowNotFound) {
+			writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+			return
+		}
+	}
+	out := map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext, "active_workflow": activeWorkflow}
+	if pkg, ok := h.readPublishingPackage(id); ok {
+		out["publishing_package"] = pkg
+	}
+	writeJSON(w, 200, out)
+}
+
+func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var in taskModelRequest
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_remix", "Only model and reasoning_effort are accepted.")
+		}
+		return
+	}
+	project, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if h.remix == nil {
+		writeError(w, http.StatusServiceUnavailable, "project_remix_unavailable", "Project remix is unavailable.")
+		return
+	}
+	selection, err := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: taskmodel.KindRemix})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_task_model", "Task model selection is invalid.")
+		return
+	}
+	run, err := h.remix.Start(r.Context(), workflow.StartRemix{ProjectID: project.ID, AccountID: project.AccountID, ModelName: selection.Model, ReasoningEffort: selection.ReasoningEffort, Now: time.Now().UTC()})
+	if errors.Is(err, store.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_remix_failed", "Project remix could not be started.")
+		return
+	}
+	view, err := h.toWorkflowView(r.Context(), run)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_workflow_failed", "Project workflow could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workflow": view, "current_task": view.CurrentTask})
+}
+
+func (h *projectsHandler) publish(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	publisher, ok := h.repository.(interface {
+		PublishProject(context.Context, string, time.Time) (domain.Project, error)
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "project_publish_unavailable", "Project publishing is unavailable.")
+		return
+	}
+	project, err := publisher.PublishProject(r.Context(), id, time.Now().UTC())
+	switch {
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+	case errors.Is(err, store.ErrFinalVideoMissing):
+		writeError(w, http.StatusConflict, "final_video_missing", "A ready final video is required before publishing.")
+	case errors.Is(err, store.ErrProjectNotInReview):
+		writeError(w, http.StatusConflict, "project_not_in_review", "Only a project in review can be published.")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "project_publish_failed", "Project could not be published.")
+	default:
+		writeJSON(w, http.StatusOK, toProjectView(project))
+	}
+}
+
+func (h *projectsHandler) toWorkflowView(ctx context.Context, run domain.ProjectWorkflowRun) (workflowView, error) {
+	view := workflowView{ID: run.ID, ProjectID: run.ProjectID, AccountID: run.AccountID, Kind: run.Kind, State: run.State, CurrentStep: run.CurrentStep, TopicTaskID: run.TopicTaskID, RemixTaskID: run.RemixTaskID, Model: run.ModelName, ReasoningEffort: run.ReasoningEffort, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt}
+	var taskID *string
+	if run.CurrentStep == domain.WorkflowStepRemix {
+		taskID = run.RemixTaskID
+	} else {
+		taskID = run.TopicTaskID
+	}
+	if taskID == nil || h.tasks == nil {
+		return view, nil
+	}
+	task, err := h.tasks.Get(ctx, *taskID)
+	if err != nil {
+		return workflowView{}, err
+	}
+	taskSummary := viewTask(task)
+	view.CurrentTask = &taskSummary
+	return view, nil
+}
+
+type stepNotesView struct {
+	ProjectID string    `json:"project_id"`
+	Step      string    `json:"step"`
+	Notes     string    `json:"notes"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (h *projectsHandler) getStepNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if h.notes == nil {
+		writeError(w, http.StatusNotImplemented, "step_notes_unavailable", "Project step notes are unavailable.")
+		return
+	}
+	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	notes, err := h.notes.Get(r.Context(), id, r.PathValue("step"))
+	if errors.Is(err, store.ErrInvalidStepNotes) {
+		writeError(w, http.StatusBadRequest, "invalid_step", "The step is not supported.")
+		return
+	}
+	if errors.Is(err, store.ErrStepNotesNotFound) {
+		writeJSON(w, http.StatusOK, stepNotesView{ProjectID: id, Step: strings.TrimSpace(r.PathValue("step")), Notes: ""})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "step_notes_read_failed", "Project step notes could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, stepNotesView{ProjectID: notes.ProjectID, Step: notes.Step, Notes: notes.Notes, UpdatedAt: notes.UpdatedAt})
+}
+
+func (h *projectsHandler) putStepNotes(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if h.notes == nil {
+		writeError(w, http.StatusNotImplemented, "step_notes_unavailable", "Project step notes are unavailable.")
+		return
+	}
+	var in struct {
+		Notes string `json:"notes"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_step_notes", "Notes payload is required.")
+		return
+	}
+	saved, err := h.notes.Upsert(r.Context(), id, r.PathValue("step"), in.Notes, time.Now().UTC())
+	switch {
+	case errors.Is(err, store.ErrInvalidStepNotes):
+		writeError(w, http.StatusBadRequest, "invalid_step", "The step is not supported.")
+		return
+	case errors.Is(err, store.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "step_notes_save_failed", "Project step notes could not be saved.")
+		return
+	}
+	writeJSON(w, http.StatusOK, stepNotesView{ProjectID: saved.ProjectID, Step: saved.Step, Notes: saved.Notes, UpdatedAt: saved.UpdatedAt})
+}
+
+func (h *projectsHandler) uploadTopicCardVersion(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	project, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_read_failed", "Project could not be read.")
+		return
+	}
+	if h.assets == nil || h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "topic_card_version_unavailable", "Topic card versioning is unavailable.")
+		return
+	}
+	current, err := store.NewAssetRepository(h.db).CurrentByProject(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project_assets_failed", "Project assets could not be read.")
+		return
+	}
+	var parent *domain.AssetVersion
+	for i := range current {
+		if current[i].Type == domain.AssetTopicCard && current[i].State == domain.AssetReady {
+			parent = &current[i]
+			break
+		}
+	}
+	if parent == nil {
+		writeError(w, http.StatusConflict, "topic_card_missing", "A ready topic card is required before creating a new version.")
+		return
+	}
+	parentPayload, err := os.ReadFile(parent.Path)
+	if err != nil || topicCardStatus(parentPayload) != "候选" {
+		writeError(w, http.StatusConflict, "topic_card_transition_invalid", "Only a candidate topic card can be upgraded to writable.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxTextAssetSize+(1<<20))
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		var large *http.MaxBytesError
+		if errors.As(err, &large) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_multipart", "The multipart form could not be read.")
+		}
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file_required", "A topic card file is required.")
+		return
+	}
+	defer file.Close()
+	payload, err := io.ReadAll(io.LimitReader(file, assets.MaxTextAssetSize+1))
+	if err != nil || int64(len(payload)) > assets.MaxTextAssetSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		return
+	}
+	if !validWritableTopicCard(payload) {
+		writeError(w, http.StatusConflict, "topic_card_status_invalid", "The new topic card must have status 可写稿 and a completed handoff brief.")
+		return
+	}
+	saved, err := h.assets.SaveProjectAsset(id, domain.AssetTopicCard, header.Filename, bytes.NewReader(payload))
+	if err != nil {
+		if errors.Is(err, assets.ErrProjectAssetTooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The upload is too large.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid_asset", "The topic card must be valid UTF-8 Markdown.")
+		}
+		return
+	}
+	parentID := parent.ID
+	version, err := store.NewAssetRepository(h.db).UpgradeTopicCard(r.Context(), store.UpgradeTopicCardVersion{
+		AddAssetVersion: store.AddAssetVersion{
+			LogicalAssetID: parent.AssetID, ProjectID: &id, AccountID: project.AccountID,
+			Type: domain.AssetTopicCard, StorageKind: domain.StorageFile, Path: saved.Path,
+			Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType, Size: saved.Size, SHA256: saved.SHA256,
+			ParentVersionID: &parentID,
+		},
+		ExpectedCurrentVersionID: parent.ID,
+	})
+	if err != nil {
+		outcome := store.CommitOutcomeOf(err)
+		if outcome == store.CommitNotCommitted {
+			_ = os.Remove(saved.Path)
+		}
+		if outcome == store.CommitUnknown {
+			writeError(w, http.StatusServiceUnavailable, "topic_card_version_commit_unknown", "The topic card version may have been recorded. Refresh the project before retrying.")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidAssetParent) {
+			writeError(w, http.StatusConflict, "topic_card_version_conflict", "The topic card changed while this version was being uploaded. Refresh before retrying.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "topic_card_version_store_failed", "The topic card version could not be recorded.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, assetView{ID: version.ID, Type: version.Type, State: version.State, Filename: version.Filename, MIMEType: version.MIMEType, Size: version.Size, SHA256: version.SHA256, Version: version.Version, CreatedAt: version.CreatedAt})
+}
+
+func validWritableTopicCard(payload []byte) bool {
+	text := string(payload)
+	if topicCardStatus(payload) != "可写稿" {
+		return false
+	}
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "## 二创交接简报" {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") {
+			end = i
+			break
+		}
+	}
+	handoff := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	handoff = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(handoff, "<!--", ""), "-->", ""))
+	return handoff != "" && handoff != "待深化。" && handoff != "待深化"
+}
+
+func topicCardStatus(payload []byte) string {
+	if !utf8.Valid(payload) {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(payload), "\r\n", "\n"), "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
+		key, value, found := strings.Cut(line, ":")
+		if found && strings.TrimSpace(key) == "status" {
+			return strings.Trim(strings.TrimSpace(value), "\"'")
+		}
+	}
+	return ""
+}
+
+func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "project_not_found", "The project was not found.")
+		return
+	} else if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	typ := domain.AssetType(r.PathValue("type"))
+	if !uploadableType(typ) {
+		writeError(w, 400, "invalid_asset_type", "The asset type is not uploadable.")
+		return
+	}
+	maxSize := assets.MaxSizeForType(typ)
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+(1<<20))
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		var large *http.MaxBytesError
+		if errors.As(err, &large) {
+			writeError(w, 413, "payload_too_large", "The upload is too large.")
+		} else {
+			writeError(w, 400, "invalid_multipart", "The multipart form could not be read.")
+		}
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, 400, "file_required", "An asset file is required.")
+		return
+	}
+	defer file.Close()
+	filename := header.Filename
+	reader := io.Reader(file)
+	var importedPackage *publishing.Package
+	if typ == domain.AssetContinuousScript {
+		payload, readErr := io.ReadAll(io.LimitReader(file, assets.MaxTextAssetSize+1))
+		if readErr != nil {
+			writeError(w, 400, "invalid_asset", "File extension and actual content must match the asset type.")
+			return
+		}
+		if int64(len(payload)) > assets.MaxTextAssetSize {
+			writeError(w, 413, "payload_too_large", "The upload is too large.")
+			return
+		}
+		script, pkg, fromJSON, unwrapErr := publishing.UnwrapContinuousScript(string(payload))
+		if unwrapErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid_remix_copy", "请粘贴连续正文，或换说法模型返回的 JSON（必须含 continuous_script）。")
+			return
+		}
+		if strings.TrimSpace(script) == "" {
+			writeError(w, 400, "invalid_asset", "File extension and actual content must match the asset type.")
+			return
+		}
+		reader = strings.NewReader(script)
+		if fromJSON {
+			filename = "continuous-script.txt"
+			importedPackage = pkg
+		}
+	}
+	saved, err := h.assets.SaveProjectAsset(id, typ, filename, reader)
+	if err != nil {
+		if errors.Is(err, assets.ErrProjectAssetTooBig) {
+			writeError(w, 413, "payload_too_large", "The upload is too large.")
+		} else if errors.Is(err, assets.ErrInvalidProjectAsset) {
+			writeError(w, 400, "invalid_asset", "File extension and actual content must match the asset type.")
+		} else {
+			writeError(w, 500, "asset_save_failed", "Asset could not be saved.")
+		}
+		return
+	}
+	now := time.Now().UTC()
+	a := domain.Asset{ID: uuid.NewString(), ProjectID: &id, Type: typ, Path: saved.Path, Filename: safeFilename(filename), MIMEType: saved.MIMEType, Size: saved.Size, SHA256: saved.SHA256, Status: "active", CreatedAt: now}
+	state, err := h.repository.AddAsset(r.Context(), &a)
+	if err != nil {
+		if state == store.CommitNotCommitted {
+			if removeErr := os.Remove(saved.Path); removeErr != nil {
+				logging.LoggerFrom(r.Context()).Error("remove uncommitted project asset", "project_id", id, "asset_type", string(typ), "error", removeErr)
+			}
+		}
+		if state == store.CommitUnknown {
+			writeError(w, http.StatusServiceUnavailable, "asset_commit_unknown", "The asset may have been recorded. Refresh before retrying.")
+			return
+		}
+		writeError(w, 500, "asset_store_failed", "Asset could not be recorded.")
+		return
+	}
+	if syncer, ok := h.repository.(interface {
+		SyncStageFromAssets(context.Context, string, time.Time) (domain.Project, error)
+	}); ok {
+		if _, syncErr := syncer.SyncStageFromAssets(r.Context(), id, time.Now().UTC()); syncErr != nil {
+			logging.LoggerFrom(r.Context()).Error("sync project stage after upload", "project_id", id, "asset_type", string(typ), "error", syncErr)
+		}
+	}
+	if importedPackage != nil {
+		if writeErr := h.writePublishingPackage(id, *importedPackage); writeErr != nil {
+			logging.LoggerFrom(r.Context()).Error("write imported publishing package", "project_id", id, "error", writeErr)
+		}
+	}
+	writeJSON(w, 201, toAssetView(a))
+}
+
+func (h *projectsHandler) writePublishingPackage(projectID string, pkg publishing.Package) error {
+	if h.assets == nil {
+		return errors.New("asset store is unavailable")
+	}
+	dir, err := h.assets.ProjectDir(projectID)
+	if err != nil {
+		return err
+	}
+	return publishing.WriteFile(filepath.Join(dir, "publishing_package.json"), pkg)
+}
+
+func (h *projectsHandler) readPublishingPackage(projectID string) (publishing.Package, bool) {
+	if h.assets == nil {
+		return publishing.Package{}, false
+	}
+	dir, err := h.assets.ProjectDir(projectID)
+	if err != nil {
+		return publishing.Package{}, false
+	}
+	pkg, err := (publishing.Reader{}).Read(filepath.Join(dir, "publishing_package.json"), "")
+	if err != nil {
+		return publishing.Package{}, false
+	}
+	return pkg, true
+}
+
+func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {
+	id, ok := projectID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var in struct {
+		Stage domain.ProjectStage `json:"stage"`
+	}
+	decodeErr := decodeJSON(w, r, maxNormalJSONRequest, &in)
+	var tooLarge *http.MaxBytesError
+	if errors.As(decodeErr, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request is too large.")
+		return
+	}
+	if decodeErr != nil || !validStage(in.Stage) {
+		writeError(w, 400, "invalid_stage", "A valid target stage is required.")
+		return
+	}
+	p, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "project_not_found", "The project was not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "project_read_failed", "Project could not be read.")
+		return
+	}
+	all, err := h.repository.ListAssets(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, "project_assets_failed", "Project assets could not be read.")
+		return
+	}
+	available := map[domain.AssetType]bool{}
+	for _, a := range all {
+		available[a.Type] = true
+		if a.Type == domain.AssetNarration {
+			available[domain.AssetAudio] = true
+		}
+		if a.Type == domain.AssetSubtitleSRT {
+			available[domain.AssetSubtitle] = true
+		}
+	}
+	bg, err := h.repository.Background(r.Context(), id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, "project_background_failed", "Project background could not be read.")
+		return
+	}
+	if bg.ID != "" {
+		available[domain.AssetAccountBackground] = true
+	}
+	if err := domain.CanMove(p.Stage, in.Stage, available); err != nil {
+		var missing *domain.MissingAssetsError
+		if errors.As(err, &missing) {
+			items := make([]string, len(missing.Missing))
+			for i, v := range missing.Missing {
+				items[i] = string(v)
+			}
+			writeJSON(w, 409, map[string]any{"code": "missing_assets", "message": "Required assets are missing.", "details": map[string]any{"missing_assets": items}})
+		} else {
+			writeError(w, 409, "stage_move_conflict", err.Error())
+		}
+		return
+	}
+	p, err = h.repository.MoveProject(r.Context(), id, p.Stage, in.Stage, time.Now().UTC())
+	if errors.Is(err, store.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
+		return
+	}
+	if errors.Is(err, store.ErrProjectStageConflict) {
+		writeError(w, http.StatusConflict, "project_stage_conflict", "Project stage changed; refresh and retry.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "stage_move_failed", "Project stage could not be updated.")
+		return
+	}
+	writeJSON(w, 200, toProjectView(p))
+}
+
+const (
+	maxSmallJSONRequest   int64 = 16 << 10
+	maxNormalJSONRequest  int64 = 64 << 10
+	maxMessageJSONRequest int64 = 256 << 10
+	maxTaskJSONRequest    int64 = 2 << 20
+	maxBundleJSONRequest  int64 = 1 << 20
+)
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, out any) error {
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	return ensureJSONEOF(d)
+}
+
+func ensureJSONEOF(d *json.Decoder) error {
+	var extra any
+	if err := d.Decode(&extra); errors.Is(err, io.EOF) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return errors.New("request must contain one JSON value")
+}
+
+func writeDecodeError(w http.ResponseWriter, err error, code, message string) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "The request body is too large.")
+		return
+	}
+	writeError(w, http.StatusBadRequest, code, message)
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "message": message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+func projectID(w http.ResponseWriter, value string) (string, bool) {
+	id, err := uuid.Parse(value)
+	if err != nil {
+		writeError(w, 400, "invalid_project_id", "Project ID must be a UUID.")
+		return "", false
+	}
+	return id.String(), true
+}
+func validStage(s domain.ProjectStage) bool {
+	switch s {
+	case domain.StageScript, domain.StageAssets, domain.StageMixing, domain.StageReview, domain.StagePublished, domain.StageArchived:
+		return true
+	}
+	return false
+}
+
+// latestAssetsByType picks the current version of each asset type. Version wins
+// first; equal versions are broken by creation time and then by ID so the choice
+// is stable regardless of the order the rows arrive in.
+func latestAssetsByType(all []domain.Asset) map[string]domain.Asset {
+	latest := make(map[string]domain.Asset, len(all))
+	for _, a := range all {
+		key := string(a.Type)
+		if previous, ok := latest[key]; !ok ||
+			a.Version > previous.Version ||
+			a.Version == previous.Version && (a.CreatedAt.After(previous.CreatedAt) ||
+				a.CreatedAt.Equal(previous.CreatedAt) && a.ID > previous.ID) {
+			latest[key] = a
+		}
+	}
+	return latest
+}
+
+func uploadableType(t domain.AssetType) bool {
+	switch t {
+	case domain.AssetSourceScript,
+		domain.AssetContinuousScript,
+		domain.AssetSpokenScript,
+		domain.AssetNarration,
+		domain.AssetSubtitleSRT,
+		domain.AssetMixDraft,
+		domain.AssetFinalVideo,
+		// Legacy aliases retained for older clients/tests.
+		domain.AssetAudio,
+		domain.AssetSubtitle:
+		return true
+	}
+	return false
+}
+func toProjectView(p domain.Project) projectView {
+	status := p.Status
+	if status == "" {
+		switch p.Stage {
+		case domain.StageMixing, domain.StageReview:
+			status = domain.ProjectProducing
+		case domain.StageReady:
+			status = domain.ProjectReadyToPublish
+		case domain.StagePublished:
+			status = domain.ProjectPublished
+		case domain.StageArchived:
+			status = domain.ProjectArchived
+		default:
+			status = domain.ProjectDraft
+		}
+	}
+	return projectView{ID: p.ID, AccountID: p.AccountID, Title: p.Title, Stage: p.Stage, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt, ReadyAt: p.ReadyAt, PublishedAt: p.PublishedAt, PublishNote: p.PublishNote, PublicationStatus: status}
+}
+func toAssetView(a domain.Asset) assetView {
+	return assetView{ID: a.ID, Type: a.Type, State: domain.AssetState(a.Status), Filename: a.Filename, MIMEType: a.MIMEType, Size: a.Size, SHA256: a.SHA256, Version: a.Version, CreatedAt: a.CreatedAt}
+}
+func missingForStage(stage domain.ProjectStage, a map[domain.AssetType]bool) []string {
+	var to domain.ProjectStage
+	switch stage {
+	case domain.StageAssets:
+		to = domain.StageMixing
+	case domain.StageReview:
+		to = domain.StagePublished
+	default:
+		return []string{}
+	}
+	err := domain.CanMove(stage, to, a)
+	var m *domain.MissingAssetsError
+	if errors.As(err, &m) {
+		out := make([]string, len(m.Missing))
+		for i, v := range m.Missing {
+			out[i] = string(v)
+		}
+		return out
+	}
+	return []string{}
+}

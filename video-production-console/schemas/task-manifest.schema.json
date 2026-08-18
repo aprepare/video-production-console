@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.video-console/schemas/task-manifest-2.0.json",
+  "title": "Video Console Task Manifest 2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "job_id", "skill", "action", "inputs", "engineering_inputs", "output_dir", "expected_outputs", "approval_mode", "skill_snapshot_id", "non_secret_settings"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "job_id": {"type": "string", "format": "uuid"},
+    "skill": {"enum": ["finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"]},
+    "action": {"enum": ["topic.brainstorm", "topic.commit", "topic.deepen", "remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review", "montage.plan", "montage.execute"]},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "account_id"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "account_id": {"type": "string", "format": "uuid"}
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asset_id", "version_id", "version", "type", "role", "path", "storage_kind", "mime", "size", "sha256", "required"],
+        "properties": {
+          "asset_id": {"type": "string", "format": "uuid"},
+          "version_id": {"type": "string", "format": "uuid"},
+          "version": {"type": "integer", "minimum": 1},
+          "type": {"$ref": "#/$defs/assetType"},
+          "role": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "storage_kind": {"const": "file"},
+          "mime": {"type": "string", "minLength": 1},
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+          "required": {"type": "boolean"}
+        }
+      }
+    },
+    "engineering_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "path"],
+        "properties": {
+          "type": {"enum": ["topic_candidates", "baokuan_source_bundle"]},
+          "path": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "output_dir": {"type": "string", "minLength": 1, "pattern": "[/\\\\]tasks[/\\\\][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}[/\\\\]output$"},
+    "expected_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "required", "description"],
+        "properties": {
+          "type": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "approval_mode": {"enum": ["plan_then_wait", "plan_only", "auto_after_valid_plan"]},
+    "skill_snapshot_id": {"type": "string", "format": "uuid"},
+    "non_secret_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listen_addr": {"type": "string"},
+        "data_root": {"type": "string"},
+        "max_codex_concurrency": {"type": "integer", "minimum": 0},
+        "baokuan_base_url": {"type": "string"},
+        "baokuan_mcp_executable": {"type": "string"},
+        "obsidian_vault": {"type": "string"},
+        "topic_cards_dir": {"type": "string"},
+        "session_id": {"type": "string", "minLength": 1},
+        "candidate_id": {"type": "string", "minLength": 1},
+        "topic_candidates_path": {"type": "string", "minLength": 1},
+        "topic_card_path": {"type": "string", "minLength": 1},
+        "grok_base_url": {"type": "string"},
+        "grok_model": {"type": "string"},
+        "codex_binary_path": {"type": "string"},
+        "media_index_path": {"type": "string"},
+        "media_root": {"type": "string"},
+        "jianying_root": {"type": "string"},
+        "machine_profile_path": {"type": "string", "minLength": 1},
+        "draft_display_name": {"type": "string", "minLength": 1},
+        "revision_notes": {"type": "string"},
+        "remix_prompt_style": {"type": "string", "enum": ["rewrite", "wash"]},
+        "remix_base_url": {"type": "string"},
+        "remix_model": {"type": "string"},
+        "remix_reasoning_effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "xhigh", "max", "ultra"]
+        },
+        "media_catalog_path": {"type": "string"},
+        "ffmpeg_path": {"type": "string"},
+        "ffprobe_path": {"type": "string"},
+        "vision_base_url": {"type": "string"},
+        "vision_model": {"type": "string"},
+        "embedding_base_url": {"type": "string"},
+        "embedding_model": {"type": "string"},
+        "montage_plan_version": {"type": "string", "enum": ["1.0", "2.0"]}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"action": {"const": "topic.brainstorm"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_candidates"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_candidates"}, "required": {"const": true}}}}, "non_secret_settings": {"required": ["session_id"]}}}},
+    {"if": {"properties": {"action": {"const": "topic.commit"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}}}, "engineering_inputs": {"minItems": 1, "maxItems": 1}, "non_secret_settings": {"required": ["session_id", "candidate_id", "topic_candidates_path", "obsidian_vault", "topic_cards_dir"]}}}},
+    {"if": {"properties": {"action": {"const": "topic.deepen"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1, "items": {"properties": {"type": {"const": "topic_card"}, "required": {"const": true}}}}, "non_secret_settings": {"required": ["session_id", "topic_card_path"]}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review"]}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}}}}}},
+    {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path"]}, "expected_outputs": {"items": {"properties": {"type": {"const": "production_plan"}}}}}}},
+    {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"non_secret_settings": {"required": ["machine_profile_path", "draft_display_name"]}, "expected_outputs": {"items": {"properties": {"type": {"enum": ["production_plan", "plaintext_workspace"]}}}}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review"]}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "continuous_script"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
+    {"if": {"properties": {"action": {"const": "montage.plan"}}}, "then": {"properties": {"expected_outputs": {"contains": {"properties": {"type": {"const": "production_plan"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
+    {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"expected_outputs": {"allOf": [{"contains": {"properties": {"type": {"const": "production_plan"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}, {"contains": {"properties": {"type": {"const": "plaintext_workspace"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}]}}}},
+    {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced"]}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "source_script"}, "role": {"const": "primary_source"}}}}}}},
+    {"if": {"properties": {"action": {"const": "remix.from_topic_card"}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "topic_card"}, "role": {"const": "topic_brief"}}}}}}},
+    {"if": {"properties": {"action": {"const": "remix.review"}}}, "then": {"properties": {"inputs": {"items": {"oneOf": [{"properties": {"type": {"const": "source_script"}, "role": {"const": "review_target"}}}, {"properties": {"type": {"const": "continuous_script"}, "role": {"const": "review_target"}}}]}}}}},
+    {"if": {"properties": {"action": {"enum": ["montage.plan", "montage.execute"]}}}, "then": {"properties": {"inputs": {"items": {"oneOf": [{"properties": {"type": {"const": "continuous_script"}, "role": {"const": "continuous_script"}}}, {"properties": {"type": {"const": "narration"}, "role": {"const": "narration"}}}, {"properties": {"type": {"const": "subtitle_srt"}, "role": {"const": "subtitle_srt"}}}, {"properties": {"type": {"const": "account_background"}, "role": {"const": "account_background"}}}]}}}}}
+  ],
+  "$defs": {
+    "assetType": {"enum": ["source_script", "topic_card", "continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]}
+  }
+}

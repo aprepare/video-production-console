@@ -1,0 +1,10 @@
+/task*-last.txt
+/video-production-console/.superpowers/
+/video-production-console/dist/
+/video-production-console/video-console-data/
+/video-production-console/*.log
+/video-production-console/web/node_modules/
+/video-production-console/web/coverage/
+**/__pycache__/
+*.pyc
+/video-production-console/task*-last.txt
