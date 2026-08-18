@@ -240,7 +240,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.4 混剪：取样与登记
 
-**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / 本地 IntentAnalyzer / 可选 ShotSelector，`BuildV2` 打开库做标签四级召回并叠加全库向量近邻，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务和电影任务都按口播召回 catalog；风景任务仅在 catalog 没有可用镜头时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。选片契约见 [混剪自动选片](operations/montage-catalog-matching.md)。
+**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 风景任务打散 `media_index.json` 风景/城市/财经，并合并 `catalog.db` 的 B-roll（`scenic_mixed_pool`，不做口播向量匹配）。电影任务（`SelectModeMovieCatalog`）才用 `media_catalog_path` 做标签四级召回 + 全库向量近邻。catalog 只存相对路径；电影本体和音轨不上云。电影任务无可用镜头时报错，不回退风景索引。选片契约见 [混剪自动选片](operations/montage-catalog-matching.md)。
 
 **本机建库**：控制台「开始建库」与 `catalog-builder.Build` 都调用 `mediacatalog.RunHostedBuild`（`Indexer` → FFmpeg `Pipeline` → `AnalysisRunner`）。缺 FFmpeg 时 ingest 仍保留、错误码 `ffmpeg_not_configured`；缺视觉/向量时错误码 `vision_not_configured`；识别全失败返回 `ErrAnalysisAllFailed`，不得标 ready。OpenAI 兼容地址若只填主机名，`CompatEndpoint` 会补 `/v1`。云机结果包合并只在 `catalog-builder` 小站（`MergePack`），控制台无合并 API。
 
@@ -254,7 +254,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
    - 有 embedder 时 `RecallReadyShots(2000)` 扫全库，按查询向量并入每段 top 32 邻居。
    - 打分：标签命中 + 向量余弦（`weightSemantic=0.40`）；缺 embedding 不失败，notes 写 `embedding_disabled`。
    - 可选 `ShotSelector` 只在每段 top 8 里点 1 个；失败写 `llm_shot_select_fallback`，保留排序结果。
-5. **风景任务**用 catalog 召回结果，不再滤成风景/景观。catalog 有就绪镜头就只从库里选；catalog 为空或不存在才回退 `media_index.json` 风景打散。
+5. **风景任务** notes 写 `scenic_mixed_pool`：从 `media_index.json` 打散风景/城市/财经，再合并 catalog B-roll，不做口播匹配。
 6. **电影任务**（`SelectModeMovieCatalog` / `movie_catalog` 预设）不过滤风景；无可用镜头直接报错，不回退旧索引。配额用 `movieCatalogPolicy`（电影 70%–100%，同源可复用）。
 7. 口播字幕默认 `captions.mode=off`（`SpokenCaptionsEnabled=false`）：不建「字幕」轨。板上标题/副标题仍在。大模型分段/关键词和 `highlights_only` 都不要打开。缩放约 1.20–1.26，B-roll/电影播放 **1.5×**，不写窗内白色片头。
 8. 最终时间线仍是确定性 `selectTimelineV2`。对话模型不能绕过短名单去扫全库。
@@ -270,7 +270,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 1. 优先池 `isScenic`：category 含 `nature`/`landscape`/`scenery`/`architecture`/`building`（`plan.go:448-453`，刻意排除 `City_Traffic`）。优先池为空才整体启用 fallback 池；**两池不混合**。
 2. 稳定排序：按 `sha256(seed + "\x00" + id + "\x00" + Clean(absPath))` 升序（`plan.go:416-419`），seed 为 `task_id`。所以同任务重试顺序稳定、不同任务开头不同。
 3. **类别相邻打散** `interleaveByCategory`（`diversify.go:11`）：排序之后、截断之前执行，保证相邻优先不同 category，每轮抽剩余最多的组、平局取首次出现更早者，完全确定性。只有一个 category 时原样返回；尾部只剩单一 category 时整段追加，此时不再保证相邻不同。
-4. 截断到 `MediaLimit`，默认 **48**（`plan.go:75-78`）。生产链路没有配置该字段的入口，实际恒为 48。
+4. 截断到 `MediaLimit`，默认 **256**（`plan.go:107-112`）。生产链路没有配置该字段的入口，实际恒为 256。
 
 **扫描缓存**（`mediascan.go:56`）：进程内全局 map + 互斥锁，键是 `(Clean(indexPath), Clean(mediaRoot))`，用索引文件的 `modTime`+`size` 做失效判断。两条正确性保护：strict 提前退出的 partial 扫描**永不发布**；读完后再 `Stat` 一次，size+mtime 与开始时一致才发布。所以缓存条目一定描述整份索引。无 TTL、无容量上限。
 

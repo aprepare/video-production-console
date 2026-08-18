@@ -157,6 +157,9 @@ func buildMontagePlan(manifestPath string, opts montageplan.Options) error {
 		return montageplan.BuildV2(opts)
 	}
 	if planVersionFromManifest(manifestPath) == "2.0" {
+		if strings.TrimSpace(opts.SelectMode) == "" {
+			opts.SelectMode = montageplan.SelectModeLandscape
+		}
 		return montageplan.BuildV2(opts)
 	}
 	return montageplan.Build(opts)

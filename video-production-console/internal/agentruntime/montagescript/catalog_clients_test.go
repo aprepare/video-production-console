@@ -90,7 +90,7 @@ func TestAttachCatalogClientsScenicFollowsNarration(t *testing.T) {
 		t.Fatalf("analyzer type %T", opts.Analyzer)
 	}
 	if local.RestrictToLandscape {
-		t.Fatal("scenic montage must follow narration, not restrict to landscape")
+		t.Fatal("local analyzer default must stay unrestricted; scenic mixes catalog broll without intent match")
 	}
 }
 

@@ -250,9 +250,8 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 		if match["intent_id"].(string) == "" || match["reason"].(string) == "" {
 			t.Fatalf("shot %d match evidence incomplete: %#v", i, match)
 		}
-		switch shot["source_id"] {
-		case "broll-03", "broll-07", "broll-11", "movie-02-0", "movie-02-1", "movie-05-0", "movie-05-1", "image-09":
-			t.Fatalf("shot %d used a non-landscape source %q", i, shot["source_id"])
+		if shot["source_id"] == "image-09" {
+			t.Fatalf("shot %d used ledger still %q", i, shot["source_id"])
 		}
 		motion := shot["motion"].(map[string]any)
 		preset := motion["preset"].(string)
@@ -856,12 +855,29 @@ func TestV2SourceWindowUsesPlaybackSpeed(t *testing.T) {
 		Kind: mediaKindBroll, DurationSeconds: 20,
 		SourceInSeconds: 2, SourceOutSeconds: 14, ShotID: "shot-speed",
 	}
-	in, out := v2SourceWindow(item, 8)
+	in, out := v2SourceWindow(item, 8, 0)
 	if math.Abs((out-in)-8*v2PlaybackSpeed) > 0.05 {
 		t.Fatalf("window %v..%v does not consume %.1fx of an 8s slot", in, out, v2PlaybackSpeed)
 	}
 	if in < 2-1e-9 || out > 14+1e-9 {
 		t.Fatalf("window %v..%v left the shot range 2..14", in, out)
+	}
+}
+
+func TestV2SourceWindowShiftsOnReuse(t *testing.T) {
+	item := mediaItem{Kind: mediaKindBroll, DurationSeconds: 40}
+	firstIn, firstOut := v2SourceWindow(item, 8, 0)
+	secondIn, secondOut := v2SourceWindow(item, 8, 1)
+	need := 8 * v2PlaybackSpeed
+	if math.Abs((firstOut-firstIn)-need) > 0.05 || math.Abs((secondOut-secondIn)-need) > 0.05 {
+		t.Fatalf("reuse windows %v..%v and %v..%v must each consume %.1fx of an 8s slot",
+			firstIn, firstOut, secondIn, secondOut, v2PlaybackSpeed)
+	}
+	if secondIn <= firstIn+1e-9 {
+		t.Fatalf("reuse must start later than first cut %v, got %v", firstIn, secondIn)
+	}
+	if math.Abs(secondIn-(firstIn+need)) > 0.05 {
+		t.Fatalf("second cut %v should start one source window after first cut %v", secondIn, firstIn)
 	}
 }
 
@@ -955,19 +971,27 @@ func TestBuildV2ImageVideoPresetWritesPresetName(t *testing.T) {
 	}
 }
 
-func TestIsLandscapeItemAcceptsOnlyScenery(t *testing.T) {
+func TestIsLandscapeItemAcceptsScenicCityAndFinance(t *testing.T) {
 	keep := []mediaItem{
 		{Category: "Nature_Landscape"},
+		{Category: "Weather_Water_Fire"},
+		{Category: "Space_Cosmos"},
+		{Category: "City_Traffic"},
+		{Category: "Finance_Business"},
+		{Category: "office"},
 		{Category: "风景"},
 		{Category: "城市景观"},
 		{RelativePath: "14_Pexels/landscape/lake.mp4"},
+		{RelativePath: "03_Weather_Water_Fire/storm.mp4"},
+		{RelativePath: "02_City_Traffic/skyline.mp4"},
 		{Tags: []string{"风景"}},
+		{Tags: []string{"车流"}},
+		{Tags: []string{"财经"}},
 	}
 	drop := []mediaItem{
-		{Category: "City_Traffic"},
-		{Category: "office"},
 		{Category: "Family_Life"},
 		{Category: "ledger"},
+		{Category: "Food_Drink"},
 		{RelativePath: "movies/bank.mp4", Tags: []string{"银行柜台"}},
 	}
 	for _, item := range keep {

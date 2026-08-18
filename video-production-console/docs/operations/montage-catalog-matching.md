@@ -1,6 +1,8 @@
 # 混剪自动选片（catalog + 向量）
 
-风景/电影混剪不再手工选片。`montage.execute` 走本机 `montage-script-run`，由 `BuildV2` 从 `media_root/catalog.db` 召回镜头，再写成 `production_plan.json`。本文说明**当前真实管线**，以及为什么「库很大却对不上买房画面」。
+**风景混剪混用风景/城市/财经。** 「开始风景混剪」打散 `media_index.json` 里的风景、城市天际线/车流、财经条目，并合并 `catalog.db` 的 B-roll，不做口播向量匹配。catalog + 向量选片只给「开始电影混剪」用。
+
+电影混剪不再手工选片。`jianying-movie-montage` 走本机 `montage-script-run`，由 `BuildV2` 从 `media_root/catalog.db` 召回镜头，再写成 `production_plan.json`。本文其余部分是电影线的检索契约。
 
 配套入口：[使用说明 · 素材库](../USER-GUIDE.md)、[AI 接手说明 §2.2](../AI-HANDOFF.md)、[架构 §5.4 / §11.5](../ARCHITECTURE.md)。
 
@@ -89,7 +91,7 @@
 
 ## 6. 日产画面约定
 
-- 素材走 `originals/broll`（风景线有 catalog 时按口播用财经 B-roll，不再滤成只剩风景）
+- 素材走 `originals/broll`（风景线会把这些 B-roll 打进混池，不按口播对画面）
 - 播放速度 **1.5×**（`v2PlaybackSpeed`）
 - 口播字幕轨关闭，无窗内白字片头；板上标题/副标题仍在
 - 「重做混剪」再发一条 `montage.execute`，不删旧草稿

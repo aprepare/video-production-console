@@ -122,7 +122,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 1. 把电影、B-roll、图片分别放到媒体目录的 `originals/movies/`、`originals/broll/`、`originals/images/`。
 2. 在设置中填写「素材库目录」「媒体素材目录」、FFmpeg/FFprobe，以及视觉/embedding 地址、模型与密钥。混剪查询向量必须和建库时同一模型。Pexels/Pixabay 密钥未配置时仍可本地建库。改 embedding 后若提示需要重启，必须重启，否则混剪仍按标签池选片。
 3. 首页点「素材库」→「开始建库」。本机会扫描 `originals`、切镜抽帧、视觉打标和向量。进度看「就绪镜头」；识别全失败会提示，不要只看“就绪”。失败镜头可单项重试（会再跑建库）。也可搜索 Pexels/Pixabay 或上传本地文件。未知许可只标本地草稿可用，**不能当成公开发布授权**。
-4. 建库完成后，点「开始风景混剪」或「开始电影混剪」，系统会自动从 `catalog.db` 按口播检索：先标签，再全库向量近邻，必要时对话模型只在每段前几名里点选。风景混剪优先用库里的财经/B-roll；库里没有可用镜头时才回退旧的风景索引。电影混剪按口播检索，不回退旧索引。库里没有住宅/法拍镜头时，买房文案最多对到城市天际线和钱/办公画面。详见 [混剪自动选片](montage-catalog-matching.md)。
+4. 「开始风景混剪」打散 `media_index` 里的风景/城市/财经，并混入 `catalog.db` 的 B-roll（计划里会有 `scenic_mixed_pool`，不按口播对画面）。「开始电影混剪」才按口播从 `catalog.db` 检索（标签 + 向量），不回退旧风景索引。详见 [混剪自动选片](montage-catalog-matching.md)。
 5. 完整电影和原音轨不会上传；云端视觉请求最多带每镜 2–3 张低清关键帧。
 6. 工作台「本次混剪计划」只描述这一条视频的配额和选用结果，不是全局素材库状态。
 
@@ -166,7 +166,7 @@ $env:VIDEO_CONSOLE_INITIAL_PASSWORD = "你的初始口令"
 | 混剪立即报 `No module named 'pyJianYingDraft'` | machine profile 的 `python_binary` 必须写为已安装 `pyJianYingDraft` 的 Python 绝对路径；保存后重启控制台。生成与登记两阶段都必须使用该路径，不能依赖启动终端的 `PATH` |
 | 手机打不开剪映目录 | 设计限制；仅本机控制台电脑可触发 |
 | 数据库在哪 | 控制台权威库：`video-console-data/console.db`；素材镜头库：设置里的 `catalog.db`（通常在素材根下）。不要误用根目录遗留的 `video-console.db` |
-| 本机建库后混剪仍像随机风景 | 先看「就绪镜头」> 0，确认 `catalog.db` 路径。再看该次 `production_plan.json` 的 `planner_notes`：没有 `embedding_pool` 就是向量没接到（改设置后未重启，或 URL/模型为空）。风景混剪有库时按口播选片；库空才回退旧风景索引 |
+| 本机建库后风景混剪仍偏风景 | 风景线会混入城市/财经索引和 catalog B-roll，但不按口播选画面。要按口播用库内镜头请走「开始电影混剪」 |
 | 买房/法拍对不到房子画面 | 当前财经库几乎没有住宅/法拍镜头，向量也只能对城市、办公、钱、K 线。要真房子先补 `originals/broll` 再建库 |
 | 电影混剪立刻失败 | 库里没有就绪镜头，或原片相对路径对不上。电影线不会回退旧的 `media_index.json` |
 | 建库提示识别全部失败 | 视觉/向量地址补到 `/v1`（只填主机名时程序会自动补），确认密钥后重试失败镜头 |

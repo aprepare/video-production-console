@@ -106,7 +106,9 @@ func loadPlanContext(opts Options) (*planContext, error) {
 	}
 	limit := opts.MediaLimit
 	if limit <= 0 {
-		limit = 48
+		// Scenic index used to cap at 48, which forced reuse on long
+		// narrations. 256 leaves room for Weather_Water_Fire plus later adds.
+		limit = 256
 	}
 
 	raw, err := os.ReadFile(opts.ManifestPath)

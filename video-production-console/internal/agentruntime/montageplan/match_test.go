@@ -361,6 +361,7 @@ func TestBuildV2UsesCatalogMatchEvidence(t *testing.T) {
 		Catalog:      fakeCatalog{shots: append(expandFixtureLibrary(fixtureShots()), landscapeCatalogShots()...)},
 		Analyzer:     LocalIntentAnalyzer{},
 		Embedder:     mapEmbedder{},
+		SelectMode:   SelectModeMovieCatalog,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +386,7 @@ func TestBuildV2UsesCatalogMatchEvidence(t *testing.T) {
 	}
 }
 
-func TestBuildV2ScenicUsesCatalogFinanceShots(t *testing.T) {
+func TestBuildV2ScenicMixesCatalogBrollWithoutIntentMatch(t *testing.T) {
 	manifest, planPath := v2Fixture(t)
 	err := BuildV2(Options{
 		ManifestPath: manifest,
@@ -407,24 +408,22 @@ func TestBuildV2ScenicUsesCatalogFinanceShots(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if strings.Contains(joined, "match_candidates_not_landscape") {
-		t.Fatalf("scenic catalog must not drop finance shots: %v", plan.PlannerNotes)
+	if !strings.Contains(joined, "scenic_mixed_pool") {
+		t.Fatalf("scenic must mix index + catalog broll, notes=%v", plan.PlannerNotes)
 	}
-	if strings.Contains(joined, "landscape_pool_supplemented") || strings.Contains(joined, "falling back to media index") {
-		t.Fatalf("catalog had usable shots; must not mix landscape index: %v", plan.PlannerNotes)
+	if !strings.Contains(joined, "scenic_catalog_broll: merged") {
+		t.Fatalf("scenic must merge catalog broll, notes=%v", plan.PlannerNotes)
 	}
-	sawCatalog := false
+	if strings.Contains(joined, "embedding_pool") {
+		t.Fatalf("scenic must not run intent/embedding match, notes=%v", plan.PlannerNotes)
+	}
 	for _, shot := range plan.Timeline {
-		if strings.HasPrefix(shot.SourceID, "src-") {
-			sawCatalog = true
-		}
-		switch shot.SourceID {
-		case "broll-00", "broll-01", "broll-02", "broll-04", "movie-00-0", "movie-00-1", "image-00":
-			t.Fatalf("landscape index clip used while catalog finance shots exist: %s notes=%v", shot.SourceID, plan.PlannerNotes)
+		if shot.SourceID == "src-bank" || shot.SourceID == "src-door" {
+			t.Fatalf("movie catalog shot leaked onto scenic timeline: %s notes=%v", shot.SourceID, plan.PlannerNotes)
 		}
 	}
-	if !sawCatalog {
-		t.Fatalf("expected finance catalog shots on scenic timeline, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
+	if len(plan.Timeline) == 0 {
+		t.Fatal("expected mixed scenic timeline")
 	}
 }
 
@@ -504,6 +503,7 @@ func TestBuildV2CatalogShotsNotSupplementedByIndex(t *testing.T) {
 		Catalog:      fakeCatalog{shots: thinLandscapeCatalogFromOneFile()},
 		Analyzer:     LocalIntentAnalyzer{},
 		Embedder:     mapEmbedder{},
+		SelectMode:   SelectModeMovieCatalog,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -552,8 +552,8 @@ func TestBuildV2EmptyCatalogFallsBackToLandscapeIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "falling back to media index") && !strings.Contains(joined, "match_candidates_insufficient") {
-		t.Fatalf("expected landscape index fallback, got %v", plan.PlannerNotes)
+	if !strings.Contains(joined, "scenic_mixed_pool") && !strings.Contains(joined, "falling back to media index") {
+		t.Fatalf("expected mixed scenic pool, got %v", plan.PlannerNotes)
 	}
 	for _, shot := range plan.Timeline {
 		if strings.HasPrefix(shot.SourceID, "src-") {
@@ -588,9 +588,23 @@ func TestBuildV2UnavailableCatalog(t *testing.T) {
 		PlanPath:     planPath,
 		Duration:     func(string) (float64, error) { return 40, nil },
 		CatalogPath:  filepath.Join(t.TempDir(), "missing-root"),
+		SelectMode:   SelectModeMovieCatalog,
 	})
 	if err == nil || !errors.Is(err, ErrCatalogUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBuildV2ScenicIgnoresMissingCatalog(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 16, nil },
+		CatalogPath:  filepath.Join(t.TempDir(), "missing-root"),
+	})
+	if err != nil {
+		t.Fatalf("scenic must not require catalog.db: %v", err)
 	}
 }
 
@@ -643,6 +657,7 @@ func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
 		CatalogPath:  catalogPath,
 		Analyzer:     LocalIntentAnalyzer{},
 		Duration:     func(string) (float64, error) { return 48, nil },
+		SelectMode:   SelectModeMovieCatalog,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -683,6 +698,7 @@ func TestBuildV2PadsCatalogFillersForLongNarration(t *testing.T) {
 		Catalog:      limitCatalog{shots: fillerBrollShots(80), semantic: 50, readyLimit: 80},
 		Analyzer:     LocalIntentAnalyzer{},
 		Embedder:     mapEmbedder{},
+		SelectMode:   SelectModeMovieCatalog,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -762,6 +778,7 @@ func TestBuildV2RealFinanceCatalogCoversLongNarration(t *testing.T) {
 		CatalogPath:  catalogPath,
 		Analyzer:     LocalIntentAnalyzer{},
 		Duration:     func(string) (float64, error) { return duration, nil },
+		SelectMode:   SelectModeMovieCatalog,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -261,10 +261,10 @@ func movieCatalogSelect(opts Options) bool {
 	return mode == SelectModeMovieCatalog || preset == mixPresetMovieCatalog
 }
 
-// BuildV2 writes production_plan.json (plan_version 2.0) with catalog recall
-// when media_catalog_path is set. Scenic and movie_catalog tasks both follow
-// narration; scenic tasks fall back to media_index landscape only when the
-// catalog has no usable shots. CaptionMode defaults to off.
+// BuildV2 writes production_plan.json (plan_version 2.0). Movie-catalog
+// tasks recall from catalog.db with intent/embedding match. Scenic tasks
+// sample media_index 风景/城市/财经 clips and merge catalog B-roll into
+// the same pool — no narration matching. CaptionMode defaults to off.
 func BuildV2(opts Options) error {
 	ctx, err := loadPlanContext(opts)
 	if err != nil {
@@ -292,16 +292,29 @@ func BuildV2(opts Options) error {
 	if opts.CatalogPath == "" {
 		opts.CatalogPath = strings.TrimSpace(ctx.manifest.NonSecretSettings.MediaCatalogPath)
 	}
-	catalog, closer, err := resolveCatalog(opts)
-	if err != nil {
-		return err
+	notes := []string{"deterministic console planner v2"}
+	var catalog CatalogReader
+	var closer func()
+	var candidates []rankedCandidate
+	var intents []NarrativeIntent
+	if movieCatalogSelect(opts) {
+		var resolveErr error
+		catalog, closer, resolveErr = resolveCatalog(opts)
+		if resolveErr != nil {
+			return resolveErr
+		}
+	} else {
+		notes = append(notes, "scenic_mixed_pool: landscape/city/finance, no intent match")
+		var resolveErr error
+		catalog, closer, resolveErr = resolveCatalog(opts)
+		if resolveErr != nil {
+			notes = append(notes, "scenic_catalog_unavailable: "+resolveErr.Error())
+			catalog, closer = nil, func() {}
+		}
 	}
 	defer closer()
 
-	notes := []string{"deterministic console planner v2"}
-	var candidates []rankedCandidate
-	var intents []NarrativeIntent
-	if catalog != nil {
+	if movieCatalogSelect(opts) && catalog != nil {
 		sentences, sentErr := loadPlanSentences(ctx)
 		if sentErr != nil {
 			return sentErr
@@ -345,17 +358,21 @@ func BuildV2(opts Options) error {
 		if len(candidates) == 0 {
 			return fmt.Errorf("movie catalog produced no usable shots")
 		}
-	} else if len(candidates) == 0 {
+	} else {
 		clips, sampleErr := sampleMediaMatching(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false, isLandscapeItem)
 		if sampleErr != nil {
 			return sampleErr
 		}
 		candidates = rankedFromIndex(clips)
-		if catalog != nil {
-			notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
+		merged, mergeNotes, mergeErr := mergeScenicCatalogBroll(context.Background(), catalog, candidates, ctx.mediaRoot)
+		if mergeErr != nil {
+			notes = append(notes, "scenic_catalog_recall_failed: "+mergeErr.Error())
+		} else {
+			candidates = merged
+			notes = append(notes, mergeNotes...)
 		}
 		if len(candidates) == 0 {
-			return fmt.Errorf("media index produced no 风景/景观 clips")
+			return fmt.Errorf("scenic pool produced no landscape/city/finance clips")
 		}
 	}
 	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
@@ -621,8 +638,11 @@ type spokenPiece struct {
 func buildV2Timeline(selection []plannedMedia) []TimelineShotV2 {
 	shots := make([]TimelineShotV2, 0, len(selection))
 	imageOrdinal, brollOrdinal := 0, 0
+	sourceUses := map[string]int{}
 	for i, segment := range selection {
 		slot := segment.EndS - segment.StartS
+		reuse := sourceUses[segment.Item.sourceKey()]
+		sourceUses[segment.Item.sourceKey()]++
 		shot := TimelineShotV2{
 			ShotNo:           i + 1,
 			StartS:           segment.StartS,
@@ -643,11 +663,11 @@ func buildV2Timeline(selection []plannedMedia) []TimelineShotV2 {
 			shot.Motion = imageMotionPlan(imageOrdinal)
 			imageOrdinal++
 		case mediaKindMovie:
-			in, out := v2SourceWindow(segment.Item, slot)
+			in, out := v2SourceWindow(segment.Item, slot, reuse)
 			shot.SourceInS, shot.SourceOutS = &in, &out
 			shot.Motion = movieMotionPlan()
 		default:
-			in, out := v2SourceWindow(segment.Item, slot)
+			in, out := v2SourceWindow(segment.Item, slot, reuse)
 			shot.SourceInS, shot.SourceOutS = &in, &out
 			shot.Motion = brollMotionPlan(brollOrdinal)
 			brollOrdinal++
@@ -658,26 +678,41 @@ func buildV2Timeline(selection []plannedMedia) []TimelineShotV2 {
 }
 
 // v2SourceWindow places the slot inside the clip's real source range at 1.5x.
-// Whole-source clips keep a 1s lead-in when there is room, like v1.
-func v2SourceWindow(item mediaItem, slot float64) (in, out float64) {
+// reuseIndex 0 keeps the 1s lead-in. Later uses of the same file walk
+// forward by one slot of source so the opening does not replay.
+func v2SourceWindow(item mediaItem, slot float64, reuseIndex int) (in, out float64) {
+	if reuseIndex < 0 {
+		reuseIndex = 0
+	}
 	source := roundSFXStart(v2SourceNeed(slot))
+	base := 0.0
+	limit := item.DurationSeconds
 	if item.hasShotRange() {
-		in = roundSFXStart(item.SourceInSeconds)
-		out = roundSFXStart(in + source)
-		if limit := roundSFXStart(item.SourceOutSeconds); out > limit {
-			out = limit
+		base = roundSFXStart(item.SourceInSeconds)
+		limit = roundSFXStart(item.SourceOutSeconds)
+	} else if item.DurationSeconds >= source+2 {
+		base = 1.0
+	}
+	span := limit - base
+	if span <= 0 || source <= 0 {
+		return base, base
+	}
+	offset := float64(reuseIndex) * source
+	if source <= span {
+		offset = math.Mod(offset, span)
+		if offset > span-source {
+			offset = span - source
 		}
-		return in, out
+	} else {
+		offset = 0
 	}
-	if item.DurationSeconds >= source+2 {
-		in = 1.0
-	}
+	in = roundSFXStart(base + offset)
 	out = roundSFXStart(in + source)
-	if item.DurationSeconds > 0 && out > item.DurationSeconds {
-		out = roundSFXStart(item.DurationSeconds)
+	if out > limit {
+		out = limit
 		in = roundSFXStart(out - source)
-		if in < 0 {
-			in = 0
+		if in < base {
+			in = base
 		}
 	}
 	return in, out
@@ -741,6 +776,27 @@ func loadPlanSentences(ctx *planContext) ([]TimedSentence, error) {
 		return nil, fmt.Errorf("parse subtitle srt: %w", err)
 	}
 	return sentences, nil
+}
+
+func mergeScenicCatalogBroll(ctx context.Context, catalog CatalogReader, candidates []rankedCandidate, mediaRoot string) ([]rankedCandidate, []string, error) {
+	if catalog == nil {
+		return candidates, nil, nil
+	}
+	pool, err := catalog.RecallReadyShots(ctx, 2000)
+	if err != nil {
+		return candidates, nil, err
+	}
+	extra := make([]rankedCandidate, 0, len(pool))
+	for _, shot := range pool {
+		if shot.item.Kind == mediaKindMovie {
+			continue
+		}
+		extra = append(extra, rankedCandidate{Item: shot.item})
+	}
+	extra = resolveCandidatePaths(extra, mediaRoot)
+	before := len(candidates)
+	merged := mergeRankedCandidates(candidates, extra)
+	return merged, []string{fmt.Sprintf("scenic_catalog_broll: merged %d", len(merged)-before)}, nil
 }
 
 func resolveCandidatePaths(candidates []rankedCandidate, mediaRoot string) []rankedCandidate {

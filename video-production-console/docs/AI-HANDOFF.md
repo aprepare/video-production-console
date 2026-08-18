@@ -23,7 +23,7 @@
 | 风景混剪 | 粘贴原文 → 二创 → 火山配音字幕 → 开始风景混剪 → 剪映草稿 → 复制发布文案 | `remix.standard` + `montage.execute` + `jianying-montage-draft` | **日产能用** |
 | 图文 ZIP | `/image-projects` 一键生图；`/advanced` 手动分段 | `internal/httpapi/imageproject_quick.go`、`web/src/image-mode/` | **日产能用** |
 | 本机/云机建库 | 控制台「素材库 → 开始建库」或 `catalog-builder` `:2031`：扫描 + 切镜 + 打标 + 向量 | `mediacatalog.RunHostedBuild`、`cmd/catalog-builder` | **能建库** |
-| 库内自动检索 | 建好且有 `ready_shots` 后，标签池 + 全库向量近邻，再可选对话点选 | `attachCatalogClients` → `rankLibrary` + `ShotSelector` | **已接通，改 embedding 须重启** |
+| 库内自动检索 | **电影混剪**按口播检索；**风景混剪**混用索引风景/城市/财经 + catalog B-roll，不对口播 | `attachCatalogClients` → `rankLibrary` + `ShotSelector` | **电影线接通；风景线混池不匹配** |
 | 电影混剪 | 工作台「开始电影混剪」，按口播用 catalog 电影镜头 | `jianying-movie-montage` + `SelectModeMovieCatalog` | **代码接通，待真机出片** |
 | 图片视频 | 无用户入口 | `quota.go` 的 `image_video` 预设 | **不要做** |
 
@@ -35,7 +35,7 @@
 4. 产出 `continuous_script` + `publishing_package.json`。查看弹窗可直接改稿；「打回重做」走 `remix.review`。
 5. 「生成配音与字幕」→ `POST /api/projects/{id}/narration`（火山 TTS + 词级 SRT）。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占。字幕由用户自己生成，不要指望混剪再调大模型分段。
 6. 「开始风景混剪」→ 本机 `montage-script-run` → Go 写 `production_plan.json` → Python skill 造明文草稿 → `montage.Coordinator` 登记剪映。
-7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：B-roll **1.5×**、按口播从 catalog 选片（财经 B-roll 优先）、**口播字幕轨关闭**（`captions.mode=off`，`SpokenCaptionsEnabled=false`）。板上标题/副标题仍在。大模型字幕分段/关键词也已屏蔽。不写窗内白色片头。catalog 为空才回退旧风景索引。否则走 v1（1.4 缩放、全索引打散）。选片细节见 [混剪自动选片](operations/montage-catalog-matching.md)。
+7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：B-roll **1.5×**、**口播字幕轨关闭**。风景任务 notes 写 `scenic_mixed_pool`，打散 `media_index` 风景/城市/财经并合并 catalog B-roll，不按口播对画面。电影任务才走 catalog 向量召回。板上标题/副标题仍在。不写窗内白色片头。否则走 v1（1.4 缩放、全索引打散）。选片细节见 [混剪自动选片](operations/montage-catalog-matching.md)。
 8. 审核阶段可「重做混剪」（再发一条 `montage.execute`，不删旧草稿）。发布文案来自最近二创结果。
 
 选题 UI 已移除（`web/src/idea/` 未挂到 `App.tsx`）。不要恢复「给我选题」主路径。后端 `/api/ideas` 仍在，openai_compat 不认 `topic_card`。
@@ -52,7 +52,7 @@
    - `task_manifest` 带上 `media_catalog_path` / 视觉 / embedding 字段（`internal/httpapi/task_manifest.go`）。改 embedding 后必须重启，否则 active 快照仍空，计划里不会有 `embedding_pool`。
    - `montage-script-run` 注入 `VIDEO_CONSOLE_EMBEDDING_*`（URL/模型/密钥都要），构造 Embedder；意图分析默认本地词表，对话模型只做短名单 `ShotSelector`。
    - `BuildV2` → `rankLibrary`：标签四级池 + 全库余弦近邻（`RecallReadyShots(2000)`）→ 配额铺轨。
-   - **风景任务**按口播用 catalog 财经/B-roll；库空才回退旧风景索引。
+   - **风景任务**混用 `media_index` 风景/城市/财经 + catalog B-roll，不按口播对画面。
    - **电影任务**同样按口播用 catalog，无可用镜头直接失败。
    - 库里没有住宅/法拍时，向量也只能对到 cityscape / 硬币 / 办公。要真房子画面先补片再建库。
 
@@ -64,7 +64,7 @@
 - 不要恢复选题/爆款库主路径。
 - 不要把白色片头标题、重点字幕加回风景画面窗。
 - 不要打开口播字幕轨（`SpokenCaptionsEnabled` / `captions.mode=spoken`）；排版不好，先整轨屏蔽。也不要打开大模型字幕分段/关键词。
-- 风景线有 catalog 时按口播用财经/B-roll，不要再滤成只剩风景。catalog 为空才回退旧风景索引。
+- 风景线混用风景/城市/财经索引和 catalog B-roll，不按口播对画面。电影线才按口播检索。
 - 不要做图片视频编排、设置页 runtime 下拉、P2-5b 代码生成。
 - 不要把 API Key 写进仓库或文档。
 - 不要擅自 `git reset/checkout/restore/stash/clean`，不要删 `video-console-data/` 与 `internal/webui/dist/`。
