@@ -104,6 +104,80 @@ func TestMatchLevelsHitFiveFixtureShots(t *testing.T) {
 	}
 }
 
+type splitCatalog struct {
+	tagged []matchShot
+	ready  []matchShot
+}
+
+func (c splitCatalog) RecallByTags(context.Context, []string, int) ([]matchShot, error) {
+	return c.tagged, nil
+}
+func (c splitCatalog) RecallByMoodSetting(context.Context, string, string, int) ([]matchShot, error) {
+	return nil, nil
+}
+func (c splitCatalog) RecallReadyShots(context.Context, int) ([]matchShot, error) {
+	return c.ready, nil
+}
+
+func TestRankLibraryPullsEmbeddingNeighborsOutsideTagPool(t *testing.T) {
+	money := matchShot{
+		item: mediaItem{ID: "src-money", Kind: mediaKindBroll, ShotID: "shot-money",
+			RelativePath: "money.mp4", DurationSeconds: 20, Tags: []string{"money"}},
+		tags: []string{"money"}, embedding: []float32{0, 1, 0},
+	}
+	city := matchShot{
+		item: mediaItem{ID: "src-city", Kind: mediaKindBroll, ShotID: "shot-city",
+			RelativePath: "city.mp4", DurationSeconds: 20, Summary: "night city skyline",
+			Tags: []string{"cityscape"}},
+		tags: []string{"cityscape"}, embedding: []float32{1, 0, 0},
+	}
+	intent := NarrativeIntent{
+		SegmentID: "seg-001", Text: "现在还要不要买房",
+		VisualConcepts: []string{"cityscape"}, Mood: "warning", Importance: 0.8,
+	}
+	ranked, notes, err := rankLibrary(context.Background(), []NarrativeIntent{intent}, splitCatalog{
+		tagged: []matchShot{money},
+		ready:  []matchShot{money, city},
+	}, mapEmbedder{"现在还要不要买房 cityscape": []float32{1, 0, 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(notes, " ")
+	if !strings.Contains(joined, "embedding_pool") {
+		t.Fatalf("notes=%v", notes)
+	}
+	found := false
+	for _, candidate := range ranked {
+		if candidate.Item.ShotID == "shot-city" {
+			found = true
+			if candidate.Match.Level != matchLevelDirect {
+				t.Fatalf("city match=%#v", candidate.Match)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("embedding neighbor missing: %#v", ranked)
+	}
+}
+
+func TestMatchKeepsEnglishCatalogTagWithoutEmbedder(t *testing.T) {
+	shot := matchShot{
+		item: mediaItem{ID: "src-city", Kind: mediaKindBroll, RelativePath: "broll/city.mp4",
+			DurationSeconds: 20, ShotID: "shot-city"},
+		tags: []string{"cityscape", "money"}, mood: "focused", setting: "city",
+	}
+	intent := NarrativeIntent{
+		SegmentID: "seg-001", Text: "现在还要不要买房？",
+		Entities: []string{"买房"}, Topics: []string{"买房"},
+		VisualConcepts: []string{"买房", "cityscape", "money"},
+		Mood:           "warning", Importance: 0.8,
+	}
+	ranked := matchCandidates(context.Background(), intent, []matchShot{shot}, nil, scoreContext{usedShots: map[string]bool{}})
+	if len(ranked) != 1 || ranked[0].Match.Level != matchLevelDirect {
+		t.Fatalf("want lexical direct without embedder, got %#v", ranked)
+	}
+}
+
 func TestMatchPenaltiesLowerScore(t *testing.T) {
 	shot := fixtureShots()[0]
 	shot.hasText = true
@@ -138,13 +212,13 @@ func TestMatchOrderShuffleDoesNotChangeTimeline(t *testing.T) {
 	if len(ranked) < 3 {
 		t.Fatalf("not enough ranked candidates: %d", len(ranked))
 	}
-	first, _, err := selectTimelineV2(ranked, 20, "seed-stable", movieMixPolicy())
+	first, _, err := selectTimelineV2(ranked, 20, "seed-stable", movieMixPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	shuffled := append([]rankedCandidate(nil), ranked...)
 	rand.New(rand.NewSource(99)).Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-	second, _, err := selectTimelineV2(shuffled, 20, "seed-stable", movieMixPolicy())
+	second, _, err := selectTimelineV2(shuffled, 20, "seed-stable", movieMixPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +256,70 @@ func (f fakeCatalog) RecallByMoodSetting(context.Context, string, string, int) (
 }
 func (f fakeCatalog) RecallReadyShots(context.Context, int) ([]matchShot, error) {
 	return f.shots, f.err
+}
+
+type limitCatalog struct {
+	shots      []matchShot
+	semantic   int
+	readyLimit int
+	err        error
+}
+
+func firstMatchShots(shots []matchShot, limit int) []matchShot {
+	if limit <= 0 || limit > len(shots) {
+		limit = len(shots)
+	}
+	return shots[:limit]
+}
+
+func (c limitCatalog) RecallByTags(_ context.Context, _ []string, limit int) ([]matchShot, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.semantic > 0 && (limit <= 0 || limit > c.semantic) {
+		limit = c.semantic
+	}
+	return firstMatchShots(c.shots, limit), nil
+}
+
+func (c limitCatalog) RecallByMoodSetting(_ context.Context, _, _ string, limit int) ([]matchShot, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.semantic > 0 && (limit <= 0 || limit > c.semantic) {
+		limit = c.semantic
+	}
+	return firstMatchShots(c.shots, limit), nil
+}
+
+func (c limitCatalog) RecallReadyShots(_ context.Context, limit int) ([]matchShot, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.readyLimit > 0 && (limit <= 0 || limit > c.readyLimit) {
+		limit = c.readyLimit
+	}
+	return firstMatchShots(c.shots, limit), nil
+}
+
+func fillerBrollShots(n int) []matchShot {
+	out := make([]matchShot, 0, n)
+	for i := 0; i < n; i++ {
+		item := mediaItem{
+			ID:              fmt.Sprintf("src-fill-%02d", i),
+			Kind:            mediaKindBroll,
+			RelativePath:    fmt.Sprintf("originals/broll/fill-%02d.mp4", i),
+			DurationSeconds: 12,
+			ShotID:          fmt.Sprintf("shot-fill-%02d", i),
+			Category:        "city",
+			Tags:            []string{"城市交通"},
+		}
+		out = append(out, matchShot{
+			item: item, tags: []string{"城市交通"}, mood: "neutral",
+			setting: "city", motion: "medium", embedding: []float32{0.1, 0.1, 0.1},
+		})
+	}
+	return out
 }
 
 func landscapeCatalogShots() []matchShot {
@@ -335,14 +473,14 @@ func TestBuildV2MovieCatalogKeepsNonLandscapeShots(t *testing.T) {
 }
 
 func thinLandscapeCatalogFromOneFile() []matchShot {
-	out := make([]matchShot, 0, 20)
-	for i := 0; i < 20; i++ {
+	out := make([]matchShot, 0, 32)
+	for i := 0; i < 32; i++ {
 		in := float64(i * 8)
 		item := mediaItem{
 			ID:               fmt.Sprintf("src-thin-%02d", i),
 			Kind:             mediaKindBroll,
 			RelativePath:     "landscape/repeat.mp4",
-			DurationSeconds:  200,
+			DurationSeconds:  320,
 			SourceInSeconds:  in,
 			SourceOutSeconds: in + 8,
 			ShotID:           fmt.Sprintf("shot-thin-%02d", i),
@@ -486,10 +624,10 @@ func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
 			{"role": "subtitle_srt", "path": srtPath},
 		},
 		"non_secret_settings": map[string]string{
-			"media_root":          mediaRoot,
-			"media_index_path":    indexPath,
-			"media_catalog_path":  catalogPath,
-			"draft_display_name":  "财经素材库验收",
+			"media_root":         mediaRoot,
+			"media_index_path":   indexPath,
+			"media_catalog_path": catalogPath,
+			"draft_display_name": "财经素材库验收",
 		},
 	})
 	if err != nil {
@@ -533,4 +671,121 @@ func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
 	if broll == 0 {
 		t.Fatalf("expected originals/broll shots, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
 	}
+}
+
+func TestBuildV2PadsCatalogFillersForLongNarration(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	const duration = 400.0
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return duration, nil },
+		Catalog:      limitCatalog{shots: fillerBrollShots(80), semantic: 50, readyLimit: 80},
+		Analyzer:     LocalIntentAnalyzer{},
+		Embedder:     mapEmbedder{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if mathAbs(plan.ProjectDurationS-duration) > 0.01 {
+		t.Fatalf("duration=%v", plan.ProjectDurationS)
+	}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if !strings.Contains(joined, "catalog_fill") {
+		t.Fatalf("expected catalog filler note, notes=%v", plan.PlannerNotes)
+	}
+	if len(plan.Timeline) <= 50 {
+		t.Fatalf("long narration must use more than the 50-shot recall cap, got %d", len(plan.Timeline))
+	}
+	for i, shot := range plan.Timeline {
+		if strings.TrimSpace(shot.Match.IntentID) == "" || strings.TrimSpace(shot.Match.Reason) == "" {
+			t.Fatalf("shot %d match evidence incomplete: %#v", i+1, shot.Match)
+		}
+	}
+}
+
+func TestBuildV2RealFinanceCatalogCoversLongNarration(t *testing.T) {
+	mediaRoot := `E:\B站素材\AI_Media_Library`
+	catalogPath := filepath.Join(mediaRoot, "catalog.db")
+	indexPath := filepath.Join(mediaRoot, "00_INDEX", "media_index.json")
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Skip("finance catalog is not on this machine")
+	}
+	root := t.TempDir()
+	narration := filepath.Join(root, "narration.mp3")
+	background := filepath.Join(root, "bg.png")
+	srtPath := filepath.Join(root, "sub.srt")
+	for _, path := range []string{narration, background} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(srtPath, []byte(v2FixtureSRT()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "task-finance-long"
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	rawManifest, err := json.Marshal(map[string]any{
+		"task_id": taskID, "job_id": taskID, "action": "montage.execute",
+		"output_dir": filepath.Join(root, "output"),
+		"inputs": []map[string]string{
+			{"role": "narration", "path": narration},
+			{"role": "account_background", "path": background},
+			{"role": "subtitle_srt", "path": srtPath},
+		},
+		"non_secret_settings": map[string]string{
+			"media_root":         mediaRoot,
+			"media_index_path":   indexPath,
+			"media_catalog_path": catalogPath,
+			"draft_display_name": "长口播财经库验收",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, rawManifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(root, "output", "production_plan.json")
+	const duration = 446.85
+	if err := BuildV2(Options{
+		ManifestPath: manifestPath,
+		PlanPath:     planPath,
+		CatalogPath:  catalogPath,
+		Analyzer:     LocalIntentAnalyzer{},
+		Duration:     func(string) (float64, error) { return duration, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Timeline) <= 50 {
+		t.Fatalf("446s finance plan must exceed the 50-shot recall cap, got %d notes=%v", len(plan.Timeline), plan.PlannerNotes)
+	}
+	for _, shot := range plan.Timeline {
+		if strings.Contains(filepath.ToSlash(shot.SourcePath), "01_Nature_Landscape") {
+			t.Fatalf("landscape fallback used: %s", shot.SourcePath)
+		}
+	}
+}
+
+func mathAbs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

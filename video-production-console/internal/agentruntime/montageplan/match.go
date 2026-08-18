@@ -34,6 +34,11 @@ const (
 	penaltyRepeat      = 0.25
 	penaltyVisibleText = 0.20
 	penaltyQuota       = 0.20
+
+	// semanticNeighborLimit is how many cosine-nearest shots (outside the
+	// tag pool) are merged into each intent. Tag recall alone only sees
+	// exact English labels, so housing narration would miss cityscape.
+	semanticNeighborLimit = 32
 )
 
 // ErrCatalogUnavailable is returned when a requested catalog cannot be opened.
@@ -186,14 +191,49 @@ func classifyMatchLevel(intent NarrativeIntent, shot matchShot) (string, string)
 		}
 	}
 	for _, concept := range intent.VisualConcepts {
-		if containsFold(haystack, concept) && looksMetaphor(concept) {
+		if !containsFold(haystack, concept) {
+			continue
+		}
+		if looksMetaphor(concept) {
 			return matchLevelMetaphor, concept
 		}
+		return matchLevelDirect, concept
 	}
-	if intent.Mood != "" && fold(intent.Mood) == fold(shot.mood) {
+	if moodMatches(intent.Mood, shot.mood) {
 		return matchLevelEmotion, intent.Mood
 	}
 	return matchLevelNeutral, ""
+}
+
+func catalogMoodsFor(mood string) []string {
+	switch fold(mood) {
+	case "warning":
+		return []string{"tense", "serious", "intense"}
+	case "anxious":
+		return []string{"stressed", "tense", "serious"}
+	case "resolute":
+		return []string{"confident", "professional", "focused"}
+	case "neutral", "":
+		return []string{"neutral", "focused", "professional", "analytical"}
+	default:
+		return []string{mood}
+	}
+}
+
+func moodMatches(intentMood, shotMood string) bool {
+	if strings.TrimSpace(intentMood) == "" || strings.TrimSpace(shotMood) == "" {
+		return false
+	}
+	if fold(intentMood) == fold(shotMood) {
+		return true
+	}
+	hay := fold(shotMood)
+	for _, candidate := range catalogMoodsFor(intentMood) {
+		if strings.Contains(hay, fold(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksMetaphor(value string) bool {
@@ -210,7 +250,7 @@ func scoreShot(intent NarrativeIntent, shot matchShot, intentEmbedding []float32
 	topic := overlapScore(append(append(append([]string{}, intent.Topics...), intent.VisualConcepts...), intent.Metaphors...), append(append([]string{}, shot.tags...), shot.setting, shot.item.Summary))
 	entity := overlapScore(intent.Entities, shot.tags)
 	mood := 0.0
-	if intent.Mood != "" && fold(intent.Mood) == fold(shot.mood) {
+	if moodMatches(intent.Mood, shot.mood) {
 		mood = 1
 	}
 	motion := motionFit(shot.motion, intent.Importance)
@@ -289,17 +329,21 @@ func firstNonEmpty(parts ...[]string) string {
 
 func passesThreshold(level string, score float64) bool {
 	switch level {
-	case matchLevelDirect:
-		return score >= thresholdDirect
-	case matchLevelMetaphor:
-		return score >= thresholdMetaphor
-	case matchLevelEmotion:
-		return score >= thresholdEmotion
+	case matchLevelDirect, matchLevelMetaphor, matchLevelEmotion:
+		// Lexical tag/mood hits must survive when embeddings are offline.
+		// The 0.72/0.62/0.54 floors assume a semantic term; tag overlap
+		// alone tops out around 0.60 and would otherwise discard every hit.
+		return true
 	default:
 		return true
 	}
 }
 
+// recallForIntent is the lexical four-level pool: entity/topic tags,
+// metaphor/visual-concept tags, mood, then a small ready-shot fill.
+// It is capped at 80. Full-library neighbors are appended later by
+// rankLibrary when an embedder is configured — do not raise this cap
+// to scan the catalog; that path is RecallReadyShots(2000).
 func recallForIntent(ctx context.Context, catalog CatalogReader, intent NarrativeIntent) ([]matchShot, error) {
 	if catalog == nil {
 		return nil, nil
@@ -328,41 +372,115 @@ func recallForIntent(ctx context.Context, catalog CatalogReader, intent Narrativ
 		return nil, wrapCatalogError(err)
 	}
 	add(rows)
-	rows, err = catalog.RecallByMoodSetting(ctx, intent.Mood, "", 50)
-	if err != nil {
-		return nil, wrapCatalogError(err)
+	for _, mood := range catalogMoodsFor(intent.Mood) {
+		rows, err = catalog.RecallByMoodSetting(ctx, mood, "", 50)
+		if err != nil {
+			return nil, wrapCatalogError(err)
+		}
+		add(rows)
 	}
-	add(rows)
 	rows, err = catalog.RecallReadyShots(ctx, 50)
 	if err != nil {
 		return nil, wrapCatalogError(err)
 	}
 	add(rows)
-	if len(out) > 50 {
-		out = out[:50]
+	if len(out) > 80 {
+		out = out[:80]
 	}
 	return out, nil
 }
 
+// appendSemanticNeighbors ranks universe by cosine(query, shot.embedding)
+// and appends unseen neighbors. Cosine never promotes match level to
+// direct — that would make fixture vectors look like lexical hits.
+func appendSemanticNeighbors(pool, universe []matchShot, query []float32, limit int) []matchShot {
+	if len(query) == 0 || len(universe) == 0 || limit <= 0 {
+		return pool
+	}
+	type scored struct {
+		shot matchShot
+		sim  float64
+	}
+	ranked := make([]scored, 0, len(universe))
+	for _, shot := range universe {
+		sim := cosine(query, shot.embedding)
+		if sim <= 0 {
+			continue
+		}
+		ranked = append(ranked, scored{shot: shot, sim: sim})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].sim != ranked[j].sim {
+			return ranked[i].sim > ranked[j].sim
+		}
+		return ranked[i].shot.item.ShotID < ranked[j].shot.item.ShotID
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	seen := map[string]bool{}
+	for _, shot := range pool {
+		seen[shot.item.shotKey()] = true
+	}
+	for _, row := range ranked {
+		key := row.shot.item.shotKey()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		pool = append(pool, row.shot)
+	}
+	return pool
+}
+
+// rankLibrary scores every intent against a tag pool plus optional
+// embedding neighbors. planner_notes record either
+// "embedding_pool: scanned N catalog shots" or
+// "embedding_disabled: embedder not configured".
+// Changing embedding URL/model/key in settings requires a console restart
+// before the child process sees them.
 func rankLibrary(ctx context.Context, intents []NarrativeIntent, catalog CatalogReader, embedder Embedder) ([]rankedCandidate, []string, error) {
 	best := map[string]rankedCandidate{}
 	warnings := []string{}
 	if len(intents) == 0 {
 		warnings = append(warnings, "intent_fallback_empty: no narrative intents; using neutral catalog pool")
 	}
+	var semanticPool []matchShot
+	if embedder == nil {
+		warnings = append(warnings, "embedding_disabled: embedder not configured")
+	} else if catalog != nil {
+		pool, err := catalog.RecallReadyShots(ctx, 2000)
+		if err != nil {
+			return nil, nil, err
+		}
+		semanticPool = pool
+		warnings = append(warnings, fmt.Sprintf("embedding_pool: scanned %d catalog shots", len(semanticPool)))
+	}
+	embedMemo := map[string][]float32{}
 	scoreCtx := scoreContext{usedShots: map[string]bool{}}
+	emptyQueries := 0
 	for _, intent := range intents {
 		pool, err := recallForIntent(ctx, catalog, intent)
 		if err != nil {
 			return nil, nil, err
 		}
+		if len(semanticPool) > 0 {
+			query := cachedEmbedIntent(ctx, embedder, embedMemo, intent)
+			if len(query) == 0 {
+				emptyQueries++
+			}
+			pool = appendSemanticNeighbors(pool, semanticPool, query, semanticNeighborLimit)
+		}
 		for _, candidate := range matchCandidates(ctx, intent, pool, embedder, scoreCtx) {
-			key := candidate.Item.shotKey()
+			key := candidate.Item.shotKey() + "\x00" + candidate.Match.IntentID
 			if existing, ok := best[key]; !ok || candidate.Score > existing.Score ||
 				(candidate.Score == existing.Score && candidate.Item.ShotID < existing.Item.ShotID) {
 				best[key] = candidate
 			}
 		}
+	}
+	if emptyQueries > 0 {
+		warnings = append(warnings, fmt.Sprintf("embedding_query_empty: %d intents", emptyQueries))
 	}
 	if len(best) == 0 && catalog != nil {
 		pool, err := catalog.RecallReadyShots(ctx, 50)
@@ -371,7 +489,7 @@ func rankLibrary(ctx context.Context, intents []NarrativeIntent, catalog Catalog
 		}
 		neutral := NarrativeIntent{SegmentID: "seg-001", Mood: "neutral", Importance: 0.4}
 		for _, candidate := range matchCandidates(ctx, neutral, pool, embedder, scoreCtx) {
-			best[candidate.Item.shotKey()] = candidate
+			best[candidate.Item.shotKey()+"\x00"+candidate.Match.IntentID] = candidate
 		}
 		warnings = append(warnings, "match_candidates_insufficient: falling back to neutral catalog shots")
 	}
@@ -381,6 +499,73 @@ func rankLibrary(ctx context.Context, intents []NarrativeIntent, catalog Catalog
 	}
 	sortRanked(out)
 	return out, warnings, nil
+}
+
+func catalogFillNeed(duration float64) int {
+	if duration <= 0 {
+		return 0
+	}
+	return int(math.Ceil(duration/5.0)) + 8
+}
+
+// padCatalogCandidates appends unused ready catalog shots when narration
+// recall is too small to cover the timeline without repeating a ShotID.
+func padCatalogCandidates(ctx context.Context, catalog CatalogReader, ranked []rankedCandidate, duration float64) ([]rankedCandidate, []string, error) {
+	if catalog == nil {
+		return ranked, nil, nil
+	}
+	need := catalogFillNeed(duration)
+	if need == 0 {
+		return ranked, nil, nil
+	}
+	seen := map[string]bool{}
+	usable := 0
+	for _, candidate := range ranked {
+		key := candidate.Item.shotKey()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if candidate.Item.Kind == mediaKindImage || v2AvailableSeconds(candidate.Item) >= 5 {
+			usable++
+		}
+	}
+	if usable >= need {
+		return ranked, nil, nil
+	}
+	limit := need * 2
+	if limit < 100 {
+		limit = 100
+	}
+	pool, err := catalog.RecallReadyShots(ctx, limit)
+	if err != nil {
+		return nil, nil, wrapCatalogError(err)
+	}
+	added := 0
+	for _, shot := range pool {
+		key := shot.item.shotKey()
+		if seen[key] {
+			continue
+		}
+		if shot.item.Kind != mediaKindImage && v2AvailableSeconds(shot.item) < 5 {
+			continue
+		}
+		seen[key] = true
+		ranked = append(ranked, rankedCandidate{
+			Item:  shot.item,
+			Score: 0,
+			Match: MatchEvidence{Level: matchLevelNeutral, IntentID: "catalog-fill", Reason: "catalog_fill: unused ready shot"},
+		})
+		usable++
+		added++
+		if usable >= need {
+			break
+		}
+	}
+	if added == 0 {
+		return ranked, nil, nil
+	}
+	return ranked, []string{fmt.Sprintf("catalog_fill: added %d unused ready shots to cover %.1fs", added, duration)}, nil
 }
 
 func sortRanked(ranked []rankedCandidate) {
@@ -407,11 +592,33 @@ func stableShotHash(item mediaItem) string {
 	return fmt.Sprintf("%x", sum[:8])
 }
 
+func cachedEmbedIntent(ctx context.Context, embedder Embedder, memo map[string][]float32, intent NarrativeIntent) []float32 {
+	key := strings.TrimSpace(intent.VisualQuery)
+	if key == "" {
+		key = strings.TrimSpace(intent.Text + " " + strings.Join(intent.VisualConcepts, " "))
+	}
+	if key == "" {
+		return nil
+	}
+	if vector, ok := memo[key]; ok {
+		return vector
+	}
+	vector := embedIntent(ctx, embedder, intent)
+	memo[key] = vector
+	return vector
+}
+
+// embedIntent embeds VisualQuery, or spoken text + visual concepts.
+// Errors return nil so lexical scoring still works offline.
 func embedIntent(ctx context.Context, embedder Embedder, intent NarrativeIntent) []float32 {
 	if embedder == nil {
 		return nil
 	}
-	vector, err := embedder.Embed(ctx, strings.TrimSpace(intent.Text+" "+strings.Join(intent.VisualConcepts, " ")))
+	query := strings.TrimSpace(intent.VisualQuery)
+	if query == "" {
+		query = strings.TrimSpace(intent.Text + " " + strings.Join(intent.VisualConcepts, " "))
+	}
+	vector, err := embedder.Embed(ctx, query)
 	if err != nil {
 		return nil
 	}

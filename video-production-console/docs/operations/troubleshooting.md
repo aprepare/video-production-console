@@ -142,6 +142,7 @@ D:\ProgramData\anaconda3\envs\index-tts\Library\bin\ffprobe.exe
 - `catalog_not_configured`：设置里同时填写素材库目录和媒体素材目录，保存并重启。
 - `provider_not_configured`：Pexels/Pixabay 密钥未填。这不阻塞本地建库，只是不能搜索外部图库。
 - 建库失败码（`ffmpeg_not_configured`、`vision_not_configured`、`embedding_not_configured`、`probe_failed`）看素材库面板的中文提示，按设置补路径或密钥后单项重试。
+- 混剪计划出现 `embedding_disabled`、或 `task_manifest` 没有 `embedding_base_url`：设置里向量三项已保存但控制台没重启。`Runtime()` 用进程内快照，必须重启后再跑混剪。详见 [混剪自动选片](montage-catalog-matching.md)。
 - 新任务仍是 v1：到 Skills 页重新扫描 `jianying-montage-draft`，确认 snapshot 含 `assets/capabilities.json` 且声明 `2.0`。已经入队的旧任务不会跟着 Latest 升级。
 
 ### 4.4 素材时间范围超出真实时长

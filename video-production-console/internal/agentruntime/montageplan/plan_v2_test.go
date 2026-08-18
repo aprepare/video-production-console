@@ -851,6 +851,20 @@ func TestBuildV2SlotLengthsFollowKindRanges(t *testing.T) {
 	}
 }
 
+func TestV2SourceWindowUsesPlaybackSpeed(t *testing.T) {
+	item := mediaItem{
+		Kind: mediaKindBroll, DurationSeconds: 20,
+		SourceInSeconds: 2, SourceOutSeconds: 14, ShotID: "shot-speed",
+	}
+	in, out := v2SourceWindow(item, 8)
+	if math.Abs((out-in)-8*v2PlaybackSpeed) > 0.05 {
+		t.Fatalf("window %v..%v does not consume %.1fx of an 8s slot", in, out, v2PlaybackSpeed)
+	}
+	if in < 2-1e-9 || out > 14+1e-9 {
+		t.Fatalf("window %v..%v left the shot range 2..14", in, out)
+	}
+}
+
 func TestBuildV2MovieAndBrollStayInsideSourceWindows(t *testing.T) {
 	manifestPath, planPath := v2Fixture(t)
 	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
@@ -863,8 +877,13 @@ func TestBuildV2MovieAndBrollStayInsideSourceWindows(t *testing.T) {
 		in := shot["source_in_s"].(float64)
 		out := shot["source_out_s"].(float64)
 		slot := shot["end_s"].(float64) - shot["start_s"].(float64)
-		if diff := (out - in) - slot; diff > 0.002 || diff < -0.002 {
-			t.Fatalf("shot %d source window %v..%v does not match slot %v", i, in, out, slot)
+		if slot <= 0 {
+			t.Fatalf("shot %d has empty timeline slot", i)
+		}
+		speed := (out - in) / slot
+		if math.Abs(speed-v2PlaybackSpeed) > 0.02 {
+			t.Fatalf("shot %d playback speed = %.3f from window %v..%v / slot %v, want %.2f",
+				i, speed, in, out, slot, v2PlaybackSpeed)
 		}
 		if kind == "movie" {
 			// Fixture movie shots expose windows like [40,46] or [140,146].

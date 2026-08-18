@@ -42,6 +42,33 @@ func TestAttachCatalogClientsReadsManifestAndEnv(t *testing.T) {
 	}
 }
 
+func TestAttachCatalogClientsUsesRemixFromManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "task_manifest.json")
+	payload, _ := json.Marshal(map[string]any{
+		"skill": "jianying-montage-draft",
+		"non_secret_settings": map[string]any{
+			"media_catalog_path": filepath.Join(dir, "catalog.db"),
+			"remix_base_url":     "http://127.0.0.1:4100/v1",
+			"remix_model":        "grok-4.6",
+		},
+	})
+	if err := os.WriteFile(manifestPath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envIntentBaseURL, "")
+	t.Setenv(envIntentModel, "")
+	t.Setenv(envIntentAPIKey, "")
+	opts := Options{ManifestPath: manifestPath}
+	attachCatalogClients(&opts)
+	if _, ok := opts.Analyzer.(montageplan.LocalIntentAnalyzer); !ok {
+		t.Fatalf("analyzer type %T", opts.Analyzer)
+	}
+	if opts.ShotSelector == nil {
+		t.Fatal("expected shot selector from remix settings")
+	}
+}
+
 func TestAttachCatalogClientsScenicFollowsNarration(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "task_manifest.json")
@@ -54,6 +81,8 @@ func TestAttachCatalogClientsScenicFollowsNarration(t *testing.T) {
 	if err := os.WriteFile(manifestPath, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(envIntentBaseURL, "")
+	t.Setenv(envIntentModel, "")
 	opts := Options{ManifestPath: manifestPath}
 	attachCatalogClients(&opts)
 	local, ok := opts.Analyzer.(montageplan.LocalIntentAnalyzer)

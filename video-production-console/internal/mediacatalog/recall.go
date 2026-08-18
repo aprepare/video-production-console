@@ -14,7 +14,14 @@ import (
 // when the catalog file cannot be opened or queried.
 var ErrCatalogUnavailable = errors.New("media_catalog_unavailable")
 
-const recallMaxCandidates = 50
+const (
+	// recallMaxCandidates caps tag/mood recall. Keep this small so lexical
+	// pools stay cheap.
+	recallMaxCandidates = 50
+	// readyPoolMaxCandidates is the full-library scan used by embedding
+	// neighbors. Do not clamp RecallReadyShots with recallMaxCandidates.
+	readyPoolMaxCandidates = 2000
+)
 
 // RecalledShot is one catalog row plus the tags and optional embedding the
 // planner needs for four-level recall. It never includes absolute movie paths.
@@ -82,7 +89,7 @@ func (r *Repository) RecallByMoodSetting(ctx context.Context, mood, setting stri
 // RecallReadyShots returns up to limit ready-source shots for embedding
 // scans and the neutral fallback pool.
 func (r *Repository) RecallReadyShots(ctx context.Context, limit int) ([]RecalledShot, error) {
-	limit = clampRecallLimit(limit)
+	limit = clampReadyLimit(limit)
 	query := `SELECT s.id FROM media_shots s
 		JOIN media_sources src ON src.id = s.source_id
 		WHERE src.status = 'ready'
@@ -94,6 +101,13 @@ func (r *Repository) RecallReadyShots(ctx context.Context, limit int) ([]Recalle
 func clampRecallLimit(limit int) int {
 	if limit <= 0 || limit > recallMaxCandidates {
 		return recallMaxCandidates
+	}
+	return limit
+}
+
+func clampReadyLimit(limit int) int {
+	if limit <= 0 || limit > readyPoolMaxCandidates {
+		return readyPoolMaxCandidates
 	}
 	return limit
 }

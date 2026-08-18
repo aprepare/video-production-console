@@ -45,6 +45,7 @@ type Options struct {
 	Catalog      CatalogReader
 	Analyzer     IntentAnalyzer
 	Embedder     Embedder
+	ShotSelector ShotSelector
 	// LineBreaker supplies word-safe caption lines. A nil breaker keeps the
 	// deterministic splitter. Production montage leaves this nil while
 	// CaptionLLMLineBreakerEnabled is false.

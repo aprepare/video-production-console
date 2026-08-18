@@ -55,6 +55,45 @@ func TestLocalIntentAnalyzerExtractsFinanceCues(t *testing.T) {
 	}
 }
 
+func TestLocalIntentAnalyzerExtractsHousingCuesAndCatalogTags(t *testing.T) {
+	intents, err := LocalIntentAnalyzer{}.Analyze(context.Background(), []TimedSentence{
+		{StartMS: 0, EndMS: 5000, Text: "法拍房五个月跌了四十万，现在还要不要买房？"},
+		{StartMS: 5000, EndMS: 9000, Text: "月供和首付压着，房贷比存款还吓人。"},
+	})
+	if err != nil || len(intents) == 0 {
+		t.Fatalf("intents=%v err=%v", intents, err)
+	}
+	joined := ""
+	concepts := ""
+	for _, intent := range intents {
+		joined += strings.Join(intent.Entities, " ") + " " + strings.Join(intent.Topics, " ") + " "
+		concepts += strings.Join(intent.VisualConcepts, " ") + " "
+	}
+	for _, want := range []string{"法拍", "买房", "房贷", "月供", "首付"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("housing cues missing %q in %q", want, joined)
+		}
+	}
+	for _, want := range []string{"cityscape", "money", "financial_data"} {
+		if !strings.Contains(concepts, want) {
+			t.Fatalf("catalog tag bridge missing %q in %q", want, concepts)
+		}
+	}
+}
+
+func TestEnrichIntentsMergesSpokenCatalogTags(t *testing.T) {
+	intents := enrichIntentsWithSpokenCues([]NarrativeIntent{{
+		SegmentID: "seg-001", Text: "现在还要不要买房", VisualConcepts: []string{"房子"},
+	}}, false)
+	if len(intents) != 1 {
+		t.Fatalf("intents=%#v", intents)
+	}
+	joined := strings.Join(intents[0].VisualConcepts, " ")
+	if !strings.Contains(joined, "cityscape") || !strings.Contains(joined, "skyscrapers") {
+		t.Fatalf("enriched concepts=%q", joined)
+	}
+}
+
 func TestHTTPIntentAnalyzerFallsBackOnError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

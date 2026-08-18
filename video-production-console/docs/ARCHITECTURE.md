@@ -240,22 +240,24 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.4 混剪：取样与登记
 
-**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / IntentAnalyzer，`BuildV2` 打开库做四级召回，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务和电影任务都按口播召回 catalog；风景任务仅在 catalog 没有可用镜头时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。
+**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / 本地 IntentAnalyzer / 可选 ShotSelector，`BuildV2` 打开库做标签四级召回并叠加全库向量近邻，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务和电影任务都按口播召回 catalog；风景任务仅在 catalog 没有可用镜头时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。选片契约见 [混剪自动选片](operations/montage-catalog-matching.md)。
 
 **本机建库**：控制台「开始建库」与 `catalog-builder.Build` 都调用 `mediacatalog.RunHostedBuild`（`Indexer` → FFmpeg `Pipeline` → `AnalysisRunner`）。缺 FFmpeg 时 ingest 仍保留、错误码 `ffmpeg_not_configured`；缺视觉/向量时错误码 `vision_not_configured`；识别全失败返回 `ErrAnalysisAllFailed`，不得标 ready。OpenAI 兼容地址若只填主机名，`CompatEndpoint` 会补 `/v1`。云机结果包合并只在 `catalog-builder` 小站（`MergePack`），控制台无合并 API。
 
 **v2 自动检索（建库之后）**：
 
 1. `taskManifestPreparer` 把 `media_catalog_path`、视觉/向量地址写入 `non_secret_settings`（`internal/httpapi/task_manifest.go`）。
-2. `cmd/console` 的 `appendMontageCatalogEnv` 把 `VIDEO_CONSOLE_VISION_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_API_KEY` / `VIDEO_CONSOLE_INTENT_*` 注入 `montage-script-run` 子进程（不进 Codex allowlist）。
-3. `attachCatalogClients` 读 manifest：风景和电影都 `RestrictToLandscape=false`，按口播召回；再构造 `HTTPEmbedder` 与 `HTTPIntentAnalyzer`（失败回落 `LocalIntentAnalyzer`）。
+2. `cmd/console` 的 `appendMontageCatalogEnv` 把 `VIDEO_CONSOLE_VISION_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_BASE_URL` / `VIDEO_CONSOLE_EMBEDDING_MODEL` / `VIDEO_CONSOLE_INTENT_*` 注入 `montage-script-run` 子进程（不进 Codex allowlist）。embedding 三项改完须重启，否则 Runtime 仍是旧快照。
+3. `attachCatalogClients` 读 manifest：风景和电影都 `RestrictToLandscape=false`。意图分析默认 `LocalIntentAnalyzer`（中英词表桥）；对话客户端只挂成 `ShotSelector`。再构造 `HTTPEmbedder`（manifest 字段空则回落环境变量；URL/模型仍空则不挂 embedder）。
 4. `BuildV2` 打开 `catalog.db` → `IntentAnalyzer.Analyze` → `rankLibrary`：
-   - 四级召回（`recallForIntent`）：实体/话题标签 → 隐喻/视觉概念标签 → 情绪 → 任意就绪镜头。每级最多 50 条，去重后截断。
-   - 打分：标签命中 + 可选向量余弦；缺 embedding 不失败。
+   - 四级召回（`recallForIntent`）：实体/话题标签 → 隐喻/视觉概念标签 → 情绪 → 任意就绪镜头。每级最多 50 条，去重后截断 80。
+   - 有 embedder 时 `RecallReadyShots(2000)` 扫全库，按查询向量并入每段 top 32 邻居。
+   - 打分：标签命中 + 向量余弦（`weightSemantic=0.40`）；缺 embedding 不失败，notes 写 `embedding_disabled`。
+   - 可选 `ShotSelector` 只在每段 top 8 里点 1 个；失败写 `llm_shot_select_fallback`，保留排序结果。
 5. **风景任务**用 catalog 召回结果，不再滤成风景/景观。catalog 有就绪镜头就只从库里选；catalog 为空或不存在才回退 `media_index.json` 风景打散。
 6. **电影任务**（`SelectModeMovieCatalog` / `movie_catalog` 预设）不过滤风景；无可用镜头直接报错，不回退旧索引。配额用 `movieCatalogPolicy`（电影 70%–100%，同源可复用）。
-7. 口播字幕默认 `captions.mode=off`（`SpokenCaptionsEnabled=false`）：不建「字幕」轨。板上标题/副标题仍在。大模型分段/关键词和 `highlights_only` 都不要打开。缩放约 1.20–1.26，不写窗内白色片头。
-8. 最终时间线仍是确定性 `selectTimelineV2`，不是模型直接选片。
+7. 口播字幕默认 `captions.mode=off`（`SpokenCaptionsEnabled=false`）：不建「字幕」轨。板上标题/副标题仍在。大模型分段/关键词和 `highlights_only` 都不要打开。缩放约 1.20–1.26，B-roll/电影播放 **1.5×**，不写窗内白色片头。
+8. 最终时间线仍是确定性 `selectTimelineV2`。对话模型不能绕过短名单去扫全库。
 
 **v1 取样**（skill snapshot 未声明 `2.0` 时）仍按下面的 `media_index.json` 打散规则，没有 catalog 召回。
 
@@ -524,7 +526,8 @@ HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/project
 | v1 计划 | `montageplan/plan.go` `Build`：`media_index.json` 风景/建筑打散，缩放 1.4 |
 | v2 计划 | `montageplan/plan_v2.go` `BuildV2` |
 | 意图 | `montageplan/intent_analyze.go`：风景和电影都跟口播实体/话题走 |
-| 四级召回 | `montageplan/match.go` `recallForIntent` + `rankLibrary`；底层 `mediacatalog/recall.go` |
+| 四级召回 + 全库向量 | `montageplan/match.go` `recallForIntent` + `rankLibrary` + `appendSemanticNeighbors`；底层 `mediacatalog/recall.go` `RecallReadyShots` |
+| 对话点选 | `montageplan/shot_select.go`：只重排每段 top 8 |
 | 风景回退 | catalog 为空时 `media.go` `isLandscapeItem` 打散旧索引 |
 | 配额 | `montageplan/quota.go`：`movieMixPolicy` / `movieCatalogPolicy` / `imageVideoPolicy`（后者无用户入口） |
 | Python 造草稿 | skill `jianying-montage-draft` 或 `jianying-movie-montage` 的 `scripts/run_montage_job.py` |
@@ -532,7 +535,7 @@ HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/project
 | 重试登记 | `internal/httpapi/montage.go` |
 | 工作台按钮 | `ProjectWorkbench.tsx`：「开始风景混剪」「开始电影混剪」「重做混剪」 |
 
-产品锁（风景/电影日产）：缩放约 1.20、口播字幕轨关闭、无窗内白字标题。不要按旧 v2 计划把重点字幕或口播字幕加回来。
+产品锁（风景/电影日产）：缩放约 1.20、B-roll 1.5×、口播字幕轨关闭、无窗内白字标题。不要按旧 v2 计划把重点字幕或口播字幕加回来。选片说明见 [混剪自动选片](operations/montage-catalog-matching.md)。
 
 ### 11.6 图文
 

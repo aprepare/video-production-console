@@ -3,6 +3,7 @@ package mediacatalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -87,5 +88,21 @@ func TestRecallNilRepositoryIsUnavailable(t *testing.T) {
 	_, err := repo.RecallReadyShots(context.Background(), 10)
 	if !errors.Is(err, ErrCatalogUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRecallReadyShotsCanExceedSemanticCap(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	const want = 51
+	for i := 0; i < want; i++ {
+		_ = seedRecallShot(t, repo, fmt.Sprintf("fill-%02d", i), "broll", "neutral", "city", []string{"补片"}, nil)
+	}
+	ready, err := repo.RecallReadyShots(ctx, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != want {
+		t.Fatalf("RecallReadyShots(%d)=%d, semantic recall cap must not shrink the fill pool", want, len(ready))
 	}
 }

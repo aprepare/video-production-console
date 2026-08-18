@@ -36,6 +36,13 @@ type catalogManifestLite struct {
 	} `json:"non_secret_settings"`
 }
 
+// attachCatalogClients wires catalog path, local intent analysis, optional
+// chat ShotSelector, and the HTTP embedder used for full-library neighbors.
+// Intent HTTP is not used for Analyze (too slow / reasoning-heavy); the
+// chat client is only attached as ShotSelector. Embedder URL/model come
+// from the frozen task manifest, then VIDEO_CONSOLE_EMBEDDING_* env
+// injected by the parent console. Empty URL/model yields ErrEmbeddingNotConfigured
+// and rankLibrary records embedding_disabled.
 func attachCatalogClients(opts *Options) {
 	if opts == nil {
 		return
@@ -55,12 +62,21 @@ func attachCatalogClients(opts *Options) {
 		opts.FFprobePath = strings.TrimSpace(manifest.NonSecretSettings.FFprobePath)
 	}
 	if opts.Analyzer == nil {
-		opts.Analyzer = montageplan.NewHTTPIntentAnalyzer(montageplan.IntentAnalyzerConfig{
-			BaseURL:  firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.VisionBaseURL),
-			Model:    firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.VisionModel),
-			APIKey:   firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
-			Fallback: montageplan.LocalIntentAnalyzer{},
-		})
+		opts.Analyzer = montageplan.LocalIntentAnalyzer{}
+		baseURL := firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.RemixBaseURL, manifest.NonSecretSettings.GrokBaseURL)
+		model := firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.RemixModel, manifest.NonSecretSettings.GrokModel)
+		if baseURL != "" && model != "" {
+			analyzer := montageplan.NewHTTPIntentAnalyzer(montageplan.IntentAnalyzerConfig{
+				BaseURL:         baseURL,
+				Model:           model,
+				APIKey:          firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
+				ReasoningEffort: strings.TrimSpace(os.Getenv(envIntentReasoningEffort)),
+				Fallback:        montageplan.LocalIntentAnalyzer{},
+			})
+			if selector, ok := analyzer.(montageplan.ShotSelector); ok && opts.ShotSelector == nil {
+				opts.ShotSelector = selector
+			}
+		}
 	}
 	// 大模型字幕分段/关键词先屏蔽，见 montageplan.CaptionLLMLineBreakerEnabled。
 	if opts.LineBreaker == nil && montageplan.CaptionLLMLineBreakerEnabled {
@@ -73,9 +89,9 @@ func attachCatalogClients(opts *Options) {
 	}
 	if opts.Embedder == nil {
 		if embedder, err := mediacatalog.NewHTTPEmbedder(mediacatalog.EmbedderConfig{
-			BaseURL: manifest.NonSecretSettings.EmbeddingBaseURL,
-			Model:   manifest.NonSecretSettings.EmbeddingModel,
-			APIKey:  strings.TrimSpace(os.Getenv(envEmbeddingAPIKey)),
+			BaseURL: firstNonEmpty(manifest.NonSecretSettings.EmbeddingBaseURL, os.Getenv("VIDEO_CONSOLE_EMBEDDING_BASE_URL")),
+			Model:   firstNonEmpty(manifest.NonSecretSettings.EmbeddingModel, os.Getenv("VIDEO_CONSOLE_EMBEDDING_MODEL")),
+			APIKey:  firstNonEmpty(os.Getenv(envEmbeddingAPIKey), os.Getenv(envVisionAPIKey)),
 		}); err == nil {
 			opts.Embedder = embedder
 		}

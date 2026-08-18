@@ -300,6 +300,7 @@ func BuildV2(opts Options) error {
 
 	notes := []string{"deterministic console planner v2"}
 	var candidates []rankedCandidate
+	var intents []NarrativeIntent
 	if catalog != nil {
 		sentences, sentErr := loadPlanSentences(ctx)
 		if sentErr != nil {
@@ -309,16 +310,36 @@ func BuildV2(opts Options) error {
 		if analyzer == nil {
 			analyzer = LocalIntentAnalyzer{}
 		}
-		intents, intentErr := analyzer.Analyze(context.Background(), sentences)
+		var intentErr error
+		intents, intentErr = analyzer.Analyze(context.Background(), sentences)
 		if intentErr != nil || len(intents) == 0 {
 			intents, _ = LocalIntentAnalyzer{}.Analyze(context.Background(), sentences)
 		}
+		intents = enrichIntentsWithSpokenCues(intents, false)
 		ranked, matchWarnings, rankErr := rankLibrary(context.Background(), intents, catalog, opts.Embedder)
 		if rankErr != nil {
 			return rankErr
 		}
+		// Optional chat rerank of the already-scored shortlist. The
+		// embedding scan has already happened inside rankLibrary.
+		if opts.ShotSelector != nil {
+			jobs := buildShotSelectJobs(intents, ranked)
+			if picks, pickErr := opts.ShotSelector.SelectShots(context.Background(), jobs); pickErr == nil {
+				var pickNotes []string
+				ranked, pickNotes = applyShotSelections(ranked, picks)
+				notes = append(notes, pickNotes...)
+			} else {
+				notes = append(notes, "llm_shot_select_fallback: "+pickErr.Error())
+			}
+		}
 		candidates = resolveCandidatePaths(ranked, ctx.mediaRoot)
 		notes = append(notes, matchWarnings...)
+		padded, padNotes, padErr := padCatalogCandidates(context.Background(), catalog, candidates, ctx.duration)
+		if padErr != nil {
+			return padErr
+		}
+		candidates = resolveCandidatePaths(padded, ctx.mediaRoot)
+		notes = append(notes, padNotes...)
 	}
 	if movieCatalogSelect(opts) {
 		if len(candidates) == 0 {
@@ -337,7 +358,7 @@ func BuildV2(opts Options) error {
 			return fmt.Errorf("media index produced no 风景/景观 clips")
 		}
 	}
-	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy)
+	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
 	if err != nil {
 		return err
 	}
@@ -443,7 +464,7 @@ func BuildV2(opts Options) error {
 			MaxObviousEffectsPer30S:   1,
 			FullCaptionTrackForbidden: true,
 		},
-		ExecutionActions: v2ExecutionActions(mode),
+		ExecutionActions:   v2ExecutionActions(mode),
 		KnownMissingAssets: []any{},
 		PlannerNotes:       notes,
 		Approval:           ApprovalV2{ApprovedBy: "video-console-script-runtime", ApprovedAt: "auto"},
@@ -636,24 +657,25 @@ func buildV2Timeline(selection []plannedMedia) []TimelineShotV2 {
 	return shots
 }
 
-// v2SourceWindow places the slot inside the clip's real source range at 1.0x.
+// v2SourceWindow places the slot inside the clip's real source range at 1.5x.
 // Whole-source clips keep a 1s lead-in when there is room, like v1.
 func v2SourceWindow(item mediaItem, slot float64) (in, out float64) {
+	source := roundSFXStart(v2SourceNeed(slot))
 	if item.hasShotRange() {
 		in = roundSFXStart(item.SourceInSeconds)
-		out = roundSFXStart(in + slot)
+		out = roundSFXStart(in + source)
 		if limit := roundSFXStart(item.SourceOutSeconds); out > limit {
 			out = limit
 		}
 		return in, out
 	}
-	if item.DurationSeconds >= slot+2 {
+	if item.DurationSeconds >= source+2 {
 		in = 1.0
 	}
-	out = roundSFXStart(in + slot)
+	out = roundSFXStart(in + source)
 	if item.DurationSeconds > 0 && out > item.DurationSeconds {
 		out = roundSFXStart(item.DurationSeconds)
-		in = roundSFXStart(out - slot)
+		in = roundSFXStart(out - source)
 		if in < 0 {
 			in = 0
 		}
@@ -688,12 +710,14 @@ func brollMotionPlan(ordinal int) MotionPlan {
 }
 
 func matchEvidenceOrTemplate(segment plannedMedia, index int) MatchEvidence {
-	if segment.Match.Level != "" && segment.Match.Reason != "" {
-		return segment.Match
-	}
 	intentID := segment.Match.IntentID
 	if intentID == "" {
 		intentID = fmt.Sprintf("seg-%03d", index+1)
+	}
+	if segment.Match.Level != "" && segment.Match.Reason != "" {
+		match := segment.Match
+		match.IntentID = intentID
+		return match
 	}
 	return MatchEvidence{
 		Level:    "neutral",

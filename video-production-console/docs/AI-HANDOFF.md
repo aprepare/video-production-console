@@ -4,7 +4,7 @@
 >
 > **模块、目录、机制、契约的权威现状见 [项目全景说明](ARCHITECTURE.md)，尤其是 §11 模块→代码对照。** 本文只回答：现在能用什么、最近改了什么、下一步做什么、哪些线不能碰。`docs/superpowers/` 已删。
 >
-> 使用者操作见 [使用说明](USER-GUIDE.md)。已复现故障见 [排障手册](operations/troubleshooting.md)。
+> 使用者操作见 [使用说明](USER-GUIDE.md)。混剪如何从 catalog 向量选片见 [混剪自动选片](operations/montage-catalog-matching.md)。已复现故障见 [排障手册](operations/troubleshooting.md)。
 >
 > 优化工单见 [OPTIMIZATION-BACKLOG.md](OPTIMIZATION-BACKLOG.md)。P0–P3 代码项已完成，只剩 P2-5b（Go→TS 代码生成）等用户拍板，**不要擅自做**。
 >
@@ -16,14 +16,14 @@
 
 默认地址 `http://127.0.0.1:2030`（本机常见也监听 `0.0.0.0:2030`）。权威库 `video-console-data/console.db`。跑的是 `dist\video-production-console.exe` 时，改 Go/前端必须停进程 → 必要时 `npm --prefix web run build:embed` → 重编 exe → 启动。
 
-## 2. 当前进度（2026-08-15，以代码为准）
+## 2. 当前进度（2026-08-18，以代码为准）
 
 | 线 | 用户能做什么 | 代码入口 | 状态 |
 |---|---|---|---|
 | 风景混剪 | 粘贴原文 → 二创 → 火山配音字幕 → 开始风景混剪 → 剪映草稿 → 复制发布文案 | `remix.standard` + `montage.execute` + `jianying-montage-draft` | **日产能用** |
 | 图文 ZIP | `/image-projects` 一键生图；`/advanced` 手动分段 | `internal/httpapi/imageproject_quick.go`、`web/src/image-mode/` | **日产能用** |
 | 本机/云机建库 | 控制台「素材库 → 开始建库」或 `catalog-builder` `:2031`：扫描 + 切镜 + 打标 + 向量 | `mediacatalog.RunHostedBuild`、`cmd/catalog-builder` | **能建库** |
-| 库内自动检索 | 建好且有 `ready_shots` 后，混剪自动从 `catalog.db` 召回，不必手工选片 | `montagescript.attachCatalogClients` → `BuildV2` + `rankLibrary` | **已接通** |
+| 库内自动检索 | 建好且有 `ready_shots` 后，标签池 + 全库向量近邻，再可选对话点选 | `attachCatalogClients` → `rankLibrary` + `ShotSelector` | **已接通，改 embedding 须重启** |
 | 电影混剪 | 工作台「开始电影混剪」，按口播用 catalog 电影镜头 | `jianying-movie-montage` + `SelectModeMovieCatalog` | **代码接通，待真机出片** |
 | 图片视频 | 无用户入口 | `quota.go` 的 `image_video` 预设 | **不要做** |
 
@@ -35,7 +35,7 @@
 4. 产出 `continuous_script` + `publishing_package.json`。查看弹窗可直接改稿；「打回重做」走 `remix.review`。
 5. 「生成配音与字幕」→ `POST /api/projects/{id}/narration`（火山 TTS + 词级 SRT）。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占。字幕由用户自己生成，不要指望混剪再调大模型分段。
 6. 「开始风景混剪」→ 本机 `montage-script-run` → Go 写 `production_plan.json` → Python skill 造明文草稿 → `montage.Coordinator` 登记剪映。
-7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：缩放约 1.2、按口播从 catalog 选片（财经 B-roll 优先）、**口播字幕轨关闭**（`captions.mode=off`，`SpokenCaptionsEnabled=false`）。板上标题/副标题仍在。大模型字幕分段/关键词也已屏蔽。不写窗内白色片头。catalog 为空才回退旧风景索引。否则走 v1（1.4 缩放、全索引打散）。
+7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：B-roll **1.5×**、按口播从 catalog 选片（财经 B-roll 优先）、**口播字幕轨关闭**（`captions.mode=off`，`SpokenCaptionsEnabled=false`）。板上标题/副标题仍在。大模型字幕分段/关键词也已屏蔽。不写窗内白色片头。catalog 为空才回退旧风景索引。否则走 v1（1.4 缩放、全索引打散）。选片细节见 [混剪自动选片](operations/montage-catalog-matching.md)。
 8. 审核阶段可「重做混剪」（再发一条 `montage.execute`，不删旧草稿）。发布文案来自最近二创结果。
 
 选题 UI 已移除（`web/src/idea/` 未挂到 `App.tsx`）。不要恢复「给我选题」主路径。后端 `/api/ideas` 仍在，openai_compat 不认 `topic_card`。
@@ -49,11 +49,12 @@
 3. 首页「素材库」点「开始建库」。控制台现在跑完整三步：`Indexer` → FFmpeg 切镜抽帧 → 视觉打标 + 向量（`internal/app/media_catalog_service.go` `runIndex` → `mediacatalog.RunHostedBuild`）。
 4. 看 `ready_shots`，不要只看 `state=ready`。识别全失败会记 `analysis_all_failed`，不再假装成功。
 5. 之后点「开始风景混剪」或「开始电影混剪」：
-   - `task_manifest` 带上 `media_catalog_path` / 视觉 / embedding 字段（`internal/httpapi/task_manifest.go`）。
-   - `montage-script-run` 用环境变量注入密钥，构造 Embedder 和 IntentAnalyzer（`internal/agentruntime/montagescript/catalog_clients.go`）。
-   - `BuildV2` 打开 catalog → 按口播意图四级召回 → 确定性配额拍板。
-   - **风景任务**按口播用 catalog；库空才回退旧风景索引。
+   - `task_manifest` 带上 `media_catalog_path` / 视觉 / embedding 字段（`internal/httpapi/task_manifest.go`）。改 embedding 后必须重启，否则 active 快照仍空，计划里不会有 `embedding_pool`。
+   - `montage-script-run` 注入 `VIDEO_CONSOLE_EMBEDDING_*`（URL/模型/密钥都要），构造 Embedder；意图分析默认本地词表，对话模型只做短名单 `ShotSelector`。
+   - `BuildV2` → `rankLibrary`：标签四级池 + 全库余弦近邻（`RecallReadyShots(2000)`）→ 配额铺轨。
+   - **风景任务**按口播用 catalog 财经/B-roll；库空才回退旧风景索引。
    - **电影任务**同样按口播用 catalog，无可用镜头直接失败。
+   - 库里没有住宅/法拍时，向量也只能对到 cityscape / 硬币 / 办公。要真房子画面先补片再建库。
 
 云机建库仍用独立程序 `cmd/catalog-builder`（默认 `:2031`），下包后在本机同一程序「合并到本机」。合并要求本机原片相对路径一致。控制台没有合并 UI。
 
@@ -93,7 +94,7 @@
 | App Server | `internal/codexapp` `internal/conversation` | 内部追问/恢复，不是用户对话页 |
 | 运行时选路 | `internal/agentruntime` | `Select`；remix 实际在 `cmd/console` 硬切 openai_compat |
 | 二创 | `internal/agentruntime/openaicompat` | 流式写稿、落盘 `continuous_script` + 发布包 |
-| 混剪计划 | `internal/agentruntime/montageplan` | v1 `Build`、v2 `BuildV2`、召回 `match.go`、意图 `intent_analyze.go` |
+| 混剪计划 | `internal/agentruntime/montageplan` | v1 `Build`、v2 `BuildV2`、召回 `match.go`、意图 `intent_analyze.go`、点选 `shot_select.go` |
 | 混剪执行 | `internal/agentruntime/montagescript` | 调 Python skill；注入 catalog 客户端 |
 | 素材库 | `internal/mediacatalog` | `catalog.db`、切镜、打标、召回、`RunHostedBuild`、`CompatEndpoint` |
 | 建库小站库 | `internal/catalogbuilder` | 打包/合并/本机页面 |
@@ -133,7 +134,7 @@
 | `remix.*` | **硬切** `openai-compat-run`；配了 remix/grok 也不回退 Codex | 设置「二创*」或 `REMIX_*` / `GROK_*` |
 | `topic.*` | 同样进 openai_compat 分支，但输入只认 `source_script` | 前端已无入口 |
 
-密钥：二创/生图/视觉/向量/火山走设置页 → `encrypted_secrets`（Windows DPAPI）。混剪检索密钥通过 `VIDEO_CONSOLE_VISION_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_API_KEY` 传给 `montage-script-run` 子进程，不进 Codex allowlist。
+密钥：二创/生图/视觉/向量/火山走设置页 → `encrypted_secrets`（Windows DPAPI）。混剪检索通过 `VIDEO_CONSOLE_VISION_API_KEY`、`VIDEO_CONSOLE_EMBEDDING_API_KEY` / `_BASE_URL` / `_MODEL` 传给 `montage-script-run` 子进程，不进 Codex allowlist。
 
 ## 5. 验证
 
@@ -150,7 +151,7 @@ npm --prefix web run test
 
 ## 6. 下一步（建议顺序）
 
-1. 风景混剪真机再跑 2–3 条，确认 v2、1.2、按口播用 catalog 财经镜头、无窗内白字、重做混剪。
+1. 风景混剪真机再跑：确认 v2、1.5×、`embedding_pool` 扫到就绪镜数、按口播用 catalog 财经镜头、无窗内白字、重做混剪。
 2. 本机建一部短片或合并已有 `catalog-pack.zip`，确认 `ready_shots` 后跑一条电影混剪。
 3. 图文一键：刷新恢复、「继续生成」、全 ready 后 ZIP。
 4. 不要同时开图片视频。

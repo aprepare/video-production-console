@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // quotaRange bounds one kind's share of the timeline duration.
@@ -145,7 +146,24 @@ const (
 // preferCandidate reports whether a should beat b for the current slot.
 // Last-resort prefers the least-used source and avoids the previous source
 // so a spent Nature_Landscape pool rotates instead of replaying one file.
-func preferCandidate(a, b *quotaCandidate, level int, prevCategory, prevSource string, sourceUses map[string]int) bool {
+func preferCandidate(a, b *quotaCandidate, level int, prevCategory, prevSource string, sourceUses map[string]int, overlap map[string]float64, knownIntents map[string]bool) bool {
+	if level < levelLastResort && len(knownIntents) > 0 {
+		aHit := overlap[a.match.IntentID]
+		bHit := overlap[b.match.IntentID]
+		aLocal := aHit > 0
+		bLocal := bHit > 0
+		if aLocal != bLocal {
+			return aLocal
+		}
+		if aLocal && aHit != bHit {
+			return aHit > bHit
+		}
+		aReserved := knownIntents[a.match.IntentID] && !aLocal
+		bReserved := knownIntents[b.match.IntentID] && !bLocal
+		if aReserved != bReserved {
+			return !aReserved
+		}
+	}
 	if level >= levelLastResort {
 		aUses := sourceUses[a.item.sourceKey()]
 		bUses := sourceUses[b.item.sourceKey()]
@@ -250,7 +268,7 @@ func selectTimeline(candidates []rankedCandidate, duration float64, seed string,
 			if !eligible(c, slotIdx, level) {
 				continue
 			}
-			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses) {
+			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses, nil, nil) {
 				best = c
 			}
 		}
@@ -338,6 +356,22 @@ func selectTimeline(candidates []rankedCandidate, duration float64, seed string,
 // of leaving a fragment shorter than any allowed slot.
 const v2TailAbsorbSeconds = 3.0
 
+// v2PlaybackSpeed is the Jianying speed for movie/B-roll. The executor
+// derives speed as (source_out-source_in)/slot, so each slot consumes
+// 1.5x as much source as it occupies on the timeline.
+const v2PlaybackSpeed = 1.5
+
+func v2SourceNeed(timelineSeconds float64) float64 {
+	return timelineSeconds * v2PlaybackSpeed
+}
+
+func v2MaxTimeline(avail float64) float64 {
+	if math.IsInf(avail, 1) {
+		return math.Inf(1)
+	}
+	return avail / v2PlaybackSpeed
+}
+
 type v2SlotRangeSpec struct{ lo, hi float64 }
 
 // v2SlotRange is the per-kind slot length contract from plan §5.4.
@@ -355,8 +389,9 @@ func v2SlotRange(kind mediaKind, startS float64) v2SlotRangeSpec {
 	}
 }
 
-// v2AvailableSeconds is the physical source budget of a candidate at 1.0x;
-// stills have no intrinsic duration and can fill any slot.
+// v2AvailableSeconds is the physical source budget of a candidate before
+// applying v2PlaybackSpeed; stills have no intrinsic duration and can fill
+// any slot.
 func v2AvailableSeconds(item mediaItem) float64 {
 	if item.Kind == mediaKindImage {
 		return math.Inf(1)
@@ -373,7 +408,37 @@ func v2SlotLength(rank [sha256.Size]byte, spec v2SlotRangeSpec) float64 {
 
 // selectTimelineV2 deterministically fills the narration with kind-dependent
 // slot lengths. Same inputs and seed always produce the same output.
-func selectTimelineV2(candidates []rankedCandidate, duration float64, seed string, policy mixPolicy) ([]plannedMedia, []quotaWarning, error) {
+func knownIntentIDs(intents []NarrativeIntent) map[string]bool {
+	out := map[string]bool{}
+	for _, intent := range intents {
+		id := strings.TrimSpace(intent.SegmentID)
+		if id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func intentImportanceAt(intents []NarrativeIntent, at float64) map[string]float64 {
+	out := map[string]float64{}
+	for _, intent := range intents {
+		id := strings.TrimSpace(intent.SegmentID)
+		if id == "" {
+			continue
+		}
+		start := float64(intent.StartMS) / 1000
+		end := float64(intent.EndMS) / 1000
+		if at >= start && at < end {
+			out[id] = intent.Importance
+			if out[id] <= 0 {
+				out[id] = 0.4
+			}
+		}
+	}
+	return out
+}
+
+func selectTimelineV2(candidates []rankedCandidate, duration float64, seed string, policy mixPolicy, intents []NarrativeIntent) ([]plannedMedia, []quotaWarning, error) {
 	if duration <= 0 {
 		return nil, nil, fmt.Errorf("timeline duration must be positive")
 	}
@@ -396,6 +461,7 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 	if total == 0 {
 		return nil, nil, fmt.Errorf("no usable media candidates")
 	}
+	knownIntents := knownIntentIDs(intents)
 
 	assigned := map[mediaKind]float64{}
 	shotUsed := map[string]bool{}
@@ -406,8 +472,8 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 
 	eligible := func(c *quotaCandidate, slotIdx, level int, minAvail float64) bool {
 		// The physical source budget is never relaxed: a v2 shot plays at
-		// 1.0x, so a slot can only consume what the clip really has.
-		if v2AvailableSeconds(c.item) < minAvail {
+		// 1.5x, so a slot can only consume what the clip really has after speed.
+		if v2AvailableSeconds(c.item) < v2SourceNeed(minAvail) {
 			return false
 		}
 		if shotUsed[c.item.shotKey()] {
@@ -436,13 +502,13 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		return true
 	}
 
-	pickFromKind := func(kind mediaKind, slotIdx, level int, minAvail float64) *quotaCandidate {
+	pickFromKind := func(kind mediaKind, slotIdx, level int, minAvail float64, overlap map[string]float64) *quotaCandidate {
 		var best *quotaCandidate
 		for _, c := range byKind[kind] {
 			if !eligible(c, slotIdx, level, minAvail) {
 				continue
 			}
-			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses) {
+			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses, overlap, knownIntents) {
 				best = c
 			}
 		}
@@ -475,12 +541,13 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		remaining := duration - cursor
 		wanted := deficitKind()
 		chain := append([]mediaKind{wanted}, substituteKinds[wanted]...)
+		overlap := intentImportanceAt(intents, cursor)
 		var chosen *quotaCandidate
 		for level := levelStrict; level <= levelLastResort && chosen == nil; level++ {
 			for _, kind := range chain {
 				spec := v2SlotRange(kind, cursor)
 				need := math.Min(spec.lo, remaining)
-				if chosen = pickFromKind(kind, slotIdx, level, need); chosen != nil {
+				if chosen = pickFromKind(kind, slotIdx, level, need, overlap); chosen != nil {
 					break
 				}
 			}
@@ -490,20 +557,22 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		}
 		spec := v2SlotRange(chosen.item.Kind, cursor)
 		avail := v2AvailableSeconds(chosen.item)
+		maxTimeline := v2MaxTimeline(avail)
 		length := v2SlotLength(chosen.rank, spec)
-		if length > avail {
-			length = avail
+		if length > maxTimeline {
+			length = maxTimeline
 		}
 		if length > remaining {
 			length = remaining
 		}
 		if remaining-length < v2TailAbsorbSeconds {
-			// Absorb the tail into this slot when the source allows it;
-			// otherwise spend the whole source and let the next slot finish.
-			if remaining <= avail {
+			// Absorb the tail into this slot when the source allows it
+			// at 1.5x; otherwise spend the whole source and let the next
+			// slot finish.
+			if remaining <= maxTimeline {
 				length = remaining
 			} else {
-				length = avail
+				length = maxTimeline
 			}
 		}
 		length = roundSFXStart(length)

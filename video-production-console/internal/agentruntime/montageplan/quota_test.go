@@ -218,10 +218,98 @@ func landscapeOnlyCandidates(n int) []rankedCandidate {
 	return out
 }
 
+func TestSelectTimelineV2KeepsIntentShotsInTheirWindow(t *testing.T) {
+	early := rankedCandidate{
+		Item: mediaItem{
+			ID: "early", Kind: mediaKindBroll, RelativePath: "early.mp4",
+			DurationSeconds: 20, ShotID: "shot-early",
+		},
+		Score: 0.20,
+		Match: MatchEvidence{IntentID: "seg-001", Level: matchLevelDirect, Reason: "early housing"},
+	}
+	late := rankedCandidate{
+		Item: mediaItem{
+			ID: "late", Kind: mediaKindBroll, RelativePath: "late.mp4",
+			DurationSeconds: 20, ShotID: "shot-late",
+		},
+		Score: 0.95,
+		Match: MatchEvidence{IntentID: "seg-002", Level: matchLevelDirect, Reason: "late housing"},
+	}
+	fillers := make([]rankedCandidate, 0, 6)
+	for i := 0; i < 6; i++ {
+		fillers = append(fillers, rankedCandidate{
+			Item: mediaItem{
+				ID: fmt.Sprintf("fill-%02d", i), Kind: mediaKindBroll,
+				RelativePath: fmt.Sprintf("fill-%02d.mp4", i), DurationSeconds: 20,
+				ShotID: fmt.Sprintf("shot-fill-%02d", i),
+			},
+			Score: 0,
+			Match: MatchEvidence{IntentID: "catalog-fill", Level: matchLevelNeutral, Reason: "fill"},
+		})
+	}
+	intents := []NarrativeIntent{
+		{SegmentID: "seg-001", StartMS: 0, EndMS: 8000, Importance: 0.8},
+		{SegmentID: "seg-002", StartMS: 8000, EndMS: 20000, Importance: 0.9},
+	}
+	segments, _, err := selectTimelineV2(append([]rankedCandidate{early, late}, fillers...), 20, "task-align", movieMixPolicy(), intents)
+	if err != nil {
+		t.Fatalf("selectTimelineV2: %v", err)
+	}
+	assertContiguousTimeline(t, segments, 20)
+	if segments[0].Item.ID != "early" {
+		t.Fatalf("first slot used %q, want early even though late scored higher", segments[0].Item.ID)
+	}
+	sawLate := false
+	for _, seg := range segments {
+		if seg.Item.ID == "late" {
+			sawLate = true
+			if seg.StartS < 7.5 {
+				t.Fatalf("late shot used at %v, want it reserved for its 8s window", seg.StartS)
+			}
+		}
+	}
+	if !sawLate {
+		t.Fatal("late intent shot was never used in its window")
+	}
+}
+
+func TestSelectTimelineV2ReservesNeutralLateShots(t *testing.T) {
+	early := rankedCandidate{
+		Item: mediaItem{
+			ID: "early", Kind: mediaKindBroll, RelativePath: "early.mp4",
+			DurationSeconds: 20, ShotID: "shot-early",
+		},
+		Score: 0.15,
+		Match: MatchEvidence{IntentID: "seg-001", Level: matchLevelNeutral, Reason: "early"},
+	}
+	late := rankedCandidate{
+		Item: mediaItem{
+			ID: "late", Kind: mediaKindBroll, RelativePath: "late.mp4",
+			DurationSeconds: 20, ShotID: "shot-late",
+		},
+		Score: 0.95,
+		Match: MatchEvidence{IntentID: "seg-002", Level: matchLevelNeutral, Reason: "late"},
+	}
+	intents := []NarrativeIntent{
+		{SegmentID: "seg-001", StartMS: 0, EndMS: 8000, Importance: 0.8},
+		{SegmentID: "seg-002", StartMS: 8000, EndMS: 20000, Importance: 0.9},
+	}
+	segments, _, err := selectTimelineV2([]rankedCandidate{early, late}, 12, "task-reserve-neutral", movieMixPolicy(), intents)
+	if err != nil {
+		t.Fatalf("selectTimelineV2: %v", err)
+	}
+	if segments[0].Item.ID != "early" {
+		t.Fatalf("first slot used %q, want early reserved late even when both are neutral", segments[0].Item.ID)
+	}
+	if segments[0].Match.IntentID != "seg-001" {
+		t.Fatalf("first intent=%q", segments[0].Match.IntentID)
+	}
+}
+
 func TestSelectTimelineV2LastResortRotatesLeastUsed(t *testing.T) {
 	const duration = 180.0
 	const pool = 12
-	segments, _, err := selectTimelineV2(landscapeOnlyCandidates(pool), duration, "task-last-resort", movieMixPolicy())
+	segments, _, err := selectTimelineV2(landscapeOnlyCandidates(pool), duration, "task-last-resort", movieMixPolicy(), nil)
 	if err != nil {
 		t.Fatalf("selectTimelineV2: %v", err)
 	}

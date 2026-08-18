@@ -24,6 +24,7 @@ type Options struct {
 	FFprobePath       string
 	Analyzer          montageplan.IntentAnalyzer
 	Embedder          montageplan.Embedder
+	ShotSelector      montageplan.ShotSelector
 	LineBreaker       montageplan.LineBreaker
 }
 
@@ -86,6 +87,7 @@ func Run(opts Options) error {
 		FFprobePath:  opts.FFprobePath,
 		Analyzer:     opts.Analyzer,
 		Embedder:     opts.Embedder,
+		ShotSelector: opts.ShotSelector,
 		LineBreaker:  opts.LineBreaker,
 	}
 	if err := buildMontagePlan(manifestPath, planOpts); err != nil {

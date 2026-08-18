@@ -763,6 +763,9 @@ func skillFromTaskManifest(manifestPath string) string {
 	return strings.TrimSpace(manifest.Skill)
 }
 
+// appendMontageCatalogEnv copies catalog retrieval secrets into the
+// montage-script-run child. URL and model must travel with the key:
+// NewHTTPEmbedder refuses empty BaseURL/Model even when the API key is set.
 func appendMontageCatalogEnv(env []string, secrets map[string]string) []string {
 	if secrets == nil {
 		return env
@@ -770,6 +773,8 @@ func appendMontageCatalogEnv(env []string, secrets map[string]string) []string {
 	for _, key := range []string{
 		"VIDEO_CONSOLE_VISION_API_KEY",
 		"VIDEO_CONSOLE_EMBEDDING_API_KEY",
+		"VIDEO_CONSOLE_EMBEDDING_BASE_URL",
+		"VIDEO_CONSOLE_EMBEDDING_MODEL",
 		"VIDEO_CONSOLE_INTENT_API_KEY",
 		"VIDEO_CONSOLE_INTENT_BASE_URL",
 		"VIDEO_CONSOLE_INTENT_MODEL",
@@ -1051,6 +1056,12 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 	}
 	if runtime.EmbeddingAPIKey != "" {
 		environment["VIDEO_CONSOLE_EMBEDDING_API_KEY"] = runtime.EmbeddingAPIKey
+	}
+	if runtime.EmbeddingBaseURL != "" {
+		environment["VIDEO_CONSOLE_EMBEDDING_BASE_URL"] = runtime.EmbeddingBaseURL
+	}
+	if runtime.EmbeddingModel != "" {
+		environment["VIDEO_CONSOLE_EMBEDDING_MODEL"] = runtime.EmbeddingModel
 	}
 	if runtime.RemixAPIKey != "" {
 		environment["VIDEO_CONSOLE_INTENT_API_KEY"] = runtime.RemixAPIKey
