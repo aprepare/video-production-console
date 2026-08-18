@@ -262,8 +262,9 @@ func movieCatalogSelect(opts Options) bool {
 }
 
 // BuildV2 writes production_plan.json (plan_version 2.0) with catalog recall
-// when media_catalog_path is set. Scenic tasks still filter to landscape;
-// movie_catalog tasks do not. CaptionMode defaults to off.
+// when media_catalog_path is set. Scenic and movie_catalog tasks both follow
+// narration; scenic tasks fall back to media_index landscape only when the
+// catalog has no usable shots. CaptionMode defaults to off.
 func BuildV2(opts Options) error {
 	ctx, err := loadPlanContext(opts)
 	if err != nil {
@@ -306,7 +307,7 @@ func BuildV2(opts Options) error {
 		}
 		analyzer := opts.Analyzer
 		if analyzer == nil {
-			analyzer = LocalIntentAnalyzer{RestrictToLandscape: !movieCatalogSelect(opts)}
+			analyzer = LocalIntentAnalyzer{}
 		}
 		intents, intentErr := analyzer.Analyze(context.Background(), sentences)
 		if intentErr != nil || len(intents) == 0 {
@@ -316,40 +317,21 @@ func BuildV2(opts Options) error {
 		if rankErr != nil {
 			return rankErr
 		}
-		resolved := resolveCandidatePaths(ranked, ctx.mediaRoot)
-		if movieCatalogSelect(opts) {
-			candidates = resolved
-		} else {
-			candidates = filterLandscapeCandidates(resolved)
-			if len(ranked) > 0 && len(candidates) == 0 {
-				notes = append(notes, "match_candidates_not_landscape: catalog recall had no 风景/景观 clips")
-			}
-		}
+		candidates = resolveCandidatePaths(ranked, ctx.mediaRoot)
 		notes = append(notes, matchWarnings...)
 	}
 	if movieCatalogSelect(opts) {
 		if len(candidates) == 0 {
 			return fmt.Errorf("movie catalog produced no usable shots")
 		}
-	} else {
-		catalogCount := len(candidates)
+	} else if len(candidates) == 0 {
 		clips, sampleErr := sampleMediaMatching(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false, isLandscapeItem)
 		if sampleErr != nil {
-			if catalogCount == 0 {
-				return sampleErr
-			}
-			notes = append(notes, fmt.Sprintf("landscape_index_unavailable: %v", sampleErr))
-		} else {
-			indexCandidates := rankedFromIndex(clips)
-			candidates = mergeRankedCandidates(candidates, indexCandidates)
-			switch {
-			case catalogCount == 0 && len(indexCandidates) == 0:
-				return fmt.Errorf("media index produced no 风景/景观 clips")
-			case catalogCount == 0 && catalog != nil && len(indexCandidates) > 0:
-				notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
-			case catalogCount > 0 && len(candidates) > catalogCount:
-				notes = append(notes, fmt.Sprintf("landscape_pool_supplemented: catalog=%d index_added=%d", catalogCount, len(candidates)-catalogCount))
-			}
+			return sampleErr
+		}
+		candidates = rankedFromIndex(clips)
+		if catalog != nil {
+			notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
 		}
 		if len(candidates) == 0 {
 			return fmt.Errorf("media index produced no 风景/景观 clips")

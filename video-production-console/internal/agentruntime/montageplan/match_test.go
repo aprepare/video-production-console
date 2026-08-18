@@ -245,15 +245,9 @@ func TestBuildV2UsesCatalogMatchEvidence(t *testing.T) {
 	if !sawReal {
 		t.Fatalf("expected real match evidence, notes=%v first=%#v", plan.PlannerNotes, plan.Timeline[0].Match)
 	}
-	for _, shot := range plan.Timeline {
-		if strings.HasPrefix(shot.SourceID, "src-bank") || strings.HasPrefix(shot.SourceID, "src-door") ||
-			strings.HasPrefix(shot.SourceID, "src-night") || strings.HasPrefix(shot.SourceID, "src-traffic") {
-			t.Fatalf("non-landscape catalog shot leaked into timeline: %s", shot.SourceID)
-		}
-	}
 }
 
-func TestBuildV2DropsNonLandscapeCatalogMatches(t *testing.T) {
+func TestBuildV2ScenicUsesCatalogFinanceShots(t *testing.T) {
 	manifest, planPath := v2Fixture(t)
 	err := BuildV2(Options{
 		ManifestPath: manifest,
@@ -275,17 +269,24 @@ func TestBuildV2DropsNonLandscapeCatalogMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "match_candidates_not_landscape") {
-		t.Fatalf("expected landscape fallback note, got %v", plan.PlannerNotes)
+	if strings.Contains(joined, "match_candidates_not_landscape") {
+		t.Fatalf("scenic catalog must not drop finance shots: %v", plan.PlannerNotes)
 	}
+	if strings.Contains(joined, "landscape_pool_supplemented") || strings.Contains(joined, "falling back to media index") {
+		t.Fatalf("catalog had usable shots; must not mix landscape index: %v", plan.PlannerNotes)
+	}
+	sawCatalog := false
 	for _, shot := range plan.Timeline {
-		switch shot.SourceID {
-		case "broll-03", "broll-07", "broll-11", "movie-02-0", "movie-02-1", "movie-05-0", "movie-05-1", "image-09":
-			t.Fatalf("fallback used a non-landscape index clip %q", shot.SourceID)
-		}
 		if strings.HasPrefix(shot.SourceID, "src-") {
-			t.Fatalf("office/city catalog shot leaked after filter: %s", shot.SourceID)
+			sawCatalog = true
 		}
+		switch shot.SourceID {
+		case "broll-00", "broll-01", "broll-02", "broll-04", "movie-00-0", "movie-00-1", "image-00":
+			t.Fatalf("landscape index clip used while catalog finance shots exist: %s notes=%v", shot.SourceID, plan.PlannerNotes)
+		}
+	}
+	if !sawCatalog {
+		t.Fatalf("expected finance catalog shots on scenic timeline, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
 	}
 }
 
@@ -356,14 +357,14 @@ func thinLandscapeCatalogFromOneFile() []matchShot {
 	return out
 }
 
-func TestBuildV2ThinLandscapeCatalogUsesIndexLibrary(t *testing.T) {
+func TestBuildV2CatalogShotsNotSupplementedByIndex(t *testing.T) {
 	manifest, planPath := v2Fixture(t)
 	err := BuildV2(Options{
 		ManifestPath: manifest,
 		PlanPath:     planPath,
 		Duration:     func(string) (float64, error) { return 120, nil },
 		Catalog:      fakeCatalog{shots: thinLandscapeCatalogFromOneFile()},
-		Analyzer:     LocalIntentAnalyzer{RestrictToLandscape: true},
+		Analyzer:     LocalIntentAnalyzer{},
 		Embedder:     mapEmbedder{},
 	})
 	if err != nil {
@@ -380,29 +381,49 @@ func TestBuildV2ThinLandscapeCatalogUsesIndexLibrary(t *testing.T) {
 	if len(plan.Timeline) < 10 {
 		t.Fatalf("timeline too short: %d notes=%v", len(plan.Timeline), plan.PlannerNotes)
 	}
-	repeatUses := 0
-	uniqueSources := map[string]int{}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if strings.Contains(joined, "landscape_pool_supplemented") || strings.Contains(joined, "falling back to media index") {
+		t.Fatalf("catalog already had shots; must not mix index: %v", plan.PlannerNotes)
+	}
 	for _, shot := range plan.Timeline {
-		key := filepath.ToSlash(shot.SourcePath)
-		if key == "" {
-			key = shot.SourceID
-		}
-		uniqueSources[key]++
-		if strings.Contains(key, "landscape/repeat.mp4") || strings.HasPrefix(shot.SourceID, "src-thin-") {
-			repeatUses++
+		if !strings.HasPrefix(shot.SourceID, "src-thin-") {
+			t.Fatalf("expected catalog shot, got %s notes=%v", shot.SourceID, plan.PlannerNotes)
 		}
 	}
-	if repeatUses > 2 {
-		t.Fatalf("thin catalog file used %d times across %d shots; unique=%d notes=%v",
-			repeatUses, len(plan.Timeline), len(uniqueSources), plan.PlannerNotes)
+}
+
+func TestBuildV2EmptyCatalogFallsBackToLandscapeIndex(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 16, nil },
+		Catalog:      fakeCatalog{},
+		Analyzer:     LocalIntentAnalyzer{},
+		Embedder:     mapEmbedder{},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(uniqueSources) < 8 {
-		t.Fatalf("expected index landscape library to fill the timeline, unique sources=%d uses=%v notes=%v",
-			len(uniqueSources), uniqueSources, plan.PlannerNotes)
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "landscape_pool_supplemented") {
-		t.Fatalf("expected supplement note, got %v", plan.PlannerNotes)
+	if !strings.Contains(joined, "falling back to media index") && !strings.Contains(joined, "match_candidates_insufficient") {
+		t.Fatalf("expected landscape index fallback, got %v", plan.PlannerNotes)
+	}
+	for _, shot := range plan.Timeline {
+		if strings.HasPrefix(shot.SourceID, "src-") {
+			t.Fatalf("empty catalog must not invent catalog shots: %s", shot.SourceID)
+		}
+	}
+	if len(plan.Timeline) == 0 {
+		t.Fatal("expected landscape index timeline")
 	}
 }
 
@@ -432,5 +453,84 @@ func TestBuildV2UnavailableCatalog(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, ErrCatalogUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
+	mediaRoot := `E:\B站素材\AI_Media_Library`
+	catalogPath := filepath.Join(mediaRoot, "catalog.db")
+	indexPath := filepath.Join(mediaRoot, "00_INDEX", "media_index.json")
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Skip("finance catalog is not on this machine")
+	}
+	root := t.TempDir()
+	narration := filepath.Join(root, "narration.mp3")
+	background := filepath.Join(root, "bg.png")
+	srtPath := filepath.Join(root, "sub.srt")
+	for _, path := range []string{narration, background} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(srtPath, []byte(v2FixtureSRT()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "task-finance-catalog"
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	rawManifest, err := json.Marshal(map[string]any{
+		"task_id": taskID, "job_id": taskID, "action": "montage.execute",
+		"output_dir": filepath.Join(root, "output"),
+		"inputs": []map[string]string{
+			{"role": "narration", "path": narration},
+			{"role": "account_background", "path": background},
+			{"role": "subtitle_srt", "path": srtPath},
+		},
+		"non_secret_settings": map[string]string{
+			"media_root":          mediaRoot,
+			"media_index_path":    indexPath,
+			"media_catalog_path":  catalogPath,
+			"draft_display_name":  "财经素材库验收",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, rawManifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(root, "output", "production_plan.json")
+	if err := BuildV2(Options{
+		ManifestPath: manifestPath,
+		PlanPath:     planPath,
+		CatalogPath:  catalogPath,
+		Analyzer:     LocalIntentAnalyzer{},
+		Duration:     func(string) (float64, error) { return 48, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if strings.Contains(joined, "falling back to media index") || strings.Contains(joined, "match_candidates_not_landscape") {
+		t.Fatalf("real finance catalog must not fall back to landscape index: %v", plan.PlannerNotes)
+	}
+	broll := 0
+	for _, shot := range plan.Timeline {
+		path := filepath.ToSlash(shot.SourcePath + " " + shot.SourceID)
+		if strings.Contains(path, "01_Nature_Landscape") || strings.Contains(path, "12_Pexels_Landscape") {
+			t.Fatalf("landscape index path used: %s notes=%v", shot.SourcePath, plan.PlannerNotes)
+		}
+		if strings.Contains(filepath.ToSlash(shot.SourcePath), "originals/broll/") {
+			broll++
+		}
+	}
+	if broll == 0 {
+		t.Fatalf("expected originals/broll shots, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
 	}
 }

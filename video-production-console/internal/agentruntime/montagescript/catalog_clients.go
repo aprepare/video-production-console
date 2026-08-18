@@ -54,14 +54,12 @@ func attachCatalogClients(opts *Options) {
 	if strings.TrimSpace(opts.FFprobePath) == "" {
 		opts.FFprobePath = strings.TrimSpace(manifest.NonSecretSettings.FFprobePath)
 	}
-	movie := strings.TrimSpace(manifest.Skill) == "jianying-movie-montage"
 	if opts.Analyzer == nil {
 		opts.Analyzer = montageplan.NewHTTPIntentAnalyzer(montageplan.IntentAnalyzerConfig{
-			BaseURL:             firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.VisionBaseURL),
-			Model:               firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.VisionModel),
-			APIKey:              firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
-			RestrictToLandscape: !movie,
-			Fallback:            montageplan.LocalIntentAnalyzer{RestrictToLandscape: !movie},
+			BaseURL:  firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.VisionBaseURL),
+			Model:    firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.VisionModel),
+			APIKey:   firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
+			Fallback: montageplan.LocalIntentAnalyzer{},
 		})
 	}
 	// 大模型字幕分段/关键词先屏蔽，见 montageplan.CaptionLLMLineBreakerEnabled。

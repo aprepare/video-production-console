@@ -42,6 +42,29 @@ func TestAttachCatalogClientsReadsManifestAndEnv(t *testing.T) {
 	}
 }
 
+func TestAttachCatalogClientsScenicFollowsNarration(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "task_manifest.json")
+	payload, _ := json.Marshal(map[string]any{
+		"skill": "jianying-montage-draft",
+		"non_secret_settings": map[string]any{
+			"media_catalog_path": filepath.Join(dir, "catalog.db"),
+		},
+	})
+	if err := os.WriteFile(manifestPath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{ManifestPath: manifestPath}
+	attachCatalogClients(&opts)
+	local, ok := opts.Analyzer.(montageplan.LocalIntentAnalyzer)
+	if !ok {
+		t.Fatalf("analyzer type %T", opts.Analyzer)
+	}
+	if local.RestrictToLandscape {
+		t.Fatal("scenic montage must follow narration, not restrict to landscape")
+	}
+}
+
 func TestAttachCatalogClientsLeavesLineBreakerNilWhileLLMDisabled(t *testing.T) {
 	if montageplan.CaptionLLMLineBreakerEnabled {
 		t.Skip("caption LLM line breaker is on")

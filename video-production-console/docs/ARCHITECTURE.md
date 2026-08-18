@@ -25,7 +25,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 - **对话工作台**：基于 Codex App Server 的长会话，与正式任务分开。
 - **混剪**：本机确定性算法生成 `production_plan.json`，Python skill 造出明文草稿，可信主机把它登记成剪映真实草稿目录，才算 `mix_draft` 资产就绪。
 - **图文生图**：`image_projects` / `image_project_items` 保存原文、顺序、封面/内容角色、提示词、运行检查点、每项尝试次数与输出位置；`internal/imageproject` 负责一键规划、校验分段覆盖原文、生成提示词和 OpenAI 兼容图片请求（总尝试次数 1–4，多 URL 只取第一张）；`internal/httpapi/imageprojects.go` 与 `imageproject_quick.go` 负责一键 202 编排、resume、分段预览、确认创建、生成、预览、重生成、删除和 ZIP 清单。进程内 job guard 保证同一项目不同时跑两份编排；服务重启把遗留 `running` 一键任务标为 `interrupted`，需用户点「继续生成」。
-- **素材库与自动检索**：`media_root/catalog.db` 是镜头元数据权威库。控制台「开始建库」与 `catalog-builder` 都调用 `mediacatalog.RunHostedBuild`（扫描 → 切镜抽帧 → 打标向量）。混剪任务在 `montage-script-run` 里注入 Embedder/IntentAnalyzer，`BuildV2` 从 catalog 四级召回后再由确定性 planner 拍板。风景任务召回后只留风景/景观；电影任务不过滤。没有 `ready_shots` 时风景任务回退 `media_index.json` 风景打散，电影任务直接失败。
+- **素材库与自动检索**：`media_root/catalog.db` 是镜头元数据权威库。控制台「开始建库」与 `catalog-builder` 都调用 `mediacatalog.RunHostedBuild`（扫描 → 切镜抽帧 → 打标向量）。混剪任务在 `montage-script-run` 里注入 Embedder/IntentAnalyzer，`BuildV2` 从 catalog 四级召回后再由确定性 planner 拍板。风景和电影都按口播选片。没有 `ready_shots` 时风景任务回退 `media_index.json` 风景打散，电影任务直接失败。
 
 它**不**管什么（这些是设计决定，不是缺口）：
 
@@ -240,7 +240,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 ### 5.4 混剪：取样与登记
 
-**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / IntentAnalyzer，`BuildV2` 打开库做四级召回，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务召回后走 `filterLandscapeCandidates`；电影任务（`jianying-movie-montage` / `movie_catalog`）不过滤。风景任务在 catalog 无可用风景时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。
+**素材来源**：v1 仍读 manifest 的 `media_root` + `media_index_path`。v2 使用 `media_catalog_path` 指向的 `catalog.db`：`montagescript.attachCatalogClients` 从 manifest + `VIDEO_CONSOLE_*` 环境变量构造 Embedder / IntentAnalyzer，`BuildV2` 打开库做四级召回，再由确定性 planner 拍板。catalog 只存相对路径；电影本体和音轨不上云。风景任务和电影任务都按口播召回 catalog；风景任务仅在 catalog 没有可用镜头时回退 `media_index.json` 风景打散；电影任务在无可用镜头时报错。
 
 **本机建库**：控制台「开始建库」与 `catalog-builder.Build` 都调用 `mediacatalog.RunHostedBuild`（`Indexer` → FFmpeg `Pipeline` → `AnalysisRunner`）。缺 FFmpeg 时 ingest 仍保留、错误码 `ffmpeg_not_configured`；缺视觉/向量时错误码 `vision_not_configured`；识别全失败返回 `ErrAnalysisAllFailed`，不得标 ready。OpenAI 兼容地址若只填主机名，`CompatEndpoint` 会补 `/v1`。云机结果包合并只在 `catalog-builder` 小站（`MergePack`），控制台无合并 API。
 
@@ -248,11 +248,11 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
 
 1. `taskManifestPreparer` 把 `media_catalog_path`、视觉/向量地址写入 `non_secret_settings`（`internal/httpapi/task_manifest.go`）。
 2. `cmd/console` 的 `appendMontageCatalogEnv` 把 `VIDEO_CONSOLE_VISION_API_KEY` / `VIDEO_CONSOLE_EMBEDDING_API_KEY` / `VIDEO_CONSOLE_INTENT_*` 注入 `montage-script-run` 子进程（不进 Codex allowlist）。
-3. `attachCatalogClients` 读 manifest：电影 skill `jianying-movie-montage` 时 `RestrictToLandscape=false`，风景线为 `true`；再构造 `HTTPEmbedder` 与 `HTTPIntentAnalyzer`（失败回落 `LocalIntentAnalyzer`）。
+3. `attachCatalogClients` 读 manifest：风景和电影都 `RestrictToLandscape=false`，按口播召回；再构造 `HTTPEmbedder` 与 `HTTPIntentAnalyzer`（失败回落 `LocalIntentAnalyzer`）。
 4. `BuildV2` 打开 `catalog.db` → `IntentAnalyzer.Analyze` → `rankLibrary`：
    - 四级召回（`recallForIntent`）：实体/话题标签 → 隐喻/视觉概念标签 → 情绪 → 任意就绪镜头。每级最多 50 条，去重后截断。
    - 打分：标签命中 + 可选向量余弦；缺 embedding 不失败。
-5. **风景任务**再跑 `filterLandscapeCandidates`（只要 `Nature_Landscape` / 风景/景观）。catalog 有命中但滤完为空 → 失败提示，不拿办公室顶上。catalog 整体为空才回退 `media_index.json` 风景打散。
+5. **风景任务**用 catalog 召回结果，不再滤成风景/景观。catalog 有就绪镜头就只从库里选；catalog 为空或不存在才回退 `media_index.json` 风景打散。
 6. **电影任务**（`SelectModeMovieCatalog` / `movie_catalog` 预设）不过滤风景；无可用镜头直接报错，不回退旧索引。配额用 `movieCatalogPolicy`（电影 70%–100%，同源可复用）。
 7. 口播字幕默认 `captions.mode=off`（`SpokenCaptionsEnabled=false`）：不建「字幕」轨。板上标题/副标题仍在。大模型分段/关键词和 `highlights_only` 都不要打开。缩放约 1.20–1.26，不写窗内白色片头。
 8. 最终时间线仍是确定性 `selectTimelineV2`，不是模型直接选片。
@@ -523,9 +523,9 @@ HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/project
 | 注入检索客户端 | `montagescript/catalog_clients.go` `attachCatalogClients` |
 | v1 计划 | `montageplan/plan.go` `Build`：`media_index.json` 风景/建筑打散，缩放 1.4 |
 | v2 计划 | `montageplan/plan_v2.go` `BuildV2` |
-| 意图 | `montageplan/intent_analyze.go`：风景强制视觉概念「风景/景观」；电影跟实体/话题 |
+| 意图 | `montageplan/intent_analyze.go`：风景和电影都跟口播实体/话题走 |
 | 四级召回 | `montageplan/match.go` `recallForIntent` + `rankLibrary`；底层 `mediacatalog/recall.go` |
-| 风景过滤 | `montageplan/media.go` `filterLandscapeCandidates` |
+| 风景回退 | catalog 为空时 `media.go` `isLandscapeItem` 打散旧索引 |
 | 配额 | `montageplan/quota.go`：`movieMixPolicy` / `movieCatalogPolicy` / `imageVideoPolicy`（后者无用户入口） |
 | Python 造草稿 | skill `jianying-montage-draft` 或 `jianying-movie-montage` 的 `scripts/run_montage_job.py` |
 | 登记 | `internal/montage/coordinator.go` `validator.go` `registrar.go` |
