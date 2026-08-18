@@ -16,7 +16,7 @@
 
 默认地址 `http://127.0.0.1:2030`（本机常见也监听 `0.0.0.0:2030`）。权威库 `video-console-data/console.db`。跑的是 `dist\video-production-console.exe` 时，改 Go/前端必须停进程 → 必要时 `npm --prefix web run build:embed` → 重编 exe → 启动。
 
-## 2. 当前进度（2026-08-18，以代码为准）
+## 2. 当前进度（2026-08-19，以代码为准）
 
 | 线 | 用户能做什么 | 代码入口 | 状态 |
 |---|---|---|---|
@@ -31,7 +31,7 @@
 
 1. `/` 制作方式首页 → `/projects` → 打开项目。
 2. 粘贴同行原文 → `source_script` + `remix.standard`。二创**硬切** OpenAI 兼容接口（`openai-compat-run`），不走 Codex CLI。设置里配「二创服务地址 / 二创模型 / 二创 API 密钥」。模型名原样发送，不剥 `cursor-`，不传独立 `reasoning_effort`。
-3. 系统提示在 `internal/agentruntime/openaicompat/run.go` `buildWriterPrompt`：锁财经爆款机器，禁止抄原稿金句。`finance-viral-remix/SKILL.md` 只作 ≤1800 字补充。
+3. 系统提示在 `internal/agentruntime/openaicompat/run.go` `buildWriterPrompt`。**rewrite（默认）= `RewritePromptStamp`「文案进化台 2026-08-19 中老年定稿」**，详见 [REWRITE-PROMPT.md](REWRITE-PROMPT.md)：先锁六件套爆款机器，关键数字必须原词，对仗钩子不能写软，开场禁锚点/换锚/货币/认知等中老年听不懂的黑话，禁止按「第N个难题」对照译，密度失败标准写死。wash 路径未改。`finance-viral-remix/SKILL.md` 只作 ≤1800 字补充。模型可额外返回 `machine`，控制台落盘仍以 `continuous_script` 为准。
 4. 产出 `continuous_script` + `publishing_package.json`。查看弹窗可直接改稿；「打回重做」走 `remix.review`。
 5. 「生成配音与字幕」→ `POST /api/projects/{id}/narration`（火山 TTS + 词级 SRT）。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占。字幕由用户自己生成，不要指望混剪再调大模型分段。
 6. 「开始风景混剪」→ 本机 `montage-script-run` → Go 写 `production_plan.json` → Python skill 造明文草稿 → `montage.Coordinator` 登记剪映。
