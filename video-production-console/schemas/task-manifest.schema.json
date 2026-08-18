@@ -94,6 +94,12 @@
         "draft_display_name": {"type": "string", "minLength": 1},
         "revision_notes": {"type": "string"},
         "remix_prompt_style": {"type": "string", "enum": ["rewrite", "wash"]},
+        "remix_base_url": {"type": "string"},
+        "remix_model": {"type": "string"},
+        "remix_reasoning_effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "xhigh", "max", "ultra"]
+        },
         "media_catalog_path": {"type": "string"},
         "ffmpeg_path": {"type": "string"},
         "ffprobe_path": {"type": "string"},

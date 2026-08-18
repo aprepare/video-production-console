@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ArrowLeft, Download, Eye, EyeOff, FileText, Play, RefreshCw, Trash2 } from "lucide-react";
+import { ModelSelect } from "../ModelSelect";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate } from "../types";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
-import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_TEXT_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
+import { DEFAULT_IMAGE_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
 import "./image-mode.css";
 
 type API = (path: string, init?: RequestInit) => Promise<Response>;
@@ -740,12 +741,10 @@ export function ImageModeWorkbench({
             </label>
             <label>
               文本模型
-              <input
+              <ModelSelect
                 aria-label="文本模型"
                 value={textModel}
-                onChange={(event) => { editedDefaults.current.textModel = true; setTextModel(event.target.value); }}
-                placeholder={DEFAULT_IMAGE_TEXT_MODEL}
-                maxLength={128}
+                onChange={(value) => { editedDefaults.current.textModel = true; setTextModel(value); }}
               />
             </label>
           </div>

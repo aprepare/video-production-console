@@ -837,6 +837,62 @@ func performJSON(t *testing.T, h http.Handler, method, target string, value any)
 	h.ServeHTTP(w, req)
 	return w.Result()
 }
+func TestUploadUnwrapsRemixJSONIntoContinuousScriptAndPublishingPackage(t *testing.T) {
+	handler, _, root, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "imported-remix-json"}))
+	payload := []byte(`{
+  "continuous_script": "又一批人要发财了。人民币第三次换锚已经开始。",
+  "titles": ["人民币第三次换锚来了", "下一批先富的人在哪", "旧锚退潮钱去哪", "一百七十万亿在找出口", "第三个锚先不说完", "窗口不会一直开着", "看懂资金方向先上车", "别只盯着工资存款"],
+  "short_titles": ["第三次换锚来了", "钱会流向哪里", "下一批赢家是谁", "窗口不会等人", "现在就上车吧"],
+  "descriptions": ["前两次换锚分别推高了外贸和房子。", "看懂资金上游的人先拿位置。", "答案先留着，窗口不会一直开着。"],
+  "topics": ["#经济", "#思维认知", "#干货分享"],
+  "cta": "关掉干扰，现在就去主页橱窗看《财富觉醒方法论》。"
+}`)
+	response := uploadProjectFile(t, handler, created.ID, "continuous_script", "continuous-script.txt", payload)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.StatusCode, readResponseBody(t, response))
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "projects", created.ID, "continuous_script"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("script entries=%v err=%v", entries, err)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "projects", created.ID, "continuous_script", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(script); got != "又一批人要发财了。人民币第三次换锚已经开始。" {
+		t.Fatalf("stored script=%q", got)
+	}
+	detail := performJSON(t, handler, http.MethodGet, "/api/projects/"+created.ID, nil)
+	defer detail.Body.Close()
+	var body struct {
+		Publishing struct {
+			ShortTitles []string `json:"short_titles"`
+			CTA         string   `json:"cta"`
+		} `json:"publishing_package"`
+	}
+	if err := json.NewDecoder(detail.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Publishing.ShortTitles) != 5 || body.Publishing.ShortTitles[0] != "第三次换锚来了" || body.Publishing.CTA == "" {
+		t.Fatalf("publishing package=%+v", body.Publishing)
+	}
+}
+
+func TestUploadRejectsRemixJSONWithoutContinuousScript(t *testing.T) {
+	handler, _, _, accountID := newProjectsTestHandler(t, "active")
+	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "bad-remix-json"}))
+	response := uploadProjectFile(t, handler, created.ID, "continuous_script", "script.txt", []byte(`{"titles":["人民币第三次换锚来了"],"cta":"上车"}`))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", response.StatusCode)
+	}
+	if body := readResponseBody(t, response); !strings.Contains(body, "continuous_script") {
+		t.Fatalf("error=%s", body)
+	}
+}
+
 func TestUploadAcceptsCurrentNarrationAndSubtitleTypes(t *testing.T) {
 	handler, _, root, accountID := newProjectsTestHandler(t, "active")
 	created := projectJSON(t, performJSON(t, handler, http.MethodPost, "/api/projects", map[string]any{"account_id": accountID, "title": "current-upload-types"}))
@@ -919,4 +975,59 @@ func validProjectMP3() []byte {
 	frame := make([]byte, 417)
 	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
 	return append(append([]byte{}, frame...), frame...)
+}
+
+func TestBatchDeleteProjectsDeletesIdleAndReportsBusy(t *testing.T) {
+	handler, db, _, accountID := newProjectsTestHandler(t, "active")
+	now := time.Now().UTC()
+	idleID := uuid.NewString()
+	busyID := uuid.NewString()
+	missingID := uuid.NewString()
+	projects := store.NewProjectRepository(db)
+	for _, id := range []string{idleID, busyID} {
+		if err := projects.CreateProject(context.Background(), domain.Project{
+			ID: id, AccountID: accountID, Title: "batch-" + id[:8], Stage: domain.StageScript, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.NewTaskRepository(db).Create(context.Background(), domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &busyID, AccountID: accountID, Type: "remix", SkillName: "finance-viral-remix",
+		Status: domain.TaskQueued, PromptSnapshot: "p", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := performJSON(t, handler, http.MethodPost, "/api/projects/batch-delete", map[string]any{
+		"ids": []string{idleID, busyID, missingID, idleID},
+	})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", res.StatusCode)
+	}
+	var body struct {
+		Deleted []string `json:"deleted"`
+		Failed  []struct {
+			ID   string `json:"id"`
+			Code string `json:"code"`
+		} `json:"failed"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Deleted) != 1 || body.Deleted[0] != idleID {
+		t.Fatalf("deleted=%v", body.Deleted)
+	}
+	codes := map[string]string{}
+	for _, item := range body.Failed {
+		codes[item.ID] = item.Code
+	}
+	if codes[busyID] != "project_active_task" || codes[missingID] != "project_not_found" {
+		t.Fatalf("failed=%v", body.Failed)
+	}
+	if _, err := projects.GetProject(context.Background(), idleID); !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("idle project still present: %v", err)
+	}
+	if _, err := projects.GetProject(context.Background(), busyID); err != nil {
+		t.Fatalf("busy project should remain: %v", err)
+	}
 }

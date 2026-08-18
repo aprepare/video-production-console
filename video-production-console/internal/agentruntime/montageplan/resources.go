@@ -16,7 +16,11 @@ const (
 	transitionEffectID = "322577"
 	transitionResID    = "6724845717472416269"
 	transitionDuration = 0.466666
-	bgmLoopSeconds     = 194.4
+	bgmLinearVolume    = 0.2512
+	bgmUsableHeadS     = 313.7
+	bgmClimaxStartS    = 67.3
+	bgmClimaxDurationS = 57.633333
+	bgmLoopSeconds     = bgmUsableHeadS
 )
 
 var defaultSFXLibrary = []verifiedSFX{
@@ -55,13 +59,16 @@ type transitionResource struct {
 }
 
 type bgmResource struct {
-	Name         string
-	MusicID      string
-	ResourceID   string
-	CacheKey     string
-	LinearVolume float64
-	LoopEveryS   float64
-	Required     bool
+	Name            string
+	MusicID         string
+	ResourceID      string
+	CacheKey        string
+	LinearVolume    float64
+	LoopEveryS      float64
+	UsableHeadS     float64
+	ClimaxStartS    float64
+	ClimaxDurationS float64
+	Required        bool
 }
 
 // defaultMontageResources returns the resources every plan used before the
@@ -76,13 +83,16 @@ func defaultMontageResources() montageResources {
 		},
 		SFX: append([]verifiedSFX(nil), defaultSFXLibrary...),
 		BGM: bgmResource{
-			Name:         "EXTA$Y+ (Remake)",
-			MusicID:      "7223314484093405186",
-			ResourceID:   "7223314484093405186",
-			CacheKey:     "bgm_extasy_remake",
-			LinearVolume: 0.1593,
-			LoopEveryS:   bgmLoopSeconds,
-			Required:     true,
+			Name:            "やわらかs'xな光",
+			MusicID:         "7555333028841670665",
+			ResourceID:      "7555333028841670665",
+			CacheKey:        "bgm_yawaraka_hikari",
+			LinearVolume:    bgmLinearVolume,
+			LoopEveryS:      bgmLoopSeconds,
+			UsableHeadS:     bgmUsableHeadS,
+			ClimaxStartS:    bgmClimaxStartS,
+			ClimaxDurationS: bgmClimaxDurationS,
+			Required:        true,
 		},
 	}
 }
@@ -110,13 +120,16 @@ type sfxOverlay struct {
 }
 
 type bgmOverlay struct {
-	Name         *string  `json:"name"`
-	MusicID      *string  `json:"music_id"`
-	ResourceID   *string  `json:"resource_id"`
-	CacheKey     *string  `json:"cache_key"`
-	LinearVolume *float64 `json:"linear_volume"`
-	LoopEveryS   *float64 `json:"loop_every_s"`
-	Required     *bool    `json:"required"`
+	Name            *string  `json:"name"`
+	MusicID         *string  `json:"music_id"`
+	ResourceID      *string  `json:"resource_id"`
+	CacheKey        *string  `json:"cache_key"`
+	LinearVolume    *float64 `json:"linear_volume"`
+	LoopEveryS      *float64 `json:"loop_every_s"`
+	UsableHeadS     *float64 `json:"usable_head_s"`
+	ClimaxStartS    *float64 `json:"climax_start_s"`
+	ClimaxDurationS *float64 `json:"climax_duration_s"`
+	Required        *bool    `json:"required"`
 }
 
 // montageResourcesFile accepts either a bare resources object or the same
@@ -255,6 +268,15 @@ func applyMontageResources(base montageResources, overlay montageResourcesOverla
 			return montageResources{}, err
 		}
 		if err := applyPositive(&out.BGM.LoopEveryS, b.LoopEveryS, "bgm loop_every_s"); err != nil {
+			return montageResources{}, err
+		}
+		if err := applyPositive(&out.BGM.UsableHeadS, b.UsableHeadS, "bgm usable_head_s"); err != nil {
+			return montageResources{}, err
+		}
+		if err := applyPositive(&out.BGM.ClimaxStartS, b.ClimaxStartS, "bgm climax_start_s"); err != nil {
+			return montageResources{}, err
+		}
+		if err := applyPositive(&out.BGM.ClimaxDurationS, b.ClimaxDurationS, "bgm climax_duration_s"); err != nil {
 			return montageResources{}, err
 		}
 		if b.Required != nil {

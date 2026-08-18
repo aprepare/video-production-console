@@ -587,6 +587,31 @@
   opacity: 0.65;
 }
 
+.source-script-entry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.source-script-entry__actions button {
+  margin-top: 0;
+}
+
+.source-script-entry .source-script-entry__skip {
+  border: 1px solid var(--workbench-line);
+  color: var(--workbench-ink);
+  background: transparent;
+}
+
+.import-script-file {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--workbench-muted);
+  font-size: 12px;
+}
+
 .source-script-dialog-backdrop {
   position: fixed;
   z-index: var(--layer-modal-backdrop);

@@ -138,6 +138,37 @@ func filterLandscapeCandidates(candidates []rankedCandidate) []rankedCandidate {
 	return out
 }
 
+func rankedFromIndex(clips []mediaItem) []rankedCandidate {
+	out := make([]rankedCandidate, 0, len(clips))
+	for _, clip := range clips {
+		out = append(out, rankedCandidate{Item: clip})
+	}
+	return out
+}
+
+func mergeRankedCandidates(primary, extra []rankedCandidate) []rankedCandidate {
+	seen := make(map[string]bool, len(primary)+len(extra))
+	out := make([]rankedCandidate, 0, len(primary)+len(extra))
+	add := func(candidate rankedCandidate) {
+		if strings.TrimSpace(candidate.Item.ID) == "" {
+			return
+		}
+		key := candidate.Item.shotKey()
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, candidate)
+	}
+	for _, candidate := range primary {
+		add(candidate)
+	}
+	for _, candidate := range extra {
+		add(candidate)
+	}
+	return out
+}
+
 func resolveMediaPath(mediaRoot, relative string) (string, error) {
 	cleaned := filepath.FromSlash(strings.TrimSpace(relative))
 	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" ||

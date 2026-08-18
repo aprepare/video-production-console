@@ -41,13 +41,13 @@ describe("ImageModeWorkbench", () => {
       throw new Error(path);
     });
     render(<ImageModeWorkbench api={api} mode="advanced" />);
-    expect((screen.getByLabelText("文本模型") as HTMLInputElement).value).toBe("gpt-5.6-sol");
-    fireEvent.change(screen.getByLabelText("文本模型"), { target: { value: "my-own-text-model" } });
+    expect((screen.getByLabelText("文本模型") as HTMLSelectElement).value).toBe("gpt-5.6-sol");
+    fireEvent.change(screen.getByLabelText("文本模型"), { target: { value: "grok-4.6" } });
     const boxes = screen.getAllByRole("textbox");
     fireEvent.change(boxes[0], { target: { value: "Project" } });
     fireEvent.change(boxes[1], { target: { value: project.script } });
     fireEvent.submit(document.querySelector("form")!);
-    await waitFor(() => expect(bodies.some((b) => b.text_model === "my-own-text-model")).toBe(true));
+    await waitFor(() => expect(bodies.some((b) => b.text_model === "grok-4.6")).toBe(true));
   });
 
   test("404 retry loads once and callback rerender does not refetch", async () => {

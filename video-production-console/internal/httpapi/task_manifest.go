@@ -155,7 +155,9 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		BaokuanBaseURL:      runtime.BaokuanBaseURL, BaokuanMCPExecutable: runtime.BaokuanMCPExecutable,
 		ObsidianVault: runtime.ObsidianVault, TopicCardsDir: runtime.TopicCardsDir,
 		GrokBaseURL: runtime.GrokBaseURL, GrokModel: runtime.GrokModel,
-		CodexBinaryPath: runtime.CodexBinaryPath, MediaIndexPath: runtime.MediaIndexPath,
+		RemixBaseURL: runtime.RemixBaseURL, RemixModel: runtime.RemixModel,
+		RemixReasoningEffort: runtime.RemixReasoningEffort,
+		CodexBinaryPath:      runtime.CodexBinaryPath, MediaIndexPath: runtime.MediaIndexPath,
 		MediaRoot: runtime.MediaRoot, JianyingRoot: runtime.JianyingRoot,
 		SessionID: strings.TrimSpace(req.SessionID), CandidateID: strings.TrimSpace(req.CandidateID),
 		TopicCandidatesPath: strings.TrimSpace(req.TopicCandidatesPath), TopicCardPath: strings.TrimSpace(req.TopicCardPath),
@@ -191,6 +193,17 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		settings.DraftDisplayName, err = p.resolveDraftDisplayName(ctx, task, project)
 		if err != nil {
 			return fmt.Errorf("resolve draft display name: %w", err)
+		}
+		shorts, shortErr := p.publishingShortTitles(ctx, project)
+		if shortErr != nil {
+			return fmt.Errorf("resolve board titles: %w", shortErr)
+		}
+		if len(shorts) > 0 {
+			subtitleSrc := ""
+			if len(shorts) > 1 {
+				subtitleSrc = strings.TrimSpace(shorts[1])
+			}
+			settings.BoardTitle, settings.BoardSubtitle = montageplan.FitBoardTitlePair(strings.TrimSpace(shorts[0]), subtitleSrc)
 		}
 		if task.SkillName == "jianying-movie-montage" {
 			if err := montageplan.ValidateMovieCatalog(settings.MediaCatalogPath); err != nil {
@@ -346,6 +359,44 @@ func snapshotBaokuanSources(ctx context.Context, baseURL, projectRoot, taskID st
 	return path, nil
 }
 
+func (p *taskManifestPreparer) publishingShortTitles(ctx context.Context, project domain.Project) ([]string, error) {
+	if p.db == nil {
+		return nil, fmt.Errorf("task database is unavailable")
+	}
+	tasks := store.NewTaskRepository(p.db)
+	completed, err := tasks.CompletedByProject(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list completed project tasks: %w", err)
+	}
+	for _, completedTask := range completed {
+		if !isRemixAction(completedTask.Action) {
+			continue
+		}
+		artifacts, readErr := tasks.Artifacts(ctx, completedTask.ID)
+		if readErr != nil {
+			return nil, fmt.Errorf("read publishing artifacts: %w", readErr)
+		}
+		for _, artifact := range artifacts {
+			if artifact.Kind != "publishing_package" {
+				continue
+			}
+			packageView, packageErr := (publishing.Reader{}).Read(artifact.Path, artifact.SHA256)
+			if packageErr == nil && len(packageView.ShortTitles) > 0 {
+				return packageView.ShortTitles, nil
+			}
+		}
+	}
+	if p.settings != nil {
+		if runtime, runtimeErr := p.settings.Runtime(ctx); runtimeErr == nil {
+			packagePath := filepath.Join(runtime.DataRoot, "projects", project.ID, "publishing_package.json")
+			if packageView, packageErr := (publishing.Reader{}).Read(packagePath, ""); packageErr == nil && len(packageView.ShortTitles) > 0 {
+				return packageView.ShortTitles, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task domain.CodexTask, project domain.Project) (string, error) {
 	if p.db == nil {
 		return "", fmt.Errorf("task database is unavailable")
@@ -354,31 +405,13 @@ func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task
 	if err != nil {
 		return "", fmt.Errorf("read account: %w", err)
 	}
-	shortTitle := ""
-	tasks := store.NewTaskRepository(p.db)
-	completed, err := tasks.CompletedByProject(ctx, project.ID)
+	shorts, err := p.publishingShortTitles(ctx, project)
 	if err != nil {
-		return "", fmt.Errorf("list completed project tasks: %w", err)
+		return "", err
 	}
-	for _, completedTask := range completed {
-		if !isRemixAction(completedTask.Action) {
-			continue
-		}
-		artifacts, readErr := tasks.Artifacts(ctx, completedTask.ID)
-		if readErr != nil {
-			return "", fmt.Errorf("read publishing artifacts: %w", readErr)
-		}
-		for _, artifact := range artifacts {
-			if artifact.Kind != "publishing_package" {
-				continue
-			}
-			packageView, packageErr := (publishing.Reader{}).Read(artifact.Path, artifact.SHA256)
-			if packageErr == nil && len(packageView.ShortTitles) > 0 {
-				shortTitle = strings.TrimSpace(packageView.ShortTitles[0])
-			}
-			break
-		}
-		break
+	shortTitle := ""
+	if len(shorts) > 0 {
+		shortTitle = strings.TrimSpace(shorts[0])
 	}
 	return montage.BuildDraftDisplayName(account.Name, project.Title, shortTitle, task.ID), nil
 }
@@ -575,4 +608,3 @@ func normalizeRemixPromptStyle(value string) (string, error) {
 		return "", fmt.Errorf("remix_prompt_style must be rewrite or wash")
 	}
 }
-

@@ -410,6 +410,91 @@ test("the project workbench starts remix.standard with the wash prompt style", a
   });
 });
 
+test("imports a finished script and skips remix to reach narration", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "成品文案项目", stage: "script" };
+  const calls: Array<{ path: string; method?: string }> = [];
+  let imported = false;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) {
+      return json({
+        project,
+        assets: imported ? { continuous_script: testAsset("continuous_script") } : {},
+        missing_assets: imported ? ["narration", "subtitle_srt"] : ["continuous_script"],
+      });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/continuous_script` && method === "POST") {
+      calls.push({ path, method });
+      imported = true;
+      expect(init?.body).toBeInstanceOf(FormData);
+      return json(testAsset("continuous_script"), 201);
+    }
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      calls.push({ path, method });
+      return json({ id: "should-not-start" }, 201);
+    }
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，跳到配音" }));
+  fireEvent.change(await screen.findByLabelText("成品文案"), { target: { value: "八月这一波要发财的人" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存并跳到配音" }));
+
+  await waitFor(() => expect(calls).toEqual([
+    { path: `/api/projects/${routedProjectID}/assets/continuous_script`, method: "POST" },
+  ]));
+  expect(await screen.findByText("成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。")).toBeTruthy();
+  expect((await screen.findByRole<HTMLButtonElement>("button", { name: "生成配音与字幕" })).disabled).toBe(false);
+});
+
+test("imports remix JSON through the finished-script dialog and skips remix", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "JSON文案项目", stage: "script" };
+  const calls: Array<{ path: string; method?: string }> = [];
+  const remixJSON = JSON.stringify({
+    continuous_script: "又一批人要发财了。人民币第三次换锚已经开始。",
+    titles: ["人民币第三次换锚来了", "下一批先富的人在哪", "旧锚退潮钱去哪", "一百七十万亿在找出口", "第三个锚先不说完", "窗口不会一直开着", "看懂资金方向先上车", "别只盯着工资存款"],
+    short_titles: ["第三次换锚来了", "钱会流向哪里", "下一批赢家是谁", "窗口不会等人", "现在就上车吧"],
+    descriptions: ["描述一", "描述二", "描述三"],
+    topics: ["#经济", "#思维认知", "#干货分享"],
+    cta: "关掉干扰，现在就去主页橱窗看《财富觉醒方法论》。",
+  });
+  let imported = false;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
+  vi.stubGlobal("fetch", baseFetch((path, method, init) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) {
+      return json({
+        project,
+        assets: imported ? { continuous_script: testAsset("continuous_script") } : {},
+        missing_assets: imported ? ["narration", "subtitle_srt"] : ["continuous_script"],
+        publishing_package: imported ? { short_titles: ["第三次换锚来了"], cta: "上车" } : undefined,
+      });
+    }
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
+    if (path === `/api/projects/${routedProjectID}/assets/continuous_script` && method === "POST") {
+      calls.push({ path, method });
+      imported = true;
+      expect(init?.body).toBeInstanceOf(FormData);
+      return json(testAsset("continuous_script"), 201);
+    }
+    if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
+      calls.push({ path, method });
+      return json({ id: "should-not-start" }, 201);
+    }
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，跳到配音" }));
+  fireEvent.change(await screen.findByLabelText("成品文案"), { target: { value: remixJSON } });
+  fireEvent.click(screen.getByRole("button", { name: "保存并跳到配音" }));
+
+  await waitFor(() => expect(calls).toEqual([
+    { path: `/api/projects/${routedProjectID}/assets/continuous_script`, method: "POST" },
+  ]));
+  expect(await screen.findByText("成品文案和发布标题已导入，已跳到配音步骤。可直接生成配音与字幕。")).toBeTruthy();
+  expect((await screen.findByRole<HTMLButtonElement>("button", { name: "生成配音与字幕" })).disabled).toBe(false);
+});
+
 test("the project workbench starts mixing through the formal montage task API", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "混剪项目", stage: "mixing" };
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
@@ -1005,6 +1090,38 @@ test.each([false, true])("deletes only after confirmation=%s and returns to the 
   }
 });
 
+test("batch deletes selected board projects and keeps busy ones", async () => {
+  const idle = { id: "12c91165-b4ef-4061-a13e-fd3ce87bfe98", account_id: "account-1", title: "空闲项目", stage: "script" };
+  const busy = { id: "271e5577-cc26-4ad8-bed7-40b80fb647eb", account_id: "account-1", title: "忙碌项目", stage: "script" };
+  let remaining = [idle, busy];
+  const bodies: unknown[] = [];
+  vi.stubGlobal("confirm", vi.fn(() => true));
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path, method, init) => {
+      if (path === "/api/projects") return json(remaining);
+      if (path === "/api/projects/batch-delete" && method === "POST") {
+        bodies.push(JSON.parse(String(init?.body)));
+        remaining = [busy];
+        return json({
+          deleted: [idle.id],
+          failed: [{ id: busy.id, code: "project_active_task" }],
+        });
+      }
+    }),
+  );
+  render(<App />);
+  await screen.findByText("空闲项目");
+  fireEvent.click(screen.getByRole("button", { name: "批量删除" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择项目 空闲项目" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择项目 忙碌项目" }));
+  fireEvent.click(screen.getByRole("button", { name: "删除所选" }));
+  await waitFor(() => expect(bodies).toEqual([{ ids: [idle.id, busy.id] }]));
+  await screen.findByText("已删除 1 个项目，另有 1 个因任务未结束未删。");
+  expect(screen.queryByText("空闲项目")).toBeNull();
+  expect(screen.getByText("忙碌项目")).toBeTruthy();
+});
+
 test("browser Back returns from a project path to the board", async () => {
   window.history.replaceState({}, "", "/projects");
   const fixture = routedProjectFetch();
@@ -1265,21 +1382,21 @@ test("settings show model defaults and use the PUT response as the saved draft",
   fireEvent.click(await screen.findByRole("button", { name: "设置" }));
   fireEvent.click(await screen.findByRole("tab", { name: "系统" }));
 
-  const model = await screen.findByRole("textbox", { name: "默认模型" });
+  const model = await screen.findByRole("combobox", { name: "默认模型" });
   const effort = screen.getByRole("combobox", { name: "默认推理强度" });
-  expect((model as HTMLInputElement).value).toBe("gpt-default");
+  expect((model as HTMLSelectElement).value).toBe("gpt-default");
   expect((effort as HTMLSelectElement).value).toBe("high");
   expect(screen.getByText("密钥留空表示不改。")).toBeTruthy();
 
-  fireEvent.change(model, { target: { value: "gpt-edited" } });
+  fireEvent.change(model, { target: { value: "grok-4.6" } });
   fireEvent.change(effort, { target: { value: "max" } });
   fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
-  await waitFor(() => expect((model as HTMLInputElement).value).toBe("gpt-from-server"));
+  await waitFor(() => expect((model as HTMLSelectElement).value).toBe("gpt-from-server"));
   expect((effort as HTMLSelectElement).value).toBe("ultra");
   expect(savedBody).toMatchObject({
     public: {
-      codex_default_model: "gpt-edited",
+      codex_default_model: "grok-4.6",
       codex_default_reasoning_effort: "max",
     },
   });

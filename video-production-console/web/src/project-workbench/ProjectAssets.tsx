@@ -6,6 +6,7 @@ import {
   ExternalLink,
   FileText,
   Image,
+  List,
   RotateCcw,
   Upload,
   WandSparkles,
@@ -14,7 +15,7 @@ import type { ComponentType } from "react";
 import { useEffect, useRef } from "react";
 import type { ProjectAsset, ProjectDetail, RegisteredMontageAsset } from "./types";
 
-type AssetType = "continuous_script" | "narration" | "subtitle_srt" | "mix_draft";
+type AssetType = "continuous_script" | "narration" | "spoken_script" | "subtitle_srt" | "mix_draft";
 export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "account_background";
 export type AssetUploadRequest = { type: ProjectAssetUploadType; token: number } | null;
 
@@ -50,6 +51,13 @@ const assetDefinitions: Array<{
     manualUpload: true,
   },
   {
+    type: "spoken_script",
+    label: "配音断句",
+    description: "按配音时间轴切好的逐句文案，与 SRT 字幕同一刀。",
+    accept: ".txt,text/plain",
+    icon: List,
+  },
+  {
     type: "mix_draft",
     label: "剪映草稿",
     description: "已登记的可编辑剪映工程，用于最后检查。",
@@ -73,6 +81,7 @@ type ProjectAssetsProps = {
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onReviseContinuousScript?: () => void;
+  onImportContinuousScript?: () => void;
   onRemakeMontage?: () => void;
   onGenerateNarration?: () => void;
   pendingActions: string[];
@@ -86,6 +95,7 @@ export function ProjectAssets({
   onReplaceBackground,
   onViewAsset,
   onReviseContinuousScript,
+  onImportContinuousScript,
   onRemakeMontage,
   onGenerateNarration,
   pendingActions,
@@ -135,7 +145,9 @@ export function ProjectAssets({
         {assetDefinitions.map((definition) => {
           const asset = detail.assets[definition.type];
           const generating = narrationGenerating
-            && (definition.type === "narration" || definition.type === "subtitle_srt");
+            && (definition.type === "narration"
+              || definition.type === "subtitle_srt"
+              || definition.type === "spoken_script");
           const state = assetState(asset, generating);
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
@@ -185,6 +197,12 @@ export function ProjectAssets({
                     查看
                   </button>
                 ) : null}
+                {!asset && definition.type === "continuous_script" && onImportContinuousScript ? (
+                  <button type="button" onClick={onImportContinuousScript} aria-label="导入成品文案">
+                    <Upload size={15} aria-hidden="true" />
+                    导入文案
+                  </button>
+                ) : null}
                 {asset && definition.type === "continuous_script" && onReviseContinuousScript ? (
                   <button type="button" onClick={onReviseContinuousScript} aria-label="打回重做连续文案">
                     <RotateCcw size={15} aria-hidden="true" />
@@ -203,7 +221,7 @@ export function ProjectAssets({
                     onClick={onGenerateNarration}
                     disabled={Boolean(narrationDisabledReason) || narrationGenerating}
                     aria-busy={narrationGenerating}
-                    title={narrationDisabledReason || "调用火山语音一次生成配音与 SRT 字幕"}
+                    title={narrationDisabledReason || "调用配音接口一次生成配音与 SRT 字幕"}
                     aria-label={narrationGenerating
                       ? "正在生成配音与字幕"
                       : narrationDisabledReason

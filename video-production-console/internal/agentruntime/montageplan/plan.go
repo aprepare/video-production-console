@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"video-production-console/internal/publishing"
 )
 
 const (
@@ -43,6 +45,10 @@ type Options struct {
 	Catalog      CatalogReader
 	Analyzer     IntentAnalyzer
 	Embedder     Embedder
+	// LineBreaker supplies word-safe caption lines. A nil breaker keeps the
+	// deterministic splitter. Production montage leaves this nil while
+	// CaptionLLMLineBreakerEnabled is false.
+	LineBreaker LineBreaker
 	// SelectMode is landscape (method one, default) or movie_catalog (method three).
 	SelectMode string
 }
@@ -63,9 +69,16 @@ type manifestFile struct {
 		MediaRoot          string `json:"media_root"`
 		MachineProfilePath string `json:"machine_profile_path"`
 		DraftDisplayName   string `json:"draft_display_name"`
+		BoardTitle         string `json:"board_title"`
+		BoardSubtitle      string `json:"board_subtitle"`
 		MediaCatalogPath   string `json:"media_catalog_path"`
 		FFprobePath        string `json:"ffprobe_path"`
+		DataRoot           string `json:"data_root"`
 	} `json:"non_secret_settings"`
+	Project *struct {
+		ID        string `json:"id"`
+		AccountID string `json:"account_id"`
+	} `json:"project"`
 }
 
 // planContext carries everything both plan builders derive from Options and
@@ -223,7 +236,7 @@ func Build(opts Options) error {
 	workspace := filepath.Join(manifest.OutputDir, "workspace", manifest.JobID)
 	// draft_display_name is for Jianying draft folder naming (includes account).
 	// On-screen title/subtitle must use only the content label, never the account.
-	title, subtitle := titlePair(onScreenTitleSource(manifest.NonSecretSettings.DraftDisplayName))
+	title, subtitle := boardTitles(ctx, "", "")
 	timeline := buildTimeline(duration, ordered, resources.Transition)
 	plan := map[string]any{
 		"plan_version":       "1.0",
@@ -299,7 +312,9 @@ func bgmPlacement(bgm bgmResource) map[string]any {
 	return map[string]any{
 		"name": bgm.Name, "music_id": bgm.MusicID, "resource_id": bgm.ResourceID,
 		"cache_key": bgm.CacheKey, "linear_volume": bgm.LinearVolume,
-		"loop_every_s": bgm.LoopEveryS, "required": bgm.Required,
+		"loop_every_s": bgm.LoopEveryS, "usable_head_s": bgm.UsableHeadS,
+		"climax_start_s": bgm.ClimaxStartS, "climax_duration_s": bgm.ClimaxDurationS,
+		"required": bgm.Required,
 	}
 }
 
@@ -730,18 +745,67 @@ func isHexSuffix(value string) bool {
 	return true
 }
 
-func titlePair(contentLabel string) (string, string) {
-	base := strings.TrimSpace(contentLabel)
-	if base == "" {
-		base = "时代观察"
+func boardTitles(ctx *planContext, aiTitle, aiSubtitle string) (string, string) {
+	titleSrc := strings.TrimSpace(ctx.manifest.NonSecretSettings.BoardTitle)
+	subtitleSrc := strings.TrimSpace(ctx.manifest.NonSecretSettings.BoardSubtitle)
+	if titleSrc != "" {
+		return FitBoardTitlePair(titleSrc, subtitleSrc)
 	}
-	runes := []rune(base)
-	title := fitRunes(runes, 6, 8, "时代观察笔记")
-	subtitle := fitRunes([]rune("家庭财务提醒"), 6, 8, "家庭财务提醒")
+	if pkg := loadProjectPublishingPackage(ctx); pkg != nil && len(pkg.ShortTitles) > 0 {
+		titleSrc = strings.TrimSpace(pkg.ShortTitles[0])
+		if len(pkg.ShortTitles) > 1 {
+			subtitleSrc = strings.TrimSpace(pkg.ShortTitles[1])
+		}
+		return FitBoardTitlePair(titleSrc, subtitleSrc)
+	}
+	if fitModelBoardTitle(aiTitle) != "" {
+		return FitBoardTitlePair(aiTitle, aiSubtitle)
+	}
+	return FitBoardTitlePair(onScreenTitleSource(ctx.manifest.NonSecretSettings.DraftDisplayName), subtitleSrc)
+}
+
+// FitBoardTitlePair clamps on-screen board copy to 6–8 characters.
+func FitBoardTitlePair(titleSrc, subtitleSrc string) (string, string) {
+	return titlePair(titleSrc, subtitleSrc)
+}
+
+func loadProjectPublishingPackage(ctx *planContext) *publishing.Package {
+	if ctx == nil || ctx.manifest.Project == nil {
+		return nil
+	}
+	root := strings.TrimSpace(ctx.manifest.NonSecretSettings.DataRoot)
+	projectID := strings.TrimSpace(ctx.manifest.Project.ID)
+	if root == "" || projectID == "" {
+		return nil
+	}
+	pkg, err := (publishing.Reader{}).Read(filepath.Join(root, "projects", projectID, "publishing_package.json"), "")
+	if err != nil {
+		return nil
+	}
+	return &pkg
+}
+
+func titlePair(titleSrc, subtitleSrc string) (string, string) {
+	title := fitBoardTitle(titleSrc, "时代观察笔记")
+	subtitle := fitBoardTitle(subtitleSrc, "家庭财务提醒")
 	if subtitle == title {
 		subtitle = "生活成本提醒"
 	}
 	return title, subtitle
+}
+
+// fitBoardTitle keeps publishing copy intact up to the board limit. Copy shorter
+// than the minimum is not padded, and copy inside the limit is never truncated:
+// the board shrinks its font instead (see boardTextSize).
+func fitBoardTitle(src, fallback string) string {
+	runes := []rune(strings.TrimSpace(src))
+	if len(runes) < boardTitleMinRunes {
+		return fallback
+	}
+	if len(runes) > boardTitleMaxRunes {
+		runes = runes[:boardTitleMaxRunes]
+	}
+	return string(runes)
 }
 
 func fitRunes(runes []rune, min, max int, fallback string) string {

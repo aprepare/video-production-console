@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
 import { AccountSwitcher } from "../accounts/AccountSwitcher";
 import { messageTone } from "../messageTone";
@@ -45,6 +46,8 @@ type ConsoleHomeProps = {
   expandedStages: Set<Project["stage"]>;
   onExpandedStagesChange: Dispatch<SetStateAction<Set<Project["stage"]>>>;
   onOpenProject: (project: Project) => void;
+  onDeleteProjects: (ids: string[]) => void;
+  deletingProjects?: boolean;
 };
 
 export function ConsoleHome({
@@ -77,9 +80,41 @@ export function ConsoleHome({
   expandedStages,
   onExpandedStagesChange,
   onOpenProject,
+  onDeleteProjects,
+  deletingProjects = false,
 }: ConsoleHomeProps) {
   const tone = messageTone(message);
   const urgent = tone === "danger";
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
+  const visibleIDs = projects.map((project) => project.id);
+  const selectedCount = selectedIDs.filter((id) => visibleIDs.includes(id)).length;
+  const allSelected = visibleIDs.length > 0 && visibleIDs.every((id) => selectedIDs.includes(id));
+
+  const toggleSelected = (id: string) => {
+    setSelectedIDs((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+  const leaveSelectMode = () => {
+    setSelecting(false);
+    setSelectedIDs([]);
+  };
+  const confirmBatchDelete = () => {
+    const ids = selectedIDs.filter((id) => visibleIDs.includes(id));
+    if (ids.length === 0) return;
+    const titles = projects.filter((project) => ids.includes(project.id)).map((project) => project.title);
+    const preview = titles.slice(0, 3).join("、");
+    const extra = titles.length > 3 ? ` 等 ${titles.length} 个` : titles.length > 1 ? ` 共 ${titles.length} 个` : "";
+    if (
+      !window.confirm(
+        `确定删除“${preview}”${extra}吗？项目专属文案、配音、SRT、草稿和任务记录都会一并删除，此操作无法恢复。`,
+      )
+    )
+      return;
+    onDeleteProjects(ids);
+    leaveSelectMode();
+  };
 
   return (
     <>
@@ -149,12 +184,47 @@ export function ConsoleHome({
               </div>
               <h2>视频项目</h2>
             </div>
-            <ProjectCreateForm
-              accountSelected={Boolean(selectedAccountID)}
-              title={newProject}
-              onTitleChange={onNewProjectChange}
-              onSubmit={onCreateProject}
-            />
+            <div className="toolbar-actions">
+              <ProjectCreateForm
+                accountSelected={Boolean(selectedAccountID)}
+                title={newProject}
+                onTitleChange={onNewProjectChange}
+                onSubmit={onCreateProject}
+              />
+              {selecting ? (
+                <div className="batch-bar" role="group" aria-label="批量删除项目">
+                  <span className="batch-bar-count">已选 {selectedCount} 个</span>
+                  <button
+                    type="button"
+                    className="batch-bar-button"
+                    disabled={visibleIDs.length === 0}
+                    onClick={() => setSelectedIDs(allSelected ? [] : visibleIDs)}
+                  >
+                    {allSelected ? "取消全选" : "全选"}
+                  </button>
+                  <button
+                    type="button"
+                    className="batch-bar-button batch-bar-button--danger"
+                    disabled={selectedCount === 0 || deletingProjects}
+                    onClick={confirmBatchDelete}
+                  >
+                    删除所选
+                  </button>
+                  <button type="button" className="batch-bar-button" onClick={leaveSelectMode}>
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="batch-select"
+                  disabled={projects.length === 0 || deletingProjects}
+                  onClick={() => setSelecting(true)}
+                >
+                  批量删除
+                </button>
+              )}
+            </div>
           </div>
           {message && (
             <div
@@ -187,20 +257,33 @@ export function ConsoleHome({
                         <h3>{stageLabel(stage)}</h3>
                         <b>{stageProjects.length}</b>
                       </div>
-                      {shownProjects.map((project) => (
-                        <button
-                          className="project"
-                          key={project.id}
-                          onClick={() => onOpenProject(project)}
-                        >
-                          <strong>{project.title}</strong>
-                          <small>{projectStageHint(project.stage)}</small>
-                          <div className="project-foot">
-                            <span>{accountName(project.account_id, accounts)}</span>
-                            <span>{formatDate(project.updated_at)}</span>
-                          </div>
-                        </button>
-                      ))}
+                      {shownProjects.map((project) => {
+                        const isSelected = selectedIDs.includes(project.id);
+                        return (
+                          <button
+                            type="button"
+                            className={isSelected ? "project project--selected" : "project"}
+                            key={project.id}
+                            aria-pressed={selecting ? isSelected : undefined}
+                            aria-label={selecting ? `选择项目 ${project.title}` : undefined}
+                            onClick={() => (selecting ? toggleSelected(project.id) : onOpenProject(project))}
+                          >
+                            {selecting ? (
+                              <span
+                                className="project-check"
+                                aria-hidden="true"
+                                data-checked={isSelected || undefined}
+                              />
+                            ) : null}
+                            <strong>{project.title}</strong>
+                            <small>{projectStageHint(project.stage)}</small>
+                            <div className="project-foot">
+                              <span>{accountName(project.account_id, accounts)}</span>
+                              <span>{formatDate(project.updated_at)}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
                       {stageProjects.length > PROJECT_COLLAPSE_LIMIT ? (
                         <button
                           type="button"

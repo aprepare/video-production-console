@@ -122,6 +122,7 @@ func narrationDelivery() narration.Delivery {
 		AudioFormat: "mp3",
 		SRT:         "1\n00:00:00,000 --> 00:00:02,000\n第一句\n\n",
 		Captions:    []narration.Caption{{Start: 0, End: 2, Text: "第一句"}},
+		SpokenScript: "第一句",
 		Report:      narration.QCReport{Pass: true, TextCoverage: 1, Warnings: []string{"字幕节奏偏快"}},
 		BilledWords: 3,
 		Duration:    2,
@@ -148,6 +149,7 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 	var view struct {
 		Narration        assetView `json:"narration"`
 		SubtitleSRT      assetView `json:"subtitle_srt"`
+		SpokenScript     assetView `json:"spoken_script"`
 		Captions         int       `json:"captions"`
 		DurationSeconds  float64   `json:"duration_seconds"`
 		BilledCharacters int       `json:"billed_characters"`
@@ -156,11 +158,11 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
 		t.Fatal(err)
 	}
-	if got.Script != "# 标题\n\n第一句。" || got.SpeakerID != "ConsoleVoiceOne" {
+	if got.Script != "# 标题\n\n第一句。" || got.SpeakerID != "ConsoleVoiceOne" || got.Provider != "volc" {
 		t.Errorf("produce request = %+v, want the stored script and configured voice", got)
 	}
-	if view.Narration.Filename != "narration.mp3" || view.SubtitleSRT.Filename != "narration.srt" {
-		t.Errorf("view = %+v, want both generated files named", view)
+	if view.Narration.Filename != "narration.mp3" || view.SubtitleSRT.Filename != "narration.srt" || view.SpokenScript.Filename != "spoken_script.txt" {
+		t.Errorf("view = %+v, want audio, SRT, and spoken lines named", view)
 	}
 	if view.Captions != 1 || view.DurationSeconds != 2 || view.BilledCharacters != 3 {
 		t.Errorf("view = %+v, want the delivery measurements reported", view)
@@ -168,15 +170,15 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 	if len(view.Warnings) != 1 {
 		t.Errorf("warnings = %v, want the gate's advisory passed through", view.Warnings)
 	}
-	if types := repository.addedTypes(); len(types) != 2 || types[0] != "narration" || types[1] != "subtitle_srt" {
-		t.Errorf("registered asset types = %v, want narration then subtitle_srt", types)
+	if types := repository.addedTypes(); len(types) != 3 || types[0] != "narration" || types[1] != "subtitle_srt" || types[2] != "spoken_script" {
+		t.Errorf("registered asset types = %v, want narration, subtitle, then spoken script", types)
 	}
 	// The stage gate reads assets from the database, so a narration that is not
 	// followed by a stage sync leaves the project stuck at the asset stage.
 	if repository.synced != 1 {
 		t.Errorf("stage syncs = %d, want exactly one after a successful run", repository.synced)
 	}
-	for _, dir := range []string{"narration", "subtitle_srt"} {
+	for _, dir := range []string{"narration", "subtitle_srt", "spoken_script"} {
 		entries, err := os.ReadDir(filepath.Join(root, "projects", projectID, dir))
 		if err != nil || len(entries) != 1 {
 			t.Errorf("%s entries = %v, err = %v", dir, entries, err)
@@ -222,6 +224,44 @@ func TestNarrationRequiresAReadyContinuousScript(t *testing.T) {
 			response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 			assertAPIError(t, response, http.StatusConflict, tt.wantCode)
 		})
+	}
+}
+
+func TestNarrationUsesAuraSTDVoiceSettingsWhenConfigured(t *testing.T) {
+	projectID := uuid.NewString()
+	repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
+	var got narration.ProduceRequest
+	handler, service, _ := newNarrationTestHandler(t, repository,
+		narrationTestSettings{runtime: consoleSettings.Runtime{
+			PublicSettings: domain.PublicSettings{
+				TTSProvider:            "aurastd",
+				AuraSTDModel:           "speech-2.8-hd",
+				AuraSTDVoiceID:         "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67",
+				AuraSTDSpeed:           1.21,
+				AuraSTDVolume:          1.4,
+				AuraSTDPitch:           1,
+				AuraSTDModifyIntensity: 5,
+				AuraSTDModifyTimbre:    6,
+				AuraSTDLanguageBoost:   "Chinese",
+			},
+			AuraSTDTTsAPIKey: "aurastd-key",
+		}},
+		func(_ context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
+			got = request
+			return narrationDelivery(), nil
+		})
+	seedContinuousScript(t, service, repository, projectID, "货还在。")
+
+	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, readResponseBody(t, response))
+	}
+	if got.Provider != "aurastd" || got.SpeakerID != "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67" {
+		t.Errorf("provider/voice = %+v", got)
+	}
+	if got.Speed != 1.21 || got.Volume != 1.4 || got.Pitch != 1 || got.ModifyIntensity != 5 || got.ModifyTimbre != 6 {
+		t.Errorf("voice params = %+v", got)
 	}
 }
 

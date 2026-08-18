@@ -166,30 +166,33 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 func titleFallbacks(script string) []string {
 	seed := firstSentence(script)
 	if utf8.RuneCountInString(seed) < 8 {
-		seed = "人民币第三次换锚，下一批人要发财了"
+		seed = clipRunes(strings.TrimSpace(script), 8, 24)
+	}
+	if utf8.RuneCountInString(seed) < 8 {
+		seed = "窗口不会等人，先看懂再上车"
 	}
 	return []string{
 		seed,
 		seed + "窗口不会等人",
-		"前两次换锚都造富了，这一次钱会流向谁",
-		"旧锚退潮之后，170万亿存款正在找出口",
-		"财富正在重新排队，看懂的人先上车",
-		"第三个锚先不说完，先看谁能站到上游",
-		"别只盯工资，真正拉开差距的是资金方向",
-		"新一轮财富换位开始，普通人还有没有窗口",
+		"看懂的人先上车，观望的人后知道",
+		"答案先留着，窗口不会一直开着",
+		"真正拉开差距的是先看懂方向",
+		"别只盯工资，先看钱往哪走",
+		"新一轮机会开始，普通人还有没有窗口",
+		"现在补判断力，比事后后悔便宜",
 	}
 }
 
 func shortTitleFallbacks(script string) []string {
 	seed := clipRunes(firstSentence(script), 6, 16)
-	out := []string{seed, "第三次换锚来了", "钱会流向哪里", "下一批赢家是谁", "窗口不会等人"}
+	out := []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}
 	return uniqueFilled(nil, out, 5, 5)
 }
 
 func descriptionFallbacks(script string) []string {
 	lead := firstSentence(script)
 	if lead == "" {
-		lead = "前两次换锚分别推高了外贸和房子，这一次资金正在重新排队。"
+		lead = "看懂方向的人先拿位置，观望的人最后才知道规则变了。"
 	}
 	return []string{
 		lead,

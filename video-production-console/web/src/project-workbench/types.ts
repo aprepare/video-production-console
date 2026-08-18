@@ -132,6 +132,7 @@ export type ProjectDetail = {
   topic_context?: unknown;
   missing_assets?: string[];
   active_workflow?: ActiveWorkflow | null;
+  publishing_package?: PublishingPackage;
   montage_qc?: MontagePlanQC | null;
 };
 

@@ -70,7 +70,7 @@ type publishingPackageView = publishing.Package
 
 func isRemixAction(action domain.TaskAction) bool {
 	switch action {
-	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic:
+	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
 		return true
 	default:
 		return false

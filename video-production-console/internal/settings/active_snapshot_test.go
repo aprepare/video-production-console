@@ -113,6 +113,41 @@ func TestImageConcurrencyIsHotButEndpointAndSecretRequireRestart(t *testing.T) {
 	}
 }
 
+func TestAuraSTDVoiceSettingsApplyWithoutRestart(t *testing.T) {
+	service, _, _, configured := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), configured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Runtime(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	configured.TTSProvider = "aurastd"
+	configured.AuraSTDVoiceID = "moss_audio_hot"
+	configured.AuraSTDSpeed = 1.21
+	configured.AuraSTDVolume = 1.4
+	configured.AuraSTDPitch = 1
+	configured.AuraSTDModifyIntensity = 5
+	configured.AuraSTDModifyTimbre = 6
+	view, err := service.Update(t.Context(), configured, map[string]string{SecretAuraSTDTTsAPIKey: "aurastd-hot-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.RestartRequired {
+		t.Fatalf("voice settings required restart: %+v", view)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AuraSTDVoiceID != "moss_audio_hot" || runtime.AuraSTDSpeed != 1.21 || runtime.AuraSTDModifyTimbre != 6 {
+		t.Fatalf("runtime voice settings=%+v", runtime.PublicSettings)
+	}
+	if runtime.AuraSTDTTsAPIKey != "aurastd-hot-key" {
+		t.Fatal("runtime did not pick up the Aura Studio key")
+	}
+}
+
 func TestImageGenerationAttemptsIsHotApplied(t *testing.T) {
 	service, _, _, configured := newSettingsTestService(t, Options{})
 	configured.ImageGenerationAttempts = 2

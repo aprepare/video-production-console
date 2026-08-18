@@ -780,6 +780,41 @@ func TestSettingsVolcSpeechKeepsAPIKeyOutOfTheViewAndPublishesTheIDs(t *testing.
 	}
 }
 
+func TestSettingsAuraSTDVoiceRoundTripKeepsTheKeyMasked(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.TTSProvider = "aurastd"
+	public.AuraSTDVoiceID = "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67"
+	public.AuraSTDSpeed = 1.21
+	public.AuraSTDVolume = 1.4
+	public.AuraSTDPitch = 1
+	public.AuraSTDModifyIntensity = 5
+	public.AuraSTDModifyTimbre = 6
+	view, err := service.Update(t.Context(), public, map[string]string{SecretAuraSTDTTsAPIKey: "aurastd-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.AuraSTDSpeed != 1.21 || view.Public.AuraSTDVolume != 1.4 || view.Public.AuraSTDModifyTimbre != 6 {
+		t.Fatalf("public aurastd settings=%+v", view.Public)
+	}
+	if !view.Secrets[SecretAuraSTDTTsAPIKey].Configured || view.Secrets[SecretAuraSTDTTsAPIKey].Masked == "" {
+		t.Fatalf("secret status=%+v", view.Secrets)
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("aurastd-secret")) {
+		t.Fatalf("HTTP view leaked the Aura Studio key: %s", raw)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AuraSTDTTsAPIKey != "aurastd-secret" || runtime.AuraSTDVoiceID != public.AuraSTDVoiceID {
+		t.Fatalf("runtime=%+v", runtime)
+	}
+}
+
 // The narration feature is optional, so an unconfigured voice must never block
 // an unrelated settings save.
 func TestSettingsAcceptEmptyVolcSpeechIDs(t *testing.T) {
@@ -1036,6 +1071,10 @@ func TestSettingsMediaIntelligenceValidationRejectsUnsafeValues(t *testing.T) {
 		{"embedding URL with fragment", func(v *domain.PublicSettings) { v.EmbeddingBaseURL = "https://embedding.example.test/v1#frag" }},
 		{"vision model untrimmed", func(v *domain.PublicSettings) { v.VisionModel = " vision-x " }},
 		{"embedding model too long", func(v *domain.PublicSettings) { v.EmbeddingModel = strings.Repeat("m", 129) }},
+		{"tts provider unknown", func(v *domain.PublicSettings) { v.TTSProvider = "minimax" }},
+		{"aurastd speed too fast", func(v *domain.PublicSettings) { v.AuraSTDSpeed = 2.5 }},
+		{"aurastd volume too loud", func(v *domain.PublicSettings) { v.AuraSTDVolume = 11 }},
+		{"aurastd sound effect unknown", func(v *domain.PublicSettings) { v.AuraSTDSoundEffects = "echo" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1127,6 +1166,16 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 		PexelsAPIBaseURL: "https://api.pexels.com", PixabayAPIBaseURL: "https://pixabay.com",
 		MaxExternalResultsPerQuery: 20,
+		TTSProvider:            defaultTTSProvider,
+		AuraSTDBaseURL:         defaultAuraSTDBaseURL,
+		AuraSTDModel:           defaultAuraSTDModel,
+		AuraSTDVoiceID:         defaultAuraSTDVoiceID,
+		AuraSTDSpeed:           defaultAuraSTDSpeed,
+		AuraSTDVolume:          defaultAuraSTDVolume,
+		AuraSTDPitch:           defaultAuraSTDPitch,
+		AuraSTDLanguageBoost:   defaultAuraSTDLanguageBoost,
+		AuraSTDModifyIntensity: defaultAuraSTDModifyIntensity,
+		AuraSTDModifyTimbre:    defaultAuraSTDModifyTimbre,
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

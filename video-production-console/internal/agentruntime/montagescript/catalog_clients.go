@@ -10,23 +10,29 @@ import (
 )
 
 const (
-	envVisionAPIKey     = "VIDEO_CONSOLE_VISION_API_KEY"
-	envEmbeddingAPIKey  = "VIDEO_CONSOLE_EMBEDDING_API_KEY"
-	envIntentAPIKey     = "VIDEO_CONSOLE_INTENT_API_KEY"
-	envIntentBaseURL    = "VIDEO_CONSOLE_INTENT_BASE_URL"
-	envIntentModel      = "VIDEO_CONSOLE_INTENT_MODEL"
+	envVisionAPIKey          = "VIDEO_CONSOLE_VISION_API_KEY"
+	envEmbeddingAPIKey       = "VIDEO_CONSOLE_EMBEDDING_API_KEY"
+	envIntentAPIKey          = "VIDEO_CONSOLE_INTENT_API_KEY"
+	envIntentBaseURL         = "VIDEO_CONSOLE_INTENT_BASE_URL"
+	envIntentModel           = "VIDEO_CONSOLE_INTENT_MODEL"
+	envIntentReasoningEffort = "VIDEO_CONSOLE_INTENT_REASONING_EFFORT"
 )
 
 type catalogManifestLite struct {
 	Skill             string `json:"skill"`
 	NonSecretSettings struct {
-		MediaCatalogPath  string `json:"media_catalog_path"`
-		FFprobePath       string `json:"ffprobe_path"`
-		VisionBaseURL     string `json:"vision_base_url"`
-		VisionModel       string `json:"vision_model"`
-		EmbeddingBaseURL  string `json:"embedding_base_url"`
-		EmbeddingModel    string `json:"embedding_model"`
-		MontagePlanVersion string `json:"montage_plan_version"`
+		MediaCatalogPath     string `json:"media_catalog_path"`
+		FFprobePath          string `json:"ffprobe_path"`
+		GrokBaseURL          string `json:"grok_base_url"`
+		GrokModel            string `json:"grok_model"`
+		RemixBaseURL         string `json:"remix_base_url"`
+		RemixModel           string `json:"remix_model"`
+		RemixReasoningEffort string `json:"remix_reasoning_effort"`
+		VisionBaseURL        string `json:"vision_base_url"`
+		VisionModel          string `json:"vision_model"`
+		EmbeddingBaseURL     string `json:"embedding_base_url"`
+		EmbeddingModel       string `json:"embedding_model"`
+		MontagePlanVersion   string `json:"montage_plan_version"`
 	} `json:"non_secret_settings"`
 }
 
@@ -56,6 +62,15 @@ func attachCatalogClients(opts *Options) {
 			APIKey:              firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
 			RestrictToLandscape: !movie,
 			Fallback:            montageplan.LocalIntentAnalyzer{RestrictToLandscape: !movie},
+		})
+	}
+	// 大模型字幕分段/关键词先屏蔽，见 montageplan.CaptionLLMLineBreakerEnabled。
+	if opts.LineBreaker == nil && montageplan.CaptionLLMLineBreakerEnabled {
+		opts.LineBreaker = montageplan.NewHTTPLineBreaker(montageplan.LineBreakerConfig{
+			BaseURL:         firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.RemixBaseURL, manifest.NonSecretSettings.GrokBaseURL, manifest.NonSecretSettings.VisionBaseURL),
+			Model:           firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.RemixModel, manifest.NonSecretSettings.GrokModel, manifest.NonSecretSettings.VisionModel),
+			APIKey:          firstNonEmpty(os.Getenv(envIntentAPIKey), os.Getenv(envVisionAPIKey)),
+			ReasoningEffort: firstNonEmpty(os.Getenv(envIntentReasoningEffort), manifest.NonSecretSettings.RemixReasoningEffort),
 		})
 	}
 	if opts.Embedder == nil {

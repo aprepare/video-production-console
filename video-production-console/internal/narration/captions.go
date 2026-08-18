@@ -25,9 +25,13 @@ type Options struct {
 	MinCaptionRunes int
 }
 
+// SpokenLineMaxRunes is the production 口播行 cap, counting digits and
+// punctuation. A protected span such as a book title may exceed it.
+const SpokenLineMaxRunes = 15
+
 func (o Options) withDefaults() Options {
 	if o.MaxLineRunes <= 0 {
-		o.MaxLineRunes = 16
+		o.MaxLineRunes = SpokenLineMaxRunes
 	}
 	if o.MinDuration <= 0 {
 		o.MinDuration = 0.5
@@ -98,7 +102,7 @@ func Compose(script string, words []Word, opts Options) ([]Caption, QCReport, er
 // a two-character final cue.
 func groupWords(words []Word, opts Options) [][]Word {
 	var groups [][]Word
-	for _, segment := range splitSentences(words, opts) {
+	for _, segment := range splitSentences(atomize(words), opts) {
 		groups = append(groups, balance(segment, opts.MaxLineRunes)...)
 	}
 	groups = pullLeadingPunctuation(groups)
@@ -118,7 +122,7 @@ func splitSentences(words []Word, opts Options) [][]Word {
 	for i, w := range words {
 		current = append(current, w)
 		length += len([]rune(w.Text))
-		if i+1 >= len(words) || joinsAcrossASCII(w.Text, words[i+1].Text) {
+		if i+1 >= len(words) || mustJoin(w.Text, words[i+1].Text) {
 			continue
 		}
 		if endsWithAny(w.Text, strongTerminators) ||
@@ -134,8 +138,8 @@ func splitSentences(words []Word, opts Options) [][]Word {
 }
 
 // balance divides one sentence into the fewest cues that all fit the line limit,
-// keeping them close to the same length. A cue may exceed the limit only when
-// breaking would split a latin word or number.
+// keeping them close to the same length. A cue may exceed the limit only when a
+// single atom — a latin name, a number, or a book title — cannot be split.
 func balance(segment []Word, maxRunes int) [][]Word {
 	total := len([]rune(joinWords(segment)))
 	if total <= maxRunes || len(segment) < 2 {
@@ -148,21 +152,32 @@ func balance(segment []Word, maxRunes int) [][]Word {
 		current []Word
 		length  int
 	)
-	for i, w := range segment {
-		current = append(current, w)
-		length += len([]rune(w.Text))
-		if length < target || i+1 >= len(segment) {
-			continue
-		}
-		if joinsAcrossASCII(w.Text, segment[i+1].Text) {
-			continue
+	flush := func() {
+		if len(current) == 0 {
+			return
 		}
 		groups = append(groups, current)
 		current, length = nil, 0
 	}
-	if len(current) > 0 {
-		groups = append(groups, current)
+	for i, w := range segment {
+		wLen := len([]rune(w.Text))
+		if len(current) > 0 && length+wLen > maxRunes && !mustJoin(current[len(current)-1].Text, w.Text) {
+			flush()
+		}
+		current = append(current, w)
+		length += wLen
+		if i+1 >= len(segment) {
+			continue
+		}
+		next := segment[i+1]
+		if mustJoin(w.Text, next.Text) {
+			continue
+		}
+		if length >= target || length+len([]rune(next.Text)) > maxRunes {
+			flush()
+		}
 	}
+	flush()
 	return groups
 }
 
@@ -309,6 +324,64 @@ func joinWords(words []Word) string {
 		b.WriteString(w.Text)
 	}
 	return b.String()
+}
+
+func atomize(words []Word) []Word {
+	if len(words) == 0 {
+		return words
+	}
+	out := []Word{words[0]}
+	for _, next := range words[1:] {
+		prev := out[len(out)-1]
+		if unclosedTitle(out) || mustJoin(prev.Text, next.Text) {
+			out[len(out)-1] = mergeWord(prev, next)
+			continue
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func mergeWord(left, right Word) Word {
+	text := left.Text + right.Text
+	if joinsAcrossASCII(left.Text, right.Text) {
+		text = left.Text + " " + right.Text
+	}
+	return Word{Text: text, StartTime: left.StartTime, EndTime: right.EndTime, Confidence: right.Confidence}
+}
+
+func unclosedTitle(words []Word) bool {
+	depth := 0
+	for _, word := range words {
+		for _, r := range word.Text {
+			switch r {
+			case '《', '〈':
+				depth++
+			case '》', '〉':
+				if depth > 0 {
+					depth--
+				}
+			}
+		}
+	}
+	return depth > 0
+}
+
+func mustJoin(left, right string) bool {
+	return joinsAcrossASCII(left, right) || joinsNumericUnit(left, right)
+}
+
+func joinsNumericUnit(left, right string) bool {
+	l := []rune(strings.TrimSpace(left))
+	r := []rune(strings.TrimSpace(right))
+	if len(l) == 0 || len(r) == 0 {
+		return false
+	}
+	last, first := l[len(l)-1], r[0]
+	if unicode.IsDigit(last) && (first == '.' || first == '%' || first == '％' || first == '年' || first == '月' || first == '日') {
+		return true
+	}
+	return last == '.' && unicode.IsDigit(first)
 }
 
 func stripSpace(s string) string {

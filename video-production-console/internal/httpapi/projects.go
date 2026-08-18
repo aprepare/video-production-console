@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,7 @@ import (
 	"video-production-console/internal/assets"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
+	"video-production-console/internal/publishing"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskmodel"
 	"video-production-console/internal/workflow"
@@ -65,6 +67,7 @@ func newProjectsHandlerWithDB(repository projectStore, service *assets.Service, 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects", h.create)
 	mux.HandleFunc("GET /api/projects", h.list)
+	mux.HandleFunc("POST /api/projects/batch-delete", h.batchDelete)
 	mux.HandleFunc("GET /api/projects/{id}", h.get)
 	mux.HandleFunc("DELETE /api/projects/{id}", h.delete)
 	mux.HandleFunc("POST /api/projects/{id}/assets/{type}", h.upload)
@@ -82,15 +85,11 @@ func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	deleter, ok := h.repository.(interface {
-		DeleteProject(context.Context, string) error
-	})
-	if !ok {
+	err := h.deleteOne(r.Context(), id)
+	switch {
+	case errors.Is(err, errProjectDeleteUnavailable):
 		writeError(w, http.StatusNotImplemented, "project_delete_unavailable", "Project deletion is unavailable.")
 		return
-	}
-	err := deleter.DeleteProject(r.Context(), id)
-	switch {
 	case errors.Is(err, store.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
 		return
@@ -101,12 +100,77 @@ func (h *projectsHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "project_delete_failed", "Project could not be deleted.")
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+const maxBatchDeleteProjects = 100
+
+var errProjectDeleteUnavailable = errors.New("project deletion is unavailable")
+
+func (h *projectsHandler) deleteOne(ctx context.Context, id string) error {
+	deleter, ok := h.repository.(interface {
+		DeleteProject(context.Context, string) error
+	})
+	if !ok {
+		return errProjectDeleteUnavailable
+	}
+	if err := deleter.DeleteProject(ctx, id); err != nil {
+		return err
+	}
 	if h.assets != nil {
 		if err := h.assets.DeleteProjectData(id); err != nil {
-			logging.LoggerFrom(r.Context()).Error("remove deleted project data", "project_id", id, "error", err)
+			logging.LoggerFrom(ctx).Error("remove deleted project data", "project_id", id, "error", err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *projectsHandler) batchDelete(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		return
+	}
+	if len(in.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_project_ids", "Select at least one project.")
+		return
+	}
+	if len(in.IDs) > maxBatchDeleteProjects {
+		writeError(w, http.StatusBadRequest, "too_many_projects", "Delete at most 100 projects at a time.")
+		return
+	}
+	seen := make(map[string]bool, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, raw := range in.IDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_project_id", "Project ID must be a UUID.")
+			return
+		}
+		value := id.String()
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		ids = append(ids, value)
+	}
+	deleted := make([]string, 0, len(ids))
+	failed := make([]map[string]string, 0)
+	for _, id := range ids {
+		err := h.deleteOne(r.Context(), id)
+		switch {
+		case err == nil:
+			deleted = append(deleted, id)
+		case errors.Is(err, store.ErrProjectNotFound):
+			failed = append(failed, map[string]string{"id": id, "code": "project_not_found"})
+		case errors.Is(err, store.ErrProjectBusy):
+			failed = append(failed, map[string]string{"id": id, "code": "project_active_task"})
+		default:
+			failed = append(failed, map[string]string{"id": id, "code": "project_delete_failed"})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
 }
 
 type projectView struct {
@@ -284,7 +348,11 @@ func (h *projectsHandler) get(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, 200, map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext, "active_workflow": activeWorkflow})
+	out := map[string]any{"project": toProjectView(p), "assets": current, "asset_history": history, "background_reference": bg, "missing_assets": missing, "topic_context": topicContext, "active_workflow": activeWorkflow}
+	if pkg, ok := h.readPublishingPackage(id); ok {
+		out["publishing_package"] = pkg
+	}
+	writeJSON(w, 200, out)
 }
 
 func (h *projectsHandler) startRemix(w http.ResponseWriter, r *http.Request) {
@@ -641,7 +709,35 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	saved, err := h.assets.SaveProjectAsset(id, typ, header.Filename, file)
+	filename := header.Filename
+	reader := io.Reader(file)
+	var importedPackage *publishing.Package
+	if typ == domain.AssetContinuousScript {
+		payload, readErr := io.ReadAll(io.LimitReader(file, assets.MaxTextAssetSize+1))
+		if readErr != nil {
+			writeError(w, 400, "invalid_asset", "File extension and actual content must match the asset type.")
+			return
+		}
+		if int64(len(payload)) > assets.MaxTextAssetSize {
+			writeError(w, 413, "payload_too_large", "The upload is too large.")
+			return
+		}
+		script, pkg, fromJSON, unwrapErr := publishing.UnwrapContinuousScript(string(payload))
+		if unwrapErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid_remix_copy", "请粘贴连续正文，或换说法模型返回的 JSON（必须含 continuous_script）。")
+			return
+		}
+		if strings.TrimSpace(script) == "" {
+			writeError(w, 400, "invalid_asset", "File extension and actual content must match the asset type.")
+			return
+		}
+		reader = strings.NewReader(script)
+		if fromJSON {
+			filename = "continuous-script.txt"
+			importedPackage = pkg
+		}
+	}
+	saved, err := h.assets.SaveProjectAsset(id, typ, filename, reader)
 	if err != nil {
 		if errors.Is(err, assets.ErrProjectAssetTooBig) {
 			writeError(w, 413, "payload_too_large", "The upload is too large.")
@@ -653,7 +749,7 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	a := domain.Asset{ID: uuid.NewString(), ProjectID: &id, Type: typ, Path: saved.Path, Filename: safeFilename(header.Filename), MIMEType: saved.MIMEType, Size: saved.Size, SHA256: saved.SHA256, Status: "active", CreatedAt: now}
+	a := domain.Asset{ID: uuid.NewString(), ProjectID: &id, Type: typ, Path: saved.Path, Filename: safeFilename(filename), MIMEType: saved.MIMEType, Size: saved.Size, SHA256: saved.SHA256, Status: "active", CreatedAt: now}
 	state, err := h.repository.AddAsset(r.Context(), &a)
 	if err != nil {
 		if state == store.CommitNotCommitted {
@@ -675,7 +771,38 @@ func (h *projectsHandler) upload(w http.ResponseWriter, r *http.Request) {
 			logging.LoggerFrom(r.Context()).Error("sync project stage after upload", "project_id", id, "asset_type", string(typ), "error", syncErr)
 		}
 	}
+	if importedPackage != nil {
+		if writeErr := h.writePublishingPackage(id, *importedPackage); writeErr != nil {
+			logging.LoggerFrom(r.Context()).Error("write imported publishing package", "project_id", id, "error", writeErr)
+		}
+	}
 	writeJSON(w, 201, toAssetView(a))
+}
+
+func (h *projectsHandler) writePublishingPackage(projectID string, pkg publishing.Package) error {
+	if h.assets == nil {
+		return errors.New("asset store is unavailable")
+	}
+	dir, err := h.assets.ProjectDir(projectID)
+	if err != nil {
+		return err
+	}
+	return publishing.WriteFile(filepath.Join(dir, "publishing_package.json"), pkg)
+}
+
+func (h *projectsHandler) readPublishingPackage(projectID string) (publishing.Package, bool) {
+	if h.assets == nil {
+		return publishing.Package{}, false
+	}
+	dir, err := h.assets.ProjectDir(projectID)
+	if err != nil {
+		return publishing.Package{}, false
+	}
+	pkg, err := (publishing.Reader{}).Read(filepath.Join(dir, "publishing_package.json"), "")
+	if err != nil {
+		return publishing.Package{}, false
+	}
+	return pkg, true
 }
 
 func (h *projectsHandler) move(w http.ResponseWriter, r *http.Request) {

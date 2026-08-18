@@ -142,6 +142,36 @@ const (
 	levelLastResort          // anything, least-used first
 )
 
+// preferCandidate reports whether a should beat b for the current slot.
+// Last-resort prefers the least-used source and avoids the previous source
+// so a spent Nature_Landscape pool rotates instead of replaying one file.
+func preferCandidate(a, b *quotaCandidate, level int, prevCategory, prevSource string, sourceUses map[string]int) bool {
+	if level >= levelLastResort {
+		aUses := sourceUses[a.item.sourceKey()]
+		bUses := sourceUses[b.item.sourceKey()]
+		if aUses != bUses {
+			return aUses < bUses
+		}
+		aDiff := a.item.sourceKey() != prevSource
+		bDiff := b.item.sourceKey() != prevSource
+		if aDiff != bDiff {
+			return aDiff
+		}
+	}
+	if a.score != b.score {
+		return a.score > b.score
+	}
+	aCat := normalizeCategory(a.item.Category) != prevCategory
+	bCat := normalizeCategory(b.item.Category) != prevCategory
+	if aCat != bCat {
+		return aCat
+	}
+	if cmp := bytes.Compare(a.rank[:], b.rank[:]); cmp != 0 {
+		return cmp < 0
+	}
+	return a.order < b.order
+}
+
 // selectTimeline deterministically assigns one candidate to every timeline
 // slot: generate the slots, pick the kind with the largest duration deficit,
 // pick the best candidate inside that kind, apply shot/source/adjacency
@@ -214,32 +244,13 @@ func selectTimeline(candidates []rankedCandidate, duration float64, seed string,
 		return true
 	}
 
-	// better reports whether a is preferred over b for the current slot:
-	// higher score, then a category different from the previous slot (the
-	// interleaveByCategory equivalent inside the new flow), then the seeded
-	// stable hash, then input order.
-	better := func(a, b *quotaCandidate) bool {
-		if a.score != b.score {
-			return a.score > b.score
-		}
-		aDiff := normalizeCategory(a.item.Category) != prevCategory
-		bDiff := normalizeCategory(b.item.Category) != prevCategory
-		if aDiff != bDiff {
-			return aDiff
-		}
-		if cmp := bytes.Compare(a.rank[:], b.rank[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return a.order < b.order
-	}
-
 	pickFromKind := func(kind mediaKind, slotIdx, level int) *quotaCandidate {
 		var best *quotaCandidate
 		for _, c := range byKind[kind] {
 			if !eligible(c, slotIdx, level) {
 				continue
 			}
-			if best == nil || better(c, best) {
+			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses) {
 				best = c
 			}
 		}
@@ -425,28 +436,13 @@ func selectTimelineV2(candidates []rankedCandidate, duration float64, seed strin
 		return true
 	}
 
-	better := func(a, b *quotaCandidate) bool {
-		if a.score != b.score {
-			return a.score > b.score
-		}
-		aDiff := normalizeCategory(a.item.Category) != prevCategory
-		bDiff := normalizeCategory(b.item.Category) != prevCategory
-		if aDiff != bDiff {
-			return aDiff
-		}
-		if cmp := bytes.Compare(a.rank[:], b.rank[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return a.order < b.order
-	}
-
 	pickFromKind := func(kind mediaKind, slotIdx, level int, minAvail float64) *quotaCandidate {
 		var best *quotaCandidate
 		for _, c := range byKind[kind] {
 			if !eligible(c, slotIdx, level, minAvail) {
 				continue
 			}
-			if best == nil || better(c, best) {
+			if best == nil || preferCandidate(c, best, level, prevCategory, prevSource, sourceUses) {
 				best = c
 			}
 		}

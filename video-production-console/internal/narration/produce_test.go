@@ -54,6 +54,9 @@ func TestProduceBuildsAudioAndSubtitleFromOneSynthesis(t *testing.T) {
 	if delivery.Duration != 0.815 {
 		t.Errorf("duration = %v, want the last caption's end", delivery.Duration)
 	}
+	if delivery.SpokenScript != "其他人。" {
+		t.Errorf("spoken script = %q, want the caption lines without SRT timestamps", delivery.SpokenScript)
+	}
 }
 
 // A cue that flashes too briefly to read is not deliverable, and the fix is an
@@ -87,8 +90,8 @@ func TestProduceRejectsSynthesisWithoutTimings(t *testing.T) {
 	})
 
 	_, err := Produce(context.Background(), client, ProduceRequest{Script: "文本", SpeakerID: "S_example"})
-	if err == nil || !strings.Contains(err.Error(), "resource id") {
-		t.Fatalf("error = %v, want the resource id named", err)
+	if err == nil || !strings.Contains(err.Error(), "subtitle timings") {
+		t.Fatalf("error = %v, want missing subtitle timings named", err)
 	}
 }
 

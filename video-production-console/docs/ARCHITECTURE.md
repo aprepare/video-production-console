@@ -254,7 +254,7 @@ Go 服务统一托管鉴权、设置和 SQLite 状态；两条线使用独立的
    - 打分：标签命中 + 可选向量余弦；缺 embedding 不失败。
 5. **风景任务**再跑 `filterLandscapeCandidates`（只要 `Nature_Landscape` / 风景/景观）。catalog 有命中但滤完为空 → 失败提示，不拿办公室顶上。catalog 整体为空才回退 `media_index.json` 风景打散。
 6. **电影任务**（`SelectModeMovieCatalog` / `movie_catalog` 预设）不过滤风景；无可用镜头直接报错，不回退旧索引。配额用 `movieCatalogPolicy`（电影 70%–100%，同源可复用）。
-7. 默认 `captions.mode=off`，缩放约 1.20–1.26，不写窗内白色片头。`highlights_only` 仍在代码里，产品线不要打开。
+7. 口播字幕默认 `captions.mode=off`（`SpokenCaptionsEnabled=false`）：不建「字幕」轨。板上标题/副标题仍在。大模型分段/关键词和 `highlights_only` 都不要打开。缩放约 1.20–1.26，不写窗内白色片头。
 8. 最终时间线仍是确定性 `selectTimelineV2`，不是模型直接选片。
 
 **v1 取样**（skill snapshot 未声明 `2.0` 时）仍按下面的 `media_index.json` 打散规则，没有 catalog 召回。
@@ -495,7 +495,7 @@ HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/project
 | 手动上传 | `internal/httpapi/projects.go` 资产上传，类型 `narration` |
 | 工作台按钮 | `web/src/project-workbench/ProjectWorkbench.tsx` / `ProjectAssets.tsx` |
 
-混剪草稿**默认不把 SRT 画进画面**（`CaptionOff`）。SRT 仍是资产，供配音对齐和以后的 highlights 模式。
+混剪草稿默认不画口播字幕轨（`SpokenCaptionsEnabled=false`，`captions.mode=off`）。排版过关前不要打开。SRT 仍是资产，供配音对齐和选片语义。`highlights_only` 不要打开。
 
 ### 11.4 素材库建库
 
@@ -532,7 +532,7 @@ HTTP 前缀在 `internal/app/app.go`：`/api/auth` `/api/accounts` `/api/project
 | 重试登记 | `internal/httpapi/montage.go` |
 | 工作台按钮 | `ProjectWorkbench.tsx`：「开始风景混剪」「开始电影混剪」「重做混剪」 |
 
-产品锁（风景/电影日产）：缩放约 1.20、`captions.mode=off`、无窗内白字标题。不要按旧 v2 计划把重点字幕加回来。
+产品锁（风景/电影日产）：缩放约 1.20、口播字幕轨关闭、无窗内白字标题。不要按旧 v2 计划把重点字幕或口播字幕加回来。
 
 ### 11.6 图文
 

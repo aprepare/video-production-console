@@ -394,9 +394,10 @@ func TestBuildKeepsBuiltInResourcesWithoutConfig(t *testing.T) {
 			}
 			audio := plan["audio"].(map[string]any)
 			bgm := audio["bgm"].(map[string]any)
-			if bgm["name"] != "EXTA$Y+ (Remake)" || bgm["music_id"] != "7223314484093405186" ||
-				bgm["resource_id"] != "7223314484093405186" || bgm["cache_key"] != "bgm_extasy_remake" ||
-				bgm["linear_volume"].(float64) != 0.1593 || bgm["loop_every_s"].(float64) != 194.4 ||
+			if bgm["name"] != "やわらかs'xな光" || bgm["music_id"] != "7555333028841670665" ||
+				bgm["resource_id"] != "7555333028841670665" || bgm["cache_key"] != "bgm_yawaraka_hikari" ||
+				bgm["linear_volume"].(float64) != 0.2512 || bgm["loop_every_s"].(float64) != 313.7 ||
+				bgm["usable_head_s"].(float64) != 313.7 || bgm["climax_start_s"].(float64) != 67.3 ||
 				bgm["required"] != true {
 				t.Fatalf("bgm = %#v", bgm)
 			}
@@ -455,6 +456,28 @@ func TestBuildRejectsMalformedMontageResources(t *testing.T) {
 	}
 	if _, statErr := os.Stat(planPath); !os.IsNotExist(statErr) {
 		t.Fatalf("plan must not be written: %v", statErr)
+	}
+}
+
+func TestMergeRankedCandidatesKeepsPrimaryAndDedupsShotKeys(t *testing.T) {
+	primary := []rankedCandidate{{
+		Item:  mediaItem{ID: "cat-1", ShotID: "shot-a", RelativePath: "landscape/a.mp4"},
+		Score: 0.9,
+	}}
+	extra := []rankedCandidate{
+		{Item: mediaItem{ID: "cat-1", ShotID: "shot-a", RelativePath: "landscape/a.mp4"}, Score: 0.1},
+		{Item: mediaItem{ID: "idx-1", RelativePath: "broll/b01.mp4"}},
+		{Item: mediaItem{ID: "", RelativePath: "skip.mp4"}},
+	}
+	got := mergeRankedCandidates(primary, extra)
+	if len(got) != 2 {
+		t.Fatalf("merged=%d, want 2: %#v", len(got), got)
+	}
+	if got[0].Item.ID != "cat-1" || got[0].Score != 0.9 {
+		t.Fatalf("primary not kept first: %#v", got[0])
+	}
+	if got[1].Item.ID != "idx-1" {
+		t.Fatalf("index clip missing: %#v", got[1])
 	}
 }
 
@@ -609,5 +632,16 @@ func TestOnScreenTitleSourceStripsAccountAndTaskSuffix(t *testing.T) {
 	}
 	if got := onScreenTitleSource("房贷困境与时代反思"); got != "房贷困境与时代反思" {
 		t.Fatalf("plain label = %q", got)
+	}
+}
+
+func TestTitlePairUsesShortTitlesWithoutPaddingShortProjectNames(t *testing.T) {
+	title, subtitle := titlePair("房子", "")
+	if title != "时代观察笔记" || subtitle != "家庭财务提醒" {
+		t.Fatalf("short project name padded into garbage: %q / %q", title, subtitle)
+	}
+	title, subtitle = titlePair("接盘之后五个要命难题", "法拍房快堆到四十万")
+	if title != "接盘之后五个要命难题" || subtitle != "法拍房快堆到四十万" {
+		t.Fatalf("short titles must stay whole up to the board limit: %q / %q", title, subtitle)
 	}
 }

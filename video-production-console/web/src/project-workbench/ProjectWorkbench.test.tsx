@@ -82,6 +82,7 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onPublish: vi.fn(),
     onUpload: vi.fn(),
     onSaveSourceScript: vi.fn(),
+    onImportContinuousScript: vi.fn(),
     onReviseContinuousScript: vi.fn(),
     onGenerateNarration: vi.fn(),
     taskModel: { model: "", reasoningEffort: "" },
@@ -136,7 +137,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
   expect(currentStep?.textContent).toContain("正在制作");
-  expect(screen.getByLabelText("2 个资产已就绪，共 5 个")).toBeTruthy();
+  expect(screen.getByLabelText("2 个资产已就绪，共 6 个")).toBeTruthy();
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();
   expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
@@ -150,6 +151,8 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(screen.getByText("二创生成的完整连续文本，用于配音和混剪。")).toBeTruthy();
   expect(screen.getByText("配音")).toBeTruthy();
   expect(screen.getByText("SRT 字幕")).toBeTruthy();
+  expect(screen.getByText("配音断句")).toBeTruthy();
+  expect(screen.getByText("按配音时间轴切好的逐句文案，与 SRT 字幕同一刀。")).toBeTruthy();
   expect(screen.getByText("剪映草稿")).toBeTruthy();
   expect(screen.queryByText("成片")).toBeNull();
   expect(screen.getAllByText("存在").length).toBeGreaterThan(0);
@@ -158,6 +161,7 @@ test("shows every project-scoped production asset with state, meaning, and acces
 
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").type).toBe("file");
+  expect(screen.queryByLabelText("上传配音断句")).toBeNull();
   expect(screen.queryByLabelText("上传成片")).toBeNull();
   expect(screen.getByLabelText<HTMLInputElement>("替换账号背景图").type).toBe("file");
 
@@ -196,7 +200,7 @@ test("disables narration generation with a stated reason while the continuous sc
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(false);
 });
 
-test("marks both narration and subtitle cards as generating while the request is pending", () => {
+test("marks narration, spoken-line, and subtitle cards as generating while the request is pending", () => {
   const props = workbenchProps();
   props.pendingActions = ["generate-narration"];
   const { container } = render(<ProjectWorkbench {...props} />);
@@ -205,8 +209,8 @@ test("marks both narration and subtitle cards as generating while the request is
   expect(generate.disabled).toBe(true);
   expect(generate.getAttribute("aria-busy")).toBe("true");
   expect(generate.textContent).toContain("正在生成…");
-  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(2);
-  expect(screen.getAllByText("生成中")).toHaveLength(2);
+  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(3);
+  expect(screen.getAllByText("生成中")).toHaveLength(3);
 });
 
 test("shows the current registered Jianying display name while keeping storage identity in collapsed technical details", () => {
@@ -366,6 +370,27 @@ test("accepts a non-empty source script and starts source remix once", () => {
 
   expect(props.onSaveSourceScript).toHaveBeenCalledOnce();
   expect(props.onSaveSourceScript).toHaveBeenCalledWith("同行原文正文");
+});
+
+test("imports a finished script and skips remix", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  detail.assets = {};
+  const props = renderWorkbench(detail);
+
+  fireEvent.click(screen.getByRole("button", { name: "导入成品文案，跳到配音" }));
+  expect(screen.getByRole("dialog", { name: "导入成品文案" })).toBeTruthy();
+  expect(screen.getByText(/换说法模型返回的 JSON/)).toBeTruthy();
+  const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存并跳到配音" });
+  expect(save.disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("成品文案"), { target: { value: "八月这一波要发财的人" } });
+  expect(save.disabled).toBe(false);
+  fireEvent.click(save);
+
+  expect(props.onImportContinuousScript).toHaveBeenCalledOnce();
+  expect(props.onImportContinuousScript).toHaveBeenCalledWith("八月这一波要发财的人");
+  expect(props.onSaveSourceScript).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "导入成品文案" })).toBeNull();
 });
 
 test("lets the operator pick wash remix prompt style before starting", () => {

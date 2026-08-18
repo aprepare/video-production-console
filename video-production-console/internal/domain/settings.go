@@ -37,6 +37,19 @@ type PublicSettings struct {
 	CodexTaskProjectRoot        string   `json:"codex_task_project_root"`
 	VolcSpeechSpeakerID         string   `json:"volc_speech_speaker_id"`
 	VolcSpeechResourceID        string   `json:"volc_speech_resource_id"`
+	TTSProvider                 string   `json:"tts_provider"`
+	AuraSTDBaseURL              string   `json:"aurastd_base_url"`
+	AuraSTDModel                string   `json:"aurastd_model"`
+	AuraSTDVoiceID              string   `json:"aurastd_voice_id"`
+	AuraSTDSpeed                float64  `json:"aurastd_speed"`
+	AuraSTDVolume               float64  `json:"aurastd_volume"`
+	AuraSTDPitch                int      `json:"aurastd_pitch"`
+	AuraSTDEmotion              string   `json:"aurastd_emotion"`
+	AuraSTDLanguageBoost        string   `json:"aurastd_language_boost"`
+	AuraSTDModifyPitch          int      `json:"aurastd_modify_pitch"`
+	AuraSTDModifyIntensity      int      `json:"aurastd_modify_intensity"`
+	AuraSTDModifyTimbre         int      `json:"aurastd_modify_timbre"`
+	AuraSTDSoundEffects         string   `json:"aurastd_sound_effects"`
 	MediaCatalogPath            string   `json:"media_catalog_path"`
 	FFmpegPath                  string   `json:"ffmpeg_path"`
 	FFprobePath                 string   `json:"ffprobe_path"`

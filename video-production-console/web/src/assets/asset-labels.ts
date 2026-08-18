@@ -5,6 +5,7 @@ export const assetLabels: Record<string, string> = {
   topic_card: "正式选题卡",
   continuous_script: "连续文案",
   narration: "配音",
+  spoken_script: "配音断句",
   subtitle_srt: "SRT 字幕",
   account_background: "账号固定背景图",
   audio: "配音",

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { ChevronDown, PenLine } from "lucide-react";
+import { ModelSelect } from "../ModelSelect";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, QuickImageProjectRequest, QuickImageProjectResponse } from "../types";
@@ -141,12 +142,10 @@ export function QuickGenerateForm({
         <p className="image-kicker">日常参数</p>
         <label>
           文本模型
-          <input
+          <ModelSelect
             aria-label="文本模型"
             value={textModel}
-            onChange={(event) => setTextModel(event.target.value)}
-            placeholder={DEFAULT_IMAGE_TEXT_MODEL}
-            maxLength={128}
+            onChange={setTextModel}
           />
         </label>
         <label>

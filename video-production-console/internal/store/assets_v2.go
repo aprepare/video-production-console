@@ -52,7 +52,7 @@ type assetDBTX interface {
 
 func validateAddAssetVersion(in AddAssetVersion) error {
 	switch in.Type {
-	case domain.AssetSpokenScript, domain.AssetAudio, domain.AssetSubtitle:
+	case domain.AssetAudio, domain.AssetSubtitle:
 		return ErrInvalidAssetInput
 	}
 	if in.ProjectID == nil && in.AccountID == "" {

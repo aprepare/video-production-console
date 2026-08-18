@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { X } from "lucide-react";
 import { messageTone } from "../messageTone";
+import { ModelSelect } from "../ModelSelect";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { PublicSettings, Settings } from "../types";
@@ -25,6 +26,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   codex_default_reasoning_effort: "默认推理强度",
   volc_speech_speaker_id: "火山音色 ID",
   volc_speech_resource_id: "火山语音资源 ID",
+  aurastd_voice_id: "克隆音色 ID",
   media_catalog_path: "素材库目录",
   ffmpeg_path: "FFmpeg 路径",
   ffprobe_path: "FFprobe 路径",
@@ -35,6 +37,7 @@ type SecretDraft = {
   remix_api_key: string;
   pexels_api_key: string;
   volc_speech_api_key: string;
+  aurastd_tts_api_key: string;
   image_api_key: string;
   image_text_api_key: string;
   vision_api_key: string;
@@ -72,6 +75,41 @@ function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
   );
 }
 
+function SliderField(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="settings-field settings-slider">
+      <span className="settings-slider-head">
+        <span>{props.label}</span>
+        <input
+          type="number"
+          aria-label={props.label}
+          min={props.min}
+          max={props.max}
+          step={props.step}
+          value={Number.isFinite(props.value) ? props.value : 0}
+          onChange={(event) => props.onChange(Number(event.target.value))}
+        />
+      </span>
+      <input
+        type="range"
+        aria-label={`${props.label}滑杆`}
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={Number.isFinite(props.value) ? props.value : 0}
+        onChange={(event) => props.onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
 export function SettingsPanel({
   settings,
   draft,
@@ -99,7 +137,8 @@ export function SettingsPanel({
 
   const httpOnTab = (tab === "remix" && (draft.remix_base_url || "").toLowerCase().startsWith("http://"))
     || (tab === "image" && ["image_base_url", "image_text_base_url"].some((key) =>
-      String(draft[key as keyof PublicSettings] || "").toLowerCase().startsWith("http://")));
+      String(draft[key as keyof PublicSettings] || "").toLowerCase().startsWith("http://")))
+    || (tab === "voice" && (draft.aurastd_base_url || "").toLowerCase().startsWith("http://"));
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -168,10 +207,10 @@ export function SettingsPanel({
                 />
               </Field>
               <Field label="二创模型">
-                <input
+                <ModelSelect
                   value={draft.remix_model || ""}
-                  placeholder="gpt-5.6-sol"
-                  onChange={setText("remix_model")}
+                  emptyLabel="不设置"
+                  onChange={(remix_model) => onDraftChange({ ...draft, remix_model })}
                 />
               </Field>
               <Field label="二创思考强度">
@@ -248,26 +287,144 @@ export function SettingsPanel({
           ) : null}
           {tab === "voice" ? (
             <>
-              <Field label="火山音色 ID">
-                <input value={draft.volc_speech_speaker_id || ""} placeholder="复刻音色 ID" onChange={setText("volc_speech_speaker_id")} />
-              </Field>
-              <Field label="火山语音资源 ID">
-                <input value={draft.volc_speech_resource_id || ""} placeholder="seed-icl-2.0" onChange={setText("volc_speech_resource_id")} />
-              </Field>
-              <Field label="火山语音 API Key">
-                <small>
-                  {settings?.secrets.volc_speech_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
-                </small>
-                <input
-                  type="password"
-                  aria-label="火山语音 API Key"
-                  value={secretDraft.volc_speech_api_key}
-                  placeholder="留空保持不变"
+              <Field label="配音接口">
+                <select
+                  aria-label="配音接口"
+                  value={draft.tts_provider || "aurastd"}
                   onChange={(event) =>
-                    onSecretDraftChange({ ...secretDraft, volc_speech_api_key: event.target.value })
+                    onDraftChange({
+                      ...draft,
+                      tts_provider: event.target.value as PublicSettings["tts_provider"],
+                    })
                   }
-                />
+                >
+                  <option value="aurastd">Aura Studio（当前）</option>
+                  <option value="volc">火山语音（备用）</option>
+                </select>
               </Field>
+              {(draft.tts_provider || "aurastd") === "aurastd" ? (
+                <>
+                  <Field label="Aura Studio API Key">
+                    <small>
+                      {settings?.secrets.aurastd_tts_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                    </small>
+                    <input
+                      type="password"
+                      aria-label="Aura Studio API Key"
+                      value={secretDraft.aurastd_tts_api_key}
+                      placeholder="留空保持不变"
+                      onChange={(event) =>
+                        onSecretDraftChange({ ...secretDraft, aurastd_tts_api_key: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field label="克隆音色 ID">
+                    <input
+                      value={draft.aurastd_voice_id || ""}
+                      placeholder="moss_audio_..."
+                      onChange={setText("aurastd_voice_id")}
+                    />
+                  </Field>
+                  <Field label="配音模型">
+                    <select
+                      aria-label="配音模型"
+                      value={draft.aurastd_model || "speech-2.8-hd"}
+                      onChange={(event) => onDraftChange({ ...draft, aurastd_model: event.target.value })}
+                    >
+                      <option value="speech-2.8-hd">speech-2.8-hd</option>
+                      <option value="speech-2.8-turbo">speech-2.8-turbo</option>
+                      <option value="speech-2.6-hd">speech-2.6-hd</option>
+                      <option value="speech-2.6-turbo">speech-2.6-turbo</option>
+                    </select>
+                  </Field>
+                  <p className="settings-section-title">音色调节</p>
+                  <SliderField
+                    label="语速"
+                    value={draft.aurastd_speed}
+                    min={0.5}
+                    max={2}
+                    step={0.01}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_speed: value })}
+                  />
+                  <SliderField
+                    label="音调"
+                    value={draft.aurastd_pitch}
+                    min={-12}
+                    max={12}
+                    step={1}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_pitch: value })}
+                  />
+                  <SliderField
+                    label="音量"
+                    value={draft.aurastd_volume}
+                    min={0}
+                    max={10}
+                    step={0.01}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_volume: value })}
+                  />
+                  <p className="settings-section-title">声音效果器（高级）</p>
+                  <SliderField
+                    label="音高（低沉/明亮）"
+                    value={draft.aurastd_modify_pitch}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_modify_pitch: value })}
+                  />
+                  <SliderField
+                    label="强度（力量感/柔和）"
+                    value={draft.aurastd_modify_intensity}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_modify_intensity: value })}
+                  />
+                  <SliderField
+                    label="音色（磁性/清脆）"
+                    value={draft.aurastd_modify_timbre}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    onChange={(value) => onDraftChange({ ...draft, aurastd_modify_timbre: value })}
+                  />
+                  <Field label="音效">
+                    <select
+                      aria-label="音效"
+                      value={draft.aurastd_sound_effects || ""}
+                      onChange={(event) => onDraftChange({ ...draft, aurastd_sound_effects: event.target.value })}
+                    >
+                      <option value="">无</option>
+                      <option value="spacious_echo">空旷回音</option>
+                      <option value="auditorium_echo">礼堂广播</option>
+                      <option value="lofi_telephone">电话失真</option>
+                      <option value="robotic">电音</option>
+                    </select>
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="火山音色 ID">
+                    <input value={draft.volc_speech_speaker_id || ""} placeholder="复刻音色 ID" onChange={setText("volc_speech_speaker_id")} />
+                  </Field>
+                  <Field label="火山语音资源 ID">
+                    <input value={draft.volc_speech_resource_id || ""} placeholder="seed-icl-2.0" onChange={setText("volc_speech_resource_id")} />
+                  </Field>
+                  <Field label="火山语音 API Key">
+                    <small>
+                      {settings?.secrets.volc_speech_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                    </small>
+                    <input
+                      type="password"
+                      aria-label="火山语音 API Key"
+                      value={secretDraft.volc_speech_api_key}
+                      placeholder="留空保持不变"
+                      onChange={(event) =>
+                        onSecretDraftChange({ ...secretDraft, volc_speech_api_key: event.target.value })
+                      }
+                    />
+                  </Field>
+                </>
+              )}
             </>
           ) : null}
           {tab === "montage" ? (
@@ -298,9 +455,10 @@ export function SettingsPanel({
           {tab === "system" ? (
             <>
               <Field label="默认模型">
-                <input
+                <ModelSelect
                   value={draft.codex_default_model || ""}
-                  onChange={(event) => onDraftChange({ ...draft, codex_default_model: event.target.value })}
+                  emptyLabel="不设置"
+                  onChange={(codex_default_model) => onDraftChange({ ...draft, codex_default_model })}
                 />
               </Field>
               <Field label="默认推理强度">

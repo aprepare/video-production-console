@@ -45,6 +45,19 @@ const draft: PublicSettings = {
   codex_default_reasoning_effort: "high",
   volc_speech_speaker_id: "S_volc_speaker",
   volc_speech_resource_id: "seed-icl-2.0",
+  tts_provider: "aurastd",
+  aurastd_base_url: "https://tts.aurastd.com",
+  aurastd_model: "speech-2.8-hd",
+  aurastd_voice_id: "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67",
+  aurastd_speed: 1.21,
+  aurastd_volume: 1.4,
+  aurastd_pitch: 1,
+  aurastd_emotion: "",
+  aurastd_language_boost: "Chinese",
+  aurastd_modify_pitch: 0,
+  aurastd_modify_intensity: 5,
+  aurastd_modify_timbre: 6,
+  aurastd_sound_effects: "",
   media_catalog_path: "C:\\media\\catalog.db",
   ffmpeg_path: "",
   ffprobe_path: "",
@@ -62,6 +75,7 @@ const emptySecretDraft = {
   remix_api_key: "",
   pexels_api_key: "",
   volc_speech_api_key: "",
+  aurastd_tts_api_key: "",
   image_api_key: "",
   image_text_api_key: "",
   vision_api_key: "",
@@ -77,6 +91,7 @@ const settings: Settings = {
     remix_api_key: { configured: false, masked: "" },
     pexels_api_key: { configured: false, masked: "" },
     volc_speech_api_key: { configured: true, masked: "********" },
+    aurastd_tts_api_key: { configured: false, masked: "" },
     image_api_key: { configured: false, masked: "" },
     image_text_api_key: { configured: false, masked: "" },
     vision_api_key: { configured: false, masked: "" },
@@ -132,7 +147,14 @@ test("remix model fields are editable independently", () => {
     ...draft,
     remix_base_url: "http://127.0.0.1:2001/v1",
   });
-  fireEvent.change(screen.getByRole("textbox", { name: "二创模型" }), {
+  const remixModel = screen.getByRole("combobox", { name: "二创模型" }) as HTMLSelectElement;
+  expect([...remixModel.options].map((option) => option.value)).toEqual([
+    "",
+    "gpt-5.6-sol",
+    "grok-4.6",
+    "gpt-5.6-terra",
+  ]);
+  fireEvent.change(remixModel, {
     target: { value: "gpt-5.6-sol" },
   });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
@@ -150,17 +172,42 @@ test("remix model fields are editable independently", () => {
   });
 });
 
-test("the Volcengine voice IDs are editable public fields", () => {
+test("the Aura Studio voice settings are the default 配音 fields", () => {
+  const { onDraftChange, onSecretDraftChange } = renderPanel();
+  openTab("配音");
+
+  const voice = screen.getByRole("textbox", { name: "克隆音色 ID" }) as HTMLInputElement;
+  expect(voice.value).toBe("moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67");
+  fireEvent.change(voice, { target: { value: "moss_audio_other" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, aurastd_voice_id: "moss_audio_other" });
+
+  const speed = screen.getByLabelText("语速") as HTMLInputElement;
+  expect(speed.value).toBe("1.21");
+  fireEvent.change(speed, { target: { value: "1.3" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, aurastd_speed: 1.3 });
+
+  fireEvent.change(screen.getByLabelText("Aura Studio API Key"), { target: { value: "new-aura-key" } });
+  expect(onSecretDraftChange).toHaveBeenCalledWith({
+    ...emptySecretDraft,
+    aurastd_tts_api_key: "new-aura-key",
+  });
+});
+
+test("switching the 配音 provider reveals the Volcengine fallback fields", () => {
   const { onDraftChange } = renderPanel();
+  openTab("配音");
+  fireEvent.change(screen.getByRole("combobox", { name: "配音接口" }), { target: { value: "volc" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, tts_provider: "volc" });
+});
+
+test("the Volcengine voice IDs are editable after switching provider", () => {
+  const { onDraftChange } = renderPanel({ draft: { ...draft, tts_provider: "volc" } });
   openTab("配音");
 
   const speaker = screen.getByRole("textbox", { name: "火山音色 ID" });
-  const resource = screen.getByRole("textbox", { name: "火山语音资源 ID" });
   expect((speaker as HTMLInputElement).value).toBe("S_volc_speaker");
-  expect((resource as HTMLInputElement).value).toBe("seed-icl-2.0");
-
   fireEvent.change(speaker, { target: { value: "S_other_speaker" } });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, volc_speech_speaker_id: "S_other_speaker" });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, tts_provider: "volc", volc_speech_speaker_id: "S_other_speaker" });
 });
 
 test("standalone conversation and local history controls are not shown", () => {
@@ -173,7 +220,7 @@ test("standalone conversation and local history controls are not shown", () => {
 });
 
 test("the Volcengine API key is masked and only sent when a new value is typed", () => {
-  const { onSecretDraftChange } = renderPanel();
+  const { onSecretDraftChange } = renderPanel({ draft: { ...draft, tts_provider: "volc" } });
   openTab("配音");
 
   const key = screen.getByLabelText(/火山语音 API Key/) as HTMLInputElement;

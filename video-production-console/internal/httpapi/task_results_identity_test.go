@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -142,5 +144,51 @@ func TestMontageResultAllowsOnlyUnambiguousLegacyDraftFallback(t *testing.T) {
 				t.Fatalf("ambiguous legacy identity leaked=%#v", view)
 			}
 		})
+	}
+}
+
+func TestRemixReviewResultIncludesPublishingPackage(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, false)
+	packageData := []byte(`{"short_titles":["三年前买三年后难卖","五个月法拍近四十万"]}`)
+	packagePath := filepath.Join(db.root, "projects", projectID, "review", "publishing_package.json")
+	if err := os.MkdirAll(filepath.Dir(packagePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packagePath, packageData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(packageData)
+	task := domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Type: "remix",
+		SkillName: "finance-viral-remix", Action: domain.ActionRemixReview,
+		Status: domain.TaskQueued, CreatedAt: time.Now().UTC(),
+	}
+	tasks := store.NewTaskRepository(db.db)
+	if err := tasks.CreateV2(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.CompleteWithResult(context.Background(), task.ID, store.TaskResultWrite{Status: domain.TaskCompleted}, []store.TaskArtifact{{
+		Kind: "publishing_package", Path: packagePath, Filename: "publishing_package.json",
+		MIMEType: "application/json", Size: int64(len(packageData)), SHA256: hex.EncodeToString(digest[:]),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+task.ID+"/result", nil)
+	req.SetPathValue("id", task.ID)
+	res := httptest.NewRecorder()
+	NewTaskResultsHandler(tasks).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		PublishingPackage *struct {
+			ShortTitles []string `json:"short_titles"`
+		} `json:"publishing_package"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PublishingPackage == nil || len(body.PublishingPackage.ShortTitles) == 0 || body.PublishingPackage.ShortTitles[0] != "三年前买三年后难卖" {
+		t.Fatalf("publishing_package=%s", res.Body.String())
 	}
 }

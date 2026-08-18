@@ -33,9 +33,9 @@
 2. 粘贴同行原文 → `source_script` + `remix.standard`。二创**硬切** OpenAI 兼容接口（`openai-compat-run`），不走 Codex CLI。设置里配「二创服务地址 / 二创模型 / 二创 API 密钥」。模型名原样发送，不剥 `cursor-`，不传独立 `reasoning_effort`。
 3. 系统提示在 `internal/agentruntime/openaicompat/run.go` `buildWriterPrompt`：锁财经爆款机器，禁止抄原稿金句。`finance-viral-remix/SKILL.md` 只作 ≤1800 字补充。
 4. 产出 `continuous_script` + `publishing_package.json`。查看弹窗可直接改稿；「打回重做」走 `remix.review`。
-5. 「生成配音与字幕」→ `POST /api/projects/{id}/narration`（火山 TTS + 词级 SRT）。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占。
+5. 「生成配音与字幕」→ `POST /api/projects/{id}/narration`（火山 TTS + 词级 SRT）。手动上传走 `POST /api/projects/{id}/assets/narration`，两条路由不能抢占。字幕由用户自己生成，不要指望混剪再调大模型分段。
 6. 「开始风景混剪」→ 本机 `montage-script-run` → Go 写 `production_plan.json` → Python skill 造明文草稿 → `montage.Coordinator` 登记剪映。
-7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：缩放约 1.2、只选风景/景观、`captions.mode=off`、不写窗内白色片头。否则走 v1（1.4 缩放、全索引打散）。
+7. skill snapshot 声明 `production_plan_versions` 含 `2.0` 时走 `BuildV2`：缩放约 1.2、只选风景/景观、**口播字幕轨关闭**（`captions.mode=off`，`SpokenCaptionsEnabled=false`）。板上标题/副标题仍在。大模型字幕分段/关键词也已屏蔽。不写窗内白色片头。否则走 v1（1.4 缩放、全索引打散）。
 8. 审核阶段可「重做混剪」（再发一条 `montage.execute`，不删旧草稿）。发布文案来自最近二创结果。
 
 选题 UI 已移除（`web/src/idea/` 未挂到 `App.tsx`）。不要恢复「给我选题」主路径。后端 `/api/ideas` 仍在，openai_compat 不认 `topic_card`。
@@ -62,6 +62,7 @@
 - 不要把二创改回 Codex CLI，不要剥 `cursor-` 前缀。
 - 不要恢复选题/爆款库主路径。
 - 不要把白色片头标题、重点字幕加回风景画面窗。
+- 不要打开口播字幕轨（`SpokenCaptionsEnabled` / `captions.mode=spoken`）；排版不好，先整轨屏蔽。也不要打开大模型字幕分段/关键词。
 - 不要为凑 movie/image 配额放行交通/家庭/办公（风景线）。
 - 不要做图片视频编排、设置页 runtime 下拉、P2-5b 代码生成。
 - 不要把 API Key 写进仓库或文档。

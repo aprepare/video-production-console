@@ -317,6 +317,71 @@ func TestComposeFailsUnreadablePace(t *testing.T) {
 	}
 }
 
+func TestComposeUsesFifteenRuneSpokenLinesByDefault(t *testing.T) {
+	tokens := []string{"今", "天", "我", "们", "要", "讲", "一", "个", "关", "于", "财", "务", "的", "问", "题", "了"}
+	captions, report, err := Compose(strings.Join(tokens, ""), wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if !report.Pass {
+		t.Fatalf("expected a passing report, got %v", report.Failures)
+	}
+	if len(captions) < 2 {
+		t.Fatalf("captions = %q, want a 16-rune sentence split to spoken lines", captionTexts(captions))
+	}
+	for _, c := range captions {
+		if n := len([]rune(c.Text)); n > 15 {
+			t.Errorf("cue %q is %d runes, want ≤15", c.Text, n)
+		}
+	}
+}
+
+func TestComposeKeepsBookTitleOnOneSpokenLine(t *testing.T) {
+	tokens := []string{"现", "在", "就", "去", "主", "页", "橱", "窗", "看", "《", "财", "富", "觉", "醒", "方", "法", "论", "》", "。"}
+	captions, _, err := Compose(strings.Join(tokens, ""), wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	joined := strings.Join(captionTexts(captions), "|")
+	if !strings.Contains(joined, "《财富觉醒方法论》") {
+		t.Errorf("book title was split: %q", joined)
+	}
+	for _, c := range captions {
+		text := c.Text
+		open := strings.Contains(text, "《")
+		close := strings.Contains(text, "》")
+		if open != close {
+			t.Errorf("book title brackets split across cues: %q", joined)
+		}
+	}
+}
+
+func TestComposeKeepsYearAndPercentTogether(t *testing.T) {
+	tokens := []string{"截", "止", "到", "2024", "年", "这", "个", "利", "率", "已", "经", "是", "3", ".", "5", "%", "。"}
+	captions, _, err := Compose(strings.Join(tokens, ""), wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	joined := strings.Join(captionTexts(captions), "|")
+	if !strings.Contains(joined, "2024年") {
+		t.Errorf("year was split: %q", joined)
+	}
+	if !strings.Contains(joined, "3.5%") {
+		t.Errorf("percent was split: %q", joined)
+	}
+}
+
+func TestRenderSpokenScriptMatchesCaptionLinesWithoutBlanks(t *testing.T) {
+	got := RenderSpokenScript([]Caption{
+		{Text: "第一句。", Start: 0, End: 1},
+		{Text: "  ", Start: 1, End: 1.1},
+		{Text: "第二句。", Start: 1.2, End: 2},
+	})
+	if got != "第一句。\n第二句。" {
+		t.Errorf("spoken script = %q", got)
+	}
+}
+
 func TestRenderSRT(t *testing.T) {
 	got := RenderSRT([]Caption{
 		{Text: "其他人。", Start: 0.205, End: 0.815},

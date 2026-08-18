@@ -333,6 +333,79 @@ func TestBuildV2MovieCatalogKeepsNonLandscapeShots(t *testing.T) {
 	}
 }
 
+func thinLandscapeCatalogFromOneFile() []matchShot {
+	out := make([]matchShot, 0, 20)
+	for i := 0; i < 20; i++ {
+		in := float64(i * 8)
+		item := mediaItem{
+			ID:               fmt.Sprintf("src-thin-%02d", i),
+			Kind:             mediaKindBroll,
+			RelativePath:     "landscape/repeat.mp4",
+			DurationSeconds:  200,
+			SourceInSeconds:  in,
+			SourceOutSeconds: in + 8,
+			ShotID:           fmt.Sprintf("shot-thin-%02d", i),
+			Category:         "Nature_Landscape",
+			Tags:             []string{"风景", "景观"},
+		}
+		out = append(out, matchShot{
+			item: item, tags: []string{"风景", "景观"}, mood: "neutral",
+			setting: "nature", embedding: []float32{0.1, 0.1, 0.1},
+		})
+	}
+	return out
+}
+
+func TestBuildV2ThinLandscapeCatalogUsesIndexLibrary(t *testing.T) {
+	manifest, planPath := v2Fixture(t)
+	err := BuildV2(Options{
+		ManifestPath: manifest,
+		PlanPath:     planPath,
+		Duration:     func(string) (float64, error) { return 120, nil },
+		Catalog:      fakeCatalog{shots: thinLandscapeCatalogFromOneFile()},
+		Analyzer:     LocalIntentAnalyzer{RestrictToLandscape: true},
+		Embedder:     mapEmbedder{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan ProductionPlanV2
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Timeline) < 10 {
+		t.Fatalf("timeline too short: %d notes=%v", len(plan.Timeline), plan.PlannerNotes)
+	}
+	repeatUses := 0
+	uniqueSources := map[string]int{}
+	for _, shot := range plan.Timeline {
+		key := filepath.ToSlash(shot.SourcePath)
+		if key == "" {
+			key = shot.SourceID
+		}
+		uniqueSources[key]++
+		if strings.Contains(key, "landscape/repeat.mp4") || strings.HasPrefix(shot.SourceID, "src-thin-") {
+			repeatUses++
+		}
+	}
+	if repeatUses > 2 {
+		t.Fatalf("thin catalog file used %d times across %d shots; unique=%d notes=%v",
+			repeatUses, len(plan.Timeline), len(uniqueSources), plan.PlannerNotes)
+	}
+	if len(uniqueSources) < 8 {
+		t.Fatalf("expected index landscape library to fill the timeline, unique sources=%d uses=%v notes=%v",
+			len(uniqueSources), uniqueSources, plan.PlannerNotes)
+	}
+	joined := strings.Join(plan.PlannerNotes, "\n")
+	if !strings.Contains(joined, "landscape_pool_supplemented") {
+		t.Fatalf("expected supplement note, got %v", plan.PlannerNotes)
+	}
+}
+
 func TestBuildV2MovieCatalogEmptyFailsWithoutLandscapeFallback(t *testing.T) {
 	manifest, planPath := v2Fixture(t)
 	err := BuildV2(Options{

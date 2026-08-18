@@ -5,6 +5,7 @@ import { queryKeys } from "../query/keys";
 import type { RemixPromptStyle } from "../RemixPromptStyleFields";
 import type { TaskModelOverride } from "../taskModel";
 import type { Asset, NarrationGeneration, Project, ProjectDetail } from "../types";
+import { unwrapImportedScript } from "./import-script";
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
@@ -386,6 +387,15 @@ export function useProjectActions({
 
   const saveContinuousScript = async (content: string) => {
     if (!selected) return;
+    const unpacked = unwrapImportedScript(content);
+    if (!unpacked.ok) {
+      setMessage(unpacked.message);
+      return;
+    }
+    if (!unpacked.script) {
+      setMessage("请先粘贴成品文案。");
+      return;
+    }
     const project = selected;
     const projectID = project.id;
     const lockKey = lockAction(projectID, "save-continuous-script");
@@ -397,7 +407,7 @@ export function useProjectActions({
         return;
       }
       if (selectedIDRef.current !== projectID) return;
-      onContinuousScriptSaved(content);
+      onContinuousScriptSaved(unpacked.script);
       setMessage("连续文案已保存为新版本；下游配音/字幕等可能已标记为失效。");
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
@@ -409,8 +419,12 @@ export function useProjectActions({
 
   const importContinuousScript = async (content: string) => {
     if (!selected) return;
-    const text = content.trim();
-    if (!text) {
+    const unpacked = unwrapImportedScript(content);
+    if (!unpacked.ok) {
+      setMessage(unpacked.message);
+      return;
+    }
+    if (!unpacked.script) {
       setMessage("请先粘贴成品文案。");
       return;
     }
@@ -419,14 +433,16 @@ export function useProjectActions({
     const lockKey = lockAction(projectID, "save-continuous-script");
     if (!lockKey) return;
     try {
-      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content: text });
+      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content });
       if (!saved) {
         if (selectedIDRef.current === projectID) setMessage("成品文案导入失败，请稍后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
-      onContinuousScriptSaved(text);
-      setMessage("成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。");
+      onContinuousScriptSaved(unpacked.script);
+      setMessage(unpacked.fromJSON && unpacked.hasPublishing
+        ? "成品文案和发布标题已导入，已跳到配音步骤。可直接生成配音与字幕。"
+        : "成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。");
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("成品文案导入失败，请检查网络连接后重试。");
@@ -618,6 +634,51 @@ export function useProjectActions({
     }
   };
 
+  const deleteProjects = async (ids: string[]) => {
+    const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    if (unique.length === 0) return;
+    const lockKey = lockAction("board", "batch-delete");
+    if (!lockKey) return;
+    try {
+      const response = await api("/api/projects/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: unique }),
+      });
+      if (!response.ok) {
+        setMessage("批量删除失败，请稍后重试。");
+        return;
+      }
+      const body = (await response.json()) as {
+        deleted?: string[];
+        failed?: Array<{ id: string; code?: string }>;
+      };
+      const deleted = body.deleted ?? [];
+      const failed = body.failed ?? [];
+      if (deleted.length > 0) {
+        setProjects((current) => current.filter((item) => !deleted.includes(item.id)));
+        await client.invalidateQueries({ queryKey: queryKeys.projects() });
+        if (selectedIDRef.current && deleted.includes(selectedIDRef.current))
+          onProjectDeleted();
+      }
+      const busy = failed.filter((item) => item.code === "project_active_task").length;
+      if (deleted.length > 0 && failed.length === 0)
+        setMessage(`已删除 ${deleted.length} 个项目。`);
+      else if (deleted.length > 0 && busy > 0)
+        setMessage(`已删除 ${deleted.length} 个项目，另有 ${busy} 个因任务未结束未删。`);
+      else if (deleted.length > 0)
+        setMessage(`已删除 ${deleted.length} 个项目，另有 ${failed.length} 个未删。`);
+      else if (busy > 0)
+        setMessage("选中的项目还有进行中的任务，请等任务结束后再删。");
+      else
+        setMessage("批量删除失败，请稍后重试。");
+    } catch (error) {
+      if (!isAbortError(error)) setMessage("批量删除失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
   return {
     pendingActions,
     taskModel,
@@ -638,5 +699,6 @@ export function useProjectActions({
     uploadAsset,
     replaceBackground,
     deleteProject,
+    deleteProjects,
   };
 }

@@ -273,6 +273,16 @@ func newSettingsHTTPTest(t *testing.T, options consoleSettings.Options) (http.Ha
 		ImageGenerationAttempts: 2,
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
+		TTSProvider:            "aurastd",
+		AuraSTDBaseURL:         "https://tts.aurastd.com",
+		AuraSTDModel:           "speech-2.8-hd",
+		AuraSTDVoiceID:         "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67",
+		AuraSTDSpeed:           1.21,
+		AuraSTDVolume:          1.4,
+		AuraSTDPitch:           1,
+		AuraSTDLanguageBoost:   "Chinese",
+		AuraSTDModifyIntensity: 5,
+		AuraSTDModifyTimbre:    6,
 	}
 	service := consoleSettings.NewService(store.NewSettingsRepository(db), httpFakeProtector{}, options)
 	return NewSettingsHandler(service), db, public

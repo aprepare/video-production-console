@@ -16,6 +16,7 @@ const (
 	CaptionNumber       CaptionKind = "number"
 	CaptionTurningPoint CaptionKind = "turning_point"
 	CaptionConclusion   CaptionKind = "conclusion"
+	CaptionSpokenLine   CaptionKind = "spoken"
 )
 
 // TimedSentence is one narration sentence with SRT-derived timing.

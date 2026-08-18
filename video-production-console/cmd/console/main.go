@@ -773,6 +773,7 @@ func appendMontageCatalogEnv(env []string, secrets map[string]string) []string {
 		"VIDEO_CONSOLE_INTENT_API_KEY",
 		"VIDEO_CONSOLE_INTENT_BASE_URL",
 		"VIDEO_CONSOLE_INTENT_MODEL",
+		"VIDEO_CONSOLE_INTENT_REASONING_EFFORT",
 	} {
 		if value := strings.TrimSpace(secrets[key]); value != "" {
 			env = append(env, key+"="+value)
@@ -1065,6 +1066,9 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 		environment["VIDEO_CONSOLE_INTENT_MODEL"] = runtime.RemixModel
 	} else if runtime.GrokModel != "" {
 		environment["VIDEO_CONSOLE_INTENT_MODEL"] = runtime.GrokModel
+	}
+	if runtime.RemixReasoningEffort != "" {
+		environment["VIDEO_CONSOLE_INTENT_REASONING_EFFORT"] = runtime.RemixReasoningEffort
 	}
 	return environment
 }

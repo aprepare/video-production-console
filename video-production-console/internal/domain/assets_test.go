@@ -5,16 +5,16 @@ import (
 	"testing"
 )
 
-func TestSpokenScriptIsOutsideInvalidationGraph(t *testing.T) {
+func TestSpokenScriptIsInvalidatedWithNarration(t *testing.T) {
 	tests := []struct {
 		changed AssetType
 		want    []AssetType
 	}{
-		{AssetSourceScript, []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
-		{AssetTopicCard, []AssetType{AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
-		{AssetContinuousScript, []AssetType{AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetSourceScript, []AssetType{AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetTopicCard, []AssetType{AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetContinuousScript, []AssetType{AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
 		{AssetSpokenScript, nil},
-		{AssetNarration, []AssetType{AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
+		{AssetNarration, []AssetType{AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}},
 		{AssetSubtitleSRT, []AssetType{AssetMixDraft, AssetFinalVideo}},
 		{AssetAccountBackground, []AssetType{AssetMixDraft, AssetFinalVideo}},
 		{AssetMixDraft, []AssetType{AssetFinalVideo}},
@@ -32,7 +32,7 @@ func TestSpokenScriptIsOutsideInvalidationGraph(t *testing.T) {
 func TestInvalidatedAssetTypesReturnsCopy(t *testing.T) {
 	got := InvalidatedAssetTypes(AssetContinuousScript)
 	got[0] = AssetFinalVideo
-	want := []AssetType{AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}
+	want := []AssetType{AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo}
 	if next := InvalidatedAssetTypes(AssetContinuousScript); !slices.Equal(next, want) {
 		t.Fatalf("invalidation graph was mutated: %v", next)
 	}

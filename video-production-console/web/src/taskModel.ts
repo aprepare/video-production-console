@@ -36,3 +36,11 @@ export const reasoningEfforts: ReasoningEffort[] = [
   "max",
   "ultra",
 ];
+
+export const selectableModels = ["gpt-5.6-sol", "grok-4.6", "gpt-5.6-terra"] as const;
+
+export type SelectableModel = (typeof selectableModels)[number];
+
+export function isSelectableModel(value: string): value is SelectableModel {
+  return (selectableModels as readonly string[]).includes(value);
+}

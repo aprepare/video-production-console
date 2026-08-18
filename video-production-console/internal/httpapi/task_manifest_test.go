@@ -379,6 +379,81 @@ func TestTaskManifestPreparerFreezesDraftDisplayNameFromFirstShortTitle(t *testi
 	}
 }
 
+func TestTaskManifestPreparerFreezesBoardTitlesFromShortTitles(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	packagePath := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(manifestPath))), "publishing_package.json")
+	if err := os.WriteFile(packagePath, []byte(`{"short_titles":["接盘之后五个要命难题","法拍房快堆到四十万"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.BoardTitle != "接盘之后五个要命难题" {
+		t.Fatalf("board title=%q", manifest.NonSecretSettings.BoardTitle)
+	}
+	if manifest.NonSecretSettings.BoardSubtitle != "法拍房快堆到四十万" {
+		t.Fatalf("board subtitle=%q", manifest.NonSecretSettings.BoardSubtitle)
+	}
+	if !strings.Contains(manifest.NonSecretSettings.DraftDisplayName, "接盘之后五个要命难题") {
+		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
+	}
+}
+
+func TestTaskManifestPreparerPrefersLatestRemixReviewShortTitles(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, true)
+	projectID := *task.ProjectID
+	root := preparer.settings.(manifestTestSettings).runtime.DataRoot
+	reviewData := []byte(`{"short_titles":["三年前买三年后难卖","五个月法拍近四十万"]}`)
+	reviewPath := filepath.Join(root, "projects", projectID, "tasks", "review-out", "publishing_package.json")
+	if err := os.MkdirAll(filepath.Dir(reviewPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reviewPath, reviewData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(reviewData)
+	reviewTask := domain.CodexTask{
+		ID: uuid.NewString(), ProjectID: &projectID, AccountID: task.AccountID, Type: "remix",
+		SkillName: "finance-viral-remix", Action: domain.ActionRemixReview,
+		Status: domain.TaskQueued, CreatedAt: time.Now().UTC(),
+	}
+	tasks := store.NewTaskRepository(preparer.db)
+	if err := tasks.CreateV2(context.Background(), reviewTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.CompleteWithResult(context.Background(), reviewTask.ID, store.TaskResultWrite{Status: domain.TaskCompleted}, []store.TaskArtifact{{
+		Kind: "publishing_package", Path: reviewPath, Filename: "publishing_package.json",
+		MIMEType: "application/json", Size: int64(len(reviewData)), SHA256: hex.EncodeToString(digest[:]),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.BoardTitle != "三年前买三年后难卖" {
+		t.Fatalf("board title=%q", manifest.NonSecretSettings.BoardTitle)
+	}
+	if manifest.NonSecretSettings.BoardSubtitle != "五个月法拍近四十万" {
+		t.Fatalf("board subtitle=%q", manifest.NonSecretSettings.BoardSubtitle)
+	}
+}
+
 func TestTaskManifestPreparerRejectsMissingIndexedClipBeforePersist(t *testing.T) {
 	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
 	runtime := preparer.settings.(manifestTestSettings).runtime
@@ -470,6 +545,28 @@ func TestTaskManifestPreparerLogsPreflightRejectionWithTaskID(t *testing.T) {
 	}
 	if record.RequestID != "request-9" || record.Phase != "preflight" {
 		t.Fatalf("preflight record is not correlated: %+v", record)
+	}
+}
+
+func TestTaskManifestPreparerUsesImportedPublishingPackageShortTitle(t *testing.T) {
+	preparer, task, manifestPath := prepareMontageManifestFixture(t, false)
+	packagePath := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(manifestPath))), "publishing_package.json")
+	if err := os.WriteFile(packagePath, []byte(`{"short_titles":["存款大搬家","不会使用第二条"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_"+task.ID[len(task.ID)-6:] {
+		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/narration"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
 
@@ -68,6 +69,7 @@ func newNarrationHandler(repository narrationStore, service *assets.Service, opt
 type narrationView struct {
 	Narration        assetView `json:"narration"`
 	SubtitleSRT      assetView `json:"subtitle_srt"`
+	SpokenScript     assetView `json:"spoken_script"`
 	Captions         int       `json:"captions"`
 	DurationSeconds  float64   `json:"duration_seconds"`
 	BilledCharacters int       `json:"billed_characters"`
@@ -141,6 +143,17 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, code, "字幕文件无法登记："+err.Error())
 		return
 	}
+	spokenText := delivery.SpokenScript
+	if strings.TrimSpace(spokenText) == "" {
+		spokenText = narration.RenderSpokenScript(delivery.Captions)
+	}
+	spoken, status, code, err := h.registerAsset(r.Context(), id, domain.AssetSpokenScript, "spoken_script.txt", func() (assets.SavedAsset, error) {
+		return h.assets.SaveTextVersion(id, domain.AssetSpokenScript, "spoken_script.txt", spokenText)
+	})
+	if err != nil {
+		writeError(w, status, code, "配音断句无法登记："+err.Error())
+		return
+	}
 	if syncer, ok := h.repository.(interface {
 		SyncStageFromAssets(context.Context, string, time.Time) (domain.Project, error)
 	}); ok {
@@ -150,7 +163,8 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, narrationView{
 		Narration: toAssetView(audio), SubtitleSRT: toAssetView(subtitle),
-		Captions: len(delivery.Captions), DurationSeconds: delivery.Duration,
+		SpokenScript: toAssetView(spoken),
+		Captions:     len(delivery.Captions), DurationSeconds: delivery.Duration,
 		BilledCharacters: delivery.BilledWords, Warnings: delivery.Report.Warnings,
 	})
 }
@@ -196,11 +210,38 @@ func (h *narrationHandler) readContinuousScript(ctx context.Context, projectID s
 // stays inside the returned client and never reaches a response or a snapshot.
 func (h *narrationHandler) produceRequest(ctx context.Context, script string) (narration.ProduceRequest, string, error) {
 	if h.runtime == nil {
-		return narration.ProduceRequest{}, "narration_not_configured", errors.New("配音服务未配置，请在设置中填写火山语音凭据。")
+		return narration.ProduceRequest{}, "narration_not_configured", errors.New("配音服务未配置，请在设置的配音页填写 Aura Studio 凭据。")
 	}
 	runtime, err := h.runtime.Runtime(ctx)
 	if err != nil {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("配音服务配置无法读取。")
+	}
+	if strings.TrimSpace(runtime.VolcSpeechAPIKey) == "" && strings.TrimSpace(runtime.AuraSTDTTsAPIKey) == "" {
+		return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置的配音页填写 Aura Studio API Key。")
+	}
+	if provider := chosenTTSProvider(runtime); provider == "aurastd" {
+		if strings.TrimSpace(runtime.AuraSTDTTsAPIKey) == "" {
+			return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置的配音页填写 Aura Studio API Key。")
+		}
+		voiceID := strings.TrimSpace(runtime.AuraSTDVoiceID)
+		if voiceID == "" {
+			return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置的配音页填写克隆音色 ID。")
+		}
+		return narration.ProduceRequest{
+			Script:          script,
+			SpeakerID:       voiceID,
+			Provider:        "aurastd",
+			Model:           strings.TrimSpace(runtime.AuraSTDModel),
+			Speed:           runtime.AuraSTDSpeed,
+			Volume:          runtime.AuraSTDVolume,
+			Pitch:           runtime.AuraSTDPitch,
+			Emotion:         strings.TrimSpace(runtime.AuraSTDEmotion),
+			LanguageBoost:   strings.TrimSpace(runtime.AuraSTDLanguageBoost),
+			ModifyPitch:     runtime.AuraSTDModifyPitch,
+			ModifyIntensity: runtime.AuraSTDModifyIntensity,
+			ModifyTimbre:    runtime.AuraSTDModifyTimbre,
+			SoundEffects:    strings.TrimSpace(runtime.AuraSTDSoundEffects),
+		}, "", nil
 	}
 	if strings.TrimSpace(runtime.VolcSpeechAPIKey) == "" {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置中填写火山语音 API Key。")
@@ -208,7 +249,19 @@ func (h *narrationHandler) produceRequest(ctx context.Context, script string) (n
 	if strings.TrimSpace(runtime.VolcSpeechSpeakerID) == "" {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置中填写火山音色 ID。")
 	}
-	return narration.ProduceRequest{Script: script, SpeakerID: strings.TrimSpace(runtime.VolcSpeechSpeakerID)}, "", nil
+	return narration.ProduceRequest{Script: script, SpeakerID: strings.TrimSpace(runtime.VolcSpeechSpeakerID), Provider: "volc"}, "", nil
+}
+
+func chosenTTSProvider(runtime consoleSettings.Runtime) string {
+	provider := strings.TrimSpace(runtime.TTSProvider)
+	if provider == "" {
+		provider = "aurastd"
+	}
+	if provider == "aurastd" && strings.TrimSpace(runtime.AuraSTDTTsAPIKey) == "" &&
+		strings.TrimSpace(runtime.VolcSpeechAPIKey) != "" && strings.TrimSpace(runtime.VolcSpeechSpeakerID) != "" {
+		return "volc"
+	}
+	return provider
 }
 
 // registerAsset writes the generated bytes through the managed asset service and
@@ -240,10 +293,11 @@ func (h *narrationHandler) registerAsset(ctx context.Context, projectID string, 
 	return domain.Asset{}, http.StatusInternalServerError, "asset_store_failed", err
 }
 
-// NewVolcengineProducer returns the production synthesis entry point. It reads
+// NewNarrationProducer returns the production synthesis entry point. It reads
 // the credentials fresh on every call so a settings change takes effect without
-// a restart.
-func NewVolcengineProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
+// a restart. Aura Studio is the default provider; Volcengine remains a fallback
+// when only those credentials are configured.
+func NewNarrationProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
 	return func(ctx context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
 		if runtime == nil {
 			return narration.Delivery{}, narration.ErrNotConfigured
@@ -252,10 +306,22 @@ func NewVolcengineProducer(runtime AssetRuntimeProvider) func(context.Context, n
 		if err != nil {
 			return narration.Delivery{}, err
 		}
-		client := &narration.Client{
-			APIKey:     strings.TrimSpace(settings.VolcSpeechAPIKey),
-			ResourceID: strings.TrimSpace(settings.VolcSpeechResourceID),
+		if chosenTTSProvider(settings) == "volc" {
+			client := &narration.Client{
+				APIKey:     strings.TrimSpace(settings.VolcSpeechAPIKey),
+				ResourceID: strings.TrimSpace(settings.VolcSpeechResourceID),
+			}
+			return narration.Produce(ctx, client, request)
+		}
+		client := &narration.AuraSTDClient{
+			BaseURL: strings.TrimSpace(settings.AuraSTDBaseURL),
+			APIKey:  strings.TrimSpace(settings.AuraSTDTTsAPIKey),
 		}
 		return narration.Produce(ctx, client, request)
 	}
+}
+
+// NewVolcengineProducer keeps the historical name for existing wiring.
+func NewVolcengineProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
+	return NewNarrationProducer(runtime)
 }

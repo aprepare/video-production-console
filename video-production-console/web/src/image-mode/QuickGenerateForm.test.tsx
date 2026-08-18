@@ -26,13 +26,13 @@ describe("QuickGenerateForm", () => {
     expect((screen.getByLabelText("视觉风格") as HTMLSelectElement).value).toBe("finance_documentary");
     expect((screen.getByLabelText("项目并发") as HTMLSelectElement).value).toBe("3");
     expect((screen.getByRole("textbox", { name: "图片模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
-    expect((screen.getByRole("textbox", { name: "文本模型" }) as HTMLInputElement).value).toBe("gpt-5.6-sol");
+    expect((screen.getByRole("combobox", { name: "文本模型" }) as HTMLSelectElement).value).toBe("gpt-5.6-sol");
     expect(screen.queryByLabelText("每张图片最多请求次数")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "高级参数" }));
     expect((screen.getByLabelText("每张图片最多请求次数") as HTMLSelectElement).value).toBe("2");
   });
 
-  test("lets the user type a different text model and submits that name", async () => {
+  test("lets the user pick a different text model and submits that name", async () => {
     const onCreated = vi.fn();
     let request: RequestInit | undefined;
     const api = vi.fn(async (_path: string, init?: RequestInit) => {
@@ -40,13 +40,13 @@ describe("QuickGenerateForm", () => {
       return json({ project_id: "new-project", run_status: "running" }, 202);
     });
     render(<QuickGenerateForm api={api} {...defaults} defaultTextModel="" onCreated={onCreated} onAdvancedMode={vi.fn()} />);
-    const modelInput = screen.getByLabelText("文本模型") as HTMLInputElement;
+    const modelInput = screen.getByLabelText("文本模型") as HTMLSelectElement;
     expect(modelInput.value).toBe("gpt-5.6-sol");
-    fireEvent.change(modelInput, { target: { value: "my-own-text-model" } });
+    fireEvent.change(modelInput, { target: { value: "grok-4.6" } });
     fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "完整文案" } });
     fireEvent.click(screen.getByRole("button", { name: "开始生成图片" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-project"));
-    expect(JSON.parse(String(request?.body)).text_model).toBe("my-own-text-model");
+    expect(JSON.parse(String(request?.body)).text_model).toBe("grok-4.6");
   });
 
   test("disables submit for blank script or blank custom style", () => {

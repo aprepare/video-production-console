@@ -110,8 +110,13 @@ type ManifestSettings struct {
 	JianyingRoot         string `json:"jianying_root,omitempty"`
 	MachineProfilePath   string `json:"machine_profile_path,omitempty"`
 	DraftDisplayName     string `json:"draft_display_name,omitempty"`
+	BoardTitle           string `json:"board_title,omitempty"`
+	BoardSubtitle        string `json:"board_subtitle,omitempty"`
 	RevisionNotes        string `json:"revision_notes,omitempty"`
 	RemixPromptStyle     string `json:"remix_prompt_style,omitempty"`
+	RemixBaseURL         string `json:"remix_base_url,omitempty"`
+	RemixModel           string `json:"remix_model,omitempty"`
+	RemixReasoningEffort string `json:"remix_reasoning_effort,omitempty"`
 	MediaCatalogPath     string `json:"media_catalog_path,omitempty"`
 	FFmpegPath           string `json:"ffmpeg_path,omitempty"`
 	FFprobePath          string `json:"ffprobe_path,omitempty"`

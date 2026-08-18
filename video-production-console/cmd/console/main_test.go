@@ -493,6 +493,74 @@ func TestCodexCommandFactoryUsesMontageScriptRuntimeByDefault(t *testing.T) {
 	}
 }
 
+func TestMontageScriptKeepsIntentEnvAfterStrippingGrokSearch(t *testing.T) {
+	t.Setenv(agentruntime.EnvMontageRuntime, "script")
+	dataRoot := t.TempDir()
+	pythonBinary := filepath.Join(t.TempDir(), "python.exe")
+	if err := os.WriteFile(pythonBinary, []byte("test python placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "machine-profile.json")
+	profileRaw, err := json.Marshal(map[string]any{"python_binary": pythonBinary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, profileRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skillRoot := filepath.Join(t.TempDir(), "jianying-montage-draft")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), []byte("#"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	base.MachineProfilePath = profilePath
+	base.SecretEnvironment = map[string]string{
+		"GROK_SEARCH_API_KEY":                   "grok-search-secret",
+		"GROK_SEARCH_BASE_URL":                  "http://23.138.12.112:2001/v1",
+		"GROK_SEARCH_MODEL":                     "gpt-5.6-sol",
+		"VIDEO_CONSOLE_INTENT_API_KEY":          "remix-secret",
+		"VIDEO_CONSOLE_INTENT_BASE_URL":         "http://127.0.0.1:4100/v1",
+		"VIDEO_CONSOLE_INTENT_MODEL":            "grok-4.6",
+		"VIDEO_CONSOLE_INTENT_REASONING_EFFORT": "high",
+	}
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot, MachineProfilePath: profilePath}, base, func(string) (string, error) {
+		return skillRoot, nil
+	})
+	projectID := "project-montage-intent"
+	taskID := "task-montage-intent"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "montage", Action: domain.ActionMontageExecute}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-montage-intent"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("makeCommand: %v", err)
+	}
+	if lastCommandEnvValue(cmd.Env, "GROK_SEARCH_MODEL") != "" {
+		t.Fatalf("grok search env should be stripped from montage: %#v", cmd.Env)
+	}
+	if lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_MODEL") != "grok-4.6" {
+		t.Fatalf("intent model=%q env=%#v", lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_MODEL"), cmd.Env)
+	}
+	if lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_BASE_URL") != "http://127.0.0.1:4100/v1" {
+		t.Fatalf("intent url=%q", lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_BASE_URL"))
+	}
+	if lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_REASONING_EFFORT") != "high" {
+		t.Fatalf("intent effort=%q", lastCommandEnvValue(cmd.Env, "VIDEO_CONSOLE_INTENT_REASONING_EFFORT"))
+	}
+}
+
 func TestCodexCommandFactoryHonorsCodexMontageRuntime(t *testing.T) {
 	t.Setenv(agentruntime.EnvMontageRuntime, "codex")
 	dataRoot := t.TempDir()

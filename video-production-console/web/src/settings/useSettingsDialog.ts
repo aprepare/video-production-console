@@ -9,6 +9,7 @@ const emptySecretDraft = {
   remix_api_key: "",
   pexels_api_key: "",
   volc_speech_api_key: "",
+  aurastd_tts_api_key: "",
   image_api_key: "",
   image_text_api_key: "",
   vision_api_key: "",

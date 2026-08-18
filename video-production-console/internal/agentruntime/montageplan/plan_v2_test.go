@@ -2,10 +2,14 @@ package montageplan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -314,25 +318,22 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 	if captions["mode"] != "off" {
 		t.Fatalf("captions mode = %v", captions["mode"])
 	}
-	if captions["target_coverage_min"].(float64) != 0 || captions["target_coverage_max"].(float64) != 0 {
-		t.Fatalf("off mode coverage targets = %#v", captions)
-	}
 	items, ok := captions["items"].([]any)
 	if !ok {
-		t.Fatalf("items must be an empty list, got %#v", captions["items"])
+		t.Fatalf("items must be a list, got %#v", captions["items"])
 	}
 	if len(items) != 0 {
-		t.Fatalf("default plan must not add highlight captions: %#v", items)
+		t.Fatalf("default plan must not paint spoken captions: %#v", items)
 	}
 	if _, forbidden := graphics["caption_tracks"]; forbidden {
 		t.Fatal("v2 graphics must not carry the v1 caption_tracks marker")
 	}
 	titleOverlay, ok := graphics["title"].(map[string]any)
-	if !ok || titleOverlay["full_duration"] != true || titleOverlay["text"] == "" {
+	if !ok || titleOverlay["full_duration"] != true || titleOverlay["text"] != "房贷困境反思" {
 		t.Fatalf("v2 graphics.title must be the full-duration board title: %#v", graphics["title"])
 	}
 	subtitleOverlay, ok := graphics["subtitle"].(map[string]any)
-	if !ok || subtitleOverlay["full_duration"] != true || subtitleOverlay["text"] == "" {
+	if !ok || subtitleOverlay["full_duration"] != true || subtitleOverlay["text"] != "家庭财务提醒" {
 		t.Fatalf("v2 graphics.subtitle must be the full-duration board subtitle: %#v", graphics["subtitle"])
 	}
 	lines, ok := graphics["boundary_lines"].(map[string]any)
@@ -356,6 +357,31 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 	concurrency := plan["concurrency"].(map[string]any)
 	if concurrency["job_id"] != "task-abcdef123456" || concurrency["media_index_lock"] != "media-index-write" {
 		t.Fatalf("concurrency = %#v", concurrency)
+	}
+}
+
+func TestCaptionModeSpokenAddsSRTLines(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	opts := v2Options(manifestPath, planPath)
+	opts.CaptionMode = CaptionSpoken
+	plan := buildV2PlanJSON(t, opts)
+	captions := plan["graphics"].(map[string]any)["captions"].(map[string]any)
+	if captions["mode"] != "spoken" {
+		t.Fatalf("captions mode = %v", captions["mode"])
+	}
+	if captions["target_coverage_min"].(float64) != 0 || captions["target_coverage_max"].(float64) != 1 {
+		t.Fatalf("spoken mode coverage targets = %#v", captions)
+	}
+	items, ok := captions["items"].([]any)
+	if !ok {
+		t.Fatalf("items must be a list, got %#v", captions["items"])
+	}
+	if len(items) == 0 {
+		t.Fatalf("spoken mode must add captions from the SRT: %#v", items)
+	}
+	first := items[0].(map[string]any)
+	if first["kind"] != "spoken" || first["style"] != "spoken_v1" {
+		t.Fatalf("spoken caption item = %#v", first)
 	}
 }
 
@@ -384,6 +410,376 @@ func TestCaptionModeHighlightsOnlySelectsFromSRT(t *testing.T) {
 		if item["style"] != "highlight_v1" {
 			t.Fatalf("caption %d style = %v", i, item["style"])
 		}
+	}
+}
+
+func TestCaptionModeOffHasNoItems(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	opts := v2Options(manifestPath, planPath)
+	opts.CaptionMode = CaptionOff
+	plan := buildV2PlanJSON(t, opts)
+	captions := plan["graphics"].(map[string]any)["captions"].(map[string]any)
+	if captions["mode"] != "off" {
+		t.Fatalf("mode = %v", captions["mode"])
+	}
+	items := captions["items"].([]any)
+	if len(items) != 0 {
+		t.Fatalf("off mode items = %#v", items)
+	}
+}
+
+func TestSplitSpokenLineBreaksAroundEightRunesAndMergesTails(t *testing.T) {
+	pieces := splitSpokenLine("三年前大家挤破头往房子里砸钱还叫投资，", 0)
+	got := make([]string, 0, len(pieces))
+	for _, piece := range pieces {
+		got = append(got, piece.text)
+		if n := len([]rune(piece.text)); n > 12 {
+			t.Fatalf("spoken line %q is %d runes, want <=12", piece.text, n)
+		}
+	}
+	if len(got) < 2 {
+		t.Fatalf("expected wrapped spoken lines, got %#v", got)
+	}
+	if got[0] != "三年前大家挤破头" {
+		t.Fatalf("first line = %q, want 8-rune wrap", got[0])
+	}
+	for _, line := range got {
+		if line == "叫投资，" {
+			t.Fatalf("leftover tail was not merged: %#v", got)
+		}
+	}
+}
+
+type fakeLineBreaker struct {
+	lines [][]string
+	pack  CaptionPack
+	err   error
+	calls int
+}
+
+func (f *fakeLineBreaker) BreakLines(_ context.Context, sentences []string) (CaptionPack, error) {
+	f.calls++
+	if f.err != nil {
+		return CaptionPack{}, f.err
+	}
+	if len(f.pack.Groups) > 0 {
+		if len(f.pack.Groups) != len(sentences) {
+			return CaptionPack{}, fmt.Errorf("fixture covers %d sentences, got %d", len(f.pack.Groups), len(sentences))
+		}
+		return f.pack, nil
+	}
+	if len(f.lines) != len(sentences) {
+		return CaptionPack{}, fmt.Errorf("fixture covers %d sentences, got %d", len(f.lines), len(sentences))
+	}
+	return captionPackFromPlainLines(f.lines), nil
+}
+
+func TestSpokenCaptionsUseModelLinesVerbatim(t *testing.T) {
+	sentences := []TimedSentence{{StartMS: 0, EndMS: 6000, Text: "全国法拍房挂牌接近四十万套，同比大涨百分之十九。"}}
+	breaker := &fakeLineBreaker{lines: [][]string{{"全国法拍房挂牌", "接近四十万套", "同比大涨", "百分之十九"}}}
+	items, _, notes := spokenCaptionsFromSentences(sentences, 371304, breaker, "")
+	if breaker.calls != 1 {
+		t.Fatalf("line breaker calls = %d", breaker.calls)
+	}
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Text)
+	}
+	want := []string{"全国法拍房挂牌", "接近四十万套", "同比大涨", "百分之十九"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("captions = %v, want %v (notes %v)", got, want, notes)
+	}
+	if items[0].StartS != 0 || items[len(items)-1].EndS <= items[0].EndS {
+		t.Fatalf("caption window = %#v", items)
+	}
+}
+
+func TestSpokenCaptionsFallBackWhenModelLinesDoNotRebuildTheSentence(t *testing.T) {
+	sentences := []TimedSentence{{StartMS: 0, EndMS: 6000, Text: "全国法拍房挂牌接近四十万套，同比大涨百分之十九。"}}
+	breaker := &fakeLineBreaker{lines: [][]string{{"全国法拍房", "改写了内容"}}}
+	items, _, notes := spokenCaptionsFromSentences(sentences, 371304, breaker, "")
+	if len(items) == 0 {
+		t.Fatal("a rejected model answer must fall back to the deterministic splitter")
+	}
+	for _, item := range items {
+		if item.Text == "改写了内容" {
+			t.Fatalf("model text that does not rebuild the sentence was used: %#v", items)
+		}
+	}
+	if !strings.Contains(strings.Join(notes, "|"), "caption_lines_rejected") {
+		t.Fatalf("planner notes must record the rejection: %v", notes)
+	}
+}
+
+func TestSpokenCaptionLinesAreCachedPerSubtitleDigest(t *testing.T) {
+	if !CaptionLLMLineBreakerEnabled {
+		t.Skip("caption LLM cache is off while the line breaker is disabled")
+	}
+	sentences := []TimedSentence{{StartMS: 0, EndMS: 6000, Text: "全国法拍房挂牌接近四十万套，同比大涨百分之十九。"}}
+	cache := filepath.Join(t.TempDir(), "caption_lines.json")
+	first := &fakeLineBreaker{lines: [][]string{{"全国法拍房挂牌", "接近四十万套", "同比大涨", "百分之十九"}}}
+	if _, _, notes := spokenCaptionsFromSentences(sentences, 371304, first, cache); len(notes) > 0 {
+		t.Fatalf("unexpected notes: %v", notes)
+	}
+	offline := &fakeLineBreaker{err: errors.New("model unavailable")}
+	items, _, notes := spokenCaptionsFromSentences(sentences, 371304, offline, cache)
+	if offline.calls != 0 {
+		t.Fatalf("cached lines must not call the model again, calls = %d", offline.calls)
+	}
+	if len(items) != 4 || items[0].Text != "全国法拍房挂牌" {
+		t.Fatalf("cached captions = %#v notes=%v", items, notes)
+	}
+}
+
+func TestSpokenCaptionsPaintModelKeywords(t *testing.T) {
+	sentences := []TimedSentence{{StartMS: 0, EndMS: 6000, Text: "三年前大家挤破头往房子里砸钱还叫投资。"}}
+	breaker := &fakeLineBreaker{pack: CaptionPack{Groups: [][]CaptionLine{{
+		{Text: "三年前大家挤破头", Keywords: []string{"挤破头"}},
+		{Text: "往房子里砸钱", Keywords: []string{"砸钱"}},
+		{Text: "还叫投资", Keywords: []string{"投资"}},
+	}}}}
+	items, pack, notes := spokenCaptionsFromSentences(sentences, 371304, breaker, "")
+	if len(notes) > 0 {
+		t.Fatalf("notes = %v", notes)
+	}
+	if pack.Groups[0][2].Keywords[0] != "投资" {
+		t.Fatalf("pack keywords = %#v", pack.Groups)
+	}
+	marked := map[string]bool{}
+	for _, item := range items {
+		runes := []rune(item.Text)
+		for _, span := range item.Spans {
+			marked[string(runes[span.Start:span.End])] = true
+		}
+	}
+	for _, want := range []string{"挤破头", "砸钱", "投资"} {
+		if !marked[want] {
+			t.Fatalf("model keyword %q was not painted, got %v texts=%v", want, marked, captionTexts(items))
+		}
+	}
+}
+
+func captionTexts(items []CaptionItem) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.Text)
+	}
+	return out
+}
+
+func TestSpokenLinesDropPunctuationAndKeepWordsWhole(t *testing.T) {
+	sentences := []TimedSentence{
+		{StartMS: 0, EndMS: 6982, Text: "三年前大家挤破头往房子里砸钱还叫投资，三年后想脱手才发现自己成了接盘的那一个。"},
+		{StartMS: 7082, EndMS: 16920, Text: "今年前五个月，全国法拍房挂牌接近四十万套，日均上新超过两千六百套，每一套背后都是一个被逼到墙角的家庭。"},
+		{StartMS: 17020, EndMS: 30806, Text: "国家统计局的口径里，全国常住人口城镇化率到了百分之六十七，消化周期超过三十六个月的城市要暂停卖地。"},
+	}
+	items, _, warnings := spokenCaptionsFromSentences(sentences, 371304, nil, "")
+	if len(items) == 0 {
+		t.Fatalf("no spoken captions: %v", warnings)
+	}
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		texts = append(texts, item.Text)
+		if strings.ContainsAny(item.Text, "，。、；：！？…,;:") {
+			t.Fatalf("caption keeps punctuation: %q", item.Text)
+		}
+		if n := len([]rune(item.Text)); n > spokenLineMaxRunes || n < 2 {
+			t.Fatalf("caption %q is %d runes, want at most %d", item.Text, n, spokenLineMaxRunes)
+		}
+	}
+	joined := strings.Join(texts, "|")
+	for _, word := range []string{"接近", "平米", "百分之", "个月", "法拍房", "城镇化率", "四十万", "超过"} {
+		for cut := 1; cut < len([]rune(word)); cut++ {
+			runes := []rune(word)
+			broken := string(runes[:cut]) + "|" + string(runes[cut:])
+			if strings.Contains(joined, broken) {
+				t.Fatalf("word %q was split across lines as %q", word, broken)
+			}
+		}
+	}
+}
+
+func TestSpokenCaptionSpansMarkNumbersAndFinanceTerms(t *testing.T) {
+	sentences := []TimedSentence{{
+		StartMS: 0,
+		EndMS:   9000,
+		Text:    "全国法拍房挂牌接近四十万套，同比大涨百分之十九。",
+	}}
+	items, _, _ := spokenCaptionsFromSentences(sentences, 371304, nil, "")
+	marked := map[string]bool{}
+	for _, item := range items {
+		runes := []rune(item.Text)
+		prevEnd := 0
+		for _, span := range item.Spans {
+			if span.Start < prevEnd || span.End <= span.Start || span.End > len(runes) {
+				t.Fatalf("caption %q has invalid span %#v", item.Text, span)
+			}
+			if span.Style != spokenKeywordStyle {
+				t.Fatalf("span style = %q", span.Style)
+			}
+			marked[string(runes[span.Start:span.End])] = true
+			prevEnd = span.End
+		}
+	}
+	for _, want := range []string{"法拍房", "四十万套", "百分之十九"} {
+		if !marked[want] {
+			t.Fatalf("keyword %q was not marked, got %v", want, marked)
+		}
+	}
+}
+
+func TestBoardTitleKeepsFullShortTitleAndShrinksToFit(t *testing.T) {
+	title, subtitle := titlePair("接盘之后五个要命难题", "法拍房快堆到四十万")
+	if title != "接盘之后五个要命难题" || subtitle != "法拍房快堆到四十万" {
+		t.Fatalf("board copy was truncated: %q / %q", title, subtitle)
+	}
+	if size := boardTextSize(len([]rune(title)), boardTitleSize); size >= boardTitleSize || size < 9 {
+		t.Fatalf("10-rune title size = %v, want between 9 and %v", size, boardTitleSize)
+	}
+	if size := boardTextSize(8, boardTitleSize); size != boardTitleSize {
+		t.Fatalf("8-rune title must keep the QC size, got %v", size)
+	}
+	if _, over := titlePair(strings.Repeat("长", 20), ""); over == "" {
+		t.Fatal("subtitle fallback must stay non-empty")
+	}
+	if long, _ := titlePair(strings.Repeat("长", 20), ""); len([]rune(long)) != 15 {
+		t.Fatalf("over-long title = %d runes, want the 15 cap", len([]rune(long)))
+	}
+}
+
+func TestBoardTitlesPreferFrozenManifestFieldsWithoutPackageFile(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	settings := manifest["non_secret_settings"].(map[string]any)
+	settings["board_title"] = "接盘之后五个要命"
+	settings["board_subtitle"] = "法拍房快堆到四十"
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
+	graphics := plan["graphics"].(map[string]any)
+	if graphics["title"].(map[string]any)["text"] != "接盘之后五个要命" {
+		t.Fatalf("title = %#v", graphics["title"])
+	}
+	if graphics["subtitle"].(map[string]any)["text"] != "法拍房快堆到四十" {
+		t.Fatalf("subtitle = %#v", graphics["subtitle"])
+	}
+}
+
+func TestSpokenCaptionSplitsDoNotOverlapAfterMicrosecondRounding(t *testing.T) {
+	sentences := []TimedSentence{{
+		StartMS: 0,
+		EndMS:   6982,
+		Text:    "三年前大家挤破头往房子里砸钱还叫投资，三年后想脱手才发现自己成了接盘的那一个。",
+	}}
+	items, _, warnings := spokenCaptionsFromSentences(sentences, 371304, nil, "")
+	if len(items) < 2 {
+		t.Fatalf("items=%#v warnings=%v", items, warnings)
+	}
+	var prevEnd int64
+	for i, item := range items {
+		start := int64(math.Round(item.StartS * 1e6))
+		end := start + int64(math.Round((item.EndS-item.StartS)*1e6))
+		if start < prevEnd {
+			t.Fatalf("item %d %q overlaps previous: start=%d prevEnd=%d", i, item.Text, start, prevEnd)
+		}
+		if end <= start {
+			t.Fatalf("item %d %q has empty range %d-%d", i, item.Text, start, end)
+		}
+		prevEnd = end
+	}
+}
+
+func TestBoardTitlesPreferPublishingShortTitles(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	root := filepath.Dir(manifestPath)
+	projectID := "11111111-1111-1111-1111-111111111111"
+	packageDir := filepath.Join(root, "projects", projectID)
+	if err := os.MkdirAll(packageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "publishing_package.json"), []byte(`{"short_titles":["接盘之后五个要命难题","法拍房快堆到四十万"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["project"] = map[string]string{"id": projectID, "account_id": "22222222-2222-2222-2222-222222222222"}
+	settings := manifest["non_secret_settings"].(map[string]any)
+	settings["data_root"] = root
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
+	graphics := plan["graphics"].(map[string]any)
+	title := graphics["title"].(map[string]any)
+	if title["text"] != "接盘之后五个要命难题" {
+		t.Fatalf("title = %#v", title)
+	}
+	if size := title["size_min"].(float64); size >= boardTitleSize {
+		t.Fatalf("a 10-rune title must shrink to fit, size_min = %v", size)
+	}
+	if graphics["subtitle"].(map[string]any)["text"] != "法拍房快堆到四十万" {
+		t.Fatalf("subtitle = %#v", graphics["subtitle"])
+	}
+}
+
+func TestBoardTitlesUseCaptionModelWhenPackageMissing(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	opts := v2Options(manifestPath, planPath)
+	opts.CaptionMode = CaptionSpoken
+	opts.LineBreaker = &fakeLineBreaker{pack: CaptionPack{
+		BoardTitle:    "接盘之后五个要命难题",
+		BoardSubtitle: "法拍房快堆到四十万",
+		Groups: [][]CaptionLine{
+			{{Text: "所以家庭现金流"}, {Text: "必须留出安全垫"}},
+			{{Text: "但是很多人忽视了"}, {Text: "利率变化"}},
+			{{Text: "所以要提前"}, {Text: "核对每月的账单"}},
+			{{Text: "但是收入并不总是"}, {Text: "稳定的"}},
+			{{Text: "所以记住不要压上"}, {Text: "全部积蓄"}},
+			{{Text: "但是市场情绪常常"}, {Text: "放大风险"}},
+			{{Text: "所以最后要设置"}, {Text: "止损的底线"}},
+			{{Text: "但是真正的耐心"}, {Text: "最难做到"}},
+		},
+	}}
+	plan := buildV2PlanJSON(t, opts)
+	graphics := plan["graphics"].(map[string]any)
+	if graphics["title"].(map[string]any)["text"] != "接盘之后五个要命难题" {
+		t.Fatalf("title = %#v", graphics["title"])
+	}
+	if graphics["subtitle"].(map[string]any)["text"] != "法拍房快堆到四十万" {
+		t.Fatalf("subtitle = %#v", graphics["subtitle"])
+	}
+}
+
+func TestBuildV2FailsWhenCaptionLineBreakerIsUnreachable(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	opts := v2Options(manifestPath, planPath)
+	opts.CaptionMode = CaptionSpoken
+	opts.LineBreaker = &fakeLineBreaker{err: errors.New("connection reset")}
+	err := BuildV2(opts)
+	if err == nil || !strings.Contains(err.Error(), "caption_lines_unavailable") {
+		t.Fatalf("unreachable caption model must fail the plan, err=%v", err)
 	}
 }
 

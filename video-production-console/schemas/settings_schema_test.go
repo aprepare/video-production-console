@@ -22,7 +22,7 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	secretInput := definitions["secretInput"].(map[string]any)
 	properties := secretInput["properties"].(map[string]any)
-	secretKeys := []string{"grok_api_key", "remix_api_key", "pexels_api_key", "volc_speech_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"}
+	secretKeys := []string{"grok_api_key", "remix_api_key", "pexels_api_key", "volc_speech_api_key", "aurastd_tts_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"}
 	for _, key := range secretKeys {
 		property, ok := properties[key].(map[string]any)
 		if !ok || property["maxLength"] != float64(16<<10) {
@@ -186,6 +186,43 @@ func TestSettingsSchemaDescribesMediaIntelligenceSettings(t *testing.T) {
 	pixabay := properties["pixabay_api_base_url"].(map[string]any)
 	if pixabay["default"] != "https://pixabay.com" || !strings.Contains(pixabay["pattern"].(string), "pixabay\\.com") {
 		t.Fatalf("pixabay_api_base_url schema=%v", pixabay)
+	}
+}
+
+func TestSettingsSchemaDescribesAuraSTDTTsSettings(t *testing.T) {
+	raw, err := os.ReadFile("settings.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	definitions := schema["$defs"].(map[string]any)
+	properties := definitions["publicSettings"].(map[string]any)["properties"].(map[string]any)
+	keys := []string{
+		"tts_provider", "aurastd_base_url", "aurastd_model", "aurastd_voice_id",
+		"aurastd_speed", "aurastd_volume", "aurastd_pitch", "aurastd_modify_intensity",
+		"aurastd_modify_timbre", "aurastd_sound_effects",
+	}
+	for _, key := range keys {
+		if properties[key] == nil {
+			t.Fatalf("%s missing from public settings schema", key)
+		}
+	}
+	updateRequired := stringSet(definitions["publicSettingsUpdate"].(map[string]any)["allOf"].([]any)[1].(map[string]any)["required"])
+	viewRequired := stringSet(definitions["publicSettingsView"].(map[string]any)["allOf"].([]any)[1].(map[string]any)["required"])
+	for _, key := range keys {
+		if updateRequired[key] {
+			t.Fatalf("legacy settings update unexpectedly requires %s", key)
+		}
+		if !viewRequired[key] {
+			t.Fatalf("settings view does not require %s", key)
+		}
+	}
+	speed := properties["aurastd_speed"].(map[string]any)
+	if speed["minimum"] != 0.5 || speed["maximum"] != float64(2) || speed["default"] != 1.21 {
+		t.Fatalf("aurastd_speed schema=%v", speed)
 	}
 }
 

@@ -22,11 +22,20 @@ type Delivery struct {
 	// Script is the text actually spoken, which is the caption source and may
 	// differ from the raw asset by removed markdown decoration.
 	Script string
+	// SpokenScript is the same spoken text cut into one line per caption, with
+	// no blank lines. Stripping those newlines reconstructs Script.
+	SpokenScript string
 	// BilledWords is the vendor's own character count for the call.
 	BilledWords int
 	// Duration is the end of the last caption. It is the only length available
 	// without decoding the audio, and a compressed stream has no computable one.
 	Duration float64
+}
+
+// Synthesizer turns a script into audio plus word timings. Volcengine and
+// AuraSTD both implement it so Produce can stay vendor-agnostic.
+type Synthesizer interface {
+	Synthesize(ctx context.Context, req Request) (Result, error)
 }
 
 // ProduceRequest describes one narration job.
@@ -35,10 +44,21 @@ type ProduceRequest struct {
 	SpeakerID string
 	// Format defaults to mp3, the only format the console stores as a narration
 	// asset.
-	Format     string
-	SampleRate int
-	SpeechRate int
-	Captions   Options
+	Format          string
+	SampleRate      int
+	SpeechRate      int
+	Captions        Options
+	Provider        string
+	Model           string
+	Speed           float64
+	Volume          float64
+	Pitch           int
+	Emotion         string
+	LanguageBoost   string
+	ModifyPitch     int
+	ModifyIntensity int
+	ModifyTimbre    int
+	SoundEffects    string
 }
 
 // QualityGateError reports captions that cannot be delivered. It carries the
@@ -55,7 +75,7 @@ func (e *QualityGateError) Error() string {
 // Produce synthesizes narration and builds its subtitle track in one pass, so
 // the two always describe the same audio. It returns the delivery even when the
 // gate fails, so a caller that wants the audio for inspection still has it.
-func Produce(ctx context.Context, client *Client, req ProduceRequest) (Delivery, error) {
+func Produce(ctx context.Context, client Synthesizer, req ProduceRequest) (Delivery, error) {
 	script := NormalizeScript(req.Script)
 	if script == "" {
 		return Delivery{}, fmt.Errorf("narration script is empty")
@@ -68,30 +88,42 @@ func Produce(ctx context.Context, client *Client, req ProduceRequest) (Delivery,
 		format = "mp3"
 	}
 	result, err := client.Synthesize(ctx, Request{
-		Text:       script,
-		SpeakerID:  req.SpeakerID,
-		Format:     format,
-		SampleRate: req.SampleRate,
-		SpeechRate: req.SpeechRate,
+		Text:            script,
+		SpeakerID:       req.SpeakerID,
+		Format:          format,
+		SampleRate:      req.SampleRate,
+		SpeechRate:      req.SpeechRate,
+		Provider:        req.Provider,
+		Model:           req.Model,
+		Speed:           req.Speed,
+		Volume:          req.Volume,
+		Pitch:           req.Pitch,
+		Emotion:         req.Emotion,
+		LanguageBoost:   req.LanguageBoost,
+		ModifyPitch:     req.ModifyPitch,
+		ModifyIntensity: req.ModifyIntensity,
+		ModifyTimbre:    req.ModifyTimbre,
+		SoundEffects:    req.SoundEffects,
 	})
 	if err != nil {
 		return Delivery{}, err
 	}
 	if len(result.Words) == 0 {
-		return Delivery{}, fmt.Errorf("the voice returned no subtitle timings; check that the configured resource id selects a 2.0 voice family")
+		return Delivery{}, fmt.Errorf("the voice returned no subtitle timings; enable word-level subtitles on the configured TTS provider")
 	}
 	captions, report, err := Compose(script, result.Words, req.Captions)
 	if err != nil {
 		return Delivery{}, err
 	}
 	delivery := Delivery{
-		Audio:       result.Audio,
-		AudioFormat: format,
-		SRT:         RenderSRT(captions),
-		Captions:    captions,
-		Report:      report,
-		Script:      script,
-		BilledWords: result.BilledWords,
+		Audio:        result.Audio,
+		AudioFormat:  format,
+		SRT:          RenderSRT(captions),
+		SpokenScript: RenderSpokenScript(captions),
+		Captions:     captions,
+		Report:       report,
+		Script:       script,
+		BilledWords:  result.BilledWords,
 	}
 	if len(captions) > 0 {
 		delivery.Duration = captions[len(captions)-1].End

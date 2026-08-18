@@ -26,6 +26,7 @@ export type Asset = ProjectAsset;
 export type NarrationGeneration = {
   narration: Asset;
   subtitle_srt: Asset;
+  spoken_script?: Asset;
   captions?: number;
   duration_seconds?: number;
   billed_characters?: number;
@@ -106,6 +107,19 @@ export type PublicSettings = {
   codex_default_reasoning_effort: ReasoningEffort;
   volc_speech_speaker_id: string;
   volc_speech_resource_id: string;
+  tts_provider: "aurastd" | "volc" | "";
+  aurastd_base_url: string;
+  aurastd_model: string;
+  aurastd_voice_id: string;
+  aurastd_speed: number;
+  aurastd_volume: number;
+  aurastd_pitch: number;
+  aurastd_emotion: string;
+  aurastd_language_boost: string;
+  aurastd_modify_pitch: number;
+  aurastd_modify_intensity: number;
+  aurastd_modify_timbre: number;
+  aurastd_sound_effects: string;
   media_catalog_path: string;
   ffmpeg_path: string;
   ffprobe_path: string;

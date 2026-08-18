@@ -24,6 +24,7 @@ type Options struct {
 	FFprobePath       string
 	Analyzer          montageplan.IntentAnalyzer
 	Embedder          montageplan.Embedder
+	LineBreaker       montageplan.LineBreaker
 }
 
 // Run validates inputs, builds a deterministic plan, executes the skill script,
@@ -85,6 +86,7 @@ func Run(opts Options) error {
 		FFprobePath:  opts.FFprobePath,
 		Analyzer:     opts.Analyzer,
 		Embedder:     opts.Embedder,
+		LineBreaker:  opts.LineBreaker,
 	}
 	if err := buildMontagePlan(manifestPath, planOpts); err != nil {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("build plan: %w", err))

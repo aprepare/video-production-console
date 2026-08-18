@@ -13,8 +13,9 @@ import (
 // The typed v2 contract below mirrors the authoritative skill parser
 // (jianying-montage-draft/scripts/production_plan_v2.py) field by field.
 // That parser rejects unknown fields, forbids source_in_s/source_out_s on
-// image shots, requires media_mix_policy targets for all three kinds, caps
-// one caption at 4s, and expects qc_expectations exactly as encoded here.
+// image shots, requires media_mix_policy targets for all three kinds, and
+// expects qc_expectations exactly as encoded here. Highlight captions stay
+// 2-4s. Spoken captions stay off until typography is ready.
 
 // CaptionMode selects the caption policy of a v2 plan.
 type CaptionMode string
@@ -22,7 +23,14 @@ type CaptionMode string
 const (
 	CaptionOff            CaptionMode = "off"
 	CaptionHighlightsOnly CaptionMode = "highlights_only"
+	CaptionSpoken         CaptionMode = "spoken"
 )
+
+// SpokenCaptionsEnabled paints SRT lines on the 字幕 track.
+//
+// 2026-08-18：口播字幕排版不好，先整轨屏蔽。板上标题/副标题仍保留。
+// 实现和单测留着，改回 true 即可恢复默认 spoken。
+const SpokenCaptionsEnabled = false
 
 // Known media_mix_policy presets; unknown names fail instead of defaulting.
 const (
@@ -187,12 +195,21 @@ type CaptionPolicy struct {
 }
 
 type CaptionItem struct {
-	Text   string      `json:"text"`
-	StartS float64     `json:"start_s"`
-	EndS   float64     `json:"end_s"`
-	Kind   CaptionKind `json:"kind"`
-	Style  string      `json:"style"`
-	Intro  string      `json:"intro"`
+	Text   string        `json:"text"`
+	StartS float64       `json:"start_s"`
+	EndS   float64       `json:"end_s"`
+	Kind   CaptionKind   `json:"kind"`
+	Style  string        `json:"style"`
+	Intro  string        `json:"intro"`
+	Spans  []CaptionSpan `json:"spans,omitempty"`
+}
+
+// CaptionSpan enlarges one keyword inside a caption. Offsets count runes of the
+// caption text and never overlap.
+type CaptionSpan struct {
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Style string `json:"style"`
 }
 
 type QCExpectations struct {
@@ -261,9 +278,13 @@ func BuildV2(opts Options) error {
 	}
 	mode := opts.CaptionMode
 	if mode == "" {
-		mode = CaptionOff
+		if SpokenCaptionsEnabled {
+			mode = CaptionSpoken
+		} else {
+			mode = CaptionOff
+		}
 	}
-	if mode != CaptionOff && mode != CaptionHighlightsOnly {
+	if mode != CaptionOff && mode != CaptionHighlightsOnly && mode != CaptionSpoken {
 		return fmt.Errorf("unknown caption mode %q", mode)
 	}
 
@@ -306,23 +327,32 @@ func BuildV2(opts Options) error {
 		}
 		notes = append(notes, matchWarnings...)
 	}
-	if len(candidates) == 0 {
-		if movieCatalogSelect(opts) {
+	if movieCatalogSelect(opts) {
+		if len(candidates) == 0 {
 			return fmt.Errorf("movie catalog produced no usable shots")
 		}
+	} else {
+		catalogCount := len(candidates)
 		clips, sampleErr := sampleMediaMatching(ctx.mediaIndex, ctx.mediaRoot, ctx.limit, ctx.manifest.TaskID, false, isLandscapeItem)
 		if sampleErr != nil {
-			return sampleErr
+			if catalogCount == 0 {
+				return sampleErr
+			}
+			notes = append(notes, fmt.Sprintf("landscape_index_unavailable: %v", sampleErr))
+		} else {
+			indexCandidates := rankedFromIndex(clips)
+			candidates = mergeRankedCandidates(candidates, indexCandidates)
+			switch {
+			case catalogCount == 0 && len(indexCandidates) == 0:
+				return fmt.Errorf("media index produced no 风景/景观 clips")
+			case catalogCount == 0 && catalog != nil && len(indexCandidates) > 0:
+				notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
+			case catalogCount > 0 && len(candidates) > catalogCount:
+				notes = append(notes, fmt.Sprintf("landscape_pool_supplemented: catalog=%d index_added=%d", catalogCount, len(candidates)-catalogCount))
+			}
 		}
-		if len(clips) == 0 {
+		if len(candidates) == 0 {
 			return fmt.Errorf("media index produced no 风景/景观 clips")
-		}
-		candidates = make([]rankedCandidate, 0, len(clips))
-		for _, clip := range clips {
-			candidates = append(candidates, rankedCandidate{Item: clip})
-		}
-		if catalog != nil {
-			notes = append(notes, "match_candidates_insufficient: catalog recall empty, falling back to media index")
 		}
 	}
 	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy)
@@ -331,13 +361,10 @@ func BuildV2(opts Options) error {
 	}
 	timeline := buildV2Timeline(selection)
 
-	title, subtitle := titlePair(onScreenTitleSource(ctx.manifest.NonSecretSettings.DraftDisplayName))
-
 	captions := CaptionPolicy{Mode: mode, Items: []CaptionItem{}}
 	var captionWarnings []string
-	if mode == CaptionHighlightsOnly {
-		captions.TargetCoverageMin = captionCoverageMin
-		captions.TargetCoverageMax = captionCoverageMax
+	var captionPack CaptionPack
+	if mode == CaptionHighlightsOnly || mode == CaptionSpoken {
 		var sentences []TimedSentence
 		if ctx.srtPath != "" {
 			file, err := os.Open(ctx.srtPath)
@@ -351,7 +378,28 @@ func BuildV2(opts Options) error {
 			}
 		}
 		narrationMS := int64(math.Round(ctx.duration * 1000))
-		captions.Items, captionWarnings = selectHighlightCaptions(sentences, narrationMS, mode)
+		if mode == CaptionSpoken {
+			// Spoken captions still come from the user's SRT timings. Line
+			// breaks use the local splitter until CaptionLLMLineBreakerEnabled
+			// is turned back on; keyword highlighting stays off with it.
+			captions.TargetCoverageMin = 0
+			captions.TargetCoverageMax = 1
+			captions.Items, captionPack, captionWarnings = spokenCaptionsFromSentences(
+				sentences, narrationMS, opts.LineBreaker, captionLinesCachePath(ctx))
+		} else {
+			captions.TargetCoverageMin = captionCoverageMin
+			captions.TargetCoverageMax = captionCoverageMax
+			captions.Items, captionWarnings = selectHighlightCaptions(sentences, narrationMS, mode)
+		}
+	}
+	title, subtitle := boardTitles(ctx, captionPack.BoardTitle, captionPack.BoardSubtitle)
+	if strings.TrimSpace(ctx.manifest.NonSecretSettings.BoardTitle) == "" &&
+		loadProjectPublishingPackage(ctx) == nil &&
+		fitModelBoardTitle(captionPack.BoardTitle) != "" {
+		captionWarnings = append(captionWarnings, "board_titles_from_caption_model")
+	}
+	if err := captionLineBreakerFailure(captionWarnings); err != nil {
+		return err
 	}
 
 	for _, warning := range quotaWarnings {
@@ -391,10 +439,12 @@ func BuildV2(opts Options) error {
 		Timeline: timeline,
 		Graphics: GraphicsV2{
 			Title: BrandTextV2{
-				Text: title, CharsMin: 6, CharsMax: 8, SizeMin: 16, Y: 0.6, FullDuration: true,
+				Text: title, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
+				SizeMin: boardTextSize(len([]rune(title)), boardTitleSize), Y: 0.6, FullDuration: true,
 			},
 			Subtitle: BrandTextV2{
-				Text: subtitle, CharsMin: 6, CharsMax: 8, SizeMin: 9.2, Y: 0.49, FullDuration: true,
+				Text: subtitle, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
+				SizeMin: boardTextSize(len([]rune(subtitle)), boardSubtitleSize), Y: 0.49, FullDuration: true,
 			},
 			BoundaryLines: BoundaryLinesV2{
 				AssetWidthPx: 1080, AssetHeightPx: 6, TopY: 0.38, BottomY: -0.38, FullDuration: true,
@@ -411,16 +461,7 @@ func BuildV2(opts Options) error {
 			MaxObviousEffectsPer30S:   1,
 			FullCaptionTrackForbidden: true,
 		},
-		ExecutionActions: []string{
-			"核验全部文件路径",
-			"按timeline创建静音画面片段并按motion设置缩放与关键帧",
-			"图片使用首尾uniform_scale关键帧实现Ken Burns",
-			"添加每个相邻镜头之间0.467秒 verified 叠化",
-			"添加贯穿全片的背景框架、标题、副标题和上下红线",
-			"不创建片头标题、章节标签和重点字幕",
-			"添加用户旁白、verified BGM和稀疏verified SFX并设置目标dB",
-			"运行草稿和方案验证器",
-		},
+		ExecutionActions: v2ExecutionActions(mode),
 		KnownMissingAssets: []any{},
 		PlannerNotes:       notes,
 		Approval:           ApprovalV2{ApprovedBy: "video-console-script-runtime", ApprovedAt: "auto"},
@@ -436,11 +477,139 @@ func BuildV2(opts Options) error {
 	return os.WriteFile(opts.PlanPath, encoded, 0o644)
 }
 
+func v2ExecutionActions(mode CaptionMode) []string {
+	actions := []string{
+		"核验全部文件路径",
+		"按timeline创建静音画面片段并按motion设置缩放与关键帧",
+		"图片使用首尾uniform_scale关键帧实现Ken Burns",
+		"添加每个相邻镜头之间0.467秒 verified 叠化",
+		"添加贯穿全片的背景框架、标题、副标题和上下红线",
+	}
+	if mode == CaptionSpoken || mode == CaptionHighlightsOnly {
+		actions = append(actions, "按口播时间轴添加画面文字")
+	}
+	return append(actions,
+		"添加用户旁白、verified BGM和稀疏verified SFX并设置目标dB",
+		"运行草稿和方案验证器",
+	)
+}
+
 func nilIfEmptyString(path string) *string {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
 	return &path
+}
+
+// captionLineBreakerFailure used to abort the plan when the HTTP caption
+// model was unreachable. While CaptionLLMLineBreakerEnabled is false this
+// should not fire on the production path.
+func captionLineBreakerFailure(notes []string) error {
+	for _, note := range notes {
+		if strings.HasPrefix(note, "caption_lines_unavailable:") {
+			return fmt.Errorf("%s", note)
+		}
+	}
+	return nil
+}
+
+// spokenCaptionsFromSentences paints the narration as caption lines from the
+// user's SRT timings. The HTTP line breaker is currently disabled; production
+// uses the deterministic splitter. See CaptionLLMLineBreakerEnabled.
+func spokenCaptionsFromSentences(
+	sentences []TimedSentence,
+	narrationMS int64,
+	breaker LineBreaker,
+	cachePath string,
+) ([]CaptionItem, CaptionPack, []string) {
+	if narrationMS <= 0 || len(sentences) == 0 {
+		return []CaptionItem{}, CaptionPack{}, []string{"spoken_captions_empty: subtitle timings produced no on-screen lines"}
+	}
+	const minPieceUS int64 = 50_000
+	pack, notes := resolveModelLines(breaker, sentences, cachePath)
+	narrationUS := narrationMS * 1000
+	items := make([]CaptionItem, 0, len(sentences)*2)
+	var prevEndUS int64
+	for index, sentence := range sentences {
+		text := strings.TrimSpace(sentence.Text)
+		if text == "" {
+			continue
+		}
+		startUS := sentence.StartMS * 1000
+		endUS := sentence.EndMS * 1000
+		if endUS <= startUS {
+			continue
+		}
+		span := float64(endUS - startUS)
+		pieces := piecesFromModelLines(pack, index)
+		if pieces == nil {
+			pieces = splitSpokenLine(text, spokenLineMaxRunes)
+		}
+		for _, piece := range pieces {
+			pieceStart := startUS + int64(math.Round(span*piece.startFrac))
+			pieceEnd := startUS + int64(math.Round(span*piece.endFrac))
+			if pieceStart < prevEndUS {
+				pieceStart = prevEndUS
+			}
+			if pieceEnd > narrationUS {
+				pieceEnd = narrationUS
+			}
+			if pieceEnd-pieceStart < minPieceUS {
+				continue
+			}
+			items = append(items, CaptionItem{
+				Text:   piece.text,
+				StartS: float64(pieceStart) / 1_000_000,
+				EndS:   float64(pieceEnd) / 1_000_000,
+				Kind:   CaptionSpokenLine,
+				Style:  "spoken_v1",
+				Intro:  "none",
+				Spans:  piece.spans,
+			})
+			prevEndUS = pieceEnd
+		}
+	}
+	if len(items) == 0 {
+		return items, pack, append(notes, "spoken_captions_empty: subtitle timings produced no on-screen lines")
+	}
+	return items, pack, notes
+}
+
+// piecesFromModelLines spreads one sentence's window across the model's lines in
+// proportion to their length, which is the same mapping the deterministic
+// splitter uses.
+func piecesFromModelLines(pack CaptionPack, index int) []spokenPiece {
+	if index >= len(pack.Groups) || len(pack.Groups[index]) == 0 {
+		return nil
+	}
+	lines := pack.Groups[index]
+	total := 0
+	for _, line := range lines {
+		total += len([]rune(line.Text))
+	}
+	if total == 0 {
+		return nil
+	}
+	pieces := make([]spokenPiece, 0, len(lines))
+	cursor := 0
+	for _, line := range lines {
+		runes := []rune(line.Text)
+		startFrac := float64(cursor) / float64(total)
+		cursor += len(runes)
+		pieces = append(pieces, spokenPiece{
+			text:      line.Text,
+			startFrac: startFrac,
+			endFrac:   float64(cursor) / float64(total),
+			spans:     spokenKeywordSpans(runes, line.Keywords),
+		})
+	}
+	return pieces
+}
+
+type spokenPiece struct {
+	text               string
+	startFrac, endFrac float64
+	spans              []CaptionSpan
 }
 
 // buildV2Timeline turns the selected slots into typed shots with per-kind

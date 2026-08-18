@@ -966,6 +966,7 @@ function App() {
           onPublish={() => void projectActions.publishProject()}
           onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
           onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
+          onImportContinuousScript={(content) => void projectActions.importContinuousScript(content)}
           loadSourceScriptContent={projectActions.loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
           onGenerateNarration={() => void projectActions.generateNarration()}
@@ -1021,6 +1022,8 @@ function App() {
           expandedStages={expandedStages}
           onExpandedStagesChange={setExpandedStages}
           onOpenProject={openProject}
+          onDeleteProjects={(ids) => void projectActions.deleteProjects(ids)}
+          deletingProjects={projectActions.pendingActions.includes("board:batch-delete")}
         />
       )}
       {preview && (

@@ -8,7 +8,8 @@ const (
 	AssetSourceScript     AssetType = "source_script"
 	AssetTopicCard        AssetType = "topic_card"
 	AssetContinuousScript AssetType = "continuous_script"
-	// Deprecated: retained so historical asset and audit data can be decoded.
+	// AssetSpokenScript is the post-TTS one-line-per-cue sheet. Remix must not
+	// emit it; narration derives it from the same captions as the SRT.
 	AssetSpokenScript      AssetType = "spoken_script"
 	AssetNarration         AssetType = "narration"
 	AssetSubtitleSRT       AssetType = "subtitle_srt"
@@ -79,10 +80,10 @@ type AssetDependency struct {
 }
 
 var invalidates = map[AssetType][]AssetType{
-	AssetSourceScript:      {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetTopicCard:         {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetContinuousScript:  {AssetNarration, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetNarration:         {AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetSourceScript:      {AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetTopicCard:         {AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetContinuousScript:  {AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetNarration:         {AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
 	AssetSubtitleSRT:       {AssetMixDraft, AssetFinalVideo},
 	AssetAccountBackground: {AssetMixDraft, AssetFinalVideo},
 	AssetMixDraft:          {AssetFinalVideo},

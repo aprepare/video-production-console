@@ -25,6 +25,21 @@ func TestWriteRemixDeliverablePassesValidator(t *testing.T) {
 	}
 }
 
+func TestPublishingFallbacksDoNotHardcodeFixedPlot(t *testing.T) {
+	titles := titleFallbacks("法拍房快堆到四十万套。普通人还在观望。")
+	shorts := shortTitleFallbacks("法拍房快堆到四十万套。")
+	descs := descriptionFallbacks("法拍房快堆到四十万套。")
+	joined := strings.Join(append(append(titles, shorts...), descs...), "\n")
+	for _, forbid := range []string{"第三次换锚", "170万亿", "一百七十万亿", "第三个锚"} {
+		if strings.Contains(joined, forbid) {
+			t.Fatalf("fallback still hardcodes %q: %s", forbid, joined)
+		}
+	}
+	if !strings.Contains(titles[0], "法拍房") {
+		t.Fatalf("title seed should follow source, got %q", titles[0])
+	}
+}
+
 func TestPickHotTopicsKeepsOnlyAllowlist(t *testing.T) {
 	got := pickHotTopics([]string{"#人民币", "#经济", "#干货分享", "#随便写"}, "seed")
 	if len(got) < 3 || len(got) > 4 {

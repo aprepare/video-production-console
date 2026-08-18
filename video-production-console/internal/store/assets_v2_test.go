@@ -148,10 +148,17 @@ func TestAssetVersionRejectsInvalidIDsParentsAndCrossProjectDependencies(t *test
 	}
 }
 
+func TestAddVersionAcceptsSpokenScript(t *testing.T) {
+	r, accountID, projectID := assetFixture(t)
+	got := addTestVersion(t, r, projectID, accountID, domain.AssetSpokenScript, "", nil)
+	if got.Type != domain.AssetSpokenScript || got.Version != 1 || got.State != domain.AssetReady {
+		t.Fatalf("spoken script version = %#v", got)
+	}
+}
+
 func TestAddVersionRejectsDeprecatedAssetTypes(t *testing.T) {
 	r, accountID, projectID := assetFixture(t)
 	for _, assetType := range []domain.AssetType{
-		domain.AssetSpokenScript,
 		domain.AssetAudio,
 		domain.AssetSubtitle,
 	} {

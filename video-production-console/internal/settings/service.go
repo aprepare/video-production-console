@@ -32,14 +32,15 @@ const (
 	SecretRemixAPIKey      = "remix_api_key"
 	SecretPexelsAPIKey     = "pexels_api_key"
 	SecretVolcSpeechAPIKey = "volc_speech_api_key"
+	SecretAuraSTDTTsAPIKey = "aurastd_tts_api_key"
 	SecretImageAPIKey      = "image_api_key"
 	SecretImageTextAPIKey  = "image_text_api_key"
 	SecretVisionAPIKey     = "vision_api_key"
 	SecretEmbeddingAPIKey  = "embedding_api_key"
 	SecretPixabayAPIKey    = "pixabay_api_key"
 
-	secretMask                 = "********"
-	defaultImageModel          = "gpt-image-2"
+	secretMask                     = "********"
+	defaultImageModel              = "gpt-image-2"
 	defaultMaxImageConcurrency     = 3
 	maxImageConcurrency            = 18
 	defaultImageGenerationAttempts = 2
@@ -49,6 +50,16 @@ const (
 	defaultPixabayAPIBaseURL          = "https://pixabay.com"
 	defaultMaxExternalResultsPerQuery = 20
 	maxExternalResultsPerQuery        = 50
+	defaultTTSProvider                = "aurastd"
+	defaultAuraSTDBaseURL             = "https://tts.aurastd.com"
+	defaultAuraSTDModel               = "speech-2.8-hd"
+	defaultAuraSTDVoiceID             = "moss_audio_6b1797c8-2329-11f1-8c29-36c83b29da67"
+	defaultAuraSTDSpeed               = 1.21
+	defaultAuraSTDVolume              = 1.4
+	defaultAuraSTDPitch               = 1
+	defaultAuraSTDModifyIntensity     = 5
+	defaultAuraSTDModifyTimbre        = 6
+	defaultAuraSTDLanguageBoost       = "Chinese"
 	defaultImageRatio                 = "3:4"
 	defaultImageStyle                 = "finance_documentary"
 	probeTimeout                      = 5 * time.Second
@@ -62,7 +73,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -129,6 +140,7 @@ type Runtime struct {
 	RemixAPIKey      string           `json:"-"`
 	PexelsAPIKey     string           `json:"-"`
 	VolcSpeechAPIKey string           `json:"-"`
+	AuraSTDTTsAPIKey string           `json:"-"`
 	ImageAPIKey      string           `json:"-"`
 	ImageTextAPIKey  string           `json:"-"`
 	VisionAPIKey     string           `json:"-"`
@@ -315,6 +327,7 @@ func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secr
 		return View{}, errors.New("settings could not be stored")
 	}
 	s.applyHotSettings(public)
+	s.applyHotVoiceSecrets(ctx, secrets)
 	return s.Get(ctx)
 }
 
@@ -334,6 +347,77 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
 	s.active.ImageStream = configured.ImageStream
+	copyVoiceHotSettings(s.active, configured)
+}
+
+func copyVoiceHotSettings(active *Runtime, configured domain.PublicSettings) {
+	if active == nil {
+		return
+	}
+	active.TTSProvider = configured.TTSProvider
+	active.AuraSTDBaseURL = configured.AuraSTDBaseURL
+	active.AuraSTDModel = configured.AuraSTDModel
+	active.AuraSTDVoiceID = configured.AuraSTDVoiceID
+	active.AuraSTDSpeed = configured.AuraSTDSpeed
+	active.AuraSTDVolume = configured.AuraSTDVolume
+	active.AuraSTDPitch = configured.AuraSTDPitch
+	active.AuraSTDEmotion = configured.AuraSTDEmotion
+	active.AuraSTDLanguageBoost = configured.AuraSTDLanguageBoost
+	active.AuraSTDModifyPitch = configured.AuraSTDModifyPitch
+	active.AuraSTDModifyIntensity = configured.AuraSTDModifyIntensity
+	active.AuraSTDModifyTimbre = configured.AuraSTDModifyTimbre
+	active.AuraSTDSoundEffects = configured.AuraSTDSoundEffects
+	active.VolcSpeechSpeakerID = configured.VolcSpeechSpeakerID
+	active.VolcSpeechResourceID = configured.VolcSpeechResourceID
+}
+
+func clearVoiceHotSettings(value *domain.PublicSettings) {
+	if value == nil {
+		return
+	}
+	value.TTSProvider = ""
+	value.AuraSTDBaseURL = ""
+	value.AuraSTDModel = ""
+	value.AuraSTDVoiceID = ""
+	value.AuraSTDSpeed = 0
+	value.AuraSTDVolume = 0
+	value.AuraSTDPitch = 0
+	value.AuraSTDEmotion = ""
+	value.AuraSTDLanguageBoost = ""
+	value.AuraSTDModifyPitch = 0
+	value.AuraSTDModifyIntensity = 0
+	value.AuraSTDModifyTimbre = 0
+	value.AuraSTDSoundEffects = ""
+	value.VolcSpeechSpeakerID = ""
+	value.VolcSpeechResourceID = ""
+}
+
+func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]string) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.active == nil {
+		return
+	}
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey} {
+		value, ok := secrets[key]
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case SecretAuraSTDTTsAPIKey:
+			s.active.AuraSTDTTsAPIKey = value
+		case SecretVolcSpeechAPIKey:
+			s.active.VolcSpeechAPIKey = value
+		}
+		_, version, configured, err := s.secretValue(ctx, key)
+		if err != nil || !configured {
+			continue
+		}
+		if s.active.SecretVersions == nil {
+			s.active.SecretVersions = map[string]int64{}
+		}
+		s.active.SecretVersions[key] = version
+	}
 }
 
 func (s *Service) PutSecret(ctx context.Context, key, value string) error {
@@ -424,6 +508,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.PexelsAPIKey = value
 		case SecretVolcSpeechAPIKey:
 			runtime.VolcSpeechAPIKey = value
+		case SecretAuraSTDTTsAPIKey:
+			runtime.AuraSTDTTsAPIKey = value
 		case SecretImageAPIKey:
 			runtime.ImageAPIKey = value
 		case SecretImageTextAPIKey:
@@ -459,6 +545,8 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
 	configured.MaxImageConcurrency, active.MaxImageConcurrency = 0, 0
 	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0
+	clearVoiceHotSettings(&configured)
+	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
 }
 
@@ -619,6 +707,50 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	if value.EmbeddingModel != strings.TrimSpace(value.EmbeddingModel) || len(value.EmbeddingModel) > 128 {
 		return invalid("embedding_model")
+	}
+	value = withAuraSTDDefaults(value)
+	switch value.TTSProvider {
+	case "aurastd", "volc":
+	default:
+		return invalid("tts_provider")
+	}
+	if value.AuraSTDBaseURL != "" {
+		if err := validateHTTPURL(value.AuraSTDBaseURL); err != nil {
+			return invalid("aurastd_base_url")
+		}
+	}
+	if value.AuraSTDModel != strings.TrimSpace(value.AuraSTDModel) || len(value.AuraSTDModel) > 128 {
+		return invalid("aurastd_model")
+	}
+	if value.AuraSTDVoiceID != strings.TrimSpace(value.AuraSTDVoiceID) || len(value.AuraSTDVoiceID) > 256 {
+		return invalid("aurastd_voice_id")
+	}
+	if value.AuraSTDSpeed < 0.5 || value.AuraSTDSpeed > 2 {
+		return invalid("aurastd_speed")
+	}
+	if value.AuraSTDVolume < 0 || value.AuraSTDVolume > 10 {
+		return invalid("aurastd_volume")
+	}
+	if value.AuraSTDPitch < -12 || value.AuraSTDPitch > 12 {
+		return invalid("aurastd_pitch")
+	}
+	if len(value.AuraSTDEmotion) > 32 {
+		return invalid("aurastd_emotion")
+	}
+	if len(value.AuraSTDLanguageBoost) > 64 {
+		return invalid("aurastd_language_boost")
+	}
+	if value.AuraSTDModifyPitch < -100 || value.AuraSTDModifyPitch > 100 {
+		return invalid("aurastd_modify_pitch")
+	}
+	if value.AuraSTDModifyIntensity < -100 || value.AuraSTDModifyIntensity > 100 {
+		return invalid("aurastd_modify_intensity")
+	}
+	if value.AuraSTDModifyTimbre < -100 || value.AuraSTDModifyTimbre > 100 {
+		return invalid("aurastd_modify_timbre")
+	}
+	if !validAuraSTDSoundEffect(value.AuraSTDSoundEffects) {
+		return invalid("aurastd_sound_effects")
 	}
 	// FFmpeg binaries are optional, but a configured path must name an
 	// existing regular file so tasks never shell out to a guessed location.
@@ -803,6 +935,7 @@ func pathWithin(root, target string) bool {
 func publicValues(value domain.PublicSettings) map[string]string {
 	value = withImageDefaults(value)
 	value = withMediaIntelligenceDefaults(value)
+	value = withAuraSTDDefaults(value)
 	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
@@ -813,7 +946,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"remix_base_url": value.RemixBaseURL, "remix_model": value.RemixModel,
 		"remix_reasoning_effort": value.RemixReasoningEffort,
-		"image_base_url": value.ImageBaseURL, "image_model": value.ImageModel,
+		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
 		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
 		"image_stream":                strconv.FormatBool(value.ImageStream),
@@ -822,14 +955,27 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"default_image_ratio":         value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
 		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
-		"machine_profile_path":    value.MachineProfilePath,
-		"app_server_enabled":      strconv.FormatBool(value.AppServerEnabled),
-		"codex_workspace_roots":   string(workspaceRoots),
-		"codex_task_project_root": value.CodexTaskProjectRoot,
-		"volc_speech_speaker_id":  value.VolcSpeechSpeakerID,
-		"volc_speech_resource_id": value.VolcSpeechResourceID,
-		"media_catalog_path":      value.MediaCatalogPath,
-		"ffmpeg_path":             value.FFmpegPath, "ffprobe_path": value.FFprobePath,
+		"machine_profile_path":     value.MachineProfilePath,
+		"app_server_enabled":       strconv.FormatBool(value.AppServerEnabled),
+		"codex_workspace_roots":    string(workspaceRoots),
+		"codex_task_project_root":  value.CodexTaskProjectRoot,
+		"volc_speech_speaker_id":   value.VolcSpeechSpeakerID,
+		"volc_speech_resource_id":  value.VolcSpeechResourceID,
+		"tts_provider":             value.TTSProvider,
+		"aurastd_base_url":         value.AuraSTDBaseURL,
+		"aurastd_model":            value.AuraSTDModel,
+		"aurastd_voice_id":         value.AuraSTDVoiceID,
+		"aurastd_speed":            formatSettingFloat(value.AuraSTDSpeed),
+		"aurastd_volume":           formatSettingFloat(value.AuraSTDVolume),
+		"aurastd_pitch":            strconv.Itoa(value.AuraSTDPitch),
+		"aurastd_emotion":          value.AuraSTDEmotion,
+		"aurastd_language_boost":   value.AuraSTDLanguageBoost,
+		"aurastd_modify_pitch":     strconv.Itoa(value.AuraSTDModifyPitch),
+		"aurastd_modify_intensity": strconv.Itoa(value.AuraSTDModifyIntensity),
+		"aurastd_modify_timbre":    strconv.Itoa(value.AuraSTDModifyTimbre),
+		"aurastd_sound_effects":    value.AuraSTDSoundEffects,
+		"media_catalog_path":       value.MediaCatalogPath,
+		"ffmpeg_path":              value.FFmpegPath, "ffprobe_path": value.FFprobePath,
 		"vision_base_url": value.VisionBaseURL, "vision_model": value.VisionModel,
 		"embedding_base_url": value.EmbeddingBaseURL, "embedding_model": value.EmbeddingModel,
 		"pexels_api_base_url":            value.PexelsAPIBaseURL,
@@ -870,6 +1016,59 @@ func withMediaIntelligenceDefaults(value domain.PublicSettings) domain.PublicSet
 	return value
 }
 
+func withAuraSTDDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if strings.TrimSpace(value.TTSProvider) == "" {
+		value.TTSProvider = defaultTTSProvider
+	}
+	if strings.TrimSpace(value.AuraSTDBaseURL) == "" {
+		value.AuraSTDBaseURL = defaultAuraSTDBaseURL
+	}
+	if strings.TrimSpace(value.AuraSTDModel) == "" {
+		value.AuraSTDModel = defaultAuraSTDModel
+	}
+	if strings.TrimSpace(value.AuraSTDVoiceID) == "" {
+		value.AuraSTDVoiceID = defaultAuraSTDVoiceID
+	}
+	if value.AuraSTDSpeed == 0 {
+		value.AuraSTDSpeed = defaultAuraSTDSpeed
+	}
+	if value.AuraSTDVolume == 0 {
+		value.AuraSTDVolume = defaultAuraSTDVolume
+	}
+	if strings.TrimSpace(value.AuraSTDLanguageBoost) == "" {
+		value.AuraSTDLanguageBoost = defaultAuraSTDLanguageBoost
+	}
+	return value
+}
+
+func formatSettingFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func floatSetting(values map[string]string, key string, fallback float64) float64 {
+	raw, ok := values[key]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func intSetting(values map[string]string, key string, fallback int) int {
+	raw, ok := values[key]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
 func normalizedImageConcurrency(value int) int {
 	if value < 1 || value > maxImageConcurrency {
 		return defaultMaxImageConcurrency
@@ -896,6 +1095,15 @@ func validImageRatio(value string) bool {
 func validImageStyle(value string) bool {
 	switch value {
 	case "finance_documentary", "red_ink", "old_newspaper", "ledger_investigation", "dark_crisis", "city_era", "blackboard":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAuraSTDSoundEffect(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "", "spacious_echo", "auditorium_echo", "lofi_telephone", "robotic":
 		return true
 	default:
 		return false
@@ -950,6 +1158,26 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 	if pixabayBaseURL == "" {
 		pixabayBaseURL = defaultPixabayAPIBaseURL
 	}
+	ttsProvider := strings.TrimSpace(values["tts_provider"])
+	if ttsProvider == "" {
+		ttsProvider = defaultTTSProvider
+	}
+	aurastdBaseURL := strings.TrimSpace(values["aurastd_base_url"])
+	if aurastdBaseURL == "" {
+		aurastdBaseURL = defaultAuraSTDBaseURL
+	}
+	aurastdModel := strings.TrimSpace(values["aurastd_model"])
+	if aurastdModel == "" {
+		aurastdModel = defaultAuraSTDModel
+	}
+	aurastdVoiceID := strings.TrimSpace(values["aurastd_voice_id"])
+	if aurastdVoiceID == "" {
+		aurastdVoiceID = defaultAuraSTDVoiceID
+	}
+	aurastdLanguageBoost := strings.TrimSpace(values["aurastd_language_boost"])
+	if aurastdLanguageBoost == "" {
+		aurastdLanguageBoost = defaultAuraSTDLanguageBoost
+	}
 	return domain.PublicSettings{
 		ListenAddr: values["listen_addr"], DataRoot: values["data_root"], MaxCodexConcurrency: concurrency,
 		CodexDefaultModel: codexDefaultModel, CodexDefaultReasoningEffort: codexDefaultReasoningEffort,
@@ -958,7 +1186,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
 		RemixBaseURL: values["remix_base_url"], RemixModel: strings.TrimSpace(values["remix_model"]),
 		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
-		ImageBaseURL: values["image_base_url"], ImageModel: imageModel,
+		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
 		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
 		ImageStream:              imageStream,
@@ -969,11 +1197,24 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],
 		AppServerEnabled:   appServerEnabled, CodexWorkspaceRoots: workspaceRoots,
-		CodexTaskProjectRoot: values["codex_task_project_root"],
-		VolcSpeechSpeakerID:  values["volc_speech_speaker_id"],
-		VolcSpeechResourceID: values["volc_speech_resource_id"],
-		MediaCatalogPath:     values["media_catalog_path"],
-		FFmpegPath:           values["ffmpeg_path"], FFprobePath: values["ffprobe_path"],
+		CodexTaskProjectRoot:   values["codex_task_project_root"],
+		VolcSpeechSpeakerID:    values["volc_speech_speaker_id"],
+		VolcSpeechResourceID:   values["volc_speech_resource_id"],
+		TTSProvider:            ttsProvider,
+		AuraSTDBaseURL:         aurastdBaseURL,
+		AuraSTDModel:           aurastdModel,
+		AuraSTDVoiceID:         aurastdVoiceID,
+		AuraSTDSpeed:           floatSetting(values, "aurastd_speed", defaultAuraSTDSpeed),
+		AuraSTDVolume:          floatSetting(values, "aurastd_volume", defaultAuraSTDVolume),
+		AuraSTDPitch:           intSetting(values, "aurastd_pitch", defaultAuraSTDPitch),
+		AuraSTDEmotion:         strings.TrimSpace(values["aurastd_emotion"]),
+		AuraSTDLanguageBoost:   aurastdLanguageBoost,
+		AuraSTDModifyPitch:     intSetting(values, "aurastd_modify_pitch", 0),
+		AuraSTDModifyIntensity: intSetting(values, "aurastd_modify_intensity", defaultAuraSTDModifyIntensity),
+		AuraSTDModifyTimbre:    intSetting(values, "aurastd_modify_timbre", defaultAuraSTDModifyTimbre),
+		AuraSTDSoundEffects:    strings.TrimSpace(values["aurastd_sound_effects"]),
+		MediaCatalogPath:       values["media_catalog_path"],
+		FFmpegPath:             values["ffmpeg_path"], FFprobePath: values["ffprobe_path"],
 		VisionBaseURL: values["vision_base_url"], VisionModel: strings.TrimSpace(values["vision_model"]),
 		EmbeddingBaseURL: values["embedding_base_url"], EmbeddingModel: strings.TrimSpace(values["embedding_model"]),
 		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,

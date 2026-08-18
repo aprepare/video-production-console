@@ -36,8 +36,9 @@ func assertDefaultResources(t *testing.T, got montageResources) {
 		}
 	}
 	wantBGM := bgmResource{
-		Name: "EXTA$Y+ (Remake)", MusicID: "7223314484093405186", ResourceID: "7223314484093405186",
-		CacheKey: "bgm_extasy_remake", LinearVolume: 0.1593, LoopEveryS: 194.4, Required: true,
+		Name: "やわらかs'xな光", MusicID: "7555333028841670665", ResourceID: "7555333028841670665",
+		CacheKey: "bgm_yawaraka_hikari", LinearVolume: 0.2512, LoopEveryS: 313.7,
+		UsableHeadS: 313.7, ClimaxStartS: 67.3, ClimaxDurationS: 57.633333, Required: true,
 	}
 	if got.BGM != wantBGM {
 		t.Fatalf("bgm = %#v, want %#v", got.BGM, wantBGM)
@@ -92,7 +93,8 @@ func TestLoadMontageResourcesAppliesPerFieldFallback(t *testing.T) {
 	}
 	wantBGM := bgmResource{
 		Name: "Other Track", MusicID: "111", ResourceID: "222", CacheKey: "bgm_other",
-		LinearVolume: 0.1593, LoopEveryS: 120.5, Required: true,
+		LinearVolume: 0.2512, LoopEveryS: 120.5, UsableHeadS: 313.7,
+		ClimaxStartS: 67.3, ClimaxDurationS: 57.633333, Required: true,
 	}
 	if got.BGM != wantBGM {
 		t.Fatalf("bgm = %#v, want %#v", got.BGM, wantBGM)

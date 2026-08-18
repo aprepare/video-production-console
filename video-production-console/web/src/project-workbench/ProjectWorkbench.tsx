@@ -154,7 +154,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const publishingTask = [...props.tasks]
     .filter((task) => task.project_id === detail.project.id && task.publishing_package)
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
-  const publishingPackage = publishingTask?.publishing_package;
+  const publishingPackage = publishingTask?.publishing_package || detail.publishing_package;
   const description = publishingPackage?.description || publishingPackage?.descriptions?.[0] || "";
   const descriptionForCopy = [description, publishingPackage?.cta || ""]
     .map((part) => part.trim())
@@ -180,6 +180,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     task.action === "remix.standard"
     && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
   const sourceRemixPending = props.pendingActions.includes("source-remix") || sourceRemixLive;
+  const importScriptPending = props.pendingActions.includes("save-continuous-script");
   const showTaskModel = Boolean(
     action && ["start-source-remix", "start-mixing"].includes(action.id),
   );
@@ -339,6 +340,22 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
   };
 
+  const openImportDialog = () => {
+    setSourceDialogOpen(false);
+    setImportDialogOpen(true);
+  };
+
+  const saveImportedScript = () => {
+    if (!importScript.trim()) return;
+    props.onImportContinuousScript(importScript.trim());
+    setImportDialogOpen(false);
+  };
+
+  const loadImportedScriptFile = (file?: File) => {
+    if (!file) return;
+    void file.text().then((text) => setImportScript(text));
+  };
+
   const primaryActionButton = (className: string, mobile = false) => displayAction ? (
     <button
       type="button"
@@ -408,15 +425,26 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <p>{sourceReady ? `已载入 ${sourceScript.length || "…"} 字` : "需要时再打开。"}</p>
             </div>
           </div>
-          <button
-            ref={sourceOpenButtonRef}
-            type="button"
-            className="source-script-entry__open"
-            onClick={() => setSourceDialogOpen(true)}
-            disabled={sourceRemixPending}
-          >
-            {sourceRemixPending ? "正在保存/启动…" : sourceReady ? "查看或替换同行原文" : "粘贴同行原文"}
-          </button>
+          <div className="source-script-entry__actions">
+            <button
+              ref={sourceOpenButtonRef}
+              type="button"
+              className="source-script-entry__open"
+              onClick={() => setSourceDialogOpen(true)}
+              disabled={sourceRemixPending}
+            >
+              {sourceRemixPending ? "正在保存/启动…" : sourceReady ? "查看或替换同行原文" : "粘贴同行原文"}
+            </button>
+            <button
+              ref={importOpenButtonRef}
+              type="button"
+              className="source-script-entry__skip"
+              onClick={openImportDialog}
+              disabled={importScriptPending}
+            >
+              {importScriptPending ? "正在导入…" : "导入成品文案"}
+            </button>
+          </div>
         </section>
       )}
 
@@ -485,6 +513,69 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         </div>
       ) : null}
 
+      {importDialogOpen ? (
+        <div
+          className="source-script-dialog-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setImportDialogOpen(false);
+          }}
+        >
+          <section
+            ref={importDialogRef}
+            className="source-script-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="import-script-dialog-title"
+          >
+            <header>
+              <div>
+                <span className="panel-kicker">FINISHED SCRIPT</span>
+                <h2 id="import-script-dialog-title">导入成品文案</h2>
+                <p>跳过二创。可粘贴连续正文，或换说法模型返回的 JSON。</p>
+              </div>
+              <button type="button" className="source-script-dialog__close" aria-label="关闭成品文案导入" onClick={() => setImportDialogOpen(false)}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </header>
+            <textarea
+              autoFocus
+              aria-label="成品文案"
+              value={importScript}
+              onChange={(event) => setImportScript(event.target.value)}
+              placeholder="把连续正文，或换说法模型返回的 JSON 贴到这里…"
+            />
+            <label className="import-script-file">
+              或选择本地文案文件
+              <input
+                type="file"
+                accept=".txt,.md,text/plain,text/markdown"
+                aria-label="选择成品文案文件"
+                onChange={(event) => {
+                  loadImportedScriptFile(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+            <footer>
+              <small>JSON 会自动拆出连续文案，标题和描述一并收下。保存后跳到配音，不启动二创。</small>
+              <div>
+                <button type="button" className="source-script-dialog__cancel" onClick={() => setImportDialogOpen(false)}>取消</button>
+                <button
+                  type="button"
+                  className="source-script-dialog__save"
+                  onClick={saveImportedScript}
+                  disabled={!importScript.trim() || importScriptPending}
+                  aria-busy={importScriptPending}
+                >
+                  {importScriptPending ? "正在导入…" : "保存并跳到配音"}
+                </button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
       <div className={`workbench-grid${showPublishingCopy ? " workbench-grid--review" : ""}`}>
         <section className="primary-action-panel" aria-label="下一主动作">
           <div className="primary-action-panel__head">
@@ -510,6 +601,16 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   {remakeLabel}
                 </button>
               ) : null}
+              {displayAction.id === "start-source-remix" ? (
+                <button
+                  type="button"
+                  className="remake-montage-action"
+                  onClick={openImportDialog}
+                  disabled={importScriptPending}
+                >
+                  导入成品文案，跳到配音
+                </button>
+              ) : null}
               {displayAction.id === "start-source-remix" && !sourceDialogOpen ? (
                 <RemixPromptStyleFields
                   name="remix-prompt-style-panel"
@@ -532,7 +633,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   : displayAction.disabled
                   ? "任务完成后会切换到下一步。"
                   : displayAction.id === "start-source-remix"
-                    ? "选好转写方式后开始二创。"
+                    ? "选好转写方式后开始二创。已经改好的连续文案或换说法 JSON，可以直接导入并跳到配音。"
                     : displayAction.id === "start-mixing"
                       ? mixKind === "movie"
                         ? "用电影切镜库生成剪映草稿。"
@@ -642,6 +743,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onReplaceBackground={props.onReplaceBackground}
           onViewAsset={props.onViewAsset}
           onReviseContinuousScript={props.onReviseContinuousScript}
+          onImportContinuousScript={stage === "script" ? openImportDialog : undefined}
           onRemakeMontage={remakeCurrent ? onRemakeCurrent : undefined}
           onGenerateNarration={props.onGenerateNarration}
           pendingActions={props.pendingActions}

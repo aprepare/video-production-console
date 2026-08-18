@@ -10,30 +10,52 @@ import (
 
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	system := buildWriterPrompt("# skill", PromptStyleRewrite)
-	for _, want := range []string{"禁止逐段同义改写", "第三个锚故意不说完", "财富觉醒方法论", "下半场", "本金乘利率", "机器顺序不能倒", "#干货分享", "3到4个"} {
+	for _, want := range []string{"禁止逐段同义改写", "机器以原文为准", "财富觉醒方法论", "本金乘利率", "原稿的推进顺序不能倒", "#干货分享", "3到4个", "必须从这篇口播长出来"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
 		}
 	}
-	user := buildWriterUser(manifestLite{}, "又一批人要发财了", PromptStyleRewrite)
-	if !strings.Contains(user, "不当逐句模板") || strings.Contains(user, "只换说法和加料，不换题") {
+	for _, forbid := range []string{"第三次换锚", "一百七十万亿", "第三个锚故意不说完", "方便面被外卖抢走", "河的上游"} {
+		if strings.Contains(system, forbid) {
+			t.Fatalf("rewrite prompt must not hardcode plot %q", forbid)
+		}
+	}
+	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套", PromptStyleRewrite)
+	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题也必须跟这篇新口播走") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
+	}
+}
+
+func TestWriterPromptSkillExcerptDoesNotReinjectFixedPlot(t *testing.T) {
+	skillPath := filepath.Join(os.Getenv("USERPROFILE"), ".codex", "skills", "finance-viral-remix", "SKILL.md")
+	raw, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Skip(err)
+	}
+	system := buildWriterPrompt(string(raw), PromptStyleRewrite)
+	if !strings.Contains(system, "# 补充约束") {
+		t.Fatalf("expected skill excerpt in system prompt")
+	}
+	for _, forbid := range []string{"第三次换锚", "一百七十万亿", "第三个锚", "方便面被外卖抢走", "河的上游", "先发财换锚"} {
+		if strings.Contains(system, forbid) {
+			t.Fatalf("skill excerpt reintroduced plot %q", forbid)
+		}
 	}
 }
 
 func TestWashPromptKeepsSourceAndOnlyCutsPhrasing(t *testing.T) {
 	system := buildWriterPrompt("# skill\n禁止照抄金句", PromptStyleWash)
-	for _, want := range []string{"按洗稿来", "切成适合口播的短段", "轻微换词", "机器顺序不能倒", "本金乘利率", "#干货分享"} {
+	for _, want := range []string{"按洗稿来", "切成适合口播的短段", "轻微换词", "原稿的推进顺序不能倒", "本金乘利率", "#干货分享"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("wash system missing %q", want)
 		}
 	}
-	for _, forbid := range []string{"禁止逐段同义改写", "禁止照抄", "补充约束", "不当逐句模板"} {
+	for _, forbid := range []string{"禁止逐段同义改写", "禁止照抄", "补充约束", "不当逐句模板", "第三次换锚", "一百七十万亿", "先发财换锚"} {
 		if strings.Contains(system, forbid) {
 			t.Fatalf("wash system has %q: %s", forbid, system)
 		}
 	}
-	user := buildWriterUser(manifestLite{}, "又一批人要发财了", PromptStyleWash)
+	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套", PromptStyleWash)
 	if !strings.Contains(user, "不要另写一篇") || strings.Contains(user, "不当逐句模板") {
 		t.Fatalf("wash user=%q", user)
 	}
@@ -113,8 +135,8 @@ func TestRunSendsWashPromptWhenManifestStyleIsWash(t *testing.T) {
 	manifestPath := filepath.Join(root, "task_manifest.json")
 	raw, _ := json.Marshal(map[string]any{
 		"task_id": "task-wash-1", "action": "remix.standard", "skill": "finance-viral-remix",
-		"output_dir": outputDir,
-		"inputs":     []any{map[string]any{"type": "source_script", "role": "primary_source", "path": sourcePath}},
+		"output_dir":          outputDir,
+		"inputs":              []any{map[string]any{"type": "source_script", "role": "primary_source", "path": sourcePath}},
 		"non_secret_settings": map[string]any{"remix_prompt_style": "wash"},
 	})
 	_ = os.WriteFile(manifestPath, raw, 0o644)

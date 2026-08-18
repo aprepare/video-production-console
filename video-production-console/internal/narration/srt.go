@@ -16,6 +16,20 @@ func RenderSRT(captions []Caption) string {
 	return b.String()
 }
 
+// RenderSpokenScript writes one caption per line so the spoken sheet and the
+// SRT cues describe the same cuts. Blank cues are dropped, not kept as gaps.
+func RenderSpokenScript(captions []Caption) string {
+	lines := make([]string, 0, len(captions))
+	for _, caption := range captions {
+		text := strings.TrimSpace(caption.Text)
+		if text == "" {
+			continue
+		}
+		lines = append(lines, text)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func formatSRTTime(seconds float64) string {
 	if seconds < 0 || math.IsNaN(seconds) {
 		seconds = 0

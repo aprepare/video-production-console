@@ -204,6 +204,65 @@ func TestSelectTimelineImageVideoPresetPrefersImages(t *testing.T) {
 	}
 }
 
+func landscapeOnlyCandidates(n int) []rankedCandidate {
+	out := make([]rankedCandidate, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, rankedCandidate{Item: mediaItem{
+			ID:              fmt.Sprintf("land-%02d", i),
+			Kind:            mediaKindBroll,
+			Category:        "Nature_Landscape",
+			RelativePath:    fmt.Sprintf("landscape/l%02d.mp4", i),
+			DurationSeconds: 30,
+		}})
+	}
+	return out
+}
+
+func TestSelectTimelineV2LastResortRotatesLeastUsed(t *testing.T) {
+	const duration = 180.0
+	const pool = 12
+	segments, _, err := selectTimelineV2(landscapeOnlyCandidates(pool), duration, "task-last-resort", movieMixPolicy())
+	if err != nil {
+		t.Fatalf("selectTimelineV2: %v", err)
+	}
+	assertContiguousTimeline(t, segments, duration)
+	if len(segments) <= pool {
+		t.Fatalf("need more slots than the pool to exercise last-resort, got %d", len(segments))
+	}
+
+	uses := map[string]int{}
+	run := 1
+	maxRun := 1
+	tailSources := map[string]bool{}
+	for i, seg := range segments {
+		src := seg.Item.sourceKey()
+		uses[src]++
+		if i > 0 && src == segments[i-1].Item.sourceKey() {
+			run++
+			if run > maxRun {
+				maxRun = run
+			}
+		} else {
+			run = 1
+		}
+		if i >= pool {
+			tailSources[src] = true
+		}
+	}
+	if maxRun >= 3 {
+		t.Fatalf("last-resort stuck on one file for %d consecutive shots; uses=%v", maxRun, uses)
+	}
+	if len(tailSources) < pool/2 {
+		t.Fatalf("tail after %d unique shots used %d sources, want rotation through the pool; uses=%v",
+			pool, len(tailSources), uses)
+	}
+	for src, n := range uses {
+		if n > 3 {
+			t.Fatalf("source %q used %d times under least-used last-resort", src, n)
+		}
+	}
+}
+
 func TestSelectTimelineReportsQuotaFallback(t *testing.T) {
 	const duration = 120.0
 	candidates := quotaCandidates(24, 0, 0, 0)

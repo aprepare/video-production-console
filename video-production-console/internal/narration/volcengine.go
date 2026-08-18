@@ -48,9 +48,21 @@ type Request struct {
 	SpeakerID  string
 	Format     string
 	SampleRate int
-	// SpeechRate maps to the vendor's [-50,100] range where 0 is unmodified
-	// and 100 is double speed.
+	// SpeechRate maps to the Volcengine vendor's [-50,100] range where 0 is
+	// unmodified and 100 is double speed. AuraSTD uses Speed instead.
 	SpeechRate int
+	// Provider selects the synthesis backend. Empty means the client type.
+	Provider string
+	Model    string
+	Speed    float64
+	Volume   float64
+	Pitch    int
+	Emotion  string
+	LanguageBoost   string
+	ModifyPitch     int
+	ModifyIntensity int
+	ModifyTimbre    int
+	SoundEffects    string
 }
 
 // Result carries the rendered audio plus the timings needed for captions.

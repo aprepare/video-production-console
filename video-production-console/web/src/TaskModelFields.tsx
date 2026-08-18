@@ -1,3 +1,4 @@
+import { ModelSelect } from "./ModelSelect";
 import type { ReasoningEffort, TaskModelDefaults, TaskModelOverride, TaskModelPurpose } from "./taskModel";
 import { inheritedTaskEffort, inheritedTaskModel, reasoningEfforts } from "./taskModel";
 
@@ -26,11 +27,11 @@ export function TaskModelFields({
       <div className="task-model-grid">
         <label>
           模型
-          <input
+          <ModelSelect
             aria-label={`${labelPrefix}临时模型`}
             value={value.model}
-            placeholder="继承默认模型"
-            onChange={(event) => onChange({ ...value, model: event.target.value })}
+            emptyLabel="继承默认模型"
+            onChange={(model) => onChange({ ...value, model })}
           />
         </label>
         {hideReasoningEffort ? null : (

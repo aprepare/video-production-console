@@ -641,6 +641,14 @@ func NewService(dataRoot string) *Service {
 	return &Service{dataRoot: filepath.Clean(dataRoot)}
 }
 
+func (s *Service) ProjectDir(projectID string) (string, error) {
+	parsed, err := uuid.Parse(projectID)
+	if err != nil {
+		return "", ErrInvalidProjectAsset
+	}
+	return filepath.Join(s.dataRoot, "projects", parsed.String()), nil
+}
+
 var ErrAssetPathInvalid = errors.New("asset path is outside the data root")
 
 // OpenAsset opens a database-referenced asset only when its resolved path is
