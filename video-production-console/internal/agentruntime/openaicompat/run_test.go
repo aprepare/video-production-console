@@ -8,9 +8,27 @@ import (
 	"testing"
 )
 
+func TestRewritePromptStamp(t *testing.T) {
+	if RewritePromptStamp != "文案进化台 2026-08-19 中老年定稿" {
+		t.Fatalf("stamp=%q", RewritePromptStamp)
+	}
+}
+
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	system := buildWriterPrompt("# skill", PromptStyleRewrite)
-	for _, want := range []string{"禁止逐段同义改写", "机器以原文为准", "财富觉醒方法论", "本金乘利率", "原稿的推进顺序不能倒", "#干货分享", "3到4个", "必须从这篇口播长出来"} {
+	for _, want := range []string{
+		"禁止逐段同义改写",
+		"机器以原文为准",
+		"财富觉醒方法论",
+		"本金乘利率",
+		"原稿的推进顺序不能倒",
+		"#干货分享",
+		"3到4个",
+		"必须从这篇口播长出来",
+		"中老年听得懂",
+		"关键数字必须原词留下",
+		"第N个难题",
+	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
 		}
@@ -21,7 +39,7 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		}
 	}
 	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套", PromptStyleRewrite)
-	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题也必须跟这篇新口播走") || strings.Contains(user, "只换说法和加料，不换题") {
+	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题也必须跟这篇新口播走") || !strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
 	}
 }

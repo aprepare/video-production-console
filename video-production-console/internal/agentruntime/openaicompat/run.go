@@ -41,6 +41,11 @@ type manifestLite struct {
 const (
 	PromptStyleRewrite = "rewrite"
 	PromptStyleWash    = "wash"
+
+	// RewritePromptStamp 是 rewrite 系统提示词的版本标注。
+	// 来源：独立「文案进化台」试写法拍房 / 存款蒸发 / 换锚后的 2026-08-19 中老年定稿。
+	// 只作仓库标注，不发给模型。wash 路径未改。
+	RewritePromptStamp = "文案进化台 2026-08-19 中老年定稿"
 )
 
 func NormalizePromptStyle(value string) (string, error) {
@@ -165,19 +170,65 @@ func readTextFile(path string) (string, error) {
 	return text, nil
 }
 
+// buildWriterPrompt 拼系统提示词。
+//
+// rewrite（默认）= RewritePromptStamp（文案进化台 2026-08-19 中老年定稿）。
+// 相对控制台旧版加了这些刀：
+//   - 先锁六件套爆款机器（钩子 / 未揭晓 / 证明 / 差距 / 情绪 / 收口）
+//   - 关键数字必须原词，禁止「很多」「心惊的数」
+//   - 对仗钩子不能写成更软的解释句
+//   - 【中老年听得懂】开场禁锚点/换锚/货币/认知等黑话
+//   - 禁止按「第N个难题」对照译文，中间必须换切口
+//   - 密度失败标准写死：钩子听不懂 / 数字糊了 / 写顺了 / 对照没了 / 降温成课
+//
+// wash 路径未改。落盘 JSON 仍走 writerJSONContract（标题/描述/话题/cta）。
+// 模型可额外返回 machine；parseRemixDraft 忽略未知字段，控制台仍以 continuous_script 为准。
 func buildWriterPrompt(skillMD, style string) string {
 	if style == PromptStyleWash {
 		return buildWashPrompt()
 	}
 	var b strings.Builder
 	b.WriteString("你是财经视频号二创写手。只写文案，不要调用工具，不要读写文件，不要解释过程。\n")
-	b.WriteString("先从同行原文锁爆款机器，再写新稿。机器以原文为准，不要用提示词里的现成情节去套。必须能用一句话指回原稿：第一句靠什么留人、观众最想知道且原稿故意还没说完的答案、历史或数字怎样证明这套逻辑已经灵过、普通人与先看懂的人之间的差距、情绪怎么升级、结尾靠什么催促上车。\n")
-	b.WriteString("不换题，不降温，不补圆原文故意不说完的答案，不收成家庭理财课。课程名固定《财富觉醒方法论》，入口主页橱窗。原文另有课名时跟原文。\n")
-	b.WriteString("禁止逐段同义改写。禁止照抄或轻微改写原稿金句、比喻和专属例子，这些画面必须换成新的。\n")
-	b.WriteString("中后段也不能留原稿原句。关键数字保留，例子必须自洽：本金乘利率要对上利息。\n")
-	b.WriteString("按四十五到六十五岁口播来写，少用书面词。第一句必须接住原稿钩子。禁止用熬夜、站位、人生感悟开场。\n")
-	b.WriteString("开场句式和比喻可以换，原稿的推进顺序不能倒。写成能念的连续口播，不要讲解员作文。\n")
+	b.WriteString("\n【先锁爆款机器】\n")
+	b.WriteString("先从同行原文锁住爆款机器，再写新稿。机器以原文为准，不要用提示词里的现成情节去套。\n")
+	b.WriteString("必须能用一句话分别指回原稿：\n")
+	b.WriteString("1）第一句靠什么留人（钩子类型）\n")
+	b.WriteString("2）观众最想知道、且原稿故意还没说完的答案\n")
+	b.WriteString("3）历史或数字怎样证明这套逻辑已经灵过\n")
+	b.WriteString("4）普通人与先看懂的人之间的差距\n")
+	b.WriteString("5）情绪怎么升级\n")
+	b.WriteString("6）结尾靠什么催促上车\n")
+	b.WriteString("写稿时这六条一条都不能丢。\n")
+	b.WriteString("\n【硬性保留】\n")
+	b.WriteString("- 不换题，不降温，不补圆原文故意不说完的答案，不收成家庭理财课\n")
+	b.WriteString("- 课程名固定《财富觉醒方法论》，入口主页橱窗；原文另有课名时跟原文\n")
+	b.WriteString("- 关键数字必须原词留下（套数、日均、比例、年限、单价、金额、城数）。禁止改成「很多」「心惊的数」「差不多」这类形容词或约数\n")
+	b.WriteString("- 例子必须自洽：本金乘利率要对上利息\n")
+	b.WriteString("- 原稿的推进顺序不能倒\n")
+	b.WriteString("- 第一句必须接住原稿钩子力度；原稿若是对仗打脸，新稿第一句必须还是对仗打脸，两边都得是大白话，用新词，不许写成更软的解释句或中介口吻\n")
+	b.WriteString("- 禁止用熬夜、站位、人生感悟开场\n")
+	b.WriteString("\n【中老年听得懂——钩子先过这一关】\n")
+	b.WriteString("听的人是四十五到六十五岁，第一句必须像跟邻居说话，一听就懂，不用停下来问「这是啥意思」。\n")
+	b.WriteString("- 钩子用具体事：存折上的钱少了、利息不够买早饭、房子挂出去没人问、银行柜台上利率条换了\n")
+	b.WriteString("- 开场禁止：锚点、换锚、换毛、货币、结汇、印钞、认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场\n")
+	b.WriteString("- 对仗可以，但两边都得是他们生活里的词。能说「三年前抢着买叫投资，现在想卖没人要」，不能说「第一次锚定美元，第二次锚定房地产」\n")
+	b.WriteString("- 黑话如果原文中段才出现，后文用大白话解释一次再往下走，不准扔在第一句\n")
+	b.WriteString("\n【允许换、但禁止洗没】\n")
+	b.WriteString("- 禁止逐段同义改写，禁止按「第N个难题」对照译文\n")
+	b.WriteString("- 中间论证必须换切口（现场、人物、一个动作），不能是原稿换词\n")
+	b.WriteString("- 禁止照抄或轻微改写原稿金句、比喻和专属例子，这些画面必须换成新的\n")
+	b.WriteString("- 中后段也不能留原稿原句\n")
+	b.WriteString("- 开场句式和比喻可以换，但钩子类型、信息密度、短句急停节奏不能被磨平\n")
+	b.WriteString("\n【密度失败标准——出现任一条即整稿失败】\n")
+	b.WriteString("- 前3秒没有明确钩子，或钩子要解释才能懂\n")
+	b.WriteString("- 开场出现锚点、换锚、货币、认知等中老年听着费劲的词\n")
+	b.WriteString("- 关键数字被删、被改糊或被形容词替代\n")
+	b.WriteString("- 短句急停被改成顺滑长段，信息密度明显下降\n")
+	b.WriteString("- 普通人对照/阶层差距被删软或删掉\n")
+	b.WriteString("- 听起来像换了一篇更温和的家庭理财文\n")
+	b.WriteString("\n按四十五到六十五岁口播来写。少用书面词。句子短，像当面说话。写成能念的连续口播，不要讲解员作文。\n")
 	b.WriteString(writerJSONContract())
+	b.WriteString("rewrite 还必须带 machine：对象，含 hook / unanswered / proof / gap / emotion / cta 六句（锁机器）。控制台落盘仍以 continuous_script 为准。\n")
 	if excerpt := skillExcerpt(skillMD); excerpt != "" {
 		b.WriteString("\n# 补充约束\n")
 		b.WriteString(excerpt)
@@ -211,8 +262,9 @@ func buildWriterUser(manifest manifestLite, source, style string) string {
 		b.WriteString("下面是同行原文。按洗稿来写，不要另写一篇。先用一句话写出这篇仍在让观众追问什么，再写口播。\n")
 		b.WriteString("保留原稿的推进顺序、数字、历史例子、比喻、课名和上车结构。只改气口、标点和少量用词。如果听起来像换了一篇文章，就算失败。\n")
 	} else {
+		// 文案进化台 2026-08-19 用户侧：先锁机器，再换皮；钩子必须五十岁以上一听就懂。
 		b.WriteString("下面是同行原文，只当证据，不当逐句模板。先从原文锁机器，再用一句话写出这篇新稿仍在让观众追问什么，再写全新口播。\n")
-		b.WriteString("同一条机器换一层完全不同的说法和例子。不要套提示词里没有出现在原文里的情节。如果听起来还是原稿换词，就算失败。\n")
+		b.WriteString("同一条机器换一层完全不同的说法和例子。第一句必须让五十岁以上的人不用停下来问「这是啥意思」。不要套提示词里没有出现在原文里的情节。如果听起来还是原稿换词，或钩子/数字/密度被磨平，或开场在讲概念，就算失败。\n")
 		b.WriteString("标题和短标题也必须跟这篇新口播走，不要沿用上一篇成稿的标题。\n")
 	}
 	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
