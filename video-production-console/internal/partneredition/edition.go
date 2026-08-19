@@ -2,7 +2,6 @@ package partneredition
 
 import (
 	"errors"
-	"net/url"
 	"strings"
 )
 
@@ -32,11 +31,11 @@ func Current() (Config, error) {
 	case Owner:
 		return Config{Name: Owner}, nil
 	case Partner:
-		u, err := url.Parse(strings.TrimSpace(builtGatewayURL))
-		if err != nil || u.Scheme != "https" || u.Host != "23.138.12.112:2443" || u.Path != "" {
+		gatewayURL := strings.TrimSpace(builtGatewayURL)
+		if gatewayURL != "https://23.138.12.112:2443" {
 			return Config{}, ErrInvalidGateway
 		}
-		return Config{Name: Partner, GatewayURL: u.String()}, nil
+		return Config{Name: Partner, GatewayURL: gatewayURL}, nil
 	default:
 		return Config{}, ErrInvalidEdition
 	}

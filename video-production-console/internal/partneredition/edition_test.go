@@ -49,6 +49,9 @@ func TestCurrentRejectsInvalidPartnerGateway(t *testing.T) {
 		{name: "http scheme", gatewayURL: "http://23.138.12.112:2443"},
 		{name: "wrong host", gatewayURL: "https://23.138.12.113:2443"},
 		{name: "extra path", gatewayURL: "https://23.138.12.112:2443/api"},
+		{name: "userinfo", gatewayURL: "https://user@23.138.12.112:2443"},
+		{name: "query", gatewayURL: "https://23.138.12.112:2443?x=1"},
+		{name: "fragment", gatewayURL: "https://23.138.12.112:2443#frag"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
