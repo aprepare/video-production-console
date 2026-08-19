@@ -39,6 +39,7 @@ template_fingerprint text null
 ```
 id, project_id, output_mode, account_id, template_version, template_fingerprint, status,
 model, resolution, concurrency_limit, retry_round, error_code, error_message,
+phase, draft_status, registration_status, manifest_relative_path,
 lease_owner, lease_expires_at, version, created_at, started_at, finished_at, updated_at
 ```
 
@@ -47,16 +48,17 @@ lease_owner, lease_expires_at, version, created_at, started_at, finished_at, upd
 新增 `image_video_job_items`：
 
 ```
-id, job_id, segment_id, ordinal, input_image_asset_id, output_video_asset_id,
-requested_duration_seconds, actual_duration_seconds, status, attempt, max_attempts,
+id, job_id, image_project_item_id, ordinal, input_image_relative_path, input_image_sha256,
+output_video_relative_path, output_video_sha256, timeline_duration_us,
+requested_duration_seconds, actual_duration_us, status, attempt, max_attempts,
 provider_request_id, error_code, error_message, started_at, finished_at, updated_at
 ```
 
-`requested_duration_seconds` 仅允许 6、10、15；`actual_duration_seconds` 是下载后探针确认并标准化后的真实时长。新增 `image_video_job_attempts` 保存每次尝试的历史：
+当前 ImageProject 没有共享资产 ID，因此镜头以 `image_project_item_id`、受管项目目录内的相对路径和 SHA-256 绑定，不能伪造或复用普通 Project 的 assets 表。路径必须规范化并限制在 `<DataRoot>/image-projects/<project_id>/` 内，API 不返回路径。`timeline_duration_us` 是剪映时间线时长；只有 `image_to_video` 的 `requested_duration_seconds` 允许 6、10、15，`image_slideshow` 该字段为空；`actual_duration_us` 只记录下载后探针确认并标准化的视频真实时长。新增 `image_video_job_attempts` 保存每次尝试的历史：
 
 ```
 id, job_item_id, retry_round, attempt, idempotency_key, provider_request_id,
-request_fingerprint, status, error_code, error_message, output_video_asset_id,
+request_fingerprint, status, error_code, error_message, output_video_relative_path, output_video_sha256,
 started_at, finished_at, created_at
 ```
 
@@ -66,7 +68,7 @@ started_at, finished_at, created_at
 
 ## 5. 时长与语义分段
 
-配音生成后，以最终配音对齐结果确定每个语义分段的目标时长，并选择能够覆盖该时长的最小档位（6、10、15 秒）。超过 15 秒必须在语义边界拆成多个子镜头；不得截断口播。图片视频的前 30 秒单图目标为 4.3–4.6 秒、后续目标至少 6 秒，但这些约束也必须通过语义分段和配音对齐实现，不能截断或硬切配音。剪映时间线须校验总时长、连续性和音画对齐。
+配音生成后，以最终配音对齐结果确定每个语义分段的 `timeline_duration_us`。只有图生视频再选择能够覆盖该时长的最小 `requested_duration_seconds` 档位（6、10、15 秒）并记录探针后的 `actual_duration_us`；图片视频不填写这两个视频字段。超过 15 秒必须在语义边界拆成多个子镜头；不得截断口播。图片视频的前 30 秒单图目标为 4.3–4.6 秒、后续目标至少 6 秒，但这些约束也必须通过语义分段和配音对齐实现，不能截断或硬切配音。剪映时间线须校验总时长、连续性和音画对齐。
 
 ## 6. 模式行为
 
@@ -76,30 +78,31 @@ started_at, finished_at, created_at
 
 ### 6.2 图生视频 `image_to_video`
 
-固定模型 `grok-imagine-video-1.5`，输出目标 `480x848`、24fps，最大并发 6，档位为 6、10、15 秒。请求提示词要求保持图片内中文标题稳定、清晰、位置和字形不变。前端仅显示模型、分辨率、帧率、时长和并发说明，不显示接口地址、令牌或密钥。
+固定模型 `grok-imagine-video-1.5`，输出目标 `480x848`、24fps，最大并发 6，档位为 6、10、15 秒。服务端使用现有 Runtime 的 `GrokBaseURL` 和 `GrokAPIKey`，不借用 `ImageBaseURL`/`ImageAPIKey`，也不复用文本 `GrokModel` 名称。请求提示词要求保持图片内中文标题稳定、清晰、位置和字形不变。前端仅显示视频模型、分辨率、帧率、时长和并发说明，不显示接口地址、令牌或密钥。
 
-供应商响应元数据不可信：下载完成后必须真实探针并完整解码，确认视频轨道、帧率、尺寸和可播放性。服务可能返回 `400x736`；服务端必须等比例补边或裁切到 `480x848`、24fps，禁止非等比拉伸，裁切不得裁掉图片内标题。探针或完整解码失败即该镜头失败，写入 attempt 历史并进入重试。
+供应商响应元数据不可信：下载完成后必须真实探针并完整解码，确认视频轨道、帧率、尺寸和可播放性。服务可能返回 `400x736`；服务端必须按比例缩放并补边到 `480x848`、24fps，不使用裁切，禁止非等比拉伸，确保图片内标题不被裁掉。探针或完整解码失败即该镜头失败，写入 attempt 历史并进入重试。
 
 ## 7. 失败、重试与恢复
 
 每镜头自动一轮为首次加 2 次重试，每次持久化 request fingerprint、请求标识、错误码、脱敏错误和输出资产。三次失败后 item/job 为 `failed`，无静默降级、无部分失败草稿。手动重试只选最终失败镜头，开启新 `retry_round`，最多 3 次；成功镜头不可覆盖或重复生成。
 
-作业领取使用租约和 version 条件。进程启动扫描租约过期的 `running` 作业，安全重新排队未完成项；已有成功输出资产的 item 不重复覆盖。幂等键至少为 `job_id + segment_id + retry_round + attempt`，供应商重放可识别。
+作业领取使用租约和 version 条件。进程启动扫描租约过期的 `running` 作业，安全重新排队未完成项；已有成功输出资产的 item 不重复覆盖。幂等键至少为 `job_id + image_project_item_id + ordinal + retry_round + attempt`，供应商重放可识别。
 
 ## 8. API
 
-- `POST /api/image-projects`：提交完整文案；可选 `output_mode`，缺省 `image_slideshow`；纯 ZIP 项目可不提供账号和模板。
+- `POST /api/image-projects`：提交完整文案；可选 `output_mode`，缺省 `image_slideshow`；纯 ZIP 项目可不提供账号。
 - `PATCH /api/image-projects/:id/output-mode`：仅未开始且未锁定时修改。
 - `POST /api/image-projects/:id/image-video-jobs`：携带模式、`account_id`、幂等键和图生视频参数；服务端校验账号，解析内置 `jianying-image-video-v1` 的版本与指纹并原子锁定。
 - `GET /api/image-video-jobs/:id`：返回锁定模式、账号公开标识、只读模板名/版本、状态、进度、尝试历史摘要和可重试镜头。
 - `POST /api/image-video-jobs/:id/retry-failed`：开启新 retry round，仅处理最终失败镜头。
 - `POST /api/image-video-jobs/:id/cancel`：取消未完成作业，资产保留但不可发布。
+- `POST /api/image-video-jobs/:id/retry-registration`：仅在媒体全部成功且草稿构建或可信登记失败时重试，不重新配音、生图或生成视频。
 
 响应只含稳定 `code`、用户可读 `message`、`job_id` 和 `item_ids`，不返回凭据、供应商私有 URL 或完整上游响应。
 
 ## 9. UI
 
-开始前显示完整文案、模式、账号、只读内置模板名/版本和确认按钮；纯 ZIP 历史项目显示原有预览/ZIP 操作。视频开始后显示模式、账号和模板锁定徽章，模式与账号选择器禁用。运行中展示每个镜头状态、`requested_duration_seconds`、`actual_duration_seconds`、当前 retry round 和尝试次数。失败面板提供“只重试失败镜头”；成功后展示剪映草稿和可信登记状态。刷新优先读取服务端，不得解除锁定或创建重复作业。
+开始前显示完整文案、模式、账号、只读内置模板名/版本和确认按钮；纯 ZIP 历史项目显示原有预览/ZIP 操作。视频开始后显示模式、账号和模板锁定徽章，模式与账号选择器禁用。运行中展示作业 phase、draft/registration 状态，以及每个镜头的 `timeline_duration_seconds`、可选 `requested_duration_seconds`、可选 `actual_duration_seconds`、当前 retry round 和尝试次数。失败面板提供“只重试失败镜头”；成功后展示剪映草稿和可信登记状态。刷新优先读取服务端，不得解除锁定或创建重复作业。
 
 ## 10. 幂等边界与安全
 
@@ -110,8 +113,8 @@ started_at, finished_at, created_at
 ## 11. 验收标准
 
 - 迁移后旧项目为 `image_slideshow`，纯 ZIP 仍可用；视频作业强制账号并固定内置 `jianying-image-video-v1`，开始后模式、账号、模板版本、模板指纹和作业均锁定。
-- 完整文案可生成语义分段；最终配音对齐后，档位仅为 6/10/15，超过 15 秒按语义边界拆分，任何模式均不截断口播；图片视频验证 4.3–4.6 秒及后续至少 6 秒约束。
-- 图生视频验证 `grok-imagine-video-1.5`、`480x848`、24fps、并发 6；对 `400x736` 等返回执行等比补边/裁切；探针、完整解码失败进入重试，标题不被拉伸或裁掉。
+- 完整文案可生成语义分段；最终配音对齐后，图生视频档位仅为 6/10/15，超过 15 秒按语义边界拆分，任何模式均不截断口播；图片视频不填写视频档位字段，并验证 4.3–4.6 秒及后续至少 6 秒的时间线约束。
+- 图生视频验证 `grok-imagine-video-1.5`、`480x848`、24fps、并发 6；对 `400x736` 等返回执行等比缩放和补边、不裁切；探针、完整解码失败进入重试，标题不被拉伸或裁掉。
 - 自动首次加 2 次重试，每次 attempt 有独立历史；手动失败镜头重试开启新 retry round、最多 3 次，成功镜头不重跑，不降级，不生成部分失败草稿。
 - 模拟超时、5xx、无效媒体、崩溃、租约过期、重复请求和并发领取，验证恢复、version 条件、幂等和资产不覆盖。
 - 仅全量成功才生成剪映草稿并可信登记；配音资产、账号/内置模板快照绑定、草稿登记的幂等边界和日志脱敏通过测试。
