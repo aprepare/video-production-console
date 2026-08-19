@@ -121,6 +121,7 @@ func TestPartnerModeBlocksUnsupportedAPIPrefixesWhenReady(t *testing.T) {
 		"/api/skills/finance-topic-selector",
 		"/api/dependencies",
 		"/api/dependencies/baokuan",
+		"/api/library/baokuan",
 		"/api/movie",
 		"/api/movie-projects/project-1",
 		"/api/image-to-video",

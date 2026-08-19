@@ -221,6 +221,7 @@ func partnerGate(partner PartnerManager, next http.Handler) http.Handler {
 		"/api/ideas",
 		"/api/skills",
 		"/api/dependencies",
+		"/api/library",
 		"/api/movie",
 		"/api/movies",
 		"/api/movie-projects",
