@@ -21,6 +21,8 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/partnerclient"
+	"video-production-console/internal/partneredition"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
@@ -42,6 +44,64 @@ func TestServeUntilShutdownStopsOnCanceledContext(t *testing.T) {
 	if err := serveUntilShutdown(ctx, server); err != nil {
 		t.Fatalf("serveUntilShutdown: %v", err)
 	}
+}
+
+func TestPartnerEditionStartsWithoutCodexBinary(t *testing.T) {
+	deps := newMainTestDeps(t)
+	deps.Edition = partneredition.Config{Name: partneredition.Partner, GatewayURL: "https://23.138.12.112:2443"}
+	deps.CodexBinaryPath = filepath.Join(t.TempDir(), "missing-codex.exe")
+	deps.PartnerManager = readyPartnerManager()
+	if err := runConsole(context.Background(), deps); err != nil {
+		t.Fatalf("partner startup: %v", err)
+	}
+}
+
+func TestOwnerEditionStillRequiresCodex(t *testing.T) {
+	deps := newMainTestDeps(t)
+	deps.Edition = partneredition.Config{Name: partneredition.Owner}
+	deps.CodexBinaryPath = filepath.Join(t.TempDir(), "missing-codex.exe")
+	err := runConsole(context.Background(), deps)
+	if err == nil || !strings.Contains(err.Error(), "resolve Codex binary") {
+		t.Fatalf("owner startup error = %v, want missing Codex binary error", err)
+	}
+}
+
+func newMainTestDeps(t *testing.T) mainDeps {
+	t.Helper()
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataRoot := t.TempDir()
+	return mainDeps{
+		Edition:         partneredition.Config{Name: partneredition.Owner},
+		Config:          config.Config{ListenAddr: "127.0.0.1:0", DataRoot: dataRoot, DatabasePath: filepath.Join(dataRoot, "console.db")},
+		CodexBinaryPath: executablePath,
+		AppRoot:         t.TempDir(),
+	}
+}
+
+type mainTestPartnerManager struct {
+	runtime partnerclient.RuntimeSnapshot
+}
+
+func readyPartnerManager() *mainTestPartnerManager {
+	return &mainTestPartnerManager{runtime: partnerclient.RuntimeSnapshot{
+		State:        partnerclient.StateReady,
+		Capabilities: partnerclient.Capabilities{Features: []string{"scenery_montage", "image_text"}, TextModels: []string{"gpt-5.6-sol", "grok-4.6"}, ImageModel: "gpt-image-2"},
+		SessionToken: "test-session",
+		Aura:         partnerclient.AuraRuntime{BaseURL: "https://aura.example.test", APIKey: "test-aura-key", Model: "speech-2.8-hd", VoiceID: "voice-id"},
+	}}
+}
+
+func (m *mainTestPartnerManager) Snapshot() partnerclient.Snapshot {
+	return partnerclient.Snapshot{State: m.runtime.State, Capabilities: m.runtime.Capabilities}
+}
+
+func (m *mainTestPartnerManager) Activate(context.Context, string) error { return nil }
+func (m *mainTestPartnerManager) Ready() bool                            { return true }
+func (m *mainTestPartnerManager) RuntimeSnapshot() partnerclient.RuntimeSnapshot {
+	return m.runtime
 }
 
 func TestInitializeAdministratorSkipsBootstrapForExistingAdmin(t *testing.T) {

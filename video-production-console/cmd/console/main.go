@@ -32,6 +32,8 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/obsidian"
+	"video-production-console/internal/partnerclient"
+	"video-production-console/internal/partneredition"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
@@ -50,6 +52,154 @@ var codexSecretEnvironmentKeys = []string{
 
 // lookPathPi resolves the local Pi coding-agent binary. Tests may stub it.
 var lookPathPi = exec.LookPath
+
+type mainDeps struct {
+	Edition         partneredition.Config
+	Config          config.Config
+	CodexBinaryPath string
+	PartnerManager  app.PartnerManager
+	AppRoot         string
+}
+
+type consoleStartup struct {
+	Edition        partneredition.Config
+	CodexBinary    string
+	PartnerManager app.PartnerManager
+	close          func()
+}
+
+func (s consoleStartup) Close() {
+	if s.close != nil {
+		s.close()
+	}
+}
+
+func runConsole(ctx context.Context, deps mainDeps) error {
+	startup, err := prepareConsoleStartup(ctx, deps)
+	if err != nil {
+		return err
+	}
+	defer startup.Close()
+	app.New(app.Options{Config: deps.Config, Partner: startup.PartnerManager})
+	return nil
+}
+
+func prepareConsoleStartup(ctx context.Context, deps mainDeps) (consoleStartup, error) {
+	edition := deps.Edition
+	if edition.Name == "" {
+		var err error
+		edition, err = partneredition.Current()
+		if err != nil {
+			return consoleStartup{}, fmt.Errorf("load console edition: %w", err)
+		}
+	}
+	startup := consoleStartup{Edition: edition, CodexBinary: deps.CodexBinaryPath}
+	if !edition.IsPartner() {
+		codexPath, err := exec.LookPath(deps.CodexBinaryPath)
+		if err != nil {
+			return consoleStartup{}, fmt.Errorf("resolve Codex binary: %w", err)
+		}
+		startup.CodexBinary, err = filepath.Abs(codexPath)
+		if err != nil {
+			return consoleStartup{}, fmt.Errorf("resolve absolute Codex binary path %q: %w", codexPath, err)
+		}
+		return startup, nil
+	}
+	absoluteCodexPath, err := filepath.Abs(deps.CodexBinaryPath)
+	if err != nil {
+		return consoleStartup{}, fmt.Errorf("resolve configured Codex path %q: %w", deps.CodexBinaryPath, err)
+	}
+	startup.CodexBinary = absoluteCodexPath
+	if deps.PartnerManager != nil {
+		startup.PartnerManager = deps.PartnerManager
+		return startup, nil
+	}
+
+	partnerDirectory := filepath.Join(deps.Config.DataRoot, "partner")
+	if err := os.MkdirAll(partnerDirectory, 0o700); err != nil {
+		return consoleStartup{}, fmt.Errorf("create partner data directory: %w", err)
+	}
+	caPath := filepath.Join(deps.AppRoot, "resources", "tls", "partner-ca.crt")
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return consoleStartup{}, fmt.Errorf("read pinned partner CA %q: %w", caPath, err)
+	}
+	gateway, err := partnerclient.NewClient(partnerclient.ClientOptions{BaseURL: edition.GatewayURL, CAPEM: caPEM})
+	if err != nil {
+		return consoleStartup{}, fmt.Errorf("create partner gateway client: %w", err)
+	}
+	manager := partnerclient.NewManager(partnerclient.ManagerOptions{
+		Gateway:         gateway,
+		CredentialStore: partnerclient.NewCredentialStore(filepath.Join(partnerDirectory, "credentials.json"), security.NewSecretProtector()),
+		AppVersion:      buildinfo.Version,
+		Edition:         string(edition.Name),
+	})
+	if err := manager.Start(ctx); err != nil {
+		slog.Warn("partner verification failed during startup; activation remains available", "error_code", manager.Snapshot().ErrorCode)
+	}
+	startup.PartnerManager = manager
+	startup.close = manager.Close
+	return startup, nil
+}
+
+type runtimeSyncingPartnerManager struct {
+	app.PartnerManager
+	settings   *consoleSettings.Service
+	gatewayURL string
+}
+
+func newRuntimeSyncingPartnerManager(manager app.PartnerManager, settings *consoleSettings.Service, gatewayURL string) *runtimeSyncingPartnerManager {
+	syncing := &runtimeSyncingPartnerManager{PartnerManager: manager, settings: settings, gatewayURL: gatewayURL}
+	syncing.refreshRuntime()
+	return syncing
+}
+
+func (m *runtimeSyncingPartnerManager) Activate(ctx context.Context, activationKey string) error {
+	err := m.PartnerManager.Activate(ctx, activationKey)
+	m.refreshRuntime()
+	return err
+}
+
+func (m *runtimeSyncingPartnerManager) Snapshot() partnerclient.Snapshot {
+	snapshot := m.PartnerManager.Snapshot()
+	m.refreshRuntime()
+	return snapshot
+}
+
+func (m *runtimeSyncingPartnerManager) Ready() bool {
+	ready := m.PartnerManager.Ready()
+	m.refreshRuntime()
+	return ready
+}
+
+func (m *runtimeSyncingPartnerManager) RuntimeSnapshot() partnerclient.RuntimeSnapshot {
+	snapshot := m.PartnerManager.RuntimeSnapshot()
+	m.applyRuntime(snapshot)
+	return snapshot
+}
+
+func (m *runtimeSyncingPartnerManager) refreshRuntime() {
+	m.applyRuntime(m.PartnerManager.RuntimeSnapshot())
+}
+
+func (m *runtimeSyncingPartnerManager) applyRuntime(snapshot partnerclient.RuntimeSnapshot) {
+	if snapshot.State != partnerclient.StateReady || strings.TrimSpace(snapshot.SessionToken) == "" {
+		m.settings.SetPartnerRuntime(nil)
+		return
+	}
+	m.settings.SetPartnerRuntime(&consoleSettings.PartnerRuntime{
+		GatewayBaseURL: strings.TrimRight(m.gatewayURL, "/") + "/v1",
+		SessionToken:   snapshot.SessionToken,
+		TextModels:     snapshot.Capabilities.TextModels,
+		ImageModel:     snapshot.Capabilities.ImageModel,
+		AuraBaseURL:    snapshot.Aura.BaseURL,
+		AuraAPIKey:     snapshot.Aura.APIKey,
+		AuraModel:      snapshot.Aura.Model,
+		AuraVoiceID:    snapshot.Aura.VoiceID,
+		AuraSpeed:      snapshot.Aura.Speed,
+		AuraVolume:     snapshot.Aura.Volume,
+	})
+}
 
 func main() {
 	logging.Init(os.LookupEnv)
@@ -87,14 +237,16 @@ func main() {
 	workingDirectory, _ := os.Getwd()
 	settings.DataRoot = resolveBootDataRoot(settings.DataRoot, executablePath, workingDirectory)
 	settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
-	codexPath, err := exec.LookPath(settings.CodexBinaryPath)
+	startup, err := prepareConsoleStartup(signalCtx, mainDeps{
+		Config:          settings,
+		CodexBinaryPath: settings.CodexBinaryPath,
+		AppRoot:         filepath.Dir(executablePath),
+	})
 	if err != nil {
-		fatal("resolve Codex binary", "error", err)
+		fatal("prepare console startup", "error", err)
 	}
-	settings.CodexBinaryPath, err = filepath.Abs(codexPath)
-	if err != nil {
-		fatal("resolve absolute Codex binary path", "codex_binary_path", codexPath, "error", err)
-	}
+	defer startup.Close()
+	settings.CodexBinaryPath = startup.CodexBinary
 	if settings.ObsidianVault != "" {
 		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
 	}
@@ -114,16 +266,22 @@ func main() {
 	if err := settingsService.InitializeBootSettings(context.Background(), boot); err != nil {
 		fatal("initialize settings", "error", err)
 	}
+	var partnerManager app.PartnerManager
+	if startup.PartnerManager != nil {
+		partnerManager = newRuntimeSyncingPartnerManager(startup.PartnerManager, settingsService, startup.Edition.GatewayURL)
+	}
 	// Codex Desktop replaces its versioned binary directory during updates.
 	// Repair a stale persisted path from the resolved executable before loading
 	// the runtime snapshot, so App Server and task runners use the same binary.
-	if publicView, viewErr := settingsService.Get(context.Background()); viewErr == nil {
-		if _, statErr := os.Stat(publicView.Public.CodexBinaryPath); os.IsNotExist(statErr) {
-			publicView.Public.CodexBinaryPath = settings.CodexBinaryPath
-			if _, updateErr := settingsService.PutPublic(context.Background(), publicView.Public); updateErr != nil {
-				slog.Error("repair stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath, "error", updateErr)
-			} else {
-				slog.Info("repaired stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath)
+	if !startup.Edition.IsPartner() {
+		if publicView, viewErr := settingsService.Get(context.Background()); viewErr == nil {
+			if _, statErr := os.Stat(publicView.Public.CodexBinaryPath); os.IsNotExist(statErr) {
+				publicView.Public.CodexBinaryPath = settings.CodexBinaryPath
+				if _, updateErr := settingsService.PutPublic(context.Background(), publicView.Public); updateErr != nil {
+					slog.Error("repair stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath, "error", updateErr)
+				} else {
+					slog.Info("repaired stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath)
+				}
 			}
 		}
 	}
@@ -236,7 +394,7 @@ func main() {
 	var conversations *conversation.Service
 	var appServerHealth func() codexapp.Health
 	var completionRetryer httpapi.CompletionRetryer
-	if runtimeSettings.AppServerEnabled {
+	if !startup.Edition.IsPartner() && runtimeSettings.AppServerEnabled {
 		manager := codexapp.NewManager(codexapp.NewCommandProcessFactory(codexapp.ProcessConfig{CodexBinary: settings.CodexBinaryPath, WorkingDirectory: workingDirectory, Environment: commandConfig.SafeEnvironment()}))
 		defer manager.Close()
 		appServerHealth = manager.Health
@@ -268,7 +426,7 @@ func main() {
 	if montageCoordinator != nil {
 		montageRetryer = montageCoordinator
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Partner: partnerManager, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
 	if err := serveUntilShutdown(signalCtx, server); err != nil {
