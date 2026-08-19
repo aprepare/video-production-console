@@ -1,6 +1,7 @@
 package partnergateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -48,9 +49,12 @@ func (p Policy) Validate(kind RequestKind, body []byte) error {
 	if !json.Valid(body) {
 		return fmt.Errorf("request body is not valid JSON")
 	}
+	if err := rejectDuplicateObjectKeys(body); err != nil {
+		return err
+	}
 
 	var value any
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&value); err != nil {
 		return fmt.Errorf("decode request body: %w", err)
@@ -112,6 +116,57 @@ func cloneSet(source map[string]struct{}) map[string]struct{} {
 		cloned[value] = struct{}{}
 	}
 	return cloned
+}
+
+func rejectDuplicateObjectKeys(body []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if err := walkJSONObjectKeys(decoder); err != nil {
+		return fmt.Errorf("inspect request body object keys: %w", err)
+	}
+	return nil
+}
+
+func walkJSONObjectKeys(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, isContainer := token.(json.Delim)
+	if !isContainer {
+		return nil
+	}
+
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("object key is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("request body contains duplicate JSON object key")
+			}
+			seen[key] = struct{}{}
+			if err := walkJSONObjectKeys(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := walkJSONObjectKeys(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter")
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 func containsClientSecretField(value any) bool {

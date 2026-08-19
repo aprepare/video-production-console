@@ -58,6 +58,26 @@ func TestPolicyRejectsClientControlledSecretFieldsAtAnyDepth(t *testing.T) {
 	}
 }
 
+func TestPolicyRejectsDuplicateJSONKeys(t *testing.T) {
+	p := DefaultPolicy()
+	tests := []struct {
+		name string
+		kind RequestKind
+		body string
+	}{
+		{"top-level model", ChatRequest, `{"model":"gpt-4o","model":"gpt-5.6-sol","messages":[]}`},
+		{"top-level image count", ImageRequest, `{"model":"gpt-image-2","n":2,"n":1,"size":"1024x1024","prompt":"x"}`},
+		{"nested metadata", ChatRequest, `{"model":"gpt-5.6-sol","messages":[{"role":"user","metadata":{"source":"first","source":"second"}}]}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := p.Validate(tc.kind, []byte(tc.body)); err == nil {
+				t.Fatal("expected duplicate JSON key to be rejected")
+			}
+		})
+	}
+}
+
 func TestPolicyRejectsBodiesOverConfiguredLimit(t *testing.T) {
 	p := DefaultPolicy()
 	p.maxRequestBytes = 64
