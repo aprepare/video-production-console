@@ -85,7 +85,11 @@ func (p Policy) Validate(kind RequestKind, body []byte) error {
 			return fmt.Errorf("image model is not allowed")
 		}
 		count, ok := request["n"].(json.Number)
-		if !ok || count.String() != "1" {
+		if !ok {
+			return fmt.Errorf("image count must be one")
+		}
+		countValue, err := count.Float64()
+		if err != nil || countValue != 1 {
 			return fmt.Errorf("image count must be one")
 		}
 		size, ok := request["size"].(string)
