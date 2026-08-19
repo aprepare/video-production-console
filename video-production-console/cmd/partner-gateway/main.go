@@ -23,6 +23,7 @@ const (
 	minPartnerVersion = "0.1.0"
 	sessionTTL        = 12 * time.Hour
 	shutdownTimeout   = 15 * time.Second
+	maxSecretFileSize = 8 * 1024
 )
 
 type serveConfig struct {
@@ -165,16 +166,28 @@ func parseHTTPURL(name, value string) (*url.URL, error) {
 }
 
 func readSecretFile(name, path string) (string, error) {
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", name, err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s secret file must be a regular file", name)
 	}
 	if runtime.GOOS == "linux" && info.Mode().Perm()&0o004 != 0 {
 		return "", fmt.Errorf("%s must not be world-readable", name)
 	}
-	body, err := os.ReadFile(path)
+	body, err := io.ReadAll(io.LimitReader(file, maxSecretFileSize+1))
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", name, err)
+	}
+	if len(body) > maxSecretFileSize {
+		return "", fmt.Errorf("%s secret file is too large", name)
 	}
 	secret := string(body)
 	switch {

@@ -74,6 +74,29 @@ func TestLoadServeConfigRejectsEmptySecretFiles(t *testing.T) {
 	}
 }
 
+func TestReadSecretFileEnforcesSizeLimit(t *testing.T) {
+	const oversizedMarker = "OVERSIZED_SECRET_MUST_NOT_LEAK"
+	oversizedPath := writeSecretFile(t, "oversized-secret", strings.Repeat(oversizedMarker, 300))
+
+	_, err := readSecretFile("TEST_SECRET_FILE", oversizedPath)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(err.Error(), oversizedMarker) {
+		t.Fatalf("secret leaked in error: %q", err)
+	}
+
+	const want = "normal-small-secret"
+	smallPath := writeSecretFile(t, "small-secret", want+"\n")
+	got, err := readSecretFile("TEST_SECRET_FILE", smallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("secret=%q, want %q", got, want)
+	}
+}
+
 func TestLoadServeConfigRejectsWorldReadableSecretFilesOnLinux(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux permission rule")
