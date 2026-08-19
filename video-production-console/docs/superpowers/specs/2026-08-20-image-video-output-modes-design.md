@@ -14,8 +14,8 @@
 ## 3. 用户流程
 
 1. 用户在 `/image-projects` 创建项目并提交完整文案，生成语义分段和图片。
-2. 用户选择输出模式，并选择发布账号与模板 profile。历史纯 ZIP 项目可以继续预览和导出 ZIP。
-3. 用户确认开始；服务端在同一事务中校验并锁定 `output_mode`、`account_id` 和 `template_profile_id`，创建专用作业及幂等记录。
+2. 用户选择输出模式和发布账号。历史纯 ZIP 项目可以继续预览和导出 ZIP。
+3. 用户确认开始；服务端在同一事务中校验并锁定 `output_mode`、`account_id`、内置 `template_version` 及其 `template_fingerprint`，创建专用作业及幂等记录。
 4. 作业器复用 `internal/narration` 生成配音和对齐后的分段时长，按模式生成媒体，逐镜头记录每次尝试。
 5. 所有镜头成功后才生成剪映草稿并可信登记；任何镜头最终失败，作业明确失败，不生成部分失败草稿。
 6. 刷新页面从服务端恢复状态。用户可只重试最终失败镜头；重试成功后再汇总。
@@ -28,20 +28,21 @@
 output_mode varchar not null default 'image_slideshow'
 output_mode_locked_at timestamptz null
 account_id uuid null
-template_profile_id uuid null
+template_version text null
+template_fingerprint text null
 ```
 
-历史记录迁移为 `image_slideshow`，`account_id` 允许为空以保持纯 ZIP 项目可用。视频作业创建请求必须提供有效账号和模板 profile；服务端在开始时锁定二者，锁定后拒绝变更。
+历史记录迁移为 `image_slideshow`，`account_id` 允许为空以保持纯 ZIP 项目可用。视频作业创建请求必须提供有效账号；服务端固定使用内置模板 `jianying-image-video-v1`，计算并锁定模板版本与内容指纹，锁定后拒绝变更。账号决定项目归属并可复用 `account_background`；`machine_profile` 仍只负责本机运行配置，不能充当账号模板。
 
 新增 `image_video_jobs`：
 
 ```
-id, project_id, output_mode, account_id, template_profile_id, status,
+id, project_id, output_mode, account_id, template_version, template_fingerprint, status,
 model, resolution, concurrency_limit, retry_round, error_code, error_message,
 lease_owner, lease_expires_at, version, created_at, started_at, finished_at, updated_at
 ```
 
-`status` 为 `pending|running|succeeded|failed|canceled`；`output_mode`、账号和模板在创建后不可变。租约字段和 `version` 用于崩溃恢复与并发控制。
+`status` 为 `pending|running|succeeded|failed|canceled`；`output_mode`、账号、模板版本和模板指纹在创建后不可变。租约字段和 `version` 用于崩溃恢复与并发控制。
 
 新增 `image_video_job_items`：
 
@@ -89,8 +90,8 @@ started_at, finished_at, created_at
 
 - `POST /api/image-projects`：提交完整文案；可选 `output_mode`，缺省 `image_slideshow`；纯 ZIP 项目可不提供账号和模板。
 - `PATCH /api/image-projects/:id/output-mode`：仅未开始且未锁定时修改。
-- `POST /api/image-projects/:id/image-video-jobs`：携带模式、`account_id`、`template_profile_id`、幂等键和图生视频参数；服务端校验并原子锁定。
-- `GET /api/image-video-jobs/:id`：返回锁定模式、账号/模板公开标识、状态、进度、尝试历史摘要和可重试镜头。
+- `POST /api/image-projects/:id/image-video-jobs`：携带模式、`account_id`、幂等键和图生视频参数；服务端校验账号，解析内置 `jianying-image-video-v1` 的版本与指纹并原子锁定。
+- `GET /api/image-video-jobs/:id`：返回锁定模式、账号公开标识、只读模板名/版本、状态、进度、尝试历史摘要和可重试镜头。
 - `POST /api/image-video-jobs/:id/retry-failed`：开启新 retry round，仅处理最终失败镜头。
 - `POST /api/image-video-jobs/:id/cancel`：取消未完成作业，资产保留但不可发布。
 
@@ -98,24 +99,24 @@ started_at, finished_at, created_at
 
 ## 9. UI
 
-开始前显示完整文案、模式、账号、模板 profile 和确认按钮；纯 ZIP 历史项目显示原有预览/ZIP 操作。视频开始后显示模式、账号和模板锁定徽章，选择器禁用。运行中展示每个镜头状态、`requested_duration_seconds`、`actual_duration_seconds`、当前 retry round 和尝试次数。失败面板提供“只重试失败镜头”；成功后展示剪映草稿和可信登记状态。刷新优先读取服务端，不得解除锁定或创建重复作业。
+开始前显示完整文案、模式、账号、只读内置模板名/版本和确认按钮；纯 ZIP 历史项目显示原有预览/ZIP 操作。视频开始后显示模式、账号和模板锁定徽章，模式与账号选择器禁用。运行中展示每个镜头状态、`requested_duration_seconds`、`actual_duration_seconds`、当前 retry round 和尝试次数。失败面板提供“只重试失败镜头”；成功后展示剪映草稿和可信登记状态。刷新优先读取服务端，不得解除锁定或创建重复作业。
 
 ## 10. 幂等边界与安全
 
-账号和 template profile 以稳定 ID、版本/快照指纹绑定到视频作业；账号校验、模板校验和锁定使用同一开始事务，重复幂等请求返回同一 job。配音资产按 `project_id + narration_input_fingerprint + voice_profile` 幂等，生成成功后复用，不因镜头重试重复生成。媒体作业按上述 attempt 幂等键；剪映草稿登记以 `job_id + template_profile_id + ordered_asset_fingerprint` 幂等，草稿生成和可信登记分开记录，可从成功媒体作业重试登记。
+账号以稳定 ID 绑定到视频作业；内置模板以 `template_version + template_fingerprint` 快照绑定。账号校验、模板解析和锁定使用同一开始事务，重复幂等请求返回同一 job。配音资产按 `project_id + narration_input_fingerprint + voice_profile` 幂等，生成成功后复用，不因镜头重试重复生成。媒体作业按上述 attempt 幂等键；剪映草稿登记以 `job_id + template_version + template_fingerprint + ordered_asset_fingerprint` 幂等，草稿生成和可信登记分开记录，可从成功媒体作业重试登记。
 
 同一项目同时只能有一个活动视频作业；数据库唯一约束、租约和幂等键共同防止双击、重复消费和超限并发。凭据仅由服务端运行时注入，日志、追踪和 API 统一脱敏，输入图片、完整文案、提示词和回调按项目权限隔离。
 
 ## 11. 验收标准
 
-- 迁移后旧项目为 `image_slideshow`，纯 ZIP 仍可用；视频作业强制账号和模板，开始后模式、账号、模板、作业均锁定。
+- 迁移后旧项目为 `image_slideshow`，纯 ZIP 仍可用；视频作业强制账号并固定内置 `jianying-image-video-v1`，开始后模式、账号、模板版本、模板指纹和作业均锁定。
 - 完整文案可生成语义分段；最终配音对齐后，档位仅为 6/10/15，超过 15 秒按语义边界拆分，任何模式均不截断口播；图片视频验证 4.3–4.6 秒及后续至少 6 秒约束。
 - 图生视频验证 `grok-imagine-video-1.5`、`480x848`、24fps、并发 6；对 `400x736` 等返回执行等比补边/裁切；探针、完整解码失败进入重试，标题不被拉伸或裁掉。
 - 自动首次加 2 次重试，每次 attempt 有独立历史；手动失败镜头重试开启新 retry round、最多 3 次，成功镜头不重跑，不降级，不生成部分失败草稿。
 - 模拟超时、5xx、无效媒体、崩溃、租约过期、重复请求和并发领取，验证恢复、version 条件、幂等和资产不覆盖。
-- 仅全量成功才生成剪映草稿并可信登记；配音资产、账号/template 绑定、草稿登记的幂等边界和日志脱敏通过测试。
+- 仅全量成功才生成剪映草稿并可信登记；配音资产、账号/内置模板快照绑定、草稿登记的幂等边界和日志脱敏通过测试。
 - 搜索规格文件确认不存在 `TBD`、`TODO`、占位符、错误的“现有已具备配音草稿”表述或不一致的模式名。
 
 ## 12. 非目标
 
-不实现 Vox；不恢复字幕；不增加可编辑标题；不改造 `/projects?mode=image-video`；不把图生视频失败自动转成图片视频；不向前端暴露供应商接口或密钥；不允许作业开始后切换模式、账号或模板。
+不实现 Vox；不恢复字幕；不增加可编辑标题；不改造 `/projects?mode=image-video`；不把图生视频失败自动转成图片视频；不向前端暴露供应商接口或密钥；不允许作业开始后切换模式或账号；本期不建设可编辑模板 profile 管理，不支持不同账号使用不同布局，后续如需账号差异化模板另立设计。
