@@ -3,6 +3,7 @@ package partnergateway
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,11 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"video-production-console/internal/security"
+
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	clock func() time.Time
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -66,7 +70,7 @@ func OpenStore(path string) (*Store, error) {
 		return closeWithError(err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, clock: time.Now}, nil
 }
 
 func createSchema(db *sql.DB) error {
@@ -163,9 +167,7 @@ INSERT INTO partners (
 }
 
 func (s *Store) PartnerByID(ctx context.Context, id string) (Partner, error) {
-	var partner Partner
-	var createdAt, updatedAt, lastVerifiedAt string
-	err := s.db.QueryRowContext(ctx, `
+	partner, err := scanPartner(s.db.QueryRowContext(ctx, `
 SELECT
 	id,
 	display_name,
@@ -184,7 +186,302 @@ SELECT
 	last_verified_at
 FROM partners
 WHERE id = ?
-`, id).Scan(
+`, id))
+	if err != nil {
+		return Partner{}, fmt.Errorf("find partner by ID: %w", err)
+	}
+	return partner, nil
+}
+
+func (s *Store) activatePartner(
+	ctx context.Context,
+	keyPrefix string,
+	deviceHash string,
+	deviceSecretHash []byte,
+	session Session,
+	now time.Time,
+	keyMatches func([]byte) bool,
+) (Partner, error) {
+	var partner Partner
+	err := s.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		var err error
+		partner, err = scanPartner(conn.QueryRowContext(ctx, `
+SELECT
+	id,
+	display_name,
+	key_prefix,
+	key_hash,
+	status,
+	device_hash,
+	device_secret_hash,
+	session_version,
+	text_calls,
+	image_calls,
+	verify_failures,
+	rate_limited,
+	created_at,
+	updated_at,
+	last_verified_at
+FROM partners
+WHERE key_prefix = ?
+`, keyPrefix))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCredential
+		}
+		if err != nil {
+			return fmt.Errorf("find partner by activation key prefix: %w", err)
+		}
+		if !keyMatches(partner.KeyHash) {
+			return ErrInvalidCredential
+		}
+		if partner.Status == PartnerDisabled {
+			return ErrPartnerDisabled
+		}
+		if partner.DeviceHash != "" && partner.DeviceHash != deviceHash {
+			return ErrDeviceMismatch
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+UPDATE partners
+SET device_hash = ?, device_secret_hash = ?, updated_at = ?, last_verified_at = ?
+WHERE id = ?
+`, deviceHash, deviceSecretHash, formatTime(now), formatTime(now), partner.ID); err != nil {
+			return fmt.Errorf("bind partner device: %w", err)
+		}
+		session.PartnerID = partner.ID
+		session.SessionVersion = partner.SessionVersion
+		if err := insertSession(ctx, conn, session); err != nil {
+			return err
+		}
+		partner.DeviceHash = deviceHash
+		partner.DeviceSecretHash = append([]byte(nil), deviceSecretHash...)
+		partner.UpdatedAt = now
+		partner.LastVerifiedAt = now
+		return nil
+	})
+	if err != nil {
+		return Partner{}, err
+	}
+	return partner, nil
+}
+
+func (s *Store) verifyPartner(
+	ctx context.Context,
+	partnerID string,
+	deviceHash string,
+	session Session,
+	now time.Time,
+	deviceSecretMatches func([]byte) bool,
+) (Partner, error) {
+	var partner Partner
+	err := s.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		var err error
+		partner, err = scanPartner(conn.QueryRowContext(ctx, `
+SELECT
+	id,
+	display_name,
+	key_prefix,
+	key_hash,
+	status,
+	device_hash,
+	device_secret_hash,
+	session_version,
+	text_calls,
+	image_calls,
+	verify_failures,
+	rate_limited,
+	created_at,
+	updated_at,
+	last_verified_at
+FROM partners
+WHERE id = ?
+`, partnerID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCredential
+		}
+		if err != nil {
+			return fmt.Errorf("find partner for verification: %w", err)
+		}
+		if partner.Status == PartnerDisabled {
+			return ErrPartnerDisabled
+		}
+		if partner.DeviceHash == "" ||
+			partner.DeviceHash != deviceHash ||
+			!deviceSecretMatches(partner.DeviceSecretHash) {
+			return ErrInvalidCredential
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+UPDATE partners
+SET updated_at = ?, last_verified_at = ?
+WHERE id = ?
+`, formatTime(now), formatTime(now), partner.ID); err != nil {
+			return fmt.Errorf("record partner verification: %w", err)
+		}
+		session.PartnerID = partner.ID
+		session.SessionVersion = partner.SessionVersion
+		if err := insertSession(ctx, conn, session); err != nil {
+			return err
+		}
+		partner.UpdatedAt = now
+		partner.LastVerifiedAt = now
+		return nil
+	})
+	if err != nil {
+		return Partner{}, err
+	}
+	return partner, nil
+}
+
+func (s *Store) SessionPartner(ctx context.Context, plaintextToken string) (Partner, error) {
+	if plaintextToken == "" {
+		return Partner{}, ErrInvalidCredential
+	}
+	var partnerID, expiresAt string
+	var sessionVersion int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT partner_id, session_version, expires_at
+FROM sessions
+WHERE token_hash = ?
+`, []byte(security.HashSecret(plaintextToken))).Scan(&partnerID, &sessionVersion, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Partner{}, ErrInvalidCredential
+	}
+	if err != nil {
+		return Partner{}, fmt.Errorf("find session: %w", err)
+	}
+	expiration, err := parseTime(expiresAt)
+	if err != nil {
+		return Partner{}, fmt.Errorf("parse session expires_at: %w", err)
+	}
+	clock := s.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	if !expiration.After(clock().UTC()) {
+		return Partner{}, ErrSessionExpired
+	}
+	partner, err := s.PartnerByID(ctx, partnerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Partner{}, ErrInvalidCredential
+	}
+	if err != nil {
+		return Partner{}, err
+	}
+	if partner.Status == PartnerDisabled {
+		return Partner{}, ErrPartnerDisabled
+	}
+	if partner.SessionVersion != sessionVersion {
+		return Partner{}, ErrInvalidCredential
+	}
+	return partner, nil
+}
+
+func (s *Store) setPartnerStatus(ctx context.Context, partnerID string, status PartnerStatus, now time.Time) error {
+	return s.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		result, err := conn.ExecContext(ctx, `
+UPDATE partners
+SET status = ?, session_version = session_version + 1, updated_at = ?
+WHERE id = ?
+`, status, formatTime(now), partnerID)
+		if err != nil {
+			return fmt.Errorf("set partner status: %w", err)
+		}
+		if err := requireAffectedPartner(result); err != nil {
+			return err
+		}
+		return deletePartnerSessions(ctx, conn, partnerID)
+	})
+}
+
+func (s *Store) rotatePartnerKey(
+	ctx context.Context,
+	partnerID string,
+	keyPrefix string,
+	keyHash []byte,
+	now time.Time,
+) error {
+	return s.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		result, err := conn.ExecContext(ctx, `
+UPDATE partners
+SET key_prefix = ?, key_hash = ?, session_version = session_version + 1, updated_at = ?
+WHERE id = ?
+`, keyPrefix, keyHash, formatTime(now), partnerID)
+		if err != nil {
+			return fmt.Errorf("rotate partner key: %w", err)
+		}
+		if err := requireAffectedPartner(result); err != nil {
+			return err
+		}
+		return deletePartnerSessions(ctx, conn, partnerID)
+	})
+}
+
+func (s *Store) unbindDevice(ctx context.Context, partnerID string, now time.Time) error {
+	return s.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		result, err := conn.ExecContext(ctx, `
+UPDATE partners
+SET device_hash = '', device_secret_hash = NULL, session_version = session_version + 1, updated_at = ?
+WHERE id = ?
+`, formatTime(now), partnerID)
+		if err != nil {
+			return fmt.Errorf("unbind partner device: %w", err)
+		}
+		if err := requireAffectedPartner(result); err != nil {
+			return err
+		}
+		return deletePartnerSessions(ctx, conn, partnerID)
+	})
+}
+
+func (s *Store) ListPartners(ctx context.Context) ([]Partner, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	id,
+	display_name,
+	key_prefix,
+	key_hash,
+	status,
+	device_hash,
+	device_secret_hash,
+	session_version,
+	text_calls,
+	image_calls,
+	verify_failures,
+	rate_limited,
+	created_at,
+	updated_at,
+	last_verified_at
+FROM partners
+ORDER BY created_at, id
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list partners: %w", err)
+	}
+	defer rows.Close()
+
+	partners := make([]Partner, 0)
+	for rows.Next() {
+		partner, err := scanPartner(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan listed partner: %w", err)
+		}
+		partners = append(partners, partner)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate partners: %w", err)
+	}
+	return partners, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPartner(row rowScanner) (Partner, error) {
+	var partner Partner
+	var createdAt, updatedAt, lastVerifiedAt string
+	err := row.Scan(
 		&partner.ID,
 		&partner.DisplayName,
 		&partner.KeyPrefix,
@@ -202,7 +499,7 @@ WHERE id = ?
 		&lastVerifiedAt,
 	)
 	if err != nil {
-		return Partner{}, fmt.Errorf("find partner by ID: %w", err)
+		return Partner{}, err
 	}
 
 	partner.CreatedAt, err = parseTime(createdAt)
@@ -218,6 +515,71 @@ WHERE id = ?
 		return Partner{}, fmt.Errorf("parse partner last_verified_at: %w", err)
 	}
 	return partner, nil
+}
+
+func insertSession(ctx context.Context, conn *sql.Conn, session Session) error {
+	_, err := conn.ExecContext(ctx, `
+INSERT INTO sessions (token_hash, partner_id, session_version, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?)
+`,
+		session.TokenHash,
+		session.PartnerID,
+		session.SessionVersion,
+		formatTime(session.ExpiresAt),
+		formatTime(session.CreatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
+	return nil
+}
+
+func deletePartnerSessions(ctx context.Context, conn *sql.Conn, partnerID string) error {
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sessions WHERE partner_id = ?`, partnerID); err != nil {
+		return fmt.Errorf("delete partner sessions: %w", err)
+	}
+	return nil
+}
+
+func requireAffectedPartner(result sql.Result) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read affected partner count: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("partner not found: %w", sql.ErrNoRows)
+	}
+	return nil
+}
+
+func (s *Store) withImmediateTransaction(ctx context.Context, operation func(*sql.Conn) error) (err error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire transaction connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin immediate transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if _, rollbackErr := conn.ExecContext(context.Background(), `ROLLBACK`); rollbackErr != nil && err == nil {
+			err = fmt.Errorf("rollback immediate transaction: %w", rollbackErr)
+		}
+	}()
+
+	if err := operation(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit immediate transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func formatTime(value time.Time) string {
