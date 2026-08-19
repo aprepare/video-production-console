@@ -188,6 +188,74 @@ func TestManagerAuthorizationFailureReturnsToLockedState(t *testing.T) {
 	}
 }
 
+func TestManagerBackgroundReverifyNotifiesOnChange(t *testing.T) {
+	now := managerTestNow()
+	tests := []struct {
+		name          string
+		gateway       fakeGateway
+		wantState     State
+		wantSession   string
+		wantErrorCode string
+	}{
+		{
+			name: "success",
+			gateway: fakeGateway{verifyResponses: []AuthResponse{
+				authResponse(now.Add(12*time.Hour), "", "aura-one", "session-one"),
+				authResponse(now.Add(12*time.Hour), "", "aura-two", "session-two"),
+			}},
+			wantState:   StateReady,
+			wantSession: "session-two",
+		},
+		{
+			name: "failure",
+			gateway: fakeGateway{
+				verifyResponses: []AuthResponse{
+					authResponse(now.Add(12*time.Hour), "", "aura-one", "session-one"),
+				},
+				verifyErrors: []error{nil, ErrAuthorizationFailed},
+			},
+			wantState:     StateLocked,
+			wantErrorCode: "authorization_failed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gateway := test.gateway
+			gateway.state = &fakeGatewayState{}
+			manager := newManagerForTest(
+				t,
+				gateway,
+				&memoryCredentialStore{credentials: savedCredentials()},
+				func() time.Time { return now },
+			)
+			if err := manager.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !manager.Ready() {
+				t.Fatal("manager is not ready after Start")
+			}
+
+			changed := make(chan RuntimeSnapshot, 1)
+			manager.SetOnChange(func() {
+				changed <- manager.RuntimeSnapshot()
+			})
+			go manager.reverify()
+
+			select {
+			case snapshot := <-changed:
+				if snapshot.State != test.wantState ||
+					snapshot.SessionToken != test.wantSession ||
+					snapshot.ErrorCode != test.wantErrorCode {
+					t.Fatalf("runtime=%+v", snapshot)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("OnChange was not invoked after background reverify")
+			}
+		})
+	}
+}
+
 func TestManagerSnapshotJSONOmitsSecrets(t *testing.T) {
 	now := managerTestNow()
 	manager := newManagerForTest(

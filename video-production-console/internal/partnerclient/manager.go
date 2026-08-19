@@ -80,6 +80,7 @@ type Manager struct {
 	sessionToken     string
 	verifyInProgress bool
 	timer            *time.Timer
+	onChange         func()
 	closed           bool
 }
 
@@ -125,6 +126,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 	return m.verify(ctx, deviceHash, credentials)
+}
+
+func (m *Manager) SetOnChange(onChange func()) {
+	m.mu.Lock()
+	m.onChange = onChange
+	m.mu.Unlock()
 }
 
 func (m *Manager) Activate(ctx context.Context, activationKey string) error {
@@ -285,8 +292,8 @@ func (m *Manager) beginVerification() {
 
 func (m *Manager) acceptAuth(credentials Credentials, response AuthResponse) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return
 	}
 	m.state = StateReady
@@ -301,6 +308,11 @@ func (m *Manager) acceptAuth(credentials Credentials, response AuthResponse) {
 	m.sessionToken = response.SessionToken
 	m.verifyInProgress = false
 	m.scheduleReverifyLocked()
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (m *Manager) validateAuthResponse(response AuthResponse, expectedPartnerID string, activation bool) error {
@@ -333,7 +345,6 @@ func (m *Manager) scheduleReverifyLocked() {
 
 func (m *Manager) lockWithError(err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.timer != nil {
 		m.timer.Stop()
 		m.timer = nil
@@ -348,11 +359,15 @@ func (m *Manager) lockWithError(err error) {
 	m.aura = AuraRuntime{}
 	m.sessionToken = ""
 	m.verifyInProgress = false
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (m *Manager) setNeedsActivation() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.timer != nil {
 		m.timer.Stop()
 		m.timer = nil
@@ -367,6 +382,11 @@ func (m *Manager) setNeedsActivation() {
 	m.aura = AuraRuntime{}
 	m.sessionToken = ""
 	m.verifyInProgress = false
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func sanitizedErrorCode(err error) string {

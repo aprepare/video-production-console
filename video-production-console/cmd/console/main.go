@@ -148,8 +148,15 @@ type runtimeSyncingPartnerManager struct {
 	gatewayURL string
 }
 
+type partnerChangeNotifier interface {
+	SetOnChange(func())
+}
+
 func newRuntimeSyncingPartnerManager(manager app.PartnerManager, settings *consoleSettings.Service, gatewayURL string) *runtimeSyncingPartnerManager {
 	syncing := &runtimeSyncingPartnerManager{PartnerManager: manager, settings: settings, gatewayURL: gatewayURL}
+	if notifier, ok := manager.(partnerChangeNotifier); ok {
+		notifier.SetOnChange(syncing.refreshRuntime)
+	}
 	syncing.refreshRuntime()
 	return syncing
 }
