@@ -3,6 +3,7 @@ package partnergateway
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -88,8 +89,8 @@ func (p Policy) Validate(kind RequestKind, body []byte) error {
 		if !ok {
 			return fmt.Errorf("image count must be one")
 		}
-		countValue, err := count.Float64()
-		if err != nil || countValue != 1 {
+		countValue, ok := new(big.Rat).SetString(count.String())
+		if !ok || countValue.Cmp(big.NewRat(1, 1)) != 0 {
 			return fmt.Errorf("image count must be one")
 		}
 		size, ok := request["size"].(string)

@@ -22,6 +22,7 @@ func TestPolicyValidatesExactModelsAndImageShape(t *testing.T) {
 		{"one image", ImageRequest, `{"model":"gpt-image-2","n":1,"size":"1024x1024","prompt":"x"}`, false},
 		{"one image decimal", ImageRequest, `{"model":"gpt-image-2","n":1.0,"size":"1024x1024","prompt":"x"}`, false},
 		{"one image exponent", ImageRequest, `{"model":"gpt-image-2","n":1e0,"size":"1024x1024","prompt":"x"}`, false},
+		{"inexact image count", ImageRequest, `{"model":"gpt-image-2","n":1.0000000000000001,"size":"1024x1024","prompt":"x"}`, true},
 		{"fractional image count", ImageRequest, `{"model":"gpt-image-2","n":1.1,"size":"1024x1024","prompt":"x"}`, true},
 		{"two images", ImageRequest, `{"model":"gpt-image-2","n":2,"size":"1024x1024","prompt":"x"}`, true},
 		{"wrong image model", ImageRequest, `{"model":"gpt-image-1","n":1,"size":"1024x1024","prompt":"x"}`, true},
