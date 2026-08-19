@@ -14,9 +14,13 @@ import (
 
 const maxSettingsRequestSize = 64 << 10
 
-type settingsAPI interface {
+type settingsReaderWriter interface {
 	Get(context.Context) (consoleSettings.View, error)
 	Update(context.Context, domain.PublicSettings, map[string]string) (consoleSettings.View, error)
+}
+
+type settingsAPI interface {
+	settingsReaderWriter
 	TestDependency(context.Context, string) consoleSettings.Health
 	RepairBaokuanMCP(context.Context) consoleSettings.Health
 }

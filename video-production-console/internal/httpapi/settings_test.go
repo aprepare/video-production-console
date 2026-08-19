@@ -124,6 +124,30 @@ func TestSettingsPublicCodexDefaultJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOwnerSettingsStillAcceptServiceFields(t *testing.T) {
+	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{})
+	public.RemixBaseURL = "https://owner-remix.example.test/v1"
+	public.AuraSTDBaseURL = "https://owner-aura.example.test/v1"
+	body, err := json.Marshal(map[string]any{"public": public, "secrets": map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body)))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", response.Code, response.Body.String())
+	}
+	var view consoleSettings.View
+	if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.RemixBaseURL != public.RemixBaseURL || view.Public.AuraSTDBaseURL != public.AuraSTDBaseURL {
+		t.Fatalf("owner service fields=%+v", view.Public)
+	}
+}
+
 func TestSettingsHTTPDependencyProbeAndRepairContracts(t *testing.T) {
 	runner := &httpRunner{}
 	handler, _, public := newSettingsHTTPTest(t, consoleSettings.Options{Runner: runner, HTTPClient: httpDoer{}})
@@ -271,7 +295,7 @@ func newSettingsHTTPTest(t *testing.T, options consoleSettings.Options) (http.Ha
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
 		ImageGenerationAttempts: 2,
-		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
+		CodexBinaryPath:         filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 		TTSProvider:            "aurastd",
 		AuraSTDBaseURL:         "https://tts.aurastd.com",

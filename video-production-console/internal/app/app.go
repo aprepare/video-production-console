@@ -18,12 +18,21 @@ import (
 	"video-production-console/internal/imageproject"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
+	"video-production-console/internal/partnerclient"
 	"video-production-console/internal/realtime"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
 )
+
+// PartnerManager is the partner-edition verification and runtime boundary.
+type PartnerManager interface {
+	Snapshot() partnerclient.Snapshot
+	Activate(context.Context, string) error
+	Ready() bool
+	RuntimeSnapshot() partnerclient.RuntimeSnapshot
+}
 
 // Options provides dependencies and settings used by the application.
 type Options struct {
@@ -36,6 +45,7 @@ type Options struct {
 	BaokuanClient   *baokuan.Client
 	MCPExecutable   string
 	AuthService     *consoleauth.Service
+	Partner         PartnerManager
 	Settings        *consoleSettings.Service
 	Skills          *skillregistry.Service
 	TaskPreparer    httpapi.TaskManifestPreparer
@@ -63,6 +73,11 @@ func New(options Options) *App {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]string{"status": "ok"})
 	})
+	if options.Partner != nil {
+		partnerHandler := httpapi.NewPartnerHandler(options.Partner)
+		mux.Handle("GET /api/partner/status", partnerHandler)
+		mux.Handle("POST /api/partner/activate", partnerHandler)
+	}
 	if options.DB != nil {
 		assetService := options.AssetService
 		if assetService == nil {
@@ -106,8 +121,18 @@ func New(options Options) *App {
 			mux.Handle("/api/tasks", tasksHandler)
 		}
 		if options.Settings != nil {
-			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
-			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
+			var settingsHandler http.Handler
+			settingsService := settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}
+			if options.Partner != nil {
+				settingsHandler = httpapi.NewPartnerSettingsHandler(partnerSettingsWithRuntime{
+					settingsWithScheduler: settingsService,
+					partner:               options.Partner,
+				})
+			} else {
+				settingsHandler = httpapi.NewSettingsHandler(settingsService)
+			}
+			mux.Handle("/api/settings", settingsHandler)
+			mux.Handle("/api/settings/", settingsHandler)
 			imageProjectsHandler := httpapi.NewImageProjectsHandler(options.DB, options.Settings, imageproject.NewClient(nil))
 			mux.Handle("/api/image-projects", imageProjectsHandler)
 			mux.Handle("/api/image-projects/", imageProjectsHandler)
@@ -158,6 +183,22 @@ func New(options Options) *App {
 		_ = json.NewEncoder(w).Encode(options.Obsidian.Health())
 	})
 	mux.Handle("/", webui.Handler())
+	if options.Partner != nil {
+		var downstream http.Handler = mux
+		if options.AuthService != nil {
+			authHandler := httpapi.NewAuthHandler(options.AuthService)
+			mux.Handle("/api/auth/", authHandler)
+			protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
+			downstream = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/health" || strings.HasPrefix(r.URL.Path, "/api/partner/") || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
+					mux.ServeHTTP(w, r)
+					return
+				}
+				protected.ServeHTTP(w, r)
+			})
+		}
+		return &App{handler: logging.RequestID(partnerGate(options.Partner, downstream))}
+	}
 	if options.AuthService == nil {
 		return &App{handler: logging.RequestID(mux)}
 	}
@@ -173,6 +214,43 @@ func New(options Options) *App {
 		}
 		protected.ServeHTTP(w, r)
 	}))}
+}
+
+func partnerGate(partner PartnerManager, next http.Handler) http.Handler {
+	unsupportedPrefixes := []string{
+		"/api/ideas",
+		"/api/skills",
+		"/api/dependencies",
+		"/api/movie",
+		"/api/movies",
+		"/api/movie-projects",
+		"/api/movie-montage",
+		"/api/image-to-video",
+		"/api/image-video",
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/") || path == "/api/health" || strings.HasPrefix(path, "/api/partner/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !partner.Ready() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"code":    "partner_verification_required",
+				"message": "Partner verification is required.",
+			})
+			return
+		}
+		for _, prefix := range unsupportedPrefixes {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func projectRouteHandler(projects, tasks, narration http.Handler, taskRoutesEnabled bool) http.Handler {
@@ -215,6 +293,15 @@ func taskRouteHandler(tasks, results, montage, completion http.Handler, hub *rea
 type settingsWithScheduler struct {
 	service   *consoleSettings.Service
 	scheduler codex.Scheduler
+}
+
+type partnerSettingsWithRuntime struct {
+	settingsWithScheduler
+	partner PartnerManager
+}
+
+func (s partnerSettingsWithRuntime) RuntimeSnapshot() partnerclient.RuntimeSnapshot {
+	return s.partner.RuntimeSnapshot()
 }
 
 func (s settingsWithScheduler) Get(ctx context.Context) (consoleSettings.View, error) {

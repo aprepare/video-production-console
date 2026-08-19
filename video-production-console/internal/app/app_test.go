@@ -17,6 +17,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/logging"
+	"video-production-console/internal/partnerclient"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 	"video-production-console/internal/workflow"
@@ -41,6 +42,31 @@ func (*routeTestScheduler) SetLimit(int) error                              { re
 func (*routeTestScheduler) Snapshot() codex.SchedulerSnapshot               { return codex.SchedulerSnapshot{} }
 func (*routeTestScheduler) Close()                                          {}
 
+type fakePartnerManager struct {
+	state partnerclient.State
+}
+
+func newFakePartnerManager(state partnerclient.State) *fakePartnerManager {
+	return &fakePartnerManager{state: state}
+}
+
+func (m *fakePartnerManager) Snapshot() partnerclient.Snapshot {
+	return partnerclient.Snapshot{State: m.state}
+}
+
+func (m *fakePartnerManager) Activate(context.Context, string) error {
+	m.state = partnerclient.StateReady
+	return nil
+}
+
+func (m *fakePartnerManager) Ready() bool {
+	return m.state == partnerclient.StateReady
+}
+
+func (m *fakePartnerManager) RuntimeSnapshot() partnerclient.RuntimeSnapshot {
+	return partnerclient.RuntimeSnapshot{State: m.state}
+}
+
 func TestHealth(t *testing.T) {
 	application := New(Options{})
 	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
@@ -59,6 +85,115 @@ func TestHealth(t *testing.T) {
 	}
 	if got, want := string(body), "{\"status\":\"ok\"}\n"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestPartnerModeBlocksBusinessAPIUntilVerified(t *testing.T) {
+	manager := newFakePartnerManager(partnerclient.StateNeedsActivation)
+	application := New(Options{Partner: manager})
+	for _, path := range []string{"/api/projects", "/api/image-projects", "/api/settings"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), `"code":"partner_verification_required"`) {
+			t.Fatalf("%s body=%s", path, response.Body.String())
+		}
+	}
+	for _, path := range []string{"/api/health", "/api/partner/status"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestPartnerModeBlocksUnsupportedAPIPrefixesWhenReady(t *testing.T) {
+	application := New(Options{Partner: newFakePartnerManager(partnerclient.StateReady)})
+	for _, path := range []string{
+		"/api/ideas",
+		"/api/ideas/idea-1",
+		"/api/skills",
+		"/api/skills/finance-topic-selector",
+		"/api/dependencies",
+		"/api/dependencies/baokuan",
+		"/api/movie",
+		"/api/movie-projects/project-1",
+		"/api/image-to-video",
+		"/api/image-to-video/project-1",
+	} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if response.Code == http.StatusUnauthorized || response.Code == http.StatusNotFound {
+		t.Fatalf("supported API remained gated after readiness: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPartnerModeGateRunsBeforeOwnerAuthentication(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+
+	application := New(Options{
+		DB:          database,
+		Config:      config.Config{DataRoot: t.TempDir()},
+		AuthService: auth,
+		Partner:     newFakePartnerManager(partnerclient.StateNeedsActivation),
+	})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if response.Code != http.StatusUnauthorized ||
+		!strings.Contains(response.Body.String(), `"code":"partner_verification_required"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestOwnerModeKeepsExistingAuthenticationExceptions(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	if err := auth.Bootstrap(context.Background(), "123321"); err != nil {
+		t.Fatal(err)
+	}
+	application := New(Options{
+		DB:          database,
+		Config:      config.Config{DataRoot: t.TempDir()},
+		AuthService: auth,
+	})
+
+	for _, path := range []string{"/api/health", "/"} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	for _, path := range []string{"/api/auth/status", "/api/projects"} {
+		response := httptest.NewRecorder()
+		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
 	}
 }
 
