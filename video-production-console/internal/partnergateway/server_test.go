@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -128,6 +129,56 @@ func TestChatProxyMapsUpstreamTimeoutToStableError(t *testing.T) {
 	fixture.handler.ServeHTTP(w, req)
 
 	assertErrorResponse(t, w, http.StatusBadGateway, "upstream_unavailable")
+}
+
+func TestChatProxyDefaultClientRefusesUpstreamRedirect(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		_, _ = io.WriteString(w, `{"stolen":true}`)
+	}))
+	defer redirectTarget.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", redirectTarget.URL+"/capture")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer upstream.Close()
+	fixture := newHTTPTestEnvironment(t, upstream.URL, "upstream-key", func(options *ServerOptions) {
+		options.HTTPClient = nil
+	})
+	req := authenticatedRequest(http.MethodPost, "/v1/chat/completions", validChatBody, fixture.activated.SessionToken)
+	w := httptest.NewRecorder()
+
+	fixture.handler.ServeHTTP(w, req)
+
+	assertErrorResponse(t, w, http.StatusBadGateway, "upstream_unavailable")
+	if redirectedRequests.Load() != 0 {
+		t.Fatalf("redirect target requests=%d", redirectedRequests.Load())
+	}
+}
+
+func TestChatProxyRejectsOversizedUpstreamResponseWithoutCountingSuccess(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"result":"response exceeds the configured maximum"}`)
+	}))
+	defer upstream.Close()
+	fixture := newHTTPTestEnvironment(t, upstream.URL, "upstream-key", func(options *ServerOptions) {
+		options.MaxResponseBytes = 16
+	})
+	req := authenticatedRequest(http.MethodPost, "/v1/chat/completions", validChatBody, fixture.activated.SessionToken)
+	w := httptest.NewRecorder()
+
+	fixture.handler.ServeHTTP(w, req)
+
+	assertErrorResponse(t, w, http.StatusBadGateway, "upstream_unavailable")
+	partner, err := fixture.store.PartnerByID(context.Background(), fixture.activated.PartnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partner.TextCalls != 0 {
+		t.Fatalf("text_calls=%d", partner.TextCalls)
+	}
 }
 
 func TestImageProxyUsesFixedRouteAndCountsSuccess(t *testing.T) {
@@ -416,6 +467,42 @@ func TestHealthzReturnsOK(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUnmatchedRoutesAndWrongMethodsReturnStableJSONErrors(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	defer upstream.Close()
+	fixture := newHTTPTestEnvironment(t, upstream.URL, "upstream-key", nil)
+	tests := []struct {
+		name   string
+		method string
+		target string
+		status int
+		code   string
+	}{
+		{
+			name:   "unmatched path",
+			method: http.MethodGet,
+			target: "/nope",
+			status: http.StatusNotFound,
+			code:   "not_found",
+		},
+		{
+			name:   "wrong method",
+			method: http.MethodPost,
+			target: "/healthz",
+			status: http.StatusMethodNotAllowed,
+			code:   "method_not_allowed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(w, httptest.NewRequest(test.method, test.target, nil))
+			assertErrorResponse(t, w, test.status, test.code)
+		})
 	}
 }
 

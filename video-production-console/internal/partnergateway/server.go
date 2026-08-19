@@ -103,7 +103,15 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	request = request.WithContext(context.WithValue(request.Context(), requestMetadataKey{}, metadata))
 	recorder := &countingResponseWriter{ResponseWriter: writer}
 
-	s.mux.ServeHTTP(recorder, request)
+	expectedMethod := routeMethod(request.URL.Path)
+	switch {
+	case expectedMethod == "":
+		s.writeError(recorder, request, http.StatusNotFound, "not_found", "route not found")
+	case !routeMethodMatches(expectedMethod, request.Method):
+		s.writeError(recorder, request, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+	default:
+		s.mux.ServeHTTP(recorder, request)
+	}
 
 	status := recorder.status
 	if status == 0 {
@@ -327,17 +335,25 @@ func bearerToken(header http.Header) (string, bool) {
 }
 
 func registeredRoute(method, path string) string {
-	switch method + " " + path {
-	case "GET /healthz",
-		"POST /auth/activate",
-		"POST /auth/verify",
-		"GET /v1/models",
-		"POST /v1/chat/completions",
-		"POST /v1/images/generations":
+	if routeMethodMatches(routeMethod(path), method) {
 		return path
-	default:
-		return "unmatched"
 	}
+	return "unmatched"
+}
+
+func routeMethod(path string) string {
+	switch path {
+	case "/healthz", "/v1/models":
+		return http.MethodGet
+	case "/auth/activate", "/auth/verify", "/v1/chat/completions", "/v1/images/generations":
+		return http.MethodPost
+	default:
+		return ""
+	}
+}
+
+func routeMethodMatches(expected, actual string) bool {
+	return expected == actual || (expected == http.MethodGet && actual == http.MethodHead)
 }
 
 type requestMetadataKey struct{}

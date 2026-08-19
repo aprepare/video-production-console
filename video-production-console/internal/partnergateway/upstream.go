@@ -40,7 +40,12 @@ func newUpstream(baseURL *url.URL, apiKey string, client *http.Client, maxRespon
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.ResponseHeaderTimeout = defaultResponseHeaderTimeout
-		client = &http.Client{Transport: transport}
+		client = &http.Client{
+			Transport: transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = defaultMaxResponseBytes
@@ -89,20 +94,68 @@ func (u *Upstream) forward(
 		return result, fmt.Errorf("upstream returned an error")
 	}
 
-	copySafeResponseHeaders(writer.Header(), response.Header)
-	result.responseStarted = true
-	writer.WriteHeader(response.StatusCode)
+	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		var buffered bytes.Buffer
+		var truncated bool
+		result.responseBytes, truncated, err = copyResponseWithLimit(&buffered, response.Body, u.maxResponseBytes)
+		if err != nil {
+			return result, fmt.Errorf("read upstream response")
+		}
+		if truncated {
+			return result, fmt.Errorf("upstream response exceeds configured maximum")
+		}
 
-	destination := io.Writer(writer)
-	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-		destination = streamingWriter{writer: writer}
-		_ = http.NewResponseController(writer).Flush()
+		copySafeResponseHeaders(writer.Header(), response.Header)
+		writer.WriteHeader(response.StatusCode)
+		result.responseStarted = true
+		written, writeErr := writer.Write(buffered.Bytes())
+		result.responseBytes = int64(written)
+		if writeErr != nil {
+			return result, fmt.Errorf("copy upstream response")
+		}
+		if written != buffered.Len() {
+			return result, fmt.Errorf("copy upstream response")
+		}
+		return result, nil
 	}
-	result.responseBytes, err = io.Copy(destination, io.LimitReader(response.Body, u.maxResponseBytes))
+
+	copySafeResponseHeaders(writer.Header(), response.Header)
+	writer.WriteHeader(response.StatusCode)
+	result.responseStarted = true
+	_ = http.NewResponseController(writer).Flush()
+	var truncated bool
+	result.responseBytes, truncated, err = copyResponseWithLimit(
+		streamingWriter{writer: writer},
+		response.Body,
+		u.maxResponseBytes,
+	)
 	if err != nil {
 		return result, fmt.Errorf("copy upstream response")
 	}
+	if truncated {
+		return result, fmt.Errorf("upstream response exceeds configured maximum")
+	}
 	return result, nil
+}
+
+func copyResponseWithLimit(destination io.Writer, source io.Reader, maxBytes int64) (int64, bool, error) {
+	written, err := io.CopyN(destination, source, maxBytes)
+	if err != nil {
+		if err == io.EOF {
+			return written, false, nil
+		}
+		return written, false, err
+	}
+
+	var extra [1]byte
+	extraBytes, err := io.ReadFull(source, extra[:])
+	if extraBytes != 0 {
+		return written, true, nil
+	}
+	if err != nil && err != io.EOF {
+		return written, false, err
+	}
+	return written, false, nil
 }
 
 func copySafeResponseHeaders(destination, source http.Header) {
