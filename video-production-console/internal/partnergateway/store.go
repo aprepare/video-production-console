@@ -193,6 +193,46 @@ WHERE id = ?
 	return partner, nil
 }
 
+func (s *Store) incrementTextCalls(ctx context.Context, partnerID string) error {
+	return s.incrementPartnerCounter(ctx, partnerID, "text_calls")
+}
+
+func (s *Store) incrementImageCalls(ctx context.Context, partnerID string) error {
+	return s.incrementPartnerCounter(ctx, partnerID, "image_calls")
+}
+
+func (s *Store) incrementVerifyFailures(ctx context.Context, partnerID string) error {
+	return s.incrementPartnerCounter(ctx, partnerID, "verify_failures")
+}
+
+func (s *Store) incrementRateLimited(ctx context.Context, partnerID string) error {
+	return s.incrementPartnerCounter(ctx, partnerID, "rate_limited")
+}
+
+func (s *Store) incrementPartnerCounter(ctx context.Context, partnerID, counter string) error {
+	var statement string
+	switch counter {
+	case "text_calls":
+		statement = `UPDATE partners SET text_calls = text_calls + 1 WHERE id = ?`
+	case "image_calls":
+		statement = `UPDATE partners SET image_calls = image_calls + 1 WHERE id = ?`
+	case "verify_failures":
+		statement = `UPDATE partners SET verify_failures = verify_failures + 1 WHERE id = ?`
+	case "rate_limited":
+		statement = `UPDATE partners SET rate_limited = rate_limited + 1 WHERE id = ?`
+	default:
+		return fmt.Errorf("unknown partner counter")
+	}
+	result, err := s.db.ExecContext(ctx, statement, partnerID)
+	if err != nil {
+		return fmt.Errorf("increment partner counter: %w", err)
+	}
+	if err := requireAffectedPartner(result); err != nil {
+		return fmt.Errorf("increment partner counter: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) activatePartner(
 	ctx context.Context,
 	keyPrefix string,
