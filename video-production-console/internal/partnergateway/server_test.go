@@ -181,6 +181,50 @@ func TestChatProxyRejectsOversizedUpstreamResponseWithoutCountingSuccess(t *test
 	}
 }
 
+func TestChatProxySignalsOversizedStreamingResponseWithoutCountingSuccess(t *testing.T) {
+	const upstreamAPIKey = "upstream-secret-key"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: "+strings.Repeat("x", 64)+"\n\n")
+	}))
+	defer upstream.Close()
+	fixture := newHTTPTestEnvironment(t, upstream.URL, upstreamAPIKey, func(options *ServerOptions) {
+		options.MaxResponseBytes = 16
+	})
+	req := authenticatedRequest(http.MethodPost, "/v1/chat/completions", validChatBody, fixture.activated.SessionToken)
+	w := httptest.NewRecorder()
+
+	fixture.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	const errorEventPrefix = "event: error\ndata: "
+	body := w.Body.String()
+	eventIndex := strings.LastIndex(body, errorEventPrefix)
+	if eventIndex == -1 {
+		t.Fatalf("missing terminal SSE error event: body=%q", body)
+	}
+	var payload ErrorResponse
+	payloadJSON := strings.TrimSpace(body[eventIndex+len(errorEventPrefix):])
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatalf("decode terminal SSE error: %v payload=%q", err, payloadJSON)
+	}
+	if payload.Error.Code != "upstream_unavailable" {
+		t.Fatalf("error code=%q payload=%q", payload.Error.Code, payloadJSON)
+	}
+	if strings.Contains(body, upstream.URL) || strings.Contains(body, upstreamAPIKey) {
+		t.Fatalf("terminal SSE error leaked upstream details: body=%q", body)
+	}
+	partner, err := fixture.store.PartnerByID(context.Background(), fixture.activated.PartnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partner.TextCalls != 0 {
+		t.Fatalf("text_calls=%d", partner.TextCalls)
+	}
+}
+
 func TestImageProxyUsesFixedRouteAndCountsSuccess(t *testing.T) {
 	var gotAuth, gotPath, gotBody, gotPrivateHeader string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

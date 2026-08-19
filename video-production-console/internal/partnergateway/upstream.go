@@ -133,6 +133,12 @@ func (u *Upstream) forward(
 		return result, fmt.Errorf("copy upstream response")
 	}
 	if truncated {
+		const terminalErrorEvent = "\n\nevent: error\ndata: {\"error\":{\"code\":\"upstream_unavailable\",\"message\":\"upstream service unavailable\"}}\n\n"
+		written, writeErr := io.WriteString(streamingWriter{writer: writer}, terminalErrorEvent)
+		result.responseBytes += int64(written)
+		if writeErr != nil {
+			return result, fmt.Errorf("write streaming error")
+		}
 		return result, fmt.Errorf("upstream response exceeds configured maximum")
 	}
 	return result, nil
