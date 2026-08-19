@@ -189,6 +189,42 @@ func TestClientGenerateAcceptsBase64AndSendsOpenAIRequest(t *testing.T) {
 	}
 }
 
+func TestPartnerRuntimeImageRequestUsesGatewaySession(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(tinyPNG(t, 1, 1))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/images/generations" {
+			t.Fatalf("request path=%s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer opaque-session" {
+			t.Fatalf("Authorization=%q", got)
+		}
+		var request GenerateRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Model != "gpt-image-2" {
+			t.Fatalf("model=%q", request.Model)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+payload+`"}]}`)
+	}))
+	defer server.Close()
+
+	result, err := NewClient(server.Client()).Generate(t.Context(), GenerateRequest{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "opaque-session",
+		Model:   "gpt-image-2",
+		Prompt:  "partner prompt",
+		Ratio:   "1:1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Width != 1 || result.Height != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestGenerateBatchHonorsConcurrencyLimit(t *testing.T) {
 	payload := base64.StdEncoding.EncodeToString(tinyPNG(t, 3, 4))
 	var active atomic.Int32

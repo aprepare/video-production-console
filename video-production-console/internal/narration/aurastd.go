@@ -28,6 +28,15 @@ type AuraSTDClient struct {
 	MaxResponseBytes int64
 }
 
+// NewAuraSTDClient constructs an Aura Studio synthesizer from runtime-only
+// endpoint and credential values.
+func NewAuraSTDClient(baseURL, apiKey string) *AuraSTDClient {
+	return &AuraSTDClient{
+		BaseURL: strings.TrimSpace(baseURL),
+		APIKey:  strings.TrimSpace(apiKey),
+	}
+}
+
 func (c *AuraSTDClient) httpClient() *http.Client {
 	if c != nil && c.HTTPClient != nil {
 		return c.HTTPClient

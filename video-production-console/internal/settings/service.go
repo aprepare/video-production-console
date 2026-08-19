@@ -99,13 +99,14 @@ type Options struct {
 }
 
 type Service struct {
-	repo      Repository
-	protector security.Protector
-	now       func() time.Time
-	runner    CommandRunner
-	http      HTTPClient
-	activeMu  sync.RWMutex
-	active    *Runtime
+	repo           Repository
+	protector      security.Protector
+	now            func() time.Time
+	runner         CommandRunner
+	http           HTTPClient
+	activeMu       sync.RWMutex
+	active         *Runtime
+	partnerRuntime *PartnerRuntime
 }
 
 type BootSettings struct {
@@ -147,6 +148,22 @@ type Runtime struct {
 	EmbeddingAPIKey  string           `json:"-"`
 	PixabayAPIKey    string           `json:"-"`
 	SecretVersions   map[string]int64 `json:"-"`
+}
+
+// PartnerRuntime is a process-only session supplied by the partner gateway.
+// It is kept separate from public settings and encrypted secrets so neither
+// the session token nor Aura key can be persisted accidentally.
+type PartnerRuntime struct {
+	GatewayBaseURL string
+	SessionToken   string
+	TextModels     []string
+	ImageModel     string
+	AuraBaseURL    string
+	AuraAPIKey     string
+	AuraModel      string
+	AuraVoiceID    string
+	AuraSpeed      float64
+	AuraVolume     float64
 }
 
 type HealthStatus string
@@ -437,6 +454,14 @@ func (s *Service) PutSecret(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// SetPartnerRuntime replaces the in-memory partner session. A nil value clears
+// the override and restores the configured owner providers.
+func (s *Service) SetPartnerRuntime(value *PartnerRuntime) {
+	s.activeMu.Lock()
+	s.partnerRuntime = clonePartnerRuntime(value)
+	s.activeMu.Unlock()
+}
+
 func (s *Service) protectSecret(value string) (string, error) {
 	if s.protector == nil {
 		return "", security.ErrSecretStoreUnsupported
@@ -461,8 +486,9 @@ func (s *Service) Runtime(ctx context.Context) (Runtime, error) {
 	s.activeMu.RLock()
 	if s.active != nil {
 		runtime := cloneRuntime(*s.active)
+		partner := clonePartnerRuntime(s.partnerRuntime)
 		s.activeMu.RUnlock()
-		return runtime, nil
+		return applyPartnerRuntime(runtime, partner), nil
 	}
 	s.activeMu.RUnlock()
 	runtime, err := s.configuredRuntime(ctx)
@@ -475,8 +501,9 @@ func (s *Service) Runtime(ctx context.Context) (Runtime, error) {
 		s.active = &copy
 	}
 	result := cloneRuntime(*s.active)
+	partner := clonePartnerRuntime(s.partnerRuntime)
 	s.activeMu.Unlock()
-	return result, nil
+	return applyPartnerRuntime(result, partner), nil
 }
 
 func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
@@ -539,6 +566,57 @@ func cloneRuntime(value Runtime) Runtime {
 	}
 	value.SecretVersions = versions
 	return value
+}
+
+func clonePartnerRuntime(value *PartnerRuntime) *PartnerRuntime {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.TextModels = append([]string(nil), value.TextModels...)
+	return &cloned
+}
+
+func applyPartnerRuntime(runtime Runtime, partner *PartnerRuntime) Runtime {
+	if partner == nil {
+		return runtime
+	}
+	textModel := partnerTextModel(partner.TextModels, "gpt-5.6-sol")
+	grokModel := partnerTextModel(partner.TextModels, "grok-4.6")
+	runtime.RemixBaseURL = partner.GatewayBaseURL
+	runtime.RemixAPIKey = partner.SessionToken
+	runtime.RemixModel = textModel
+	runtime.GrokBaseURL = partner.GatewayBaseURL
+	runtime.GrokAPIKey = partner.SessionToken
+	runtime.GrokModel = grokModel
+	runtime.ImageTextBaseURL = partner.GatewayBaseURL
+	runtime.ImageTextAPIKey = partner.SessionToken
+	runtime.ImageTextModel = textModel
+	runtime.ImageBaseURL = partner.GatewayBaseURL
+	runtime.ImageAPIKey = partner.SessionToken
+	runtime.ImageModel = strings.TrimSpace(partner.ImageModel)
+	runtime.TTSProvider = "aurastd"
+	runtime.AuraSTDBaseURL = partner.AuraBaseURL
+	runtime.AuraSTDTTsAPIKey = partner.AuraAPIKey
+	runtime.AuraSTDModel = partner.AuraModel
+	runtime.AuraSTDVoiceID = partner.AuraVoiceID
+	runtime.AuraSTDSpeed = partner.AuraSpeed
+	runtime.AuraSTDVolume = partner.AuraVolume
+	return runtime
+}
+
+func partnerTextModel(models []string, preferred string) string {
+	for _, model := range models {
+		if strings.TrimSpace(model) == preferred {
+			return preferred
+		}
+	}
+	for _, model := range models {
+		if model = strings.TrimSpace(model); model != "" {
+			return model
+		}
+	}
+	return preferred
 }
 
 func restartSensitiveChanged(configured, active domain.PublicSettings) bool {

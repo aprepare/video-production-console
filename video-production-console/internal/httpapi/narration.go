@@ -298,6 +298,16 @@ func (h *narrationHandler) registerAsset(ctx context.Context, projectID string, 
 // a restart. Aura Studio is the default provider; Volcengine remains a fallback
 // when only those credentials are configured.
 func NewNarrationProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
+	return newNarrationProducer(runtime, false)
+}
+
+// NewPartnerNarrationProducer always constructs Aura Studio from the
+// memory-only partner runtime, regardless of the owner's saved provider.
+func NewPartnerNarrationProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
+	return newNarrationProducer(runtime, true)
+}
+
+func newNarrationProducer(runtime AssetRuntimeProvider, partner bool) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
 	return func(ctx context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
 		if runtime == nil {
 			return narration.Delivery{}, narration.ErrNotConfigured
@@ -306,19 +316,18 @@ func NewNarrationProducer(runtime AssetRuntimeProvider) func(context.Context, na
 		if err != nil {
 			return narration.Delivery{}, err
 		}
-		if chosenTTSProvider(settings) == "volc" {
-			client := &narration.Client{
-				APIKey:     strings.TrimSpace(settings.VolcSpeechAPIKey),
-				ResourceID: strings.TrimSpace(settings.VolcSpeechResourceID),
-			}
-			return narration.Produce(ctx, client, request)
-		}
-		client := &narration.AuraSTDClient{
-			BaseURL: strings.TrimSpace(settings.AuraSTDBaseURL),
-			APIKey:  strings.TrimSpace(settings.AuraSTDTTsAPIKey),
-		}
-		return narration.Produce(ctx, client, request)
+		return narration.Produce(ctx, narrationSynthesizer(settings, partner), request)
 	}
+}
+
+func narrationSynthesizer(settings consoleSettings.Runtime, partner bool) narration.Synthesizer {
+	if !partner && chosenTTSProvider(settings) == "volc" {
+		return &narration.Client{
+			APIKey:     strings.TrimSpace(settings.VolcSpeechAPIKey),
+			ResourceID: strings.TrimSpace(settings.VolcSpeechResourceID),
+		}
+	}
+	return narration.NewAuraSTDClient(settings.AuraSTDBaseURL, settings.AuraSTDTTsAPIKey)
 }
 
 // NewVolcengineProducer keeps the historical name for existing wiring.

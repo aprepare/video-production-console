@@ -1,9 +1,12 @@
 package agentruntime
 
 import (
+	"context"
 	"testing"
 
+	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/narration"
 )
 
 func TestMontageRuntimeFromEnvDefaultsToScript(t *testing.T) {
@@ -114,6 +117,47 @@ func TestResolveOpenAICompatConfigPrefersRemixSettingsOverProcessOpenAIEnv(t *te
 	})
 	if !ok || baseURL != "http://23.138.12.112:2001/v1" || apiKey != "remix-key" || model != "gpt-5.6-sol" {
 		t.Fatalf("stale openai env won: %q %q %q ok=%t", baseURL, apiKey, model, ok)
+	}
+}
+
+func TestPartnerRuntimeUsesGatewaySessionForOpenAICompat(t *testing.T) {
+	t.Setenv(EnvOpenAIBaseURL, "")
+	t.Setenv(EnvOpenAIAPIKey, "")
+	t.Setenv("REMIX_BASE_URL", "")
+	t.Setenv("REMIX_API_KEY", "")
+	t.Setenv("REMIX_MODEL", "")
+	baseURL, apiKey, model, ok := ResolveOpenAICompatConfig(map[string]string{
+		"REMIX_BASE_URL": "https://23.138.12.112:2443/v1",
+		"REMIX_API_KEY":  "opaque-session",
+		"REMIX_MODEL":    "gpt-5.6-sol",
+	})
+	if !ok || baseURL != "https://23.138.12.112:2443/v1" || apiKey != "opaque-session" || model != "gpt-5.6-sol" {
+		t.Fatalf("partner config=%q %q %q ok=%t", baseURL, apiKey, model, ok)
+	}
+}
+
+type partnerTimingSynthesizer struct {
+	words []narration.Word
+}
+
+func (s partnerTimingSynthesizer) Synthesize(context.Context, narration.Request) (narration.Result, error) {
+	return narration.Result{Audio: []byte("audio"), Words: append([]narration.Word(nil), s.words...), BilledWords: 3}, nil
+}
+
+func TestPartnerSubtitleInsertionIsOffWhileSRTTimingsRemain(t *testing.T) {
+	if montageplan.SpokenCaptionsEnabled {
+		t.Fatal("partner draft subtitle insertion must be disabled")
+	}
+	words := []narration.Word{{Text: "伙伴稿", StartTime: 0, EndTime: 2}}
+	delivery, err := narration.Produce(t.Context(), partnerTimingSynthesizer{words: words}, narration.ProduceRequest{
+		Script:    "伙伴稿",
+		SpeakerID: "partner-voice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(words) != 1 || words[0].StartTime != 0 || words[0].EndTime != 2 || delivery.SRT == "" {
+		t.Fatalf("words=%+v SRT=%q", words, delivery.SRT)
 	}
 }
 

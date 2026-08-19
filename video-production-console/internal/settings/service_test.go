@@ -109,6 +109,98 @@ func TestSettingsPublicUpdateSecretMaskingAndRuntimeSeparation(t *testing.T) {
 	}
 }
 
+func TestPartnerRuntimeOverridesPersistedProvidersWithoutPersistingSession(t *testing.T) {
+	service, db, _, public := newSettingsTestService(t, Options{})
+	public.RemixBaseURL = "https://owner-remix.example.test/v1"
+	public.RemixModel = "owner-remix"
+	public.GrokBaseURL = "https://owner-grok.example.test/v1"
+	public.GrokModel = "owner-grok"
+	public.ImageBaseURL = "https://owner-image.example.test/v1"
+	public.ImageModel = "owner-image"
+	public.ImageTextBaseURL = "https://owner-image-text.example.test/v1"
+	public.ImageTextModel = "owner-image-text"
+	public.TTSProvider = "volc"
+	if _, err := service.Update(t.Context(), public, map[string]string{
+		SecretRemixAPIKey:      "owner-remix-key",
+		SecretGrokAPIKey:       "owner-grok-key",
+		SecretImageAPIKey:      "owner-image-key",
+		SecretImageTextAPIKey:  "owner-image-text-key",
+		SecretVolcSpeechAPIKey: "owner-volc-key",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service.SetPartnerRuntime(&PartnerRuntime{
+		GatewayBaseURL: "https://23.138.12.112:2443/v1",
+		SessionToken:   "opaque-session",
+		TextModels:     []string{"gpt-5.6-sol", "grok-4.6"},
+		ImageModel:     "gpt-image-2",
+		AuraBaseURL:    "https://tts.aurastd.com",
+		AuraAPIKey:     "aura-key",
+		AuraModel:      "speech-2.8-hd",
+		AuraVoiceID:    "voice-id",
+		AuraSpeed:      1.1,
+		AuraVolume:     1.2,
+	})
+	runtime, err := service.Runtime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.RemixBaseURL != "https://23.138.12.112:2443/v1" || runtime.RemixAPIKey != "opaque-session" || runtime.RemixModel != "gpt-5.6-sol" {
+		t.Fatalf("remix runtime=%+v", runtime)
+	}
+	if runtime.GrokBaseURL != runtime.RemixBaseURL || runtime.GrokAPIKey != "opaque-session" || runtime.GrokModel != "grok-4.6" {
+		t.Fatalf("grok runtime=%+v", runtime)
+	}
+	if runtime.ImageTextBaseURL != runtime.RemixBaseURL || runtime.ImageTextAPIKey != "opaque-session" || runtime.ImageTextModel != "gpt-5.6-sol" {
+		t.Fatalf("image text runtime=%+v", runtime)
+	}
+	if runtime.ImageBaseURL != runtime.RemixBaseURL || runtime.ImageModel != "gpt-image-2" || runtime.ImageAPIKey != "opaque-session" {
+		t.Fatalf("image runtime=%+v", runtime)
+	}
+	if runtime.TTSProvider != "aurastd" || runtime.AuraSTDBaseURL != "https://tts.aurastd.com" ||
+		runtime.AuraSTDTTsAPIKey != "aura-key" || runtime.AuraSTDModel != "speech-2.8-hd" ||
+		runtime.AuraSTDVoiceID != "voice-id" || runtime.AuraSTDSpeed != 1.1 || runtime.AuraSTDVolume != 1.2 {
+		t.Fatalf("Aura runtime=%+v", runtime)
+	}
+	rawDB := readEncryptedSecrets(t, db)
+	if bytes.Contains(rawDB, []byte("opaque-session")) || bytes.Contains(rawDB, []byte("aura-key")) {
+		t.Fatal("partner runtime persisted")
+	}
+
+	service.SetPartnerRuntime(nil)
+	owner, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.RemixBaseURL != public.RemixBaseURL || owner.RemixAPIKey != "owner-remix-key" ||
+		owner.TTSProvider != "volc" || owner.VolcSpeechAPIKey != "owner-volc-key" {
+		t.Fatalf("owner runtime after clear=%+v", owner)
+	}
+}
+
+func readEncryptedSecrets(t *testing.T, db *sql.DB) []byte {
+	t.Helper()
+	rows, err := db.Query(`SELECT key, ciphertext FROM encrypted_secrets ORDER BY key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var raw bytes.Buffer
+	for rows.Next() {
+		var key, ciphertext string
+		if err := rows.Scan(&key, &ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		raw.WriteString(key)
+		raw.WriteString(ciphertext)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return raw.Bytes()
+}
+
 func TestSettingsPublicCodexDefaultsWhenKeysAreMissingOrEmpty(t *testing.T) {
 	service, db, _, _ := newSettingsTestService(t, Options{})
 	assertDefaults := func() {
@@ -1166,16 +1258,16 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 		PexelsAPIBaseURL: "https://api.pexels.com", PixabayAPIBaseURL: "https://pixabay.com",
 		MaxExternalResultsPerQuery: 20,
-		TTSProvider:            defaultTTSProvider,
-		AuraSTDBaseURL:         defaultAuraSTDBaseURL,
-		AuraSTDModel:           defaultAuraSTDModel,
-		AuraSTDVoiceID:         defaultAuraSTDVoiceID,
-		AuraSTDSpeed:           defaultAuraSTDSpeed,
-		AuraSTDVolume:          defaultAuraSTDVolume,
-		AuraSTDPitch:           defaultAuraSTDPitch,
-		AuraSTDLanguageBoost:   defaultAuraSTDLanguageBoost,
-		AuraSTDModifyIntensity: defaultAuraSTDModifyIntensity,
-		AuraSTDModifyTimbre:    defaultAuraSTDModifyTimbre,
+		TTSProvider:                defaultTTSProvider,
+		AuraSTDBaseURL:             defaultAuraSTDBaseURL,
+		AuraSTDModel:               defaultAuraSTDModel,
+		AuraSTDVoiceID:             defaultAuraSTDVoiceID,
+		AuraSTDSpeed:               defaultAuraSTDSpeed,
+		AuraSTDVolume:              defaultAuraSTDVolume,
+		AuraSTDPitch:               defaultAuraSTDPitch,
+		AuraSTDLanguageBoost:       defaultAuraSTDLanguageBoost,
+		AuraSTDModifyIntensity:     defaultAuraSTDModifyIntensity,
+		AuraSTDModifyTimbre:        defaultAuraSTDModifyTimbre,
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

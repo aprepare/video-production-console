@@ -105,7 +105,10 @@ func New(options Options) *App {
 		narrationOptions := httpapi.NarrationHandlerOptions{}
 		if options.Settings != nil {
 			narrationOptions.Runtime = options.Settings
-			narrationOptions.Produce = httpapi.NewVolcengineProducer(options.Settings)
+			narrationOptions.Produce = httpapi.NewNarrationProducer(options.Settings)
+			if options.Partner != nil {
+				narrationOptions.Produce = httpapi.NewPartnerNarrationProducer(options.Settings)
+			}
 		}
 		narrationHandler := httpapi.NewNarrationHandler(options.DB, assetService, narrationOptions)
 		mux.Handle("/api/projects/", projectRouteHandler(projects, tasksHandler, narrationHandler, options.Scheduler != nil))

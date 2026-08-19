@@ -88,6 +88,34 @@ func configuredNarrationRuntime() consoleSettings.Runtime {
 	}
 }
 
+func TestPartnerNarrationAlwaysConstructsAuraFromMemoryRuntime(t *testing.T) {
+	runtime := configuredNarrationRuntime()
+	runtime.TTSProvider = "volc"
+	runtime.AuraSTDBaseURL = "https://tts.aurastd.com"
+	runtime.AuraSTDTTsAPIKey = "memory-only-aura-key"
+	client := narrationSynthesizer(runtime, true)
+	aura, ok := client.(*narration.AuraSTDClient)
+	if !ok {
+		t.Fatalf("partner synthesizer=%T, want Aura Studio", client)
+	}
+	if aura.BaseURL != "https://tts.aurastd.com" || aura.APIKey != "memory-only-aura-key" {
+		t.Fatalf("Aura client=%+v", aura)
+	}
+}
+
+func TestOwnerNarrationKeepsConfiguredProvider(t *testing.T) {
+	runtime := configuredNarrationRuntime()
+	runtime.TTSProvider = "volc"
+	client := narrationSynthesizer(runtime, false)
+	volc, ok := client.(*narration.Client)
+	if !ok {
+		t.Fatalf("owner synthesizer=%T, want Volcengine", client)
+	}
+	if volc.APIKey != "volc-key" || volc.ResourceID != "volc.megatts.default" {
+		t.Fatalf("Volcengine client=%+v", volc)
+	}
+}
+
 // newNarrationTestHandler wires the handler over a real asset service so the
 // generated files land on disk exactly as they do in production, with only the
 // vendor call and the database replaced.
@@ -118,14 +146,14 @@ func seedContinuousScript(t *testing.T, service *assets.Service, repository *nar
 
 func narrationDelivery() narration.Delivery {
 	return narration.Delivery{
-		Audio:       validProjectMP3(),
-		AudioFormat: "mp3",
-		SRT:         "1\n00:00:00,000 --> 00:00:02,000\n第一句\n\n",
-		Captions:    []narration.Caption{{Start: 0, End: 2, Text: "第一句"}},
+		Audio:        validProjectMP3(),
+		AudioFormat:  "mp3",
+		SRT:          "1\n00:00:00,000 --> 00:00:02,000\n第一句\n\n",
+		Captions:     []narration.Caption{{Start: 0, End: 2, Text: "第一句"}},
 		SpokenScript: "第一句",
-		Report:      narration.QCReport{Pass: true, TextCoverage: 1, Warnings: []string{"字幕节奏偏快"}},
-		BilledWords: 3,
-		Duration:    2,
+		Report:       narration.QCReport{Pass: true, TextCoverage: 1, Warnings: []string{"字幕节奏偏快"}},
+		BilledWords:  3,
+		Duration:     2,
 	}
 }
 
