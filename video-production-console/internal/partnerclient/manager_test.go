@@ -150,6 +150,7 @@ func TestManagerSessionExpiryTriggersReverify(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForGatewayVerifies(t, state, 2)
+	waitForManagerState(t, manager, StateReady)
 	runtime := manager.RuntimeSnapshot()
 	if runtime.SessionToken != "session-two" || runtime.Aura.APIKey != "aura-two" {
 		t.Fatalf("runtime=%+v", runtime)
@@ -177,6 +178,7 @@ func TestManagerAuthorizationFailureReturnsToLockedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForGatewayVerifies(t, state, 2)
+	waitForManagerState(t, manager, StateLocked)
 	got := manager.Snapshot()
 	if got.State != StateLocked || got.ErrorCode != "authorization_failed" || got.SessionToken != "" {
 		t.Fatalf("snapshot=%+v", got)
@@ -430,6 +432,25 @@ func waitForGatewayVerifies(t *testing.T, state *fakeGatewayState, count int) {
 		case <-state.verifyCalled:
 		case <-deadline.C:
 			t.Fatalf("verify calls=%d want>=%d", got, count)
+		}
+	}
+}
+
+func waitForManagerState(t *testing.T, manager *Manager, want State) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		got := manager.Snapshot()
+		if got.State == want {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatalf("state=%q want=%q snapshot=%+v", got.State, want, got)
 		}
 	}
 }
