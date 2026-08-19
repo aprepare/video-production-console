@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 CREATE TABLE IF NOT EXISTS partners (
-	id TEXT PRIMARY KEY,
+	id TEXT PRIMARY KEY NOT NULL,
 	display_name TEXT NOT NULL UNIQUE,
 	key_prefix TEXT NOT NULL UNIQUE,
 	key_hash BLOB NOT NULL,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS partners (
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-	token_hash BLOB PRIMARY KEY,
+	token_hash BLOB PRIMARY KEY NOT NULL,
 	partner_id TEXT NOT NULL,
 	session_version INTEGER NOT NULL,
 	expires_at TEXT NOT NULL,

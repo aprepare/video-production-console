@@ -54,6 +54,60 @@ func TestOpenStoreCreatesIndependentWALSchema(t *testing.T) {
 	}
 }
 
+func TestNullPrimaryKeysRejected(t *testing.T) {
+	t.Run("partners.id", func(t *testing.T) {
+		store, err := OpenStore(filepath.Join(t.TempDir(), "gateway.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		_, err = store.db.Exec(`
+			INSERT INTO partners (
+				id, display_name, key_prefix, key_hash, status, device_hash,
+				session_version, text_calls, image_calls, verify_failures,
+				rate_limited, created_at, updated_at, last_verified_at
+			) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			"null-id partner", "vpc_null", []byte("hash"), PartnerActive, "device-hash",
+			1, 0, 0, 0, 0, now, now, now,
+		)
+		if err == nil {
+			t.Fatal("expected NULL partners.id to be rejected")
+		}
+	})
+
+	t.Run("sessions.token_hash", func(t *testing.T) {
+		store, err := OpenStore(filepath.Join(t.TempDir(), "gateway.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+
+		partner := Partner{
+			ID:             "p1",
+			DisplayName:    "session partner",
+			KeyPrefix:      "vpc_session",
+			KeyHash:        []byte("hash"),
+			Status:         PartnerActive,
+			SessionVersion: 1,
+		}
+		if err := store.CreatePartner(context.Background(), partner); err != nil {
+			t.Fatal(err)
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		_, err = store.db.Exec(`
+			INSERT INTO sessions (token_hash, partner_id, session_version, expires_at, created_at)
+			VALUES (NULL, ?, ?, ?, ?)
+		`, partner.ID, partner.SessionVersion, now, now)
+		if err == nil {
+			t.Fatal("expected NULL sessions.token_hash to be rejected")
+		}
+	})
+}
+
 func TestCreatePartnerRejectsDuplicateDisplayNameAndKeyPrefix(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "gateway.db"))
 	if err != nil {
