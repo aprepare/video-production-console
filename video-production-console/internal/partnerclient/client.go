@@ -12,8 +12,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"video-production-console/internal/partneredition"
 )
 
 const (
@@ -50,16 +54,12 @@ func NewClient(options ClientOptions) (*Client, error) {
 		return nil, ErrInvalidGatewayResponse
 	}
 
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(options.CAPEM) {
-		return nil, ErrInvalidPinnedCA
+	tlsConfig, err := PinnedTLSConfig(options.CAPEM)
+	if err != nil {
+		return nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		RootCAs:    pool,
-		ServerName: pinnedGatewayServerName,
-	}
+	transport.TLSClientConfig = tlsConfig
 	transport.Proxy = http.ProxyFromEnvironment
 	if options.DialContext != nil {
 		transport.DialContext = options.DialContext
@@ -75,6 +75,94 @@ func NewClient(options ClientOptions) (*Client, error) {
 			},
 		},
 	}, nil
+}
+
+// PinnedTLSConfig trusts only the bundled partner gateway CA and the
+// published gateway IP SAN.
+func PinnedTLSConfig(caPEM []byte) (*tls.Config, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, ErrInvalidPinnedCA
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: pinnedGatewayServerName,
+	}, nil
+}
+
+func ApplyPinnedTLS(transport *http.Transport, caPEM []byte) error {
+	if transport == nil {
+		return ErrInvalidPinnedCA
+	}
+	pinned, err := PinnedTLSConfig(caPEM)
+	if err != nil {
+		return err
+	}
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = pinned
+		return nil
+	}
+	cfg := transport.TLSClientConfig.Clone()
+	cfg.MinVersion = pinned.MinVersion
+	cfg.RootCAs = pinned.RootCAs
+	cfg.ServerName = pinned.ServerName
+	transport.TLSClientConfig = cfg
+	return nil
+}
+
+func PinnedHTTPClient(caPEM []byte, timeout time.Duration) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if err := ApplyPinnedTLS(transport, caPEM); err != nil {
+		return nil, err
+	}
+	transport.Proxy = http.ProxyFromEnvironment
+	return &http.Client{Transport: transport, Timeout: timeout}, nil
+}
+
+func PinnedHTTPClientFromFile(path string, timeout time.Duration) (*http.Client, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return PinnedHTTPClient(pem, timeout)
+}
+
+func BundledCAFile(appRoot string) string {
+	return filepath.Join(strings.TrimSpace(appRoot), "resources", "tls", "partner-ca.crt")
+}
+
+func LoadBundledCAPEM() []byte {
+	if path := strings.TrimSpace(os.Getenv("VIDEO_CONSOLE_PARTNER_CA_FILE")); path != "" {
+		if pem, err := os.ReadFile(path); err == nil && len(pem) > 0 {
+			return pem
+		}
+	}
+	edition, err := partneredition.Current()
+	if err != nil || !edition.IsPartner() {
+		return nil
+	}
+	for _, root := range candidateAppRoots() {
+		if pem, err := os.ReadFile(BundledCAFile(root)); err == nil && len(pem) > 0 {
+			return pem
+		}
+	}
+	return nil
+}
+
+// candidateAppRoots lists directories that may hold resources/tls/partner-ca.crt.
+// The console binary lives in <appRoot>/bin, so both the executable directory
+// and its parent are checked, plus the launcher-provided VIDEO_CONSOLE_APP_ROOT.
+func candidateAppRoots() []string {
+	var roots []string
+	if value := strings.TrimSpace(os.Getenv("VIDEO_CONSOLE_APP_ROOT")); value != "" {
+		roots = append(roots, value)
+	}
+	if executable, err := os.Executable(); err == nil {
+		dir := filepath.Dir(executable)
+		roots = append(roots, dir, filepath.Dir(dir))
+	}
+	return roots
 }
 
 func (c *Client) Activate(ctx context.Context, request ActivateRequest) (AuthResponse, error) {

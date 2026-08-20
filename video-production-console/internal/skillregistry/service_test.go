@@ -181,6 +181,15 @@ func TestSkillScanRejectsSymlinkEscapeAndPersistsSnapshot(t *testing.T) {
 	}
 }
 
+func TestPartnerRootsMatchDefaultProductionSkills(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "skills")
+	got := PartnerRoots(base)
+	want := DefaultRoots(base)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("partner roots=%+v want %+v", got, want)
+	}
+}
+
 func TestDefaultRootsRegisterProductionSkills(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "skills")
 	got := DefaultRoots(base)

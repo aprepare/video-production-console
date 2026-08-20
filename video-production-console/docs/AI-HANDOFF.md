@@ -2,7 +2,7 @@
 
 > 面向接手本仓库的 AI。先保护工作区与运行时数据，再开始任何修改。
 >
-> **模块、目录、机制、契约的权威现状见 [项目全景说明](ARCHITECTURE.md)，尤其是 §11 模块→代码对照。** 本文只回答：现在能用什么、最近改了什么、下一步做什么、哪些线不能碰。`docs/superpowers/` 已删。
+> **模块、目录、机制、契约的权威现状见 [项目全景说明](ARCHITECTURE.md)，尤其是 §11 模块→代码对照。** 本文只回答：现在能用什么、最近改了什么、下一步做什么、哪些线不能碰。本分支是 **伙伴 EXE 分发线** `feat/partner-exe-rollout`。
 >
 > 使用者操作见 [使用说明](USER-GUIDE.md)。混剪如何从 catalog 向量选片见 [混剪自动选片](operations/montage-catalog-matching.md)。已复现故障见 [排障手册](operations/troubleshooting.md)。
 >
@@ -16,16 +16,16 @@
 
 默认地址 `http://127.0.0.1:2030`（本机常见也监听 `0.0.0.0:2030`）。权威库 `video-console-data/console.db`。跑的是 `dist\video-production-console.exe` 时，改 Go/前端必须停进程 → 必要时 `npm --prefix web run build:embed` → 重编 exe → 启动。
 
-## 2. 当前进度（2026-08-19，以代码为准）
+## 2. 当前进度（2026-08-20，以本伙伴分支代码为准）
+
+发给合作伙伴的安装包是桌面上的 `video-production-console-partner-0.1.15.exe`，不要发本机开发 exe。操作说明见 [伙伴便携版](operations/partner-portable-runbook.md)、[网关](operations/partner-gateway-runbook.md)。
 
 | 线 | 用户能做什么 | 代码入口 | 状态 |
 |---|---|---|---|
-| 风景混剪 | 粘贴原文 → 二创 → 火山配音字幕 → 开始风景混剪 → 剪映草稿 → 复制发布文案 | `remix.standard` + `montage.execute` + `jianying-montage-draft` | **日产能用** |
-| 图文 ZIP | `/image-projects` 一键生图；`/advanced` 手动分段 | `internal/httpapi/imageproject_quick.go`、`web/src/image-mode/` | **日产能用** |
-| 本机/云机建库 | 控制台「素材库 → 开始建库」或 `catalog-builder` `:2031`：扫描 + 切镜 + 打标 + 向量 | `mediacatalog.RunHostedBuild`、`cmd/catalog-builder` | **能建库** |
-| 库内自动检索 | **电影混剪**按口播检索；**风景混剪**混用索引风景/城市/财经 + catalog B-roll，不对口播 | `attachCatalogClients` → `rankLibrary` + `ShotSelector` | **电影线接通；风景线混池不匹配** |
-| 电影混剪 | 工作台「开始电影混剪」，按口播用 catalog 电影镜头 | `jianying-movie-montage` + `SelectModeMovieCatalog` | **代码接通，待真机出片** |
-| 图片视频 | 无用户入口 | `quota.go` 的 `image_video` 预设 | **不要做** |
+| 伙伴 EXE | 激活密钥 → 选剪映目录和风景素材 → 本机出草稿 | `cmd/partner-launcher` `internal/portable` `internal/partnerclient` | **0.1.15 可发给用户** |
+| 风景混剪 | 只从自然风景 / 天气类镜头铺轨，不再进城市、财经、宇宙 | `scenic_index.go` + `BuildV2` | **已收紧** |
+| 图文 ZIP | 一键生图、打包下载 | `internal/httpapi/imageproject_*.go` | **能用；图文视频不在本分支** |
+| 伙伴网关 | VPS 上校验激活、转发模型，前端不展示接口地址 | `cmd/partner-gateway` `deploy/partner-gateway` | **已部署则按 runbook 运维** |
 
 ### 2.1 日产主路径（风景）
 
@@ -52,7 +52,7 @@
    - `task_manifest` 带上 `media_catalog_path` / 视觉 / embedding 字段（`internal/httpapi/task_manifest.go`）。改 embedding 后必须重启，否则 active 快照仍空，计划里不会有 `embedding_pool`。
    - `montage-script-run` 注入 `VIDEO_CONSOLE_EMBEDDING_*`（URL/模型/密钥都要），构造 Embedder；意图分析默认本地词表，对话模型只做短名单 `ShotSelector`。
    - `BuildV2` → `rankLibrary`：标签四级池 + 全库余弦近邻（`RecallReadyShots(2000)`）→ 配额铺轨。
-   - **风景任务**混用 `media_index` 风景/城市/财经 + catalog B-roll，不按口播对画面。
+   - **风景任务**只保留自然风景和天气类镜头，城市/财经/宇宙会从本机旧索引里清掉，也不再掺 catalog B-roll。
    - **电影任务**同样按口播用 catalog，无可用镜头直接失败。
    - 库里没有住宅/法拍时，向量也只能对到 cityscape / 硬币 / 办公。要真房子画面先补片再建库。
 
@@ -64,8 +64,10 @@
 - 不要恢复选题/爆款库主路径。
 - 不要把白色片头标题、重点字幕加回风景画面窗。
 - 不要打开口播字幕轨（`SpokenCaptionsEnabled` / `captions.mode=spoken`）；排版不好，先整轨屏蔽。也不要打开大模型字幕分段/关键词。
-- 风景线混用风景/城市/财经索引和 catalog B-roll，不按口播对画面。电影线才按口播检索。
-- 不要做图片视频编排、设置页 runtime 下拉、P2-5b 代码生成。
+- 风景线只进自然/天气镜头。不要把城市、财经、宇宙加回风景混剪。
+- 不要在本分支做图文视频 / 图生视频（那条线在 `codex/video-production-console`）。
+- 不要把网站下载中心、Cloudflare、`.vpcdraft` 方案捡回来。
+- 不要把 API 地址或密钥写进伙伴前端、安装包或文档实例。
 - 不要把 API Key 写进仓库或文档。
 - 不要擅自 `git reset/checkout/restore/stash/clean`，不要删 `video-console-data/` 与 `internal/webui/dist/`。
 

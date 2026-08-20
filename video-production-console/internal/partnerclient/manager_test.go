@@ -22,6 +22,22 @@ func TestManagerRequiresOnlineVerifyEveryStart(t *testing.T) {
 	}
 }
 
+func TestManagerStartAuthorizationFailedReturnsToActivation(t *testing.T) {
+	store := &memoryCredentialStore{credentials: savedCredentials()}
+	manager := newManagerForTest(t, fakeGateway{verifyErr: ErrAuthorizationFailed}, store, managerTestNow)
+
+	if err := manager.Start(context.Background()); !errors.Is(err, ErrAuthorizationFailed) {
+		t.Fatalf("err=%v", err)
+	}
+	got := manager.Snapshot()
+	if got.State != StateNeedsActivation || got.ErrorCode != "authorization_failed" || got.SessionToken != "" {
+		t.Fatalf("snapshot=%+v", got)
+	}
+	if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale credentials remain: %v", err)
+	}
+}
+
 func TestManagerSuccessfulActivationSavesCredentials(t *testing.T) {
 	now := managerTestNow()
 	gatewayState := &fakeGatewayState{}
@@ -66,6 +82,25 @@ func TestManagerSuccessfulActivationSavesCredentials(t *testing.T) {
 	}
 	if got := manager.Snapshot().State; got != StateReady {
 		t.Fatalf("state=%q", got)
+	}
+}
+
+func TestManagerActivateGatewayUnavailableKeepsActivationAvailable(t *testing.T) {
+	store := &memoryCredentialStore{loadErr: os.ErrNotExist}
+	manager := newManagerForTest(t, fakeGateway{activateErr: ErrGatewayUnavailable}, store, managerTestNow)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Activate(context.Background(), "one-time-activation-key"); !errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("err=%v", err)
+	}
+	got := manager.Snapshot()
+	if got.State != StateNeedsActivation || got.ErrorCode != "gateway_unavailable" || got.SessionToken != "" {
+		t.Fatalf("snapshot=%+v", got)
+	}
+	if store.lastSaved() != (Credentials{}) {
+		t.Fatalf("saved credentials after failed activation: %+v", store.lastSaved())
 	}
 }
 
@@ -408,6 +443,14 @@ func (s *memoryCredentialStore) Save(credentials Credentials) error {
 	s.credentials = credentials
 	s.loadErr = nil
 	s.saved = append(s.saved, credentials)
+	return nil
+}
+
+func (s *memoryCredentialStore) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.credentials = Credentials{}
+	s.loadErr = os.ErrNotExist
 	return nil
 }
 

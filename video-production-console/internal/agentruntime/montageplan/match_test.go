@@ -28,7 +28,7 @@ func fixtureShots() []matchShot {
 		},
 		{
 			item: mediaItem{ID: "src-water", Kind: mediaKindBroll, RelativePath: "broll/water.mp4",
-				DurationSeconds: 40, ShotID: "shot-water", Category: "water"},
+				DurationSeconds: 40, ShotID: "shot-water", Category: "Weather_Water_Fire"},
 			tags: []string{"水位下降"}, mood: "warning", setting: "reservoir", motion: "low",
 			embedding: []float32{0, 1, 0},
 		},
@@ -408,8 +408,8 @@ func TestBuildV2ScenicMixesCatalogBrollWithoutIntentMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "scenic_mixed_pool") {
-		t.Fatalf("scenic must mix index + catalog broll, notes=%v", plan.PlannerNotes)
+	if !strings.Contains(joined, "scenic_nature_pool") {
+		t.Fatalf("scenic must keep a nature-only pool, notes=%v", plan.PlannerNotes)
 	}
 	if !strings.Contains(joined, "scenic_catalog_broll: merged") {
 		t.Fatalf("scenic must merge catalog broll, notes=%v", plan.PlannerNotes)
@@ -418,8 +418,8 @@ func TestBuildV2ScenicMixesCatalogBrollWithoutIntentMatch(t *testing.T) {
 		t.Fatalf("scenic must not run intent/embedding match, notes=%v", plan.PlannerNotes)
 	}
 	for _, shot := range plan.Timeline {
-		if shot.SourceID == "src-bank" || shot.SourceID == "src-door" {
-			t.Fatalf("movie catalog shot leaked onto scenic timeline: %s notes=%v", shot.SourceID, plan.PlannerNotes)
+		if shot.SourceID == "src-bank" || shot.SourceID == "src-door" || shot.SourceID == "src-traffic" || shot.SourceID == "src-night" {
+			t.Fatalf("non-landscape catalog shot leaked onto scenic timeline: %s notes=%v", shot.SourceID, plan.PlannerNotes)
 		}
 	}
 	if len(plan.Timeline) == 0 {
@@ -552,8 +552,8 @@ func TestBuildV2EmptyCatalogFallsBackToLandscapeIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "scenic_mixed_pool") && !strings.Contains(joined, "falling back to media index") {
-		t.Fatalf("expected mixed scenic pool, got %v", plan.PlannerNotes)
+	if !strings.Contains(joined, "scenic_nature_pool") && !strings.Contains(joined, "falling back to media index") {
+		t.Fatalf("expected nature-only scenic pool, got %v", plan.PlannerNotes)
 	}
 	for _, shot := range plan.Timeline {
 		if strings.HasPrefix(shot.SourceID, "src-") {

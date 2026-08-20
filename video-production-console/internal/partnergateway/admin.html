@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>伙伴网关台账</title>
+  <style>
+    :root {
+      --ink: #efe6d2;
+      --muted: #b7aa8d;
+      --paper: #241f18;
+      --panel: #2f2920;
+      --line: #4a4030;
+      --brass: #c4a35a;
+      --ok: #7d9a62;
+      --bad: #c45c4a;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, rgba(196, 163, 90, 0.16), transparent 55%),
+        linear-gradient(180deg, #1b1813 0%, #14110d 100%);
+    }
+    main { width: min(1080px, calc(100% - 32px)); margin: 32px auto 48px; }
+    header { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: 0.04em; }
+    .eyebrow { color: var(--brass); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; }
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: #1b1712;
+      color: var(--ink);
+      font: 15px/1.4 ui-monospace, "IBM Plex Mono", Consolas, monospace;
+    }
+    button {
+      border: 0;
+      cursor: pointer;
+      background: var(--brass);
+      color: #1b1712;
+      padding: 9px 14px;
+      font: 600 14px/1 "Source Han Sans SC", "PingFang SC", sans-serif;
+    }
+    button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    button.danger { background: var(--bad); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+    .row > * { flex: 1 1 180px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.06em; }
+    td.id, td.prefix { font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace; font-size: 12px; }
+    .status { font-size: 12px; letter-spacing: 0.08em; }
+    .status.active { color: var(--ok); }
+    .status.disabled { color: var(--bad); }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .msg { min-height: 1.4em; color: var(--bad); margin: 8px 0 0; }
+    .msg.ok { color: var(--ok); }
+    dialog {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      width: min(640px, calc(100% - 24px));
+      box-shadow: var(--shadow);
+    }
+    dialog::backdrop { background: rgba(8, 6, 4, 0.72); }
+    .keybox {
+      margin: 12px 0;
+      padding: 12px;
+      background: #1b1712;
+      border: 1px dashed var(--brass);
+      word-break: break-all;
+      font: 14px/1.5 ui-monospace, "IBM Plex Mono", Consolas, monospace;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <div class="eyebrow">Partner Gateway Ledger</div>
+        <h1>伙伴激活台账</h1>
+      </div>
+      <button id="logout" class="ghost hidden" type="button">退出</button>
+    </header>
+
+    <section id="login-panel" class="panel">
+      <p>输入管理口令后进入。激活码只在创建或轮换时显示一次，列表里不会再出现。</p>
+      <label for="password">管理口令</label>
+      <div class="row">
+        <div><input id="password" type="password" autocomplete="current-password"></div>
+        <div><button id="login" type="button">进入台账</button></div>
+      </div>
+      <p id="login-msg" class="msg"></p>
+    </section>
+
+    <section id="desk-panel" class="panel hidden">
+      <form id="create-form">
+        <div class="row">
+          <div>
+            <label for="display-name">新建伙伴名称</label>
+            <input id="display-name" name="display_name" maxlength="40" placeholder="例如 居中观">
+          </div>
+          <div><button type="submit">生成激活码</button></div>
+        </div>
+      </form>
+      <p id="desk-msg" class="msg"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>状态</th>
+            <th>设备</th>
+            <th>前缀</th>
+            <th>用量</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <dialog id="key-dialog">
+    <h2 id="key-title">一次性激活码</h2>
+    <p>立刻复制到密码管理器。关闭后后台不再保存明文。</p>
+    <div id="key-value" class="keybox"></div>
+    <div class="row">
+      <button id="copy-key" type="button">复制</button>
+      <button id="close-key" class="ghost" type="button">我已保存</button>
+    </div>
+  </dialog>
+
+  <script>
+    const loginPanel = document.getElementById("login-panel");
+    const deskPanel = document.getElementById("desk-panel");
+    const logoutButton = document.getElementById("logout");
+    const loginMsg = document.getElementById("login-msg");
+    const deskMsg = document.getElementById("desk-msg");
+    const rows = document.getElementById("rows");
+    const keyDialog = document.getElementById("key-dialog");
+    const keyTitle = document.getElementById("key-title");
+    const keyValue = document.getElementById("key-value");
+
+    async function api(path, options) {
+      const response = await fetch(path, Object.assign({
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }
+      }, options));
+      const text = await response.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (err) { data = { raw: text }; }
+      if (!response.ok) {
+        const message = data && data.error && data.error.message ? data.error.message : "请求失败";
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+      }
+      return data;
+    }
+
+    function showLogin(message) {
+      loginPanel.classList.remove("hidden");
+      deskPanel.classList.add("hidden");
+      logoutButton.classList.add("hidden");
+      loginMsg.textContent = message || "";
+    }
+
+    function showDesk() {
+      loginPanel.classList.add("hidden");
+      deskPanel.classList.remove("hidden");
+      logoutButton.classList.remove("hidden");
+    }
+
+    function showKey(title, key) {
+      keyTitle.textContent = title;
+      keyValue.textContent = key;
+      keyDialog.showModal();
+    }
+
+    function statusLabel(status) {
+      return status === "active" ? "启用" : "停用";
+    }
+
+    async function refresh() {
+      const data = await api("/admin/api/partners");
+      rows.replaceChildren();
+      (data.partners || []).forEach((partner) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>
+            <strong>${escapeHtml(partner.display_name)}</strong>
+            <div class="id">${escapeHtml(partner.id)}</div>
+          </td>
+          <td class="status ${escapeHtml(partner.status)}">${statusLabel(partner.status)}</td>
+          <td>${partner.device_bound ? "已绑定" : "未绑定"}</td>
+          <td class="prefix">${escapeHtml(partner.key_prefix)}</td>
+          <td>文 ${partner.text_calls} / 图 ${partner.image_calls}</td>
+          <td class="actions"></td>
+        `;
+        const actions = tr.querySelector(".actions");
+        addAction(actions, partner.status === "active" ? "停用" : "启用", "ghost", () => mutate(partner, partner.status === "active" ? "disable" : "enable"));
+        addAction(actions, "轮换", "ghost", () => rotate(partner));
+        addAction(actions, "解绑", "danger", () => unbind(partner));
+        rows.appendChild(tr);
+      });
+    }
+
+    function addAction(root, label, kind, handler) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      if (kind) button.className = kind;
+      button.addEventListener("click", handler);
+      root.appendChild(button);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+
+    async function mutate(partner, action) {
+      deskMsg.textContent = "";
+      await api("/admin/api/partners/" + action, {
+        method: "POST",
+        body: JSON.stringify({ id: partner.id })
+      });
+      deskMsg.className = "msg ok";
+      deskMsg.textContent = partner.display_name + " 已更新";
+      await refresh();
+    }
+
+    async function rotate(partner) {
+      if (!confirm("轮换后旧激活码立即失效，确定吗？")) return;
+      const data = await api("/admin/api/partners/rotate-key", {
+        method: "POST",
+        body: JSON.stringify({ id: partner.id })
+      });
+      showKey(partner.display_name + " 的新激活码", data.activation_key);
+      await refresh();
+    }
+
+    async function unbind(partner) {
+      if (!confirm("解绑后原电脑无法继续使用，确定吗？")) return;
+      await mutate(partner, "unbind");
+    }
+
+    document.getElementById("login").addEventListener("click", async () => {
+      loginMsg.textContent = "";
+      try {
+        await api("/admin/api/login", {
+          method: "POST",
+          body: JSON.stringify({ password: document.getElementById("password").value })
+        });
+        showDesk();
+        await refresh();
+      } catch (err) {
+        loginMsg.textContent = err.message;
+      }
+    });
+
+    logoutButton.addEventListener("click", async () => {
+      await api("/admin/api/logout", { method: "POST", body: "{}" });
+      showLogin("");
+    });
+
+    document.getElementById("create-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      deskMsg.textContent = "";
+      try {
+        const data = await api("/admin/api/partners", {
+          method: "POST",
+          body: JSON.stringify({ display_name: document.getElementById("display-name").value })
+        });
+        document.getElementById("display-name").value = "";
+        showKey(data.display_name + " 的激活码", data.activation_key);
+        await refresh();
+      } catch (err) {
+        deskMsg.className = "msg";
+        deskMsg.textContent = err.message;
+      }
+    });
+
+    document.getElementById("copy-key").addEventListener("click", async () => {
+      await navigator.clipboard.writeText(keyValue.textContent);
+    });
+    document.getElementById("close-key").addEventListener("click", () => keyDialog.close());
+
+    (async () => {
+      try {
+        await api("/admin/api/session");
+        showDesk();
+        await refresh();
+      } catch (err) {
+        showLogin("");
+      }
+    })();
+  </script>
+</body>
+</html>

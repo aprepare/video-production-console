@@ -12,6 +12,7 @@ type AccountSwitcherProps = {
   onNewAccountNameChange: (value: string) => void;
   backgroundSelected: boolean;
   onBackgroundChange: (file: File | null) => void;
+  creating?: boolean;
 };
 
 export function AccountSwitcher({
@@ -25,6 +26,7 @@ export function AccountSwitcher({
   onNewAccountNameChange,
   backgroundSelected,
   onBackgroundChange,
+  creating = false,
 }: AccountSwitcherProps) {
   return (
     <aside>
@@ -80,7 +82,9 @@ export function AccountSwitcher({
               onChange={(event) => onBackgroundChange(event.target.files?.[0] || null)}
             />
           </label>
-          <button type="submit">添加账号</button>
+          <button type="submit" disabled={creating}>
+            {creating ? "正在创建…" : "添加账号"}
+          </button>
         </form>
       </nav>
       <div className="aside-foot">

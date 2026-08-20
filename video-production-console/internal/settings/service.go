@@ -96,6 +96,7 @@ type Options struct {
 	Now        func() time.Time
 	Runner     CommandRunner
 	HTTPClient HTTPClient
+	AppRoot    string
 }
 
 type Service struct {
@@ -104,6 +105,7 @@ type Service struct {
 	now            func() time.Time
 	runner         CommandRunner
 	http           HTTPClient
+	appRoot        string
 	activeMu       sync.RWMutex
 	active         *Runtime
 	partnerRuntime *PartnerRuntime
@@ -194,7 +196,7 @@ func NewService(repo Repository, protector security.Protector, optionValues ...O
 		options.HTTPClient = &http.Client{Timeout: probeTimeout}
 	}
 	options.HTTPClient = noRedirectHTTPClient(options.HTTPClient)
-	return &Service{repo: repo, protector: protector, now: options.Now, runner: options.Runner, http: options.HTTPClient}
+	return &Service{repo: repo, protector: protector, now: options.Now, runner: options.Runner, http: options.HTTPClient, appRoot: options.AppRoot}
 }
 
 func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings) error {
@@ -513,6 +515,15 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 	}
 	if view.Public.DataRoot == "" || view.Public.CodexBinaryPath == "" || !filepath.IsAbs(view.Public.DataRoot) || !filepath.IsAbs(view.Public.CodexBinaryPath) {
 		return Runtime{}, ErrNotConfigured
+	}
+	repaired := clearMissingOptionalBinaries(&view.Public)
+	if applyBundledMediaBinaries(&view.Public, s.appRoot) {
+		repaired = true
+	}
+	if repaired {
+		if _, persistErr := s.repo.UpdatePublic(ctx, publicValues(view.Public)); persistErr != nil {
+			return Runtime{}, persistErr
+		}
 	}
 	if err := validatePublic(view.Public); err != nil {
 		return Runtime{}, err
@@ -875,8 +886,12 @@ func validatePublic(value domain.PublicSettings) error {
 	if value.TopicCardsDir != "" && (value.ObsidianVault == "" || !pathWithin(value.ObsidianVault, value.TopicCardsDir)) {
 		return invalid("topic_cards_dir")
 	}
-	if value.MediaIndexPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaIndexPath)) {
-		return invalid("media_index_path")
+	if value.MediaIndexPath != "" {
+		underMedia := value.MediaRoot != "" && pathWithin(value.MediaRoot, value.MediaIndexPath)
+		underData := value.DataRoot != "" && pathWithin(value.DataRoot, value.MediaIndexPath)
+		if !underMedia && !underData {
+			return invalid("media_index_path")
+		}
 	}
 	if value.MediaCatalogPath != "" && (value.MediaRoot == "" || !pathWithin(value.MediaRoot, value.MediaCatalogPath)) {
 		return invalid("media_catalog_path")
@@ -890,6 +905,55 @@ func validatePublic(value domain.PublicSettings) error {
 }
 
 func invalid(field string) error { return fmt.Errorf("%w: %s", ErrInvalidSettings, field) }
+
+func clearMissingOptionalBinaries(value *domain.PublicSettings) bool {
+	repaired := false
+	if !optionalMediaBinaryUsable(value.FFmpegPath) {
+		value.FFmpegPath = ""
+		repaired = true
+	}
+	if !optionalMediaBinaryUsable(value.FFprobePath) {
+		value.FFprobePath = ""
+		repaired = true
+	}
+	return repaired
+}
+
+func optionalMediaBinaryUsable(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return true
+	}
+	if err := validateCanonicalAbsolutePath(path); err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func applyBundledMediaBinaries(value *domain.PublicSettings, appRoot string) bool {
+	if strings.TrimSpace(appRoot) == "" {
+		return false
+	}
+	ffmpeg := filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffmpeg.exe")
+	ffprobe := filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffprobe.exe")
+	changed := false
+	if value.FFmpegPath == "" && mediaBinaryFileReady(ffmpeg) {
+		value.FFmpegPath = ffmpeg
+		changed = true
+	}
+	if value.FFprobePath == "" && mediaBinaryFileReady(ffprobe) {
+		value.FFprobePath = ffprobe
+		changed = true
+	}
+	return changed
+}
+
+func mediaBinaryFileReady(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	return optionalMediaBinaryUsable(path)
+}
 
 func validateListenAddr(value string) error {
 	if value == "" || value != strings.TrimSpace(value) || strings.Contains(value, "://") {
@@ -1479,6 +1543,12 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// PartnerSetupComplete reports whether first-run local paths are present.
+// It does not inspect secrets or gateway session material.
+func PartnerSetupComplete(public domain.PublicSettings) bool {
+	return public.PartnerSetupComplete()
 }
 
 func grokModelsURL(base string) (string, error) {

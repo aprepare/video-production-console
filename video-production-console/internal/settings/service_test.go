@@ -1087,6 +1087,65 @@ func TestSettingsMediaIntelligenceDefaultsFillMissingValues(t *testing.T) {
 	}
 }
 
+func TestRuntimeClearsStaleFFmpegPathSoConsoleCanBoot(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	public.FFmpegPath = filepath.Join(t.TempDir(), "missing-ffmpeg.exe")
+	public.FFprobePath = filepath.Join(t.TempDir(), "missing-ffprobe.exe")
+	if _, err := service.repo.UpdatePublic(t.Context(), publicValues(public)); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatalf("Runtime() error=%v, want stale ffmpeg/ffprobe to be cleared instead of blocking boot", err)
+	}
+	if runtime.FFmpegPath != "" || runtime.FFprobePath != "" {
+		t.Fatalf("runtime binaries=%q/%q, want cleared", runtime.FFmpegPath, runtime.FFprobePath)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.FFmpegPath != "" || view.Public.FFprobePath != "" {
+		t.Fatalf("persisted binaries=%q/%q, want cleared so the next boot stays valid", view.Public.FFmpegPath, view.Public.FFprobePath)
+	}
+}
+
+func TestRuntimeRewritesStaleFFmpegPathToBundledBinaries(t *testing.T) {
+	appRoot := t.TempDir()
+	binDir := filepath.Join(appRoot, "runtime", "ffmpeg", "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ffmpeg := filepath.Join(binDir, "ffmpeg.exe")
+	ffprobe := filepath.Join(binDir, "ffprobe.exe")
+	for _, path := range []string{ffmpeg, ffprobe} {
+		if err := os.WriteFile(path, []byte("binary"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, _, _, public := newSettingsTestService(t, Options{AppRoot: appRoot})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	public.FFmpegPath = filepath.Join(t.TempDir(), "old-ffmpeg.exe")
+	public.FFprobePath = filepath.Join(t.TempDir(), "old-ffprobe.exe")
+	if _, err := service.repo.UpdatePublic(t.Context(), publicValues(public)); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatalf("Runtime() error=%v, want bundled ffmpeg/ffprobe rewrite", err)
+	}
+	if runtime.FFmpegPath != ffmpeg || runtime.FFprobePath != ffprobe {
+		t.Fatalf("runtime binaries=%q/%q, want bundled %q/%q", runtime.FFmpegPath, runtime.FFprobePath, ffmpeg, ffprobe)
+	}
+}
+
 func TestSettingsMediaIntelligenceRoundTripsValidConfiguration(t *testing.T) {
 	service, _, _, public := newSettingsTestService(t, Options{})
 	binaries := t.TempDir()
@@ -1270,4 +1329,36 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		AuraSTDModifyTimbre:        defaultAuraSTDModifyTimbre,
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
+}
+
+func TestPartnerSetupCompleteRequiresLocalPathsWithoutSecrets(t *testing.T) {
+	incomplete := domain.PublicSettings{DataRoot: t.TempDir()}
+	if PartnerSetupComplete(incomplete) {
+		t.Fatal("empty settings reported complete")
+	}
+	dataRoot := t.TempDir()
+	mediaRoot := filepath.Join(t.TempDir(), "media")
+	complete := domain.PublicSettings{
+		DataRoot:           dataRoot,
+		MediaRoot:          mediaRoot,
+		MediaIndexPath:     filepath.Join(dataRoot, "media", "index.json"),
+		JianyingRoot:       filepath.Join(t.TempDir(), "drafts"),
+		MachineProfilePath: filepath.Join(dataRoot, "config", "machine-profile.json"),
+		FFmpegPath:         filepath.Join(t.TempDir(), "ffmpeg.exe"),
+		FFprobePath:        filepath.Join(t.TempDir(), "ffprobe.exe"),
+	}
+	if !PartnerSetupComplete(complete) {
+		t.Fatal("fully configured partner paths should be complete")
+	}
+}
+
+func TestSettingsAllowPartnerMediaIndexUnderDataRoot(t *testing.T) {
+	service, _, _, valid := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), valid); err != nil {
+		t.Fatal(err)
+	}
+	valid.MediaIndexPath = filepath.Join(valid.DataRoot, "media", "index.json")
+	if _, err := service.PutPublic(t.Context(), valid); err != nil {
+		t.Fatalf("partner index under data root rejected: %v", err)
+	}
 }

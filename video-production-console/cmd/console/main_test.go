@@ -24,6 +24,7 @@ import (
 	"video-production-console/internal/partnerclient"
 	"video-production-console/internal/partneredition"
 	"video-production-console/internal/security"
+	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
 )
@@ -45,6 +46,82 @@ func TestServeUntilShutdownStopsOnCanceledContext(t *testing.T) {
 		t.Fatalf("serveUntilShutdown: %v", err)
 	}
 }
+
+func TestPartnerSetupRestartStopsWithExitCode75(t *testing.T) {
+	restart := make(chan struct{}, 1)
+	restart <- struct{}{}
+	server := newServer("127.0.0.1:0", http.NewServeMux())
+	err := serveUntilStop(context.Background(), server, restart)
+	if !errors.Is(err, errRestartRequested) {
+		t.Fatalf("err=%v", err)
+	}
+	if restartExitStatus(err) != 75 {
+		t.Fatalf("exit=%d", restartExitStatus(err))
+	}
+}
+
+func TestSkillRootsForPartnerUseBundledSkills(t *testing.T) {
+	appRoot := filepath.Join(t.TempDir(), "app")
+	roots := skillRootsForEdition(partneredition.Config{Name: partneredition.Partner}, filepath.Join(t.TempDir(), "home"), appRoot)
+	want := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
+	if len(roots) != len(want) {
+		t.Fatalf("roots=%+v", roots)
+	}
+	for i, name := range want {
+		if roots[i].Name != name || roots[i].Path != filepath.Join(appRoot, "skills", name) {
+			t.Fatalf("root[%d]=%+v, want bundled %s", i, roots[i], name)
+		}
+		if strings.Contains(roots[i].Path, ".codex") {
+			t.Fatalf("partner must not scan owner home skills: %+v", roots[i])
+		}
+	}
+}
+
+func TestSkillRootsForOwnerStillUseHomeCodex(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	roots := skillRootsForEdition(partneredition.Config{Name: partneredition.Owner}, home, filepath.Join(t.TempDir(), "app"))
+	if len(roots) < 3 || roots[0].Path != filepath.Join(home, ".codex", "skills", "finance-topic-selector") {
+		t.Fatalf("owner roots=%+v", roots)
+	}
+}
+
+func TestMissingMontageSkillDoesNotAbortPartnerConsole(t *testing.T) {
+	if !skipMontageOnError(partneredition.Config{Name: partneredition.Partner}, skillregistry.ErrSkillNotFound) {
+		t.Fatal("partner startup must continue when bundled montage skill is missing")
+	}
+	if skipMontageOnError(partneredition.Config{Name: partneredition.Owner}, skillregistry.ErrSkillNotFound) {
+		t.Fatal("owner startup should still treat a missing montage skill as fatal")
+	}
+}
+
+func TestStartPartnerManagerDoesNotBlockOnVerify(t *testing.T) {
+	started := make(chan struct{})
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	returned := make(chan struct{})
+	go func() {
+		startPartnerManager(context.Background(), startFunc(func(context.Context) error {
+			close(started)
+			<-block
+			return nil
+		}))
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startPartnerManager blocked on verify")
+	}
+	select {
+	case <-started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("partner Start was not invoked")
+	}
+}
+
+type startFunc func(context.Context) error
+
+func (f startFunc) Start(ctx context.Context) error { return f(ctx) }
 
 func TestPartnerEditionStartsWithoutCodexBinary(t *testing.T) {
 	deps := newMainTestDeps(t)
@@ -114,6 +191,28 @@ func TestInitializeAdministratorSkipsBootstrapForExistingAdmin(t *testing.T) {
 		t.Fatal("environment read")
 		return "", false
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPartnerEditionSkipsAdministratorBootstrap(t *testing.T) {
+	err := maybeInitializeAdministrator(
+		context.Background(),
+		partneredition.Config{Name: partneredition.Partner, GatewayURL: "https://23.138.12.112:2443"},
+		func(context.Context) (store.Admin, error) {
+			t.Fatal("partner edition must not read the owner administrator")
+			return store.Admin{}, store.ErrUnauthenticated
+		},
+		func(context.Context, string) error {
+			t.Fatal("partner edition must not bootstrap an owner administrator")
+			return nil
+		},
+		func(string) (string, bool) {
+			t.Fatal("partner edition must not read VIDEO_CONSOLE_INITIAL_PASSWORD")
+			return "", false
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -989,6 +1088,23 @@ func TestCodexFallbackStripsGrokSecretsForRemix(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(cmd.Args, " "), "openai-compat-run") {
 		t.Fatalf("explicit VIDEO_CONSOLE_LLM_RUNTIME=codex must not launch Codex CLI for remix, got %#v", cmd.Args)
+	}
+}
+
+func TestPartnerCAFileStaysEmptyForOwnerEdition(t *testing.T) {
+	appRoot := t.TempDir()
+	caPath := filepath.Join(appRoot, "resources", "tls", "partner-ca.crt")
+	if err := os.MkdirAll(filepath.Dir(caPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caPath, []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := partnerCAFile(appRoot); got != "" {
+		t.Fatalf("owner edition must not pin partner CA, got %q", got)
+	}
+	if got := appendPartnerCAEnv(nil, appRoot); len(got) != 0 {
+		t.Fatalf("owner env=%#v", got)
 	}
 }
 

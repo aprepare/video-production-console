@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"video-production-console/internal/security"
 )
@@ -62,6 +63,16 @@ func (s *CredentialStore) Save(credentials Credentials) error {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 	return writeCredentialsAtomically(s.path, raw)
+}
+
+func (s *CredentialStore) Clear() error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return nil
+	}
+	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (s *CredentialStore) Load() (Credentials, error) {

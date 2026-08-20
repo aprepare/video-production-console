@@ -22,6 +22,8 @@ import (
 	"time"
 
 	_ "golang.org/x/image/webp"
+
+	"video-production-console/internal/partnerclient"
 )
 
 const (
@@ -76,7 +78,11 @@ func (e imageAPIRequestError) Unwrap() error { return e.cause }
 
 func NewClient(client *http.Client) *Client {
 	if client == nil {
-		client = &http.Client{Timeout: DefaultGenerateTimeout}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if pem := partnerclient.LoadBundledCAPEM(); len(pem) > 0 {
+			_ = partnerclient.ApplyPinnedTLS(transport, pem)
+		}
+		client = &http.Client{Timeout: DefaultGenerateTimeout, Transport: transport}
 	}
 	apiClient := *client
 	apiClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

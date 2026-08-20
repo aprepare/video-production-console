@@ -121,7 +121,102 @@ test("the root chooser does not load workflow-specific data", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
-  expect(requests).toEqual(["/api/auth/me"]);
+  expect(requests).toEqual(["/api/health", "/api/auth/me"]);
+});
+
+test("partner edition does not require owner login after activation", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") {
+        return json({
+          state: "ready",
+          capabilities: { features: ["scenery_montage", "image_text"] },
+        });
+      }
+      if (path === "/api/auth/me") return new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } });
+      if (path === "/api/projects" || path === "/api/image-projects") return json([]);
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "登录控制台", level: 1 })).toBeNull();
+});
+
+test("partner edition waits at the gate and does not load settings or projects", async () => {
+  const requests: string[] = [];
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : input.toString();
+      requests.push(path);
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") return json({ state: "needs_activation" });
+      throw new Error(`unexpected request: ${path}`);
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByLabelText("伙伴密钥")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "选择制作方式", level: 1 })).toBeNull();
+  expect(requests).not.toContain("/api/settings");
+  expect(requests).not.toContain("/api/projects");
+  expect(requests).not.toContain("/api/auth/me");
+});
+
+test("partner edition hides movie and image-to-video tiles from scenery_montage and image_text", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") {
+        return json({
+          state: "ready",
+          capabilities: { features: ["scenery_montage", "image_text"] },
+        });
+      }
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "进入风景混剪" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "进入图文制作" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "进入电影混剪" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入图片视频" })).toBeNull();
+});
+
+test("partner image mode hides gpt-5.6-terra outside the text_models allowlist", async () => {
+  window.history.replaceState({}, "", "/image-projects");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") {
+        return json({
+          state: "ready",
+          capabilities: { features: ["image_text"], text_models: ["gpt-5.6-sol"] },
+        });
+      }
+      if (path === "/api/settings") return json({ text_models: ["gpt-5.6-sol"] });
+      if (path === "/api/image-projects") return json([]);
+    }),
+  );
+
+  render(<App />);
+
+  const select = await screen.findByRole("combobox", { name: "文本模型" });
+  const options = [...select.querySelectorAll("option")].map((option) => option.value);
+  expect(options).toContain("gpt-5.6-sol");
+  expect(options).not.toContain("gpt-5.6-terra");
 });
 
 test("the image project route does not load montage accounts, projects, or runtime", async () => {
@@ -1347,6 +1442,8 @@ function baseFetch(
     const method = (init?.method || "GET").toUpperCase();
     const response = await handler(path, method, init);
     if (response) return response;
+    if (path === "/api/health") return json({ status: "ok", edition: "owner" });
+    if (path === "/api/partner/setup") return json({ complete: true, detected_jianying_root: "" });
     if (path === "/api/auth/me") return json({ csrfToken: "csrf" });
     if (path === "/api/accounts")
       return json([{ id: "account-1", name: "认知觉醒" }]);
@@ -1673,6 +1770,53 @@ test("an existing continuous script advances to asset preparation without a seco
   expect(screen.queryByRole("button", { name: "开始二创文案" })).toBeNull();
   expect(confirm).not.toHaveBeenCalled();
   expect(taskRequests).toHaveLength(0);
+});
+
+test("partner edition waits at the gate and does not load settings or projects", async () => {
+  const requests: string[] = [];
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : input.toString();
+      requests.push(path);
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") return json({ state: "needs_activation" });
+      throw new Error(`unexpected request: ${path}`);
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByLabelText("伙伴密钥")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "选择制作方式", level: 1 })).toBeNull();
+  expect(requests).not.toContain("/api/settings");
+  expect(requests).not.toContain("/api/projects");
+  expect(requests).not.toContain("/api/auth/me");
+});
+
+test("partner edition hides movie and image-to-video tiles from scenery_montage and image_text", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/health") return json({ status: "ok", edition: "partner" });
+      if (path === "/api/partner/status") {
+        return json({
+          state: "ready",
+          capabilities: { features: ["scenery_montage", "image_text"] },
+        });
+      }
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "进入风景混剪" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "进入图文制作" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "进入电影混剪" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入图片视频" })).toBeNull();
 });
 
 test("the home board no longer exposes topic planning", async () => {

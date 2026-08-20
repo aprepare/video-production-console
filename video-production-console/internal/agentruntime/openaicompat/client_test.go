@@ -1,11 +1,70 @@
 package openaicompat
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestHTTP2ClientPinsPartnerCAFromEnv(t *testing.T) {
+	caPEM := testCAPEM(t)
+	caFile := filepath.Join(t.TempDir(), "partner-ca.crt")
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIDEO_CONSOLE_PARTNER_CA_FILE", caFile)
+	client := http2Client()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport == nil || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatal("remix HTTP client must pin the partner CA")
+	}
+	if got := transport.TLSClientConfig.ServerName; got != "23.138.12.112" {
+		t.Fatalf("server name=%q", got)
+	}
+}
+
+func TestHTTP2ClientUsesSystemRootsWithoutPartnerCA(t *testing.T) {
+	t.Setenv("VIDEO_CONSOLE_PARTNER_CA_FILE", "")
+	client := http2Client()
+	if client.Transport != nil {
+		if transport, ok := client.Transport.(*http.Transport); ok && transport != nil && transport.TLSClientConfig != nil && transport.TLSClientConfig.RootCAs != nil {
+			t.Fatal("owner remix client must not pin a partner CA")
+		}
+	}
+}
+
+func testCAPEM(t *testing.T) []byte {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "openaicompat-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
 
 func TestChatCompletionsURLJoinsV1(t *testing.T) {
 	cases := map[string]string{

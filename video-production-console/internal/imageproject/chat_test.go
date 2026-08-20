@@ -2,6 +2,8 @@ package imageproject
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -21,6 +23,19 @@ func TestChatHTTPClientIgnoresShortSharedClient(t *testing.T) {
 	got := chatHTTPClient(&http.Client{Timeout: 30 * time.Second})
 	if got.Timeout != DefaultChatTimeout {
 		t.Fatalf("timeout=%s, want %s", got.Timeout, DefaultChatTimeout)
+	}
+}
+
+func TestChatHTTPClientKeepsInjectedPinnedRoots(t *testing.T) {
+	pool := x509.NewCertPool()
+	base := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "23.138.12.112"}}}
+	got := chatHTTPClient(base)
+	transport, ok := got.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs != pool {
+		t.Fatal("planner client must keep the injected partner CA")
+	}
+	if got := transport.TLSClientConfig.ServerName; got != "23.138.12.112" {
+		t.Fatalf("server name=%q", got)
 	}
 }
 

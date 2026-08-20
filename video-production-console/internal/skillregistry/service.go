@@ -74,7 +74,14 @@ func NewService(repo Repository, optionValues ...Options) *Service {
 }
 
 func DefaultRoots(skillsBase string) []Root {
-	names := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
+	return rootsFor(skillsBase, []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"})
+}
+
+func PartnerRoots(skillsBase string) []Root {
+	return DefaultRoots(skillsBase)
+}
+
+func rootsFor(skillsBase string, names []string) []Root {
 	roots := make([]Root, 0, len(names))
 	for _, name := range names {
 		roots = append(roots, Root{Name: name, Path: filepath.Join(skillsBase, name)})

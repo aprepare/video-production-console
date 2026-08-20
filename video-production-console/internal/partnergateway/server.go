@@ -24,8 +24,10 @@ type ServerOptions struct {
 	Limiter          *Limiter
 	UpstreamBaseURL  *url.URL
 	UpstreamAPIKey   string
+	AdminPassword    string
 	HTTPClient       *http.Client
 	Logger           *slog.Logger
+	Now              func() time.Time
 	MaxRequestBytes  int64
 	MaxResponseBytes int64
 }
@@ -44,6 +46,10 @@ type Server struct {
 	policy          Policy
 	limiter         *Limiter
 	upstream        *Upstream
+	adminPassword   string
+	adminSessions   map[string]time.Time
+	adminLoginFails map[string][]time.Time
+	adminNow        func() time.Time
 	logger          *slog.Logger
 	maxRequestBytes int64
 	mux             *http.ServeMux
@@ -75,12 +81,20 @@ func NewServer(options ServerOptions) (*Server, error) {
 		return nil, err
 	}
 
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
 	server := &Server{
 		auth:            options.Auth,
 		store:           options.Store,
 		policy:          options.Policy,
 		limiter:         options.Limiter,
 		upstream:        upstream,
+		adminPassword:   strings.TrimSpace(options.AdminPassword),
+		adminSessions:   map[string]time.Time{},
+		adminLoginFails: map[string][]time.Time{},
+		adminNow:        now,
 		logger:          options.Logger,
 		maxRequestBytes: options.MaxRequestBytes,
 		mux:             http.NewServeMux(),
@@ -91,6 +105,16 @@ func NewServer(options ServerOptions) (*Server, error) {
 	server.mux.HandleFunc("GET /v1/models", server.withSession(server.models))
 	server.mux.HandleFunc("POST /v1/chat/completions", server.withSession(server.proxyChat))
 	server.mux.HandleFunc("POST /v1/images/generations", server.withSession(server.proxyImage))
+	server.mux.HandleFunc("GET /admin", server.adminPage)
+	server.mux.HandleFunc("GET /admin/api/session", server.adminSession)
+	server.mux.HandleFunc("GET /admin/api/partners", server.adminListPartners)
+	server.mux.HandleFunc("POST /admin/api/login", server.adminLogin)
+	server.mux.HandleFunc("POST /admin/api/logout", server.adminLogout)
+	server.mux.HandleFunc("POST /admin/api/partners", server.adminCreatePartner)
+	server.mux.HandleFunc("POST /admin/api/partners/enable", server.adminEnablePartner)
+	server.mux.HandleFunc("POST /admin/api/partners/disable", server.adminDisablePartner)
+	server.mux.HandleFunc("POST /admin/api/partners/rotate-key", server.adminRotatePartner)
+	server.mux.HandleFunc("POST /admin/api/partners/unbind", server.adminUnbindPartner)
 	return server, nil
 }
 
@@ -343,9 +367,14 @@ func registeredRoute(method, path string) string {
 
 func routeMethod(path string) string {
 	switch path {
-	case "/healthz", "/v1/models":
+	case "/healthz", "/v1/models", "/admin", "/admin/api/session":
 		return http.MethodGet
-	case "/auth/activate", "/auth/verify", "/v1/chat/completions", "/v1/images/generations":
+	case "/admin/api/partners":
+		return http.MethodGet + "|" + http.MethodPost
+	case "/auth/activate", "/auth/verify", "/v1/chat/completions", "/v1/images/generations",
+		"/admin/api/login", "/admin/api/logout",
+		"/admin/api/partners/enable", "/admin/api/partners/disable",
+		"/admin/api/partners/rotate-key", "/admin/api/partners/unbind":
 		return http.MethodPost
 	default:
 		return ""
@@ -353,6 +382,14 @@ func routeMethod(path string) string {
 }
 
 func routeMethodMatches(expected, actual string) bool {
+	if strings.Contains(expected, "|") {
+		for _, method := range strings.Split(expected, "|") {
+			if routeMethodMatches(method, actual) {
+				return true
+			}
+		}
+		return false
+	}
 	return expected == actual || (expected == http.MethodGet && actual == http.MethodHead)
 }
 

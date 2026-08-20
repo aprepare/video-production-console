@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,34 @@ func TestNewClientRejectsExpiredCertificate(t *testing.T) {
 	}
 	if _, err := client.Models(context.Background(), "session"); err == nil {
 		t.Fatal("expired certificate accepted")
+	}
+}
+
+func TestLoadBundledCAPEMUsesEnvFile(t *testing.T) {
+	_, caPEM := newTLSServerForIP(t, "23.138.12.112")
+	caFile := filepath.Join(t.TempDir(), "partner-ca.crt")
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIDEO_CONSOLE_PARTNER_CA_FILE", caFile)
+	got := LoadBundledCAPEM()
+	if string(got) != string(caPEM) {
+		t.Fatalf("loaded %d bytes, want %d", len(got), len(caPEM))
+	}
+}
+
+func TestPinnedHTTPClientRejectsUnknownAuthority(t *testing.T) {
+	goodServer, caPEM := newTLSServerForIP(t, "23.138.12.112")
+	client, err := PinnedHTTPClient(caPEM, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(goodServer.URL + "/v1/models"); err != nil {
+		t.Fatal(err)
+	}
+	badServer, _ := newTLSServerForIP(t, "23.138.12.112")
+	if _, err := client.Get(badServer.URL + "/v1/models"); err == nil {
+		t.Fatal("untrusted CA accepted")
 	}
 }
 

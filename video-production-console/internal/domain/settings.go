@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type PublicSettings struct {
 	ListenAddr                  string   `json:"listen_addr"`
@@ -60,6 +63,17 @@ type PublicSettings struct {
 	PexelsAPIBaseURL            string   `json:"pexels_api_base_url"`
 	PixabayAPIBaseURL           string   `json:"pixabay_api_base_url"`
 	MaxExternalResultsPerQuery  int      `json:"max_external_results_per_query"`
+}
+
+// PartnerSetupComplete reports first-run local path completion without
+// exposing secrets or gateway session material.
+func (s PublicSettings) PartnerSetupComplete() bool {
+	return strings.TrimSpace(s.MediaRoot) != "" &&
+		strings.TrimSpace(s.JianyingRoot) != "" &&
+		strings.TrimSpace(s.MediaIndexPath) != "" &&
+		strings.TrimSpace(s.MachineProfilePath) != "" &&
+		strings.TrimSpace(s.FFmpegPath) != "" &&
+		strings.TrimSpace(s.FFprobePath) != ""
 }
 
 type SecretStatus struct {

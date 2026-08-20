@@ -19,6 +19,8 @@ type IdeaPlannerDialogProps = {
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults: PublicSettings | undefined;
+  models?: readonly string[];
+  efforts?: readonly string[];
   onClose: () => void;
   onCreateConversation: () => void;
   onSwitchConversation: (session: IdeaSession) => void;
@@ -40,6 +42,8 @@ export function IdeaPlannerDialog({
   taskModel,
   onTaskModelChange,
   taskModelDefaults,
+  models,
+  efforts,
   onClose,
   onCreateConversation,
   onSwitchConversation,
@@ -190,6 +194,8 @@ export function IdeaPlannerDialog({
                 defaults={taskModelDefaults}
                 labelPrefix="选题"
                 purpose="remix"
+                models={models}
+                efforts={efforts}
               />
               <label htmlFor="idea-message-input">发送选题消息</label>
               <input

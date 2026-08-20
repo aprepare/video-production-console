@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"video-production-console/internal/partnerclient"
 )
 
 const DefaultChatTimeout = 10 * time.Minute
@@ -32,8 +34,18 @@ func NewHTTPChatClient(client *http.Client) *HTTPChatClient {
 // chatHTTPClient always returns a dedicated client. Reasoning models can sit
 // silent after the first SSE byte for tens of seconds; a shared/short client
 // or inherited Transport deadline will look like CPA "context canceled".
-func chatHTTPClient(_ *http.Client) *http.Client {
+func chatHTTPClient(base *http.Client) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if base != nil {
+		if inherited, ok := base.Transport.(*http.Transport); ok && inherited != nil && inherited.TLSClientConfig != nil {
+			transport.TLSClientConfig = inherited.TLSClientConfig.Clone()
+		}
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		if pem := partnerclient.LoadBundledCAPEM(); len(pem) > 0 {
+			_ = partnerclient.ApplyPinnedTLS(transport, pem)
+		}
+	}
 	transport.ResponseHeaderTimeout = 0
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ExpectContinueTimeout = 1 * time.Second

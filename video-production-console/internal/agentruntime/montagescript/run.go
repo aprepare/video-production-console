@@ -26,6 +26,7 @@ type Options struct {
 	Embedder          montageplan.Embedder
 	ShotSelector      montageplan.ShotSelector
 	LineBreaker       montageplan.LineBreaker
+	PartnerMode       bool
 }
 
 // Run validates inputs, builds a deterministic plan, executes the skill script,
@@ -43,6 +44,9 @@ func Run(opts Options) error {
 	}
 	python := strings.TrimSpace(opts.PythonBinary)
 	if python == "" {
+		if opts.PartnerMode {
+			return fmt.Errorf("python_binary is required in partner mode")
+		}
 		python = "python"
 	}
 	run := opts.CommandRunner
@@ -101,17 +105,17 @@ func Run(opts Options) error {
 	raw, err := run(python, script, "execute", "--manifest", manifestPath, "--plan", planPath)
 	resultFile := filepath.Join(filepath.Dir(planPath), "result.json")
 	if fileRaw, readErr := os.ReadFile(resultFile); readErr == nil {
-		if writeErr := writeRawEnvelope(outPath, fileRaw); writeErr == nil {
+		if writeErr := writeRawEnvelope(outPath, fileRaw, python); writeErr == nil {
 			return nil
 		}
 	}
 	if err != nil {
-		if writeErr := writeRawEnvelope(outPath, raw); writeErr == nil {
+		if writeErr := writeRawEnvelope(outPath, raw, python); writeErr == nil {
 			return nil
 		}
 		return writeFailure(outPath, manifestPath, fmt.Errorf("execute: %w", err))
 	}
-	if err := writeRawEnvelope(outPath, raw); err != nil {
+	if err := writeRawEnvelope(outPath, raw, python); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
 	return nil
@@ -231,7 +235,7 @@ func planPathFromManifest(manifestPath string) (string, error) {
 	return filepath.Join(manifest.OutputDir, "production_plan.json"), nil
 }
 
-func writeRawEnvelope(path string, raw []byte) error {
+func writeRawEnvelope(path string, raw []byte, pythonBinary string) error {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
 		return fmt.Errorf("empty script result")
@@ -246,7 +250,7 @@ func writeRawEnvelope(path string, raw []byte) error {
 	var probe map[string]any
 	if err := json.Unmarshal(candidate, &probe); err != nil {
 		// Windows Python may emit GBK text inside JSON; rewrite as UTF-8.
-		decoded, decErr := decodeBestEffortJSON(candidate)
+		decoded, decErr := decodeBestEffortJSON(candidate, pythonBinary)
 		if decErr != nil {
 			return fmt.Errorf("decode script result: %w", err)
 		}
@@ -298,10 +302,10 @@ func normalizeEnvelopePaths(probe map[string]any) {
 	}
 }
 
-func decodeBestEffortJSON(raw []byte) (map[string]any, error) {
+func decodeBestEffortJSON(raw []byte, pythonBinary string) (map[string]any, error) {
 	for _, decode := range []func([]byte) ([]byte, error){
 		func(b []byte) ([]byte, error) { return b, nil },
-		decodeGBK,
+		func(b []byte) ([]byte, error) { return decodeGBK(pythonBinary, b) },
 	} {
 		converted, err := decode(raw)
 		if err != nil {
@@ -315,9 +319,18 @@ func decodeBestEffortJSON(raw []byte) (map[string]any, error) {
 	return nil, fmt.Errorf("unsupported script result encoding")
 }
 
-func decodeGBK(raw []byte) ([]byte, error) {
-	// Minimal GBK→UTF-8 via PowerShell-free table is heavy; use python when needed.
-	cmd := exec.Command("python", "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().decode('gb18030','replace').encode('utf-8'))")
+func buildDecodeCommand(configured, input string) *exec.Cmd {
+	cmd := exec.Command(configured, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().decode('gb18030','replace').encode('utf-8'))")
+	cmd.Stdin = strings.NewReader(input)
+	return cmd
+}
+
+func decodeGBK(pythonBinary string, raw []byte) ([]byte, error) {
+	configured := strings.TrimSpace(pythonBinary)
+	if configured == "" {
+		configured = "python"
+	}
+	cmd := buildDecodeCommand(configured, "")
 	cmd.Stdin = bytes.NewReader(raw)
 	out, err := cmd.Output()
 	if err != nil {

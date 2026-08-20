@@ -27,6 +27,7 @@ const EnvLLMRuntime = "VIDEO_CONSOLE_LLM_RUNTIME"
 const (
 	EnvOpenAIBaseURL = "VIDEO_CONSOLE_OPENAI_BASE_URL"
 	EnvOpenAIAPIKey  = "VIDEO_CONSOLE_OPENAI_API_KEY"
+	EnvPartnerCAFile = "VIDEO_CONSOLE_PARTNER_CA_FILE"
 )
 
 type ModelRef struct {

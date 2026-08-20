@@ -36,6 +36,7 @@ type ConsoleHomeProps = {
   onNewAccountNameChange: (value: string) => void;
   accountBackgroundSelected: boolean;
   onAccountBackgroundChange: (file: File | null) => void;
+  creatingAccount?: boolean;
   newProject: string;
   onNewProjectChange: (value: string) => void;
   onCreateProject: (event: FormEvent) => void;
@@ -70,6 +71,7 @@ export function ConsoleHome({
   onNewAccountNameChange,
   accountBackgroundSelected,
   onAccountBackgroundChange,
+  creatingAccount = false,
   newProject,
   onNewProjectChange,
   onCreateProject,
@@ -173,6 +175,7 @@ export function ConsoleHome({
           onNewAccountNameChange={onNewAccountNameChange}
           backgroundSelected={accountBackgroundSelected}
           onBackgroundChange={onAccountBackgroundChange}
+          creating={creatingAccount}
         />
         <main>
           <div className="toolbar">

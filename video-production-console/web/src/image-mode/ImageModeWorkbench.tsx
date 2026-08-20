@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ArrowLeft, Download, Eye, EyeOff, FileText, Play, RefreshCw, Trash2 } from "lucide-react";
 import { ModelSelect } from "../ModelSelect";
-import { reasoningEfforts } from "../taskModel";
+import { resolveSelectableEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate } from "../types";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
@@ -24,6 +24,8 @@ type Props = {
   defaultReasoningEffort?: ReasoningEffort | "";
   defaultImageModel?: string;
   defaultImageAttempts?: number;
+  models?: readonly string[];
+  efforts?: readonly string[];
   onAdvancedMode?: () => void;
 };
 type EditableItemField = "source_text" | "title" | "prompt";
@@ -105,8 +107,11 @@ export function ImageModeWorkbench({
   defaultReasoningEffort = "",
   defaultImageModel = "",
   defaultImageAttempts = 2,
+  models,
+  efforts,
   onAdvancedMode,
 }: Props) {
+  const effortOptions = resolveSelectableEfforts(efforts);
   const [projects, setProjects] = useState<ImageProject[]>([]);
   const [detail, setDetail] = useState<ImageProjectDetail | null>(null);
   const [previewItem, setPreviewItem] = useState<ImageProjectItem | null>(null);
@@ -709,6 +714,8 @@ export function ImageModeWorkbench({
             defaultReasoningEffort={reasoningEffort}
             defaultImageModel={defaultImageModel}
             defaultImageAttempts={imageAttempts}
+            models={models}
+            efforts={efforts}
             onCreated={(projectID) => {
               if (onProjectOpen) onProjectOpen(projectID);
               else void loadProject(projectID);
@@ -722,7 +729,7 @@ export function ImageModeWorkbench({
           <label>最终文案<textarea rows={12} value={script} onChange={(event) => { setScript(event.target.value); setSegments([]); }} placeholder="粘贴已经定稿的完整文案；系统不会二创" /></label>
           <div className="image-param-grid">
             <label>{"\u5efa\u8bae\u5f20\u6570"}<input type="number" min={1} max={18} value={count || ""} onChange={(event) => setCount(Math.min(18, Math.max(0, Number(event.target.value) || 0)))} placeholder={"\u7559\u7a7a\u5219\u81ea\u52a8\u5206\u6bb5"} /></label>
-            <label>{"\u601d\u8003\u5f3a\u5ea6"}<select aria-label={"\u601d\u8003\u5f3a\u5ea6"} value={reasoningEffort} onChange={(event) => { editedDefaults.current.reasoningEffort = true; setReasoningEffort(event.target.value as ReasoningEffort | ""); }}><option value="">{"\u4e0d\u8bbe\u7f6e"}</option>{reasoningEfforts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+            <label>{"\u601d\u8003\u5f3a\u5ea6"}<select aria-label={"\u601d\u8003\u5f3a\u5ea6"} value={reasoningEffort} onChange={(event) => { editedDefaults.current.reasoningEffort = true; setReasoningEffort(event.target.value as ReasoningEffort | ""); }}><option value="">{"\u4e0d\u8bbe\u7f6e"}</option>{effortOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>图片比例<select value={ratio} onChange={(event) => { editedDefaults.current.ratio = true; setRatio(event.target.value as ImageProject["ratio"]); }}>{ratios.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label>视觉风格<select value={style} onChange={(event) => { editedDefaults.current.style = true; setStyle(event.target.value); }}>{styles.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
             <label>项目并发<select value={concurrency} onChange={(event) => { editedDefaults.current.concurrency = true; setConcurrency(Number(event.target.value)); }}>{concurrencyOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
@@ -745,6 +752,7 @@ export function ImageModeWorkbench({
                 aria-label="文本模型"
                 value={textModel}
                 onChange={(value) => { editedDefaults.current.textModel = true; setTextModel(value); }}
+                models={models}
               />
             </label>
           </div>

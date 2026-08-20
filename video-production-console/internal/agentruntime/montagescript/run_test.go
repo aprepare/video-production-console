@@ -215,6 +215,41 @@ func TestMixPresetFromManifest(t *testing.T) {
 	}
 }
 
+func TestDecodeGBKFallbackUsesConfiguredPython(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "python.exe")
+	got := buildDecodeCommand(configured, "input")
+	if got.Path != configured {
+		t.Fatalf("path=%q", got.Path)
+	}
+}
+
+func TestPartnerModeDoesNotFallBackToPATHPython(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "scripts", "run_montage_job.py"), []byte("# fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Run(Options{
+		ManifestPath:      filepath.Join(root, "task_manifest.json"),
+		SkillRoot:         skillRoot,
+		OutputLastMessage: filepath.Join(root, "last.json"),
+		PartnerMode:       true,
+		CommandRunner: func(name string, args ...string) ([]byte, error) {
+			t.Fatalf("partner mode used PATH python %q %v", name, args)
+			return nil, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("partner mode accepted empty python binary")
+	}
+	if strings.EqualFold(filepath.Base(strings.TrimSpace(err.Error())), "python") {
+		t.Fatalf("error still mentions PATH python: %v", err)
+	}
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }

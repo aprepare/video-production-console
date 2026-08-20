@@ -6,6 +6,9 @@ import { apiRequest } from "./api/client";
 import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
 import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
+import { PartnerGate, usePartnerSession } from "./partner/PartnerGate";
+import type { PartnerSettingsView, PartnerSnapshot } from "./partner/types";
+import { PartnerSettingsPanel, usePartnerSettingsDialog } from "./settings/PartnerSettingsPanel";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { ImageModeWorkbench } from "./image-mode/ImageModeWorkbench";
 import { MediaLibraryPanel } from "./media-library/MediaLibraryPanel";
@@ -19,7 +22,7 @@ import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { ConsoleHome } from "./shell/ConsoleHome";
 import { ModeHome } from "./production-modes/ModeHome";
-import { montageKindLabel, parseMontageKind, productionModes } from "./production-modes/catalog";
+import { modesForCapabilities, montageKindLabel, parseMontageKind, productionModes } from "./production-modes/catalog";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
 import {
@@ -90,8 +93,49 @@ const textAssets = new Set([
 ]);
 const noTasks: Task[] = [];
 
+function partnerImageRatio(value: string | undefined): "3:4" | "4:3" | "9:16" | "1:1" | undefined {
+  if (value === "3:4" || value === "4:3" || value === "9:16" || value === "1:1") return value;
+  return undefined;
+}
+
+function partnerAllowlist(
+  settings: PartnerSettingsView | null,
+  session: PartnerSnapshot | null,
+  key: "text_models" | "reasoning_efforts",
+): readonly string[] | undefined {
+  if (!session) return undefined;
+  const fromSettings = settings?.[key];
+  if (fromSettings && fromSettings.length > 0) return fromSettings;
+  const fromCaps = session.capabilities?.[key];
+  if (fromCaps && fromCaps.length > 0) return fromCaps;
+  return undefined;
+}
+
 function App() {
+  const [edition, setEdition] = useState<"owner" | "partner" | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/health", { credentials: "same-origin" });
+        const payload = (await response.json()) as { edition?: string };
+        if (!cancelled) setEdition(payload.edition === "partner" ? "partner" : "owner");
+      } catch {
+        if (!cancelled) setEdition("owner");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!edition) return <div className="splash">正在启动…</div>;
+  const body = <AppShell />;
+  return edition === "partner" ? <PartnerGate>{body}</PartnerGate> : body;
+}
+
+function AppShell() {
   const client = useQueryClient();
+  const partnerSession = usePartnerSession();
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const route = parseLocation(window.location.pathname);
@@ -107,6 +151,7 @@ function App() {
   const [account, setAccount] = useState("");
   const [newAccount, setNewAccount] = useState("");
   const [accountBackground, setAccountBackground] = useState<File | null>(null);
+  const [creatingAccount, setCreatingAccount] = useState(false);
   const [newProject, setNewProject] = useState("");
   const [message, setMessage] = useState("");
   const [selected, setSelected] = useState<Project | null>(null);
@@ -183,13 +228,34 @@ function App() {
   );
   const settingsQuery = useQuery({
     queryKey: queryKeys.settings(),
-    enabled: authenticated === true && (montageRoute || imageRoute),
+    enabled: !partnerSession && authenticated === true && (montageRoute || imageRoute),
     queryFn: ({ signal }) => readSettings(signal),
   });
   const settings = settingsQuery.data ?? null;
+  const partnerSettingsQuery = useQuery({
+    queryKey: ["partner-settings"],
+    enabled: Boolean(partnerSession) && authenticated === true && (montageRoute || imageRoute),
+    queryFn: async ({ signal }) => {
+      const response = await api("/api/settings", { signal });
+      if (!response.ok) throw new Error("设置读取失败。");
+      return (await response.json()) as PartnerSettingsView;
+    },
+  });
+  const partnerSettings = partnerSettingsQuery.data ?? null;
+  const partnerTextModels = partnerAllowlist(partnerSettings, partnerSession, "text_models");
+  const partnerEfforts = partnerAllowlist(partnerSettings, partnerSession, "reasoning_efforts");
 
   const settingsPanel = useSettingsDialog({ api, readSettings, setMessage });
+  const partnerSettingsPanel = usePartnerSettingsDialog({ api, setMessage });
   const { open: settingsOpen, setOpen: setSettingsOpen } = settingsPanel;
+  const settingsDialogOpen = settingsOpen || partnerSettingsPanel.open;
+  const closePartnerSettingsRef = useRef(partnerSettingsPanel.close);
+  closePartnerSettingsRef.current = partnerSettingsPanel.close;
+  const openSettings = () =>
+    void (partnerSession ? partnerSettingsPanel.openDialog() : settingsPanel.openDialog());
+  const visibleModes = partnerSession
+    ? modesForCapabilities(partnerSession.capabilities?.features ?? [])
+    : productionModes;
 
   useEffect(() => {
     if (consoleDataFailed) setMessage("控制台服务尚未连接");
@@ -376,6 +442,10 @@ function App() {
   }, [detail, setProjects]);
 
   useEffect(() => {
+    if (partnerSession) {
+      setAuthenticated(true);
+      return;
+    }
     void (async () => {
       try {
         const response = await fetch("/api/auth/me", {
@@ -392,7 +462,7 @@ function App() {
         setAuthenticated(false);
       }
     })();
-  }, []);
+  }, [partnerSession]);
   useEffect(() => {
     if (!montageRoute || !selected || !activeTaskIDs) return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -580,7 +650,7 @@ function App() {
     const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
     const active = dialogs[dialogs.length - 1];
     const dialogOpen = Boolean(
-      preview || reviseOpen || settingsOpen || taskOpen,
+      preview || reviseOpen || settingsDialogOpen || taskOpen,
     );
     if (!dialogOpen) {
       if (dialogWasOpenRef.current) previousFocusRef.current?.focus();
@@ -663,7 +733,10 @@ function App() {
       if (taskOpen) {
         setTaskOpen(null);
         writeTaskQuery("", "replace");
-      } else if (settingsOpen) setSettingsOpen(false);
+      } else if (settingsDialogOpen) {
+        setSettingsOpen(false);
+        closePartnerSettingsRef.current();
+      }
       else if (reviseOpen) setReviseOpen(false);
       else if (preview) setPreview(null);
       else if (selected) {
@@ -687,7 +760,7 @@ function App() {
         }
       });
     };
-  }, [clearProjectSelection, preview, reviseOpen, selected, setSettingsOpen, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, preview, reviseOpen, selected, setSettingsOpen, settingsDialogOpen, taskOpen]);
   useEffect(() => () => {
     taskRestoreAbortRef.current?.abort();
     if (detailRefreshTimerRef.current !== null)
@@ -750,7 +823,7 @@ function App() {
     writeProjectLocation("", "push");
   };
   useEffect(() => {
-    if (!selected || preview || settingsOpen || taskOpen) return;
+    if (!selected || preview || settingsDialogOpen || taskOpen) return;
     const returnToBoard = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -762,7 +835,7 @@ function App() {
     };
     window.addEventListener("keydown", returnToBoard);
     return () => window.removeEventListener("keydown", returnToBoard);
-  }, [clearProjectSelection, preview, selected, settingsOpen, taskOpen]);
+  }, [clearProjectSelection, preview, selected, settingsDialogOpen, taskOpen]);
   const createAccount = async (event: FormEvent) => {
     event.preventDefault();
     if (!newAccount.trim() || !accountBackground) {
@@ -772,16 +845,24 @@ function App() {
     const body = new FormData();
     body.set("name", newAccount.trim());
     body.set("background", accountBackground);
-    const response = await api("/api/accounts", { method: "POST", body });
-    if (!response.ok) {
-      setMessage("账号创建失败，请检查名称和背景图。");
-      return;
+    setCreatingAccount(true);
+    setMessage("正在保存账号和背景图，大图可能需要一些时间…");
+    try {
+      const response = await api("/api/accounts", { method: "POST", body });
+      if (!response.ok) {
+        setMessage("账号创建失败，请换一张 20MB 以内的 PNG、JPEG 或 WebP 后重试。");
+        return;
+      }
+      setNewAccount("");
+      setAccountBackground(null);
+      setAccountFormOpen(false);
+      setMessage("账号已创建。");
+      await client.invalidateQueries({ queryKey: queryKeys.accounts() });
+    } catch {
+      setMessage("账号创建中断，请确认软件仍在运行后，换一张较小的图片重试。");
+    } finally {
+      setCreatingAccount(false);
     }
-    setNewAccount("");
-    setAccountBackground(null);
-    setAccountFormOpen(false);
-    setMessage("账号已创建。");
-    await client.invalidateQueries({ queryKey: queryKeys.accounts() });
   };
   const answerTask = async (task: Task, providedAnswer?: string) => {
     const questions = taskQuestions(task);
@@ -888,7 +969,7 @@ function App() {
     );
 
   const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || taskOpen || mediaLibraryOpen,
+    preview || reviseOpen || settingsDialogOpen || taskOpen || mediaLibraryOpen,
   );
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
@@ -902,7 +983,7 @@ function App() {
   return (
     <div className={imageRoute ? "shell shell--image" : "shell"}>
       {route.view === "mode-home" ? (
-        <ModeHome modes={productionModes} onNavigate={navigate} />
+        <ModeHome modes={visibleModes} onNavigate={navigate} />
       ) : route.view === "not-found" ? (
         <main className="notice" role="alert">
           <h1>404</h1>
@@ -926,7 +1007,7 @@ function App() {
                 </select>
               </label>
               <button type="button" className="header-button" onClick={() => navigate("/")}>制作方式</button>
-              <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
+              <button className="header-button" onClick={openSettings}>设置</button>
               <button className="header-button" onClick={() => void logout()}>退出</button>
             </div>
           </header>
@@ -936,13 +1017,23 @@ function App() {
             initialProjectID={imageProjectID}
             onProjectOpen={(id) => navigate(`/image-projects/${id}`)}
             onProjectClose={() => navigate("/image-projects")}
-            defaultRatio={settings?.public.default_image_ratio}
-            defaultStyle={settings?.public.default_image_style}
+            defaultRatio={partnerSession ? partnerImageRatio(partnerSettings?.default_image_ratio) : settings?.public.default_image_ratio}
+            defaultStyle={partnerSession ? partnerSettings?.default_image_style : settings?.public.default_image_style}
             defaultConcurrency={settings?.public.max_image_concurrency}
-            defaultTextModel={settings?.public.image_text_model || "gpt-5.6-sol"}
+            defaultTextModel={
+              partnerSession
+                ? partnerSettings?.text_models?.[0] || "gpt-5.6-sol"
+                : settings?.public.image_text_model || "gpt-5.6-sol"
+            }
             defaultReasoningEffort=""
-            defaultImageModel={settings?.public.image_model || "gpt-image-2"}
+            defaultImageModel={
+              partnerSession
+                ? partnerSettings?.image_model || "gpt-image-2"
+                : settings?.public.image_model || "gpt-image-2"
+            }
             defaultImageAttempts={settings?.public.image_generation_attempts}
+            models={partnerTextModels}
+            efforts={partnerEfforts}
             onAdvancedMode={() => navigate("/image-projects/advanced")}
           />
         </>
@@ -972,7 +1063,16 @@ function App() {
           onGenerateNarration={() => void projectActions.generateNarration()}
           taskModel={projectActions.taskModel}
           onTaskModelChange={(value) => projectActions.setTaskModel(value)}
-          taskModelDefaults={settings?.public}
+          taskModelDefaults={
+            partnerSession
+              ? {
+                  remix_model: partnerSettings?.text_models?.[0],
+                  codex_default_model: partnerSettings?.text_models?.[0],
+                }
+              : settings?.public
+          }
+          models={partnerTextModels}
+          efforts={partnerEfforts}
           remixPromptStyle={projectActions.remixPromptStyle}
           onRemixPromptStyleChange={projectActions.setRemixPromptStyle}
           onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
@@ -1000,7 +1100,7 @@ function App() {
           modeTitle={montageKindLabel(montageKind)}
           runtime={runtime}
           onOpenMediaLibrary={() => setMediaLibraryOpen(true)}
-          onOpenSettings={() => void settingsPanel.openDialog()}
+          onOpenSettings={openSettings}
           onLogout={() => void logout()}
           accounts={accounts}
           selectedAccountID={account}
@@ -1012,6 +1112,7 @@ function App() {
           onNewAccountNameChange={setNewAccount}
           accountBackgroundSelected={Boolean(accountBackground)}
           onAccountBackgroundChange={setAccountBackground}
+          creatingAccount={creatingAccount}
           newProject={newProject}
           onNewProjectChange={setNewProject}
           onCreateProject={projectActions.createProject}
@@ -1047,6 +1148,8 @@ function App() {
           taskModel={projectActions.taskModel}
           onTaskModelChange={projectActions.setTaskModel}
           taskModelDefaults={settings?.public}
+          models={partnerTextModels}
+          efforts={partnerEfforts}
           submitDisabled={
             !reviseNotes.trim()
             || detail?.assets.continuous_script?.state !== "ready"
@@ -1060,7 +1163,14 @@ function App() {
       {mediaLibraryOpen && (
         <MediaLibraryPanel api={api} onClose={() => setMediaLibraryOpen(false)} />
       )}
-      {settingsOpen && settingsPanel.draft && (
+      {partnerSession && partnerSettingsPanel.open && partnerSettingsPanel.settings ? (
+        <PartnerSettingsPanel
+          settings={partnerSettingsPanel.settings}
+          onSave={(update) => void partnerSettingsPanel.save(update)}
+          onClose={partnerSettingsPanel.close}
+          feedback={partnerSettingsPanel.feedback}
+        />
+      ) : settingsOpen && settingsPanel.draft ? (
         <SettingsPanel
           settings={settings}
           draft={settingsPanel.draft}
@@ -1071,7 +1181,7 @@ function App() {
           onClose={settingsPanel.close}
           onSubmit={settingsPanel.save}
         />
-      )}
+      ) : null}
       {taskOpen && (
         <TaskDetailDialog
           task={taskOpen}

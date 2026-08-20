@@ -125,7 +125,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.lockWithError(err)
 		return err
 	}
-	return m.verify(ctx, deviceHash, credentials)
+	return m.verify(ctx, deviceHash, credentials, false)
 }
 
 func (m *Manager) SetOnChange(onChange func()) {
@@ -137,12 +137,12 @@ func (m *Manager) SetOnChange(onChange func()) {
 func (m *Manager) Activate(ctx context.Context, activationKey string) error {
 	deviceHash, err := m.deviceHash()
 	if err != nil {
-		m.lockWithError(err)
+		m.returnToActivation(err)
 		return err
 	}
 	if m.gateway == nil || m.credentialStore == nil {
 		err := errors.New("partner manager dependencies are required")
-		m.lockWithError(err)
+		m.returnToActivation(err)
 		return err
 	}
 
@@ -154,11 +154,11 @@ func (m *Manager) Activate(ctx context.Context, activationKey string) error {
 		Edition:       m.edition,
 	})
 	if err != nil {
-		m.lockWithError(err)
+		m.returnToActivation(err)
 		return err
 	}
 	if err := m.validateAuthResponse(response, "", true); err != nil {
-		m.lockWithError(err)
+		m.returnToActivation(err)
 		return err
 	}
 	credentials := Credentials{
@@ -167,7 +167,7 @@ func (m *Manager) Activate(ctx context.Context, activationKey string) error {
 		AuraAPIKey:   response.Aura.APIKey,
 	}
 	if err := m.credentialStore.Save(credentials); err != nil {
-		m.lockWithError(err)
+		m.returnToActivation(err)
 		return err
 	}
 	m.acceptAuth(credentials, response)
@@ -222,7 +222,7 @@ func (m *Manager) Close() {
 	m.aura.APIKey = ""
 }
 
-func (m *Manager) verify(ctx context.Context, deviceHash string, credentials Credentials) error {
+func (m *Manager) verify(ctx context.Context, deviceHash string, credentials Credentials, lockOnFailure bool) error {
 	m.beginVerification()
 	response, err := m.gateway.Verify(ctx, VerifyRequest{
 		PartnerID:    credentials.PartnerID,
@@ -231,11 +231,11 @@ func (m *Manager) verify(ctx context.Context, deviceHash string, credentials Cre
 		AppVersion:   m.appVersion,
 	})
 	if err != nil {
-		m.lockWithError(err)
+		m.handleVerifyError(err, lockOnFailure)
 		return err
 	}
 	if err := m.validateAuthResponse(response, credentials.PartnerID, false); err != nil {
-		m.lockWithError(err)
+		m.handleVerifyError(err, lockOnFailure)
 		return err
 	}
 	if response.PartnerID != "" {
@@ -273,7 +273,7 @@ func (m *Manager) reverify() {
 		m.lockWithError(err)
 		return
 	}
-	_ = m.verify(context.Background(), deviceHash, credentials)
+	_ = m.verify(context.Background(), deviceHash, credentials, true)
 }
 
 func (m *Manager) beginVerification() {
@@ -343,6 +343,29 @@ func (m *Manager) scheduleReverifyLocked() {
 	m.timer = time.AfterFunc(delay, m.reverify)
 }
 
+func reopenActivation(err error) bool {
+	return errors.Is(err, ErrAuthorizationFailed) || errors.Is(err, ErrDeviceMismatch)
+}
+
+func clearStoredCredentials(store CredentialsStore) {
+	type clearer interface{ Clear() error }
+	if store == nil {
+		return
+	}
+	if item, ok := store.(clearer); ok {
+		_ = item.Clear()
+	}
+}
+
+func (m *Manager) handleVerifyError(err error, lockOnFailure bool) {
+	if !lockOnFailure && reopenActivation(err) {
+		clearStoredCredentials(m.credentialStore)
+		m.returnToActivation(err)
+		return
+	}
+	m.lockWithError(err)
+}
+
 func (m *Manager) lockWithError(err error) {
 	m.mu.Lock()
 	if m.timer != nil {
@@ -367,6 +390,14 @@ func (m *Manager) lockWithError(err error) {
 }
 
 func (m *Manager) setNeedsActivation() {
+	m.setActivationState("")
+}
+
+func (m *Manager) returnToActivation(err error) {
+	m.setActivationState(sanitizedErrorCode(err))
+}
+
+func (m *Manager) setActivationState(errorCode string) {
 	m.mu.Lock()
 	if m.timer != nil {
 		m.timer.Stop()
@@ -377,7 +408,7 @@ func (m *Manager) setNeedsActivation() {
 	m.partnerName = ""
 	m.capabilities = Capabilities{}
 	m.sessionExpiresAt = time.Time{}
-	m.errorCode = ""
+	m.errorCode = errorCode
 	m.deviceSecret = ""
 	m.aura = AuraRuntime{}
 	m.sessionToken = ""

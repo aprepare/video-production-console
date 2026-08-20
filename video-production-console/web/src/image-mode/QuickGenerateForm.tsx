@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { ChevronDown, PenLine } from "lucide-react";
 import { ModelSelect } from "../ModelSelect";
-import { reasoningEfforts } from "../taskModel";
+import { resolveSelectableEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, QuickImageProjectRequest, QuickImageProjectResponse } from "../types";
 
@@ -17,6 +17,8 @@ export type QuickGenerateFormProps = {
   defaultReasoningEffort: ReasoningEffort | "";
   defaultImageModel: string;
   defaultImageAttempts: number;
+  models?: readonly string[];
+  efforts?: readonly string[];
   onCreated: (projectID: string) => void;
   onAdvancedMode: () => void;
 };
@@ -62,9 +64,12 @@ export function QuickGenerateForm({
   defaultReasoningEffort,
   defaultImageModel,
   defaultImageAttempts,
+  models,
+  efforts,
   onCreated,
   onAdvancedMode,
 }: QuickGenerateFormProps) {
+  const effortOptions = resolveSelectableEfforts(efforts);
   const [script, setScript] = useState("");
   const [ratio, setRatio] = useState<ImageProject["ratio"]>(defaultRatio);
   const [style, setStyle] = useState(defaultStyle);
@@ -146,6 +151,7 @@ export function QuickGenerateForm({
             aria-label="文本模型"
             value={textModel}
             onChange={setTextModel}
+            models={models}
           />
         </label>
         <label>
@@ -162,7 +168,7 @@ export function QuickGenerateForm({
           思考强度
           <select aria-label="思考强度" value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")}>
             <option value="">不设置</option>
-            {reasoningEfforts.map((value) => <option value={value} key={value}>{value}</option>)}
+            {effortOptions.map((value) => <option value={value} key={value}>{value}</option>)}
           </select>
         </label>
         <label>

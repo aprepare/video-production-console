@@ -391,3 +391,14 @@ func TestRealFFmpegIntegration(t *testing.T) {
 		t.Fatalf("keyframe validation failed: %dx%d digest %q", width, height, digest)
 	}
 }
+
+func TestBundledFFmpegPathsUseAppRootRuntime(t *testing.T) {
+	appRoot := filepath.Join(t.TempDir(), "app")
+	ffmpeg, ffprobe := BundledPaths(appRoot)
+	if ffmpeg != filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffmpeg.exe") {
+		t.Fatalf("ffmpeg=%q", ffmpeg)
+	}
+	if ffprobe != filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffprobe.exe") {
+		t.Fatalf("ffprobe=%q", ffprobe)
+	}
+}

@@ -32,6 +32,21 @@ describe("QuickGenerateForm", () => {
     expect((screen.getByLabelText("每张图片最多请求次数") as HTMLSelectElement).value).toBe("2");
   });
 
+  test("partner allowlist hides gpt-5.6-terra from the text model select", () => {
+    render(
+      <QuickGenerateForm
+        api={vi.fn()}
+        {...defaults}
+        models={["gpt-5.6-sol"]}
+        onCreated={vi.fn()}
+        onAdvancedMode={vi.fn()}
+      />,
+    );
+    const options = [...(screen.getByLabelText("文本模型") as HTMLSelectElement).options].map((option) => option.value);
+    expect(options).toEqual(["gpt-5.6-sol"]);
+    expect(options).not.toContain("gpt-5.6-terra");
+  });
+
   test("lets the user pick a different text model and submits that name", async () => {
     const onCreated = vi.fn();
     let request: RequestInit | undefined;

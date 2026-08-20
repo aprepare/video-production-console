@@ -54,6 +54,8 @@ export type ProjectWorkbenchProps = {
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults?: TaskModelDefaults;
+  models?: readonly string[];
+  efforts?: readonly string[];
   remixPromptStyle: RemixPromptStyle;
   onRemixPromptStyleChange: (value: RemixPromptStyle) => void;
   onReplaceBackground: (file: File) => void;
@@ -492,6 +494,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 defaults={props.taskModelDefaults}
                 labelPrefix="工作台"
                 purpose="remix"
+                models={props.models}
+                efforts={props.efforts}
               />
             ) : null}
             <footer>
@@ -625,6 +629,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   defaults={props.taskModelDefaults}
                   labelPrefix="工作台"
                   purpose={displayAction.id === "start-source-remix" ? "remix" : "codex"}
+                  models={props.models}
+                  efforts={props.efforts}
                 />
               ) : null}
               <p className="primary-action-panel__hint">

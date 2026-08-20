@@ -105,23 +105,22 @@ func isLandscapeItem(item mediaItem) bool {
 	key := strings.ToLower(strings.ReplaceAll(raw, " ", "_"))
 	switch key {
 	case "nature_landscape", "scenery", "landscape", "nature",
-		"weather_water_fire", "weather", "space_cosmos", "space",
-		"city_traffic", "city", "urban", "skyline", "architecture",
-		"finance_business", "finance", "business", "office":
+		"weather_water_fire", "weather":
 		return true
 	}
-	for _, token := range []string{"风景", "景观", "城市", "车流", "天际线", "财经", "金融"} {
+	for _, token := range []string{"风景", "自然", "山水"} {
 		if strings.Contains(raw, token) {
 			return true
 		}
 	}
 	path := strings.ToLower(filepath.ToSlash(item.RelativePath + " " + item.AbsPath))
+	if strings.Contains(path, "/movies/") {
+		return false
+	}
 	for _, token := range []string{
-		"nature_landscape", "/scenery/", "/landscape/",
-		"weather_water_fire", "space_cosmos",
-		"city_traffic", "/city/", "/urban/",
-		"finance_business", "/finance/",
-		"风景", "景观", "城市", "车流", "天际线", "财经", "金融",
+		"nature_landscape", "/scenery/", "/landscape/", "/nature/",
+		"weather_water_fire", "/weather/",
+		"风景", "自然", "山水",
 	} {
 		if strings.Contains(path, token) {
 			return true
@@ -131,10 +130,10 @@ func isLandscapeItem(item mediaItem) bool {
 		tag = strings.TrimSpace(tag)
 		lower := strings.ToLower(tag)
 		switch lower {
-		case "landscape", "scenery", "city", "traffic", "skyline", "finance", "business":
+		case "landscape", "scenery", "nature", "weather":
 			return true
 		}
-		for _, token := range []string{"风景", "景观", "城市", "车流", "天际线", "财经", "金融"} {
+		for _, token := range []string{"风景", "自然", "山水"} {
 			if strings.Contains(tag, token) {
 				return true
 			}
@@ -187,7 +186,7 @@ func mergeRankedCandidates(primary, extra []rankedCandidate) []rankedCandidate {
 // resolveMediaPath joins a declared relative path with the canonical media
 // root and rejects absolute paths and any traversal outside the root.
 func resolveMediaPath(mediaRoot, relative string) (string, error) {
-	cleaned := filepath.FromSlash(strings.TrimSpace(relative))
+	cleaned := filepath.FromSlash(filepath.ToSlash(strings.TrimSpace(relative)))
 	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" ||
 		strings.HasPrefix(cleaned, string(filepath.Separator)) {
 		return "", fmt.Errorf("media index relative_path must not be absolute: %s", relative)

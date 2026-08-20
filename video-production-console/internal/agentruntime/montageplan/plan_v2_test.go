@@ -971,28 +971,34 @@ func TestBuildV2ImageVideoPresetWritesPresetName(t *testing.T) {
 	}
 }
 
-func TestIsLandscapeItemAcceptsScenicCityAndFinance(t *testing.T) {
+func TestIsLandscapeItemKeepsNatureAndWeatherOnly(t *testing.T) {
 	keep := []mediaItem{
 		{Category: "Nature_Landscape"},
 		{Category: "Weather_Water_Fire"},
+		{Category: "风景"},
+		{Category: "自然山水"},
+		{RelativePath: "14_Pexels/landscape/lake.mp4"},
+		{RelativePath: "01_Nature_Landscape/lake.mp4"},
+		{RelativePath: "03_Weather_Water_Fire/storm.mp4"},
+		{RelativePath: "originals/broll/lake.mp4", Category: "Nature_Landscape"},
+		{Tags: []string{"风景"}},
+		{Tags: []string{"nature"}},
+	}
+	drop := []mediaItem{
 		{Category: "Space_Cosmos"},
 		{Category: "City_Traffic"},
 		{Category: "Finance_Business"},
 		{Category: "office"},
-		{Category: "风景"},
 		{Category: "城市景观"},
-		{RelativePath: "14_Pexels/landscape/lake.mp4"},
-		{RelativePath: "03_Weather_Water_Fire/storm.mp4"},
-		{RelativePath: "02_City_Traffic/skyline.mp4"},
-		{Tags: []string{"风景"}},
-		{Tags: []string{"车流"}},
-		{Tags: []string{"财经"}},
-	}
-	drop := []mediaItem{
 		{Category: "Family_Life"},
 		{Category: "ledger"},
 		{Category: "Food_Drink"},
+		{RelativePath: "02_City_Traffic/skyline.mp4"},
+		{RelativePath: "04_Finance_Business/office.mp4"},
+		{RelativePath: "05_Space_Cosmos/stars.mp4"},
 		{RelativePath: "movies/bank.mp4", Tags: []string{"银行柜台"}},
+		{Tags: []string{"车流"}},
+		{Tags: []string{"财经"}},
 	}
 	for _, item := range keep {
 		if !isLandscapeItem(item) {

@@ -6,6 +6,10 @@ video-console.db
 /dist/
 web/dist/
 release/
+release/partner-tls/
+release/partner/
+.tmp/partner-payload/
+*.key
 # Embedded production frontend must stay versioned.
 !internal/webui/dist/
 !internal/webui/dist/**
@@ -21,3 +25,7 @@ publish*.exe
 web/*-output*.txt
 web/test-target*.txt
 task5-*
+release/gateway/
+docs/operations/evidence/*.mp4
+docs/operations/evidence/*.png
+

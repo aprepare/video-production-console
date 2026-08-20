@@ -9,6 +9,8 @@ type ReviseDialogProps = {
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults: PublicSettings | undefined;
+  models?: readonly string[];
+  efforts?: readonly string[];
   submitDisabled: boolean;
   submitting: boolean;
   onClose: () => void;
@@ -21,6 +23,8 @@ export function ReviseDialog({
   taskModel,
   onTaskModelChange,
   taskModelDefaults,
+  models,
+  efforts,
   submitDisabled,
   submitting,
   onClose,
@@ -60,6 +64,8 @@ export function ReviseDialog({
           defaults={taskModelDefaults}
           labelPrefix="打回"
           purpose="remix"
+          models={models}
+          efforts={efforts}
         />
         <button
           type="button"

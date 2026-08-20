@@ -27,14 +27,15 @@ const (
 )
 
 type serveConfig struct {
-	listen       string
-	databasePath string
-	tlsCertPath  string
-	tlsKeyPath   string
-	upstreamURL  *url.URL
-	upstreamKey  string
-	capabilities partnergateway.Capabilities
-	aura         partnergateway.AuraRuntime
+	listen        string
+	databasePath  string
+	tlsCertPath   string
+	tlsKeyPath    string
+	upstreamURL   *url.URL
+	upstreamKey   string
+	adminPassword string
+	capabilities  partnergateway.Capabilities
+	aura          partnergateway.AuraRuntime
 }
 
 func main() {
@@ -136,6 +137,12 @@ func loadServeConfig() (serveConfig, error) {
 	if err != nil {
 		return serveConfig{}, err
 	}
+	if adminKeyPath := strings.TrimSpace(os.Getenv("PARTNER_GATEWAY_ADMIN_KEY_FILE")); adminKeyPath != "" {
+		config.adminPassword, err = readSecretFile("PARTNER_GATEWAY_ADMIN_KEY_FILE", adminKeyPath)
+		if err != nil {
+			return serveConfig{}, err
+		}
+	}
 
 	config.capabilities = defaultCapabilities()
 	config.aura = partnergateway.AuraRuntime{
@@ -234,6 +241,7 @@ func serve(ctx context.Context, config serveConfig, stderr io.Writer) error {
 		Limiter:         partnergateway.NewLimiter(),
 		UpstreamBaseURL: config.upstreamURL,
 		UpstreamAPIKey:  config.upstreamKey,
+		AdminPassword:   config.adminPassword,
 		Logger:          slog.New(slog.NewTextHandler(stderr, nil)),
 	})
 	if err != nil {

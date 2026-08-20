@@ -59,6 +59,10 @@ type Options struct {
 	// MediaCatalog overrides the default settings-backed catalog service;
 	// tests inject fakes through it.
 	MediaCatalog httpapi.CatalogService
+	// PartnerSetupComplete reports first-run completion. Nil means complete
+	// unless Settings can answer the question.
+	PartnerSetupComplete func() bool
+	Restart              func()
 }
 
 // App is the HTTP application.
@@ -71,12 +75,29 @@ func New(options Options) *App {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(map[string]string{"status": "ok"})
+		edition := "owner"
+		if options.Partner != nil {
+			edition = "partner"
+		}
+		_ = json.NewEncoder(response).Encode(struct {
+			Status  string `json:"status"`
+			Edition string `json:"edition"`
+		}{Status: "ok", Edition: edition})
 	})
 	if options.Partner != nil {
 		partnerHandler := httpapi.NewPartnerHandler(options.Partner)
 		mux.Handle("GET /api/partner/status", partnerHandler)
 		mux.Handle("POST /api/partner/activate", partnerHandler)
+		if options.Settings != nil {
+			setupHandler := httpapi.NewPartnerSetupHandler(httpapi.PartnerSetupOptions{
+				AppRoot:  options.Config.AppRoot,
+				DataRoot: options.Config.DataRoot,
+				Settings: options.Settings,
+				Restart:  options.Restart,
+			})
+			mux.Handle("GET /api/partner/setup", setupHandler)
+			mux.Handle("POST /api/partner/setup", setupHandler)
+		}
 	}
 	if options.DB != nil {
 		assetService := options.AssetService
@@ -187,20 +208,7 @@ func New(options Options) *App {
 	})
 	mux.Handle("/", webui.Handler())
 	if options.Partner != nil {
-		var downstream http.Handler = mux
-		if options.AuthService != nil {
-			authHandler := httpapi.NewAuthHandler(options.AuthService)
-			mux.Handle("/api/auth/", authHandler)
-			protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
-			downstream = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/health" || strings.HasPrefix(r.URL.Path, "/api/partner/") || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
-					mux.ServeHTTP(w, r)
-					return
-				}
-				protected.ServeHTTP(w, r)
-			})
-		}
-		return &App{handler: logging.RequestID(partnerGate(options.Partner, downstream))}
+		return &App{handler: logging.RequestID(partnerGate(options.Partner, mux, partnerSetupCompleteFunc(options)))}
 	}
 	if options.AuthService == nil {
 		return &App{handler: logging.RequestID(mux)}
@@ -219,7 +227,24 @@ func New(options Options) *App {
 	}))}
 }
 
-func partnerGate(partner PartnerManager, next http.Handler) http.Handler {
+func partnerSetupCompleteFunc(options Options) func() bool {
+	if options.PartnerSetupComplete != nil {
+		return options.PartnerSetupComplete
+	}
+	if options.Settings == nil {
+		return func() bool { return true }
+	}
+	settings := options.Settings
+	return func() bool {
+		view, err := settings.Get(context.Background())
+		if err != nil {
+			return false
+		}
+		return consoleSettings.PartnerSetupComplete(view.Public)
+	}
+}
+
+func partnerGate(partner PartnerManager, next http.Handler, setupComplete func() bool) http.Handler {
 	unsupportedPrefixes := []string{
 		"/api/ideas",
 		"/api/skills",
@@ -234,16 +259,32 @@ func partnerGate(partner PartnerManager, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if !strings.HasPrefix(path, "/api/") || path == "/api/health" || strings.HasPrefix(path, "/api/partner/") {
+		if !strings.HasPrefix(path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if path == "/api/health" || path == "/api/partner/status" || path == "/api/partner/activate" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if path == "/api/partner/setup" || strings.HasPrefix(path, "/api/partner/setup/") {
+			if !partner.Ready() {
+				writePartnerVerificationRequired(w)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
 		if !partner.Ready() {
+			writePartnerVerificationRequired(w)
+			return
+		}
+		if setupComplete != nil && !setupComplete() {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
+			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"code":    "partner_verification_required",
-				"message": "Partner verification is required.",
+				"code":    "partner_setup_required",
+				"message": "Partner first-run setup is required.",
 			})
 			return
 		}
@@ -254,6 +295,15 @@ func partnerGate(partner PartnerManager, next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func writePartnerVerificationRequired(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"code":    "partner_verification_required",
+		"message": "Partner verification is required.",
 	})
 }
 

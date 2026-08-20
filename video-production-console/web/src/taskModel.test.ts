@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { inheritedTaskEffort, inheritedTaskModel, isSelectableModel, selectableModels } from "./taskModel";
+import {
+  inheritedTaskEffort,
+  inheritedTaskModel,
+  isSelectableModel,
+  resolveSelectableEfforts,
+  resolveSelectableModels,
+  selectableModels,
+} from "./taskModel";
 
 test("remix inherits remix model first", () => {
   expect(
@@ -28,4 +35,19 @@ test("selectable models are the three console choices", () => {
   expect([...selectableModels]).toEqual(["gpt-5.6-sol", "grok-4.6", "gpt-5.6-terra"]);
   expect(isSelectableModel("grok-4.6")).toBe(true);
   expect(isSelectableModel("gpt-default")).toBe(false);
+});
+
+test("a partner allowlist replaces the hardcoded selectable models", () => {
+  expect(resolveSelectableModels(["gpt-5.6-sol", "partner-text"])).toEqual([
+    "gpt-5.6-sol",
+    "partner-text",
+  ]);
+  expect(resolveSelectableModels(undefined)).toEqual([...selectableModels]);
+  expect(isSelectableModel("partner-text", ["partner-text"])).toBe(true);
+  expect(isSelectableModel("partner-text")).toBe(false);
+});
+
+test("a partner effort allowlist replaces the hardcoded reasoning efforts", () => {
+  expect(resolveSelectableEfforts(["medium", "high"])).toEqual(["medium", "high"]);
+  expect(resolveSelectableEfforts(undefined)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
 });

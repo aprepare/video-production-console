@@ -263,8 +263,9 @@ func movieCatalogSelect(opts Options) bool {
 
 // BuildV2 writes production_plan.json (plan_version 2.0). Movie-catalog
 // tasks recall from catalog.db with intent/embedding match. Scenic tasks
-// sample media_index 风景/城市/财经 clips and merge catalog B-roll into
-// the same pool — no narration matching. CaptionMode defaults to off.
+// sample only nature/weather clips from media_index.json and merge matching
+// catalog B-roll into the same pool — no narration matching. CaptionMode
+// defaults to off.
 func BuildV2(opts Options) error {
 	ctx, err := loadPlanContext(opts)
 	if err != nil {
@@ -304,7 +305,7 @@ func BuildV2(opts Options) error {
 			return resolveErr
 		}
 	} else {
-		notes = append(notes, "scenic_mixed_pool: landscape/city/finance, no intent match")
+		notes = append(notes, "scenic_nature_pool: nature/weather only, no intent match")
 		var resolveErr error
 		catalog, closer, resolveErr = resolveCatalog(opts)
 		if resolveErr != nil {
@@ -372,7 +373,7 @@ func BuildV2(opts Options) error {
 			notes = append(notes, mergeNotes...)
 		}
 		if len(candidates) == 0 {
-			return fmt.Errorf("scenic pool produced no landscape/city/finance clips")
+			return fmt.Errorf("scenic pool produced no landscape clips")
 		}
 	}
 	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
@@ -788,7 +789,7 @@ func mergeScenicCatalogBroll(ctx context.Context, catalog CatalogReader, candida
 	}
 	extra := make([]rankedCandidate, 0, len(pool))
 	for _, shot := range pool {
-		if shot.item.Kind == mediaKindMovie {
+		if shot.item.Kind == mediaKindMovie || !isLandscapeItem(shot.item) {
 			continue
 		}
 		extra = append(extra, rankedCandidate{Item: shot.item})

@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"video-production-console/internal/partnerclient"
 )
 
 type Message struct {
@@ -91,6 +93,11 @@ func chatCompletionsURL(base string) (string, error) {
 }
 
 func http2Client() *http.Client {
+	if pem := partnerclient.LoadBundledCAPEM(); len(pem) > 0 {
+		if client, err := partnerclient.PinnedHTTPClient(pem, 10*time.Minute); err == nil {
+			return client
+		}
+	}
 	return &http.Client{Timeout: 10 * time.Minute}
 }
 
@@ -104,6 +111,12 @@ func http1Client() *http.Client {
 		cfg.NextProtos = []string{"http/1.1"}
 	}
 	transport.TLSClientConfig = cfg
+	if pem := partnerclient.LoadBundledCAPEM(); len(pem) > 0 {
+		_ = partnerclient.ApplyPinnedTLS(transport, pem)
+		if transport.TLSClientConfig != nil {
+			transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+		}
+	}
 	return &http.Client{Timeout: 10 * time.Minute, Transport: transport}
 }
 

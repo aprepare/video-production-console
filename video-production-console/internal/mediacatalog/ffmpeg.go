@@ -8,12 +8,19 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// BundledPaths returns the partner-payload FFmpeg/FFprobe locations.
+func BundledPaths(appRoot string) (ffmpegPath, ffprobePath string) {
+	return filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffmpeg.exe"),
+		filepath.Join(appRoot, "runtime", "ffmpeg", "bin", "ffprobe.exe")
+}
 
 // ErrFFmpegNotConfigured is returned when the caller did not inject validated
 // ffmpeg/ffprobe binary paths (they come from settings, never from PATH).

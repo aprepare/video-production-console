@@ -11,6 +11,20 @@ export type ProductionModeDefinition = {
   icon: LucideIcon;
 };
 
+const modeCapabilities: Record<string, readonly string[]> = {
+  scenic: ["scenery_montage", "text"],
+  "movie-montage": ["movie_montage"],
+  "image-video": ["image_video"],
+  image: ["image_text", "image"],
+};
+
+export function modesForCapabilities(features: readonly string[]): ProductionModeDefinition[] {
+  const available = new Set(features);
+  return productionModes.filter((mode) =>
+    (modeCapabilities[mode.id] ?? []).some((feature) => available.has(feature)),
+  );
+}
+
 export const productionModes: ProductionModeDefinition[] = [
   {
     id: "scenic",

@@ -16,7 +16,7 @@ Implementation must conform to:
 
 - `docs/superpowers/specs/2026-08-19-partner-self-extracting-exe-gateway-design.md`
 
-This roadmap supersedes the earlier website, Cloudflare, download-center and `.vpcdraft` plans for the current objective. Do not execute those older plans unless the user explicitly reactivates them.
+This roadmap supersedes the earlier website, Cloudflare, download-center and `.vpcdraft` plans. Those older plan files have been deleted. Current operator docs: `docs/operations/partner-portable-runbook.md`, `partner-gateway-runbook.md`, `partner-pilot-acceptance.md`. The shipped partner build is 0.1.15.
 
 ## Milestone plans
 

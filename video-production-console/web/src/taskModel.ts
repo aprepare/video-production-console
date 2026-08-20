@@ -41,6 +41,16 @@ export const selectableModels = ["gpt-5.6-sol", "grok-4.6", "gpt-5.6-terra"] as 
 
 export type SelectableModel = (typeof selectableModels)[number];
 
-export function isSelectableModel(value: string): value is SelectableModel {
-  return (selectableModels as readonly string[]).includes(value);
+export function resolveSelectableModels(allowlist?: readonly string[]): readonly string[] {
+  if (allowlist && allowlist.length > 0) return allowlist;
+  return selectableModels;
+}
+
+export function resolveSelectableEfforts(allowlist?: readonly string[]): readonly string[] {
+  if (allowlist && allowlist.length > 0) return allowlist;
+  return reasoningEfforts;
+}
+
+export function isSelectableModel(value: string, allowlist?: readonly string[]): boolean {
+  return resolveSelectableModels(allowlist).includes(value);
 }

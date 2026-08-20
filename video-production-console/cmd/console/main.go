@@ -34,6 +34,7 @@ import (
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/partnerclient"
 	"video-production-console/internal/partneredition"
+	"video-production-console/internal/partnerprofile"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
@@ -134,12 +135,22 @@ func prepareConsoleStartup(ctx context.Context, deps mainDeps) (consoleStartup, 
 		AppVersion:      buildinfo.Version,
 		Edition:         string(edition.Name),
 	})
-	if err := manager.Start(ctx); err != nil {
-		slog.Warn("partner verification failed during startup; activation remains available", "error_code", manager.Snapshot().ErrorCode)
-	}
+	startPartnerManager(ctx, manager)
 	startup.PartnerManager = manager
 	startup.close = manager.Close
 	return startup, nil
+}
+
+type partnerStarter interface {
+	Start(context.Context) error
+}
+
+func startPartnerManager(ctx context.Context, starter partnerStarter) {
+	go func() {
+		if err := starter.Start(ctx); err != nil {
+			slog.Warn("partner verification failed during startup; activation remains available", "error", err)
+		}
+	}()
 }
 
 type runtimeSyncingPartnerManager struct {
@@ -239,15 +250,22 @@ func main() {
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
-	settings := config.Default()
+	settings := config.ApplyEnvironment(config.Default(), os.LookupEnv)
 	executablePath, _ := os.Executable()
 	workingDirectory, _ := os.Getwd()
-	settings.DataRoot = resolveBootDataRoot(settings.DataRoot, executablePath, workingDirectory)
-	settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
+	if strings.TrimSpace(settings.DataRoot) == "" || !filepath.IsAbs(settings.DataRoot) {
+		settings.DataRoot = resolveBootDataRoot(settings.DataRoot, executablePath, workingDirectory)
+		settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
+	}
+	appRoot := strings.TrimSpace(settings.AppRoot)
+	if appRoot == "" {
+		appRoot = filepath.Dir(executablePath)
+	}
+	settings.AppRoot = appRoot
 	startup, err := prepareConsoleStartup(signalCtx, mainDeps{
 		Config:          settings,
 		CodexBinaryPath: settings.CodexBinaryPath,
-		AppRoot:         filepath.Dir(executablePath),
+		AppRoot:         appRoot,
 	})
 	if err != nil {
 		fatal("prepare console startup", "error", err)
@@ -268,10 +286,17 @@ func main() {
 		fatal("open console database", "database_path", settings.DatabasePath, "error", err)
 	}
 	defer db.Close()
-	settingsService := consoleSettings.NewService(store.NewSettingsRepository(db), security.NewSecretProtector())
+	settingsService := consoleSettings.NewService(store.NewSettingsRepository(db), security.NewSecretProtector(), consoleSettings.Options{AppRoot: appRoot})
 	boot := consoleSettings.BootSettings{ListenAddr: settings.ListenAddr, DataRoot: settings.DataRoot, CodexBinaryPath: settings.CodexBinaryPath, ObsidianVault: settings.ObsidianVault, CodexTaskProjectRoot: defaultTaskProjectRoot, CodexWorkspaceRoots: uniqueCanonicalPaths([]string{workingDirectory, desktopWorkingDirectory, settings.DataRoot, defaultTaskProjectRoot})}
 	if err := settingsService.InitializeBootSettings(context.Background(), boot); err != nil {
 		fatal("initialize settings", "error", err)
+	}
+	if startup.Edition.IsPartner() {
+		if _, changed, refreshErr := partnerprofile.RefreshBundledRuntime(settings.DataRoot, appRoot); refreshErr != nil {
+			slog.Warn("refresh partner bundled runtime paths", "error", refreshErr)
+		} else if changed {
+			slog.Info("rewrote partner machine profile onto current app root", "app_root", appRoot)
+		}
 	}
 	var partnerManager app.PartnerManager
 	if startup.PartnerManager != nil {
@@ -308,7 +333,7 @@ func main() {
 	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, MachineProfilePath: settings.MachineProfilePath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
 	skillsService := skillregistry.NewService(store.NewSkillRepository(db), skillregistry.Options{
-		Roots: skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills")),
+		Roots: skillRootsForEdition(startup.Edition, homeDirectory, settings.AppRoot),
 	})
 	if _, scanErr := skillsService.ScanAll(context.Background()); scanErr != nil {
 		slog.Error("Skill scan completed with errors; manifest-backed tasks may be unavailable", "error", scanErr)
@@ -362,30 +387,27 @@ func main() {
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
 		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
 		if runtimeErr != nil {
-			fatal("resolve trusted montage runtime", "error", runtimeErr)
+			reportMontageStartupError(startup.Edition, "resolve trusted montage runtime", "error", runtimeErr)
+		} else if currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft"); skillErr != nil {
+			reportMontageStartupError(startup.Edition, "resolve current Jianying montage Skill", "skill", "jianying-montage-draft", "error", skillErr)
+		} else if trustedMontageRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(trustedMontageRuntime, currentMontageSkill); runtimeErr != nil {
+			reportMontageStartupError(startup.Edition, "resolve trusted Jianying reconciliation runtime", "error", runtimeErr)
+		} else {
+			montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
+			defer montageCoordinator.Close()
+			if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {
+				slog.Error("recover montage registrations", "error", recoverErr)
+			} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
+				slog.Info("recovered montage registrations", "queued", len(recovery.Queued), "interrupted", len(recovery.Interrupted))
+			}
+			reconcileMontageDisplayNames(context.Background(), montageCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
+			if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
+				slog.Error("audit registered montage drafts", "error", auditErr)
+			} else if audit.Staled > 0 {
+				slog.Warn("marked montage draft assets stale during startup audit", "staled", audit.Staled, "inspected", audit.Inspected)
+			}
+			legacyScheduler.SetCompletionGate(montageCoordinator)
 		}
-		currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft")
-		if skillErr != nil {
-			fatal("resolve current Jianying montage Skill", "skill", "jianying-montage-draft", "error", skillErr)
-		}
-		trustedMontageRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(trustedMontageRuntime, currentMontageSkill)
-		if runtimeErr != nil {
-			fatal("resolve trusted Jianying reconciliation runtime", "error", runtimeErr)
-		}
-		montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
-		defer montageCoordinator.Close()
-		if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {
-			slog.Error("recover montage registrations", "error", recoverErr)
-		} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
-			slog.Info("recovered montage registrations", "queued", len(recovery.Queued), "interrupted", len(recovery.Interrupted))
-		}
-		reconcileMontageDisplayNames(context.Background(), montageCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
-		if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
-			slog.Error("audit registered montage drafts", "error", auditErr)
-		} else if audit.Staled > 0 {
-			slog.Warn("marked montage draft assets stale during startup audit", "staled", audit.Staled, "inspected", audit.Inspected)
-		}
-		legacyScheduler.SetCompletionGate(montageCoordinator)
 	} else {
 		slog.Warn("montage registration is disabled because no machine profile is configured")
 	}
@@ -424,7 +446,7 @@ func main() {
 	}
 	authStore := store.NewAuthStore(db)
 	authService := consoleauth.NewService(authStore, consoleauth.Options{})
-	if err := initializeAdministrator(context.Background(), authStore.Admin, authService.Bootstrap, os.LookupEnv); err != nil {
+	if err := maybeInitializeAdministrator(context.Background(), startup.Edition, authStore.Admin, authService.Bootstrap, os.LookupEnv); err != nil {
 		fatal("initialize administrator", "error", err)
 	}
 	var montageRetryer interface {
@@ -433,10 +455,20 @@ func main() {
 	if montageCoordinator != nil {
 		montageRetryer = montageCoordinator
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Partner: partnerManager, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
+	restart := make(chan struct{}, 1)
+	requestRestart := func() {
+		select {
+		case restart <- struct{}{}:
+		default:
+		}
+	}
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Partner: partnerManager, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator, Restart: requestRestart})
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
-	if err := serveUntilShutdown(signalCtx, server); err != nil {
+	if err := serveUntilStop(signalCtx, server, restart); err != nil {
+		if errors.Is(err, errRestartRequested) {
+			os.Exit(75)
+		}
 		slog.Error("serve video production console", "listen_addr", settings.ListenAddr, "error", err)
 	}
 }
@@ -667,11 +699,16 @@ func runMontageScriptCommand(args []string) error {
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
 	}
+	partnerMode := os.Getenv("VIDEO_CONSOLE_LAUNCHED") == "1"
+	if edition, err := partneredition.Current(); err == nil && edition.IsPartner() {
+		partnerMode = true
+	}
 	return montagescript.Run(montagescript.Options{
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
 		OutputLastMessage: outputLast,
 		PythonBinary:      pythonBinary,
+		PartnerMode:       partnerMode,
 	})
 }
 
@@ -786,7 +823,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 			preferred := agentruntime.MontageRuntimeFromEnv()
 			selected := agentruntime.Select(task.Action, preferred)
 			if selected == agentruntime.RuntimeScript {
-				cmd, scriptErr := buildMontageScriptCommand(cfg, manifestPath, resolveSkillRoot)
+				cmd, scriptErr := buildMontageScriptCommand(cfg, manifestPath, settings.AppRoot, resolveSkillRoot)
 				if scriptErr == nil {
 					return cmd, root, nil
 				}
@@ -801,7 +838,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 				}
 				return cmd, root, nil
 			default:
-				cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, resolveSkillRoot)
+				cmd, openaiErr := buildOpenAICompatCommand(cfg, task, manifestPath, settings.AppRoot, resolveSkillRoot)
 				if openaiErr != nil {
 					return nil, "", fmt.Errorf("remix requires Grok / OpenAI-compatible settings: %w", openaiErr)
 				}
@@ -869,7 +906,7 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 	return makeCommand, makeResume
 }
 
-func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
+func buildMontageScriptCommand(cfg codex.Config, manifestPath, appRoot string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
 	if resolveSkillRoot == nil {
 		return nil, fmt.Errorf("skill root resolver is nil")
 	}
@@ -891,7 +928,7 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	if cfg.OutputLastMessage == "" || cfg.WorkingDirectory == "" {
 		return nil, fmt.Errorf("montage script command requires working directory and output-last-message")
 	}
-	pythonBinary, err := montagePythonBinary(cfg.MachineProfilePath)
+	pythonBinary, err := montagePythonBinary(cfg.MachineProfilePath, appRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -911,6 +948,7 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	cmd.Dir = cfg.WorkingDirectory
 	cmd.Env = append(cfg.SafeEnvironment(), "VIDEO_CONSOLE_TASK_MANIFEST="+manifestPath)
 	cmd.Env = appendMontageCatalogEnv(cmd.Env, cfg.SecretEnvironment)
+	cmd.Env = appendPartnerCAEnv(cmd.Env, appRoot)
 	return cmd, nil
 }
 
@@ -952,7 +990,7 @@ func appendMontageCatalogEnv(env []string, secrets map[string]string) []string {
 	return env
 }
 
-func montagePythonBinary(profilePath string) (string, error) {
+func montagePythonBinary(profilePath, appRoot string) (string, error) {
 	raw, err := os.ReadFile(strings.TrimSpace(profilePath))
 	if err != nil {
 		return "", fmt.Errorf("read montage machine profile: %w", err)
@@ -973,10 +1011,18 @@ func montagePythonBinary(profilePath string) (string, error) {
 			return "", fmt.Errorf("resolve montage python binary: %w", err)
 		}
 	}
+	if _, statErr := os.Stat(pythonBinary); statErr != nil {
+		bundled := filepath.Join(strings.TrimSpace(appRoot), "runtime", "python", "python.exe")
+		if strings.TrimSpace(appRoot) != "" {
+			if _, bundledErr := os.Stat(bundled); bundledErr == nil {
+				return filepath.Abs(bundled)
+			}
+		}
+	}
 	return filepath.Abs(pythonBinary)
 }
 
-func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
+func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestPath, appRoot string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {
 	if resolveSkillRoot == nil {
 		return nil, fmt.Errorf("skill root resolver is nil")
 	}
@@ -1023,6 +1069,7 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 		agentruntime.EnvOpenAIBaseURL+"="+baseURL,
 		agentruntime.EnvOpenAIAPIKey+"="+apiKey,
 	)
+	cmd.Env = appendPartnerCAEnv(cmd.Env, appRoot)
 	return cmd, nil
 }
 
@@ -1249,7 +1296,72 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 	return environment
 }
 
+func appendPartnerCAEnv(env []string, appRoot string) []string {
+	path := partnerCAFile(appRoot)
+	if path == "" {
+		return env
+	}
+	return append(env,
+		agentruntime.EnvPartnerCAFile+"="+path,
+		"SSL_CERT_FILE="+path,
+		"REQUESTS_CA_BUNDLE="+path,
+	)
+}
+
+func partnerCAFile(appRoot string) string {
+	edition, err := partneredition.Current()
+	if err != nil || !edition.IsPartner() {
+		return ""
+	}
+	root := strings.TrimSpace(appRoot)
+	if root == "" {
+		if executable, err := os.Executable(); err == nil {
+			root = filepath.Dir(executable)
+		}
+	}
+	if root == "" {
+		return ""
+	}
+	path := partnerclient.BundledCAFile(root)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
+}
+
+func skillRootsForEdition(edition partneredition.Config, homeDirectory, appRoot string) []skillregistry.Root {
+	if edition.IsPartner() {
+		return skillregistry.PartnerRoots(filepath.Join(appRoot, "skills"))
+	}
+	return skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills"))
+}
+
+func skipMontageOnError(edition partneredition.Config, err error) bool {
+	return edition.IsPartner() && err != nil
+}
+
+func reportMontageStartupError(edition partneredition.Config, message string, args ...any) {
+	if edition.IsPartner() {
+		slog.Error(message, args...)
+		return
+	}
+	fatal(message, args...)
+}
+
 const initialPasswordEnvironment = "VIDEO_CONSOLE_INITIAL_PASSWORD"
+
+func maybeInitializeAdministrator(
+	ctx context.Context,
+	edition partneredition.Config,
+	admin func(context.Context) (store.Admin, error),
+	bootstrap func(context.Context, string) error,
+	lookupEnv func(string) (string, bool),
+) error {
+	if edition.IsPartner() {
+		return nil
+	}
+	return initializeAdministrator(ctx, admin, bootstrap, lookupEnv)
+}
 
 func initializeAdministrator(ctx context.Context, admin func(context.Context) (store.Admin, error), bootstrap func(context.Context, string) error, lookupEnv func(string) (string, bool)) error {
 	if _, err := admin(ctx); err == nil {
@@ -1267,7 +1379,13 @@ func initializeAdministrator(ctx context.Context, admin func(context.Context) (s
 	return nil
 }
 
+var errRestartRequested = errors.New("restart requested")
+
 func serveUntilShutdown(ctx context.Context, server *http.Server) error {
+	return serveUntilStop(ctx, server, nil)
+}
+
+func serveUntilStop(ctx context.Context, server *http.Server, restart <-chan struct{}) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
 
@@ -1277,10 +1395,17 @@ func serveUntilShutdown(ctx context.Context, server *http.Server) error {
 			return nil
 		}
 		return err
+	case <-restart:
+		if err := shutdownServer(server); err != nil {
+			return err
+		}
+		err := <-errCh
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return errRestartRequested
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := shutdownServer(server); err != nil {
 			return err
 		}
 		err := <-errCh
@@ -1289,6 +1414,19 @@ func serveUntilShutdown(ctx context.Context, server *http.Server) error {
 		}
 		return err
 	}
+}
+
+func shutdownServer(server *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return server.Shutdown(shutdownCtx)
+}
+
+func restartExitStatus(err error) int {
+	if errors.Is(err, errRestartRequested) {
+		return 75
+	}
+	return 0
 }
 
 func newServer(address string, handler http.Handler) *http.Server {

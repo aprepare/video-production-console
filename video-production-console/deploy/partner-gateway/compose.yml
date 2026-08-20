@@ -1,0 +1,28 @@
+name: partner-gateway
+services:
+  partner-gateway:
+    build: .
+    image: video-partner-gateway:${PARTNER_GATEWAY_VERSION}
+    container_name: partner-gateway
+    restart: unless-stopped
+    env_file: gateway.env
+    ports:
+      - "2443:2443"
+    volumes:
+      - ./data:/var/lib/partner-gateway
+      - ./tls/gateway.crt:/run/tls/gateway.crt:ro
+      - ./tls/gateway.key:/run/tls/gateway.key:ro
+      - ./secrets/upstream_api_key:/run/secrets/upstream_api_key:ro
+      - ./secrets/aura_api_key:/run/secrets/aura_api_key:ro
+      - ./secrets/admin_password:/run/secrets/admin_password:ro
+    networks:
+      - cliproxy
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://127.0.0.1:2443/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  cliproxy:
+    external: true
+    name: cliproxyapi_default

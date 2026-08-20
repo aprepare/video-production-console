@@ -212,12 +212,23 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 					"media_catalog_path", settings.MediaCatalogPath, "error", err)
 				return fmt.Errorf("movie catalog preflight: %w", err)
 			}
-		} else if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
-			logging.LoggerFrom(ctx).Error("montage media preflight rejected",
-				"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
-				"media_index_path", settings.MediaIndexPath, "media_root", settings.MediaRoot,
-				"error", err)
-			return fmt.Errorf("montage media preflight: %w", err)
+		} else {
+			err := montageplan.PruneScenicMediaIndex(settings.MediaIndexPath)
+			if err == nil {
+				err = montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath)
+			}
+			if err != nil {
+				if rebuildErr := montageplan.WriteScenicMediaIndex(settings.MediaRoot, settings.MediaIndexPath, settings.FFprobePath); rebuildErr == nil {
+					err = montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath)
+				}
+			}
+			if err != nil {
+				logging.LoggerFrom(ctx).Error("montage media preflight rejected",
+					"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
+					"media_index_path", settings.MediaIndexPath, "media_root", settings.MediaRoot,
+					"error", err)
+				return fmt.Errorf("montage media preflight: %w", err)
+			}
 		}
 	}
 	// Project-less planning tasks use their task ID as the managed root; this

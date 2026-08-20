@@ -83,7 +83,19 @@ func TestHealth(t *testing.T) {
 	if result.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", result.StatusCode, http.StatusOK)
 	}
-	if got, want := string(body), "{\"status\":\"ok\"}\n"; got != want {
+	if got, want := string(body), "{\"status\":\"ok\",\"edition\":\"owner\"}\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestHealthReportsPartnerEdition(t *testing.T) {
+	application := New(Options{Partner: newFakePartnerManager(partnerclient.StateNeedsActivation)})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got, want := response.Body.String(), "{\"status\":\"ok\",\"edition\":\"partner\"}\n"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -109,6 +121,39 @@ func TestPartnerModeBlocksBusinessAPIUntilVerified(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestPartnerSetupAllowsSetupOnlyUntilComplete(t *testing.T) {
+	complete := false
+	application := New(Options{
+		Partner:              newFakePartnerManager(partnerclient.StateReady),
+		PartnerSetupComplete: func() bool { return complete },
+	})
+	setup := httptest.NewRecorder()
+	application.Handler().ServeHTTP(setup, httptest.NewRequest(http.MethodGet, "/api/partner/setup", nil))
+	if setup.Code == http.StatusUnauthorized {
+		t.Fatalf("setup blocked after partner ready: %s", setup.Body.String())
+	}
+	business := httptest.NewRecorder()
+	application.Handler().ServeHTTP(business, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if business.Code != http.StatusForbidden || !strings.Contains(business.Body.String(), `"code":"partner_setup_required"`) {
+		t.Fatalf("business status=%d body=%s", business.Code, business.Body.String())
+	}
+	complete = true
+	allowed := httptest.NewRecorder()
+	application.Handler().ServeHTTP(allowed, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if allowed.Code == http.StatusUnauthorized || allowed.Code == http.StatusForbidden {
+		t.Fatalf("business remained gated after setup: status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestPartnerSetupIsBlockedBeforePartnerReady(t *testing.T) {
+	application := New(Options{Partner: newFakePartnerManager(partnerclient.StateNeedsActivation)})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/partner/setup", nil))
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"partner_verification_required"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -138,6 +183,27 @@ func TestPartnerModeBlocksUnsupportedAPIPrefixesWhenReady(t *testing.T) {
 	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
 	if response.Code == http.StatusUnauthorized || response.Code == http.StatusNotFound {
 		t.Fatalf("supported API remained gated after readiness: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPartnerReadyBusinessAPIDoesNotRequireOwnerLogin(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	auth := consoleauth.NewService(store.NewAuthStore(database), consoleauth.Options{})
+	application := New(Options{
+		DB:                   database,
+		Config:               config.Config{DataRoot: t.TempDir()},
+		AuthService:          auth,
+		Partner:              newFakePartnerManager(partnerclient.StateReady),
+		PartnerSetupComplete: func() bool { return true },
+	})
+	response := httptest.NewRecorder()
+	application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if response.Code == http.StatusUnauthorized {
+		t.Fatalf("partner business API required owner login: body=%s", response.Body.String())
 	}
 }
 
