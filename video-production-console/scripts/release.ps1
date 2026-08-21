@@ -24,6 +24,24 @@ try {
     }
     Copy-Item schemas (Join-Path $packageDir "schemas") -Recurse
     Copy-Item README.md (Join-Path $packageDir "README.md")
+    $skillsSource = if ($env:VIDEO_CONSOLE_SKILLS_SOURCE) { $env:VIDEO_CONSOLE_SKILLS_SOURCE } else { Join-Path $env:USERPROFILE ".codex\skills" }
+    $requiredSkills = @("finance-topic-selector", "finance-viral-remix", "jianying-montage-draft")
+    $skillsDest = Join-Path $packageDir "skills"
+    New-Item -ItemType Directory -Path $skillsDest | Out-Null
+    foreach ($name in $requiredSkills) {
+        $src = Join-Path $skillsSource $name
+        if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+            throw "Required skill missing for release: $src"
+        }
+        Copy-Item -LiteralPath $src -Destination (Join-Path $skillsDest $name) -Recurse
+    }
+    $optionalMovie = Join-Path $skillsSource "jianying-movie-montage"
+    if (Test-Path -LiteralPath $optionalMovie -PathType Container) {
+        Copy-Item -LiteralPath $optionalMovie -Destination (Join-Path $skillsDest "jianying-movie-montage") -Recurse
+    }
+    Get-ChildItem -LiteralPath $skillsDest -Recurse -Force | Where-Object {
+        $_.Name -in @("__pycache__", ".pytest_cache", ".git") -or $_.Extension -eq ".pyc"
+    } | Remove-Item -Recurse -Force
     $hashes = Get-ChildItem $packageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
         $relative = [IO.Path]::GetRelativePath($packageDir, $_.FullName).Replace('\', '/')
         "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"

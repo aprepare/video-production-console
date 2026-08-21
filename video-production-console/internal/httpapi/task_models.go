@@ -9,8 +9,10 @@ import (
 
 func modelKindForAction(action domain.TaskAction) string {
 	switch action {
+	case domain.ActionRemixSpokenLines:
+		return taskmodel.KindSpokenLines
 	case domain.ActionTopicBrainstorm, domain.ActionTopicCommit, domain.ActionTopicDeepen,
-		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
+		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionCaptionKeywords, domain.ActionRemixReview:
 		return taskmodel.KindRemix
 	default:
 		return taskmodel.KindCodex

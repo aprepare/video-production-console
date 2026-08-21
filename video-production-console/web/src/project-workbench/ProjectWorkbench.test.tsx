@@ -37,6 +37,7 @@ function fixture(): ProjectDetail {
     },
     assets: {
       continuous_script: asset("continuous_script"),
+      spoken_script: asset("spoken_script"),
       narration: asset("narration", "stale"),
       mix_draft: asset("mix_draft", "failed"),
     },
@@ -84,11 +85,10 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onSaveSourceScript: vi.fn(),
     onImportContinuousScript: vi.fn(),
     onReviseContinuousScript: vi.fn(),
+    onStartSpokenLines: vi.fn(),
     onGenerateNarration: vi.fn(),
     taskModel: { model: "", reasoningEffort: "" },
     onTaskModelChange: vi.fn(),
-    remixPromptStyle: "rewrite",
-    onRemixPromptStyleChange: vi.fn(),
     taskModelDefaults: {
       codex_default_model: "gpt-test",
       codex_default_reasoning_effort: "medium",
@@ -125,7 +125,7 @@ test("renders the desktop project production contract without drawer semantics o
   expect(screen.getByText("请确认片尾保留几秒。")).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
 
-  const forbidden = ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"];
+  const forbidden = ["给我选题", "深化一下", "生成选题卡", "remix.spoken_format", "待发布"];
   for (const phrase of forbidden) expect(screen.queryByText(phrase, { exact: false })).toBeNull();
 });
 
@@ -137,7 +137,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
   expect(currentStep?.textContent).toContain("正在制作");
-  expect(screen.getByLabelText("2 个资产已就绪，共 6 个")).toBeTruthy();
+  expect(screen.getByLabelText("3 个资产已就绪，共 6 个")).toBeTruthy();
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();
   expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
@@ -148,11 +148,9 @@ test("shows every project-scoped production asset with state, meaning, and acces
   const props = renderWorkbench();
 
   expect(screen.getByText("连续文案")).toBeTruthy();
-  expect(screen.getByText("二创生成的完整连续文本，用于配音和混剪。")).toBeTruthy();
   expect(screen.getByText("配音")).toBeTruthy();
   expect(screen.getByText("SRT 字幕")).toBeTruthy();
-  expect(screen.getByText("配音断句")).toBeTruthy();
-  expect(screen.getByText("按配音时间轴切好的逐句文案，与 SRT 字幕同一刀。")).toBeTruthy();
+  expect(screen.getByText("口播稿")).toBeTruthy();
   expect(screen.getByText("剪映草稿")).toBeTruthy();
   expect(screen.queryByText("成片")).toBeNull();
   expect(screen.getAllByText("存在").length).toBeGreaterThan(0);
@@ -161,7 +159,7 @@ test("shows every project-scoped production asset with state, meaning, and acces
 
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").type).toBe("file");
   expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").type).toBe("file");
-  expect(screen.queryByLabelText("上传配音断句")).toBeNull();
+  expect(screen.queryByLabelText("上传口播稿")).toBeNull();
   expect(screen.queryByLabelText("上传成片")).toBeNull();
   expect(screen.getByLabelText<HTMLInputElement>("替换账号背景图").type).toBe("file");
 
@@ -171,6 +169,8 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(props.onUpload).toHaveBeenCalledWith("narration", expect.any(File));
   fireEvent.click(screen.getByRole("button", { name: "查看连续文案" }));
   expect(props.onViewAsset).toHaveBeenCalledWith(expect.objectContaining({ type: "continuous_script" }));
+  fireEvent.click(screen.getByRole("button", { name: "重做口播稿" }));
+  expect(props.onStartSpokenLines).toHaveBeenCalledOnce();
 });
 
 test("generates narration and subtitles from the assets stage once the continuous script is ready", () => {
@@ -183,6 +183,22 @@ test("generates narration and subtitles from the assets stage once the continuou
   expect(props.onGenerateNarration).toHaveBeenCalledOnce();
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(false);
   expect(screen.getByLabelText<HTMLInputElement>("上传SRT 字幕").disabled).toBe(false);
+});
+
+test("disables narration generation with a stated reason while the spoken script is missing", () => {
+  const detail = fixture();
+  delete detail.assets.spoken_script;
+  detail.project.stage = "script";
+  detail.missing_assets = ["spoken_script"];
+  const props = renderWorkbench(detail);
+
+  const generate = screen.getByRole<HTMLButtonElement>("button", { name: /生成配音与字幕/ });
+  expect(generate.disabled).toBe(true);
+  expect(generate.getAttribute("title")).toContain("口播稿");
+  expect(generate.getAttribute("aria-label")).toContain("口播稿");
+  fireEvent.click(generate);
+  expect(props.onGenerateNarration).not.toHaveBeenCalled();
+  expect(props.onStartSpokenLines).toHaveBeenCalledOnce();
 });
 
 test("disables narration generation with a stated reason while the continuous script is missing", () => {
@@ -200,7 +216,7 @@ test("disables narration generation with a stated reason while the continuous sc
   expect(screen.getByLabelText<HTMLInputElement>("上传配音").disabled).toBe(false);
 });
 
-test("marks narration, spoken-line, and subtitle cards as generating while the request is pending", () => {
+test("marks narration and subtitle cards as generating while narration is pending", () => {
   const props = workbenchProps();
   props.pendingActions = ["generate-narration"];
   const { container } = render(<ProjectWorkbench {...props} />);
@@ -209,8 +225,20 @@ test("marks narration, spoken-line, and subtitle cards as generating while the r
   expect(generate.disabled).toBe(true);
   expect(generate.getAttribute("aria-busy")).toBe("true");
   expect(generate.textContent).toContain("正在生成…");
-  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(3);
-  expect(screen.getAllByText("生成中")).toHaveLength(3);
+  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(2);
+  expect(screen.getAllByText("生成中")).toHaveLength(2);
+});
+
+test("marks the spoken-script card as generating while spoken lines are pending", () => {
+  const props = workbenchProps();
+  props.pendingActions = ["spoken-lines"];
+  const { container } = render(<ProjectWorkbench {...props} />);
+
+  const remake = screen.getByRole<HTMLButtonElement>("button", { name: "正在生成口播稿" });
+  expect(remake.disabled).toBe(true);
+  expect(remake.getAttribute("aria-busy")).toBe("true");
+  expect(container.querySelectorAll(".project-asset--generating")).toHaveLength(1);
+  expect(screen.getAllByText("生成中")).toHaveLength(1);
 });
 
 test("shows the current registered Jianying display name while keeping storage identity in collapsed technical details", () => {
@@ -378,10 +406,10 @@ test("imports a finished script and skips remix", () => {
   detail.assets = {};
   const props = renderWorkbench(detail);
 
-  fireEvent.click(screen.getByRole("button", { name: "导入成品文案，跳到配音" }));
+  fireEvent.click(screen.getByRole("button", { name: "导入成品文案，接着生成口播稿" }));
   expect(screen.getByRole("dialog", { name: "导入成品文案" })).toBeTruthy();
   expect(screen.getByText(/换说法模型返回的 JSON/)).toBeTruthy();
-  const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存并跳到配音" });
+  const save = screen.getByRole<HTMLButtonElement>("button", { name: "保存并生成口播稿" });
   expect(save.disabled).toBe(true);
   fireEvent.change(screen.getByLabelText("成品文案"), { target: { value: "八月这一波要发财的人" } });
   expect(save.disabled).toBe(false);
@@ -393,18 +421,14 @@ test("imports a finished script and skips remix", () => {
   expect(screen.queryByRole("dialog", { name: "导入成品文案" })).toBeNull();
 });
 
-test("lets the operator pick wash remix prompt style before starting", () => {
+test("no longer offers a remix prompt style choice", () => {
   const detail = fixture();
   detail.project.stage = "script";
   detail.assets = { source_script: asset("source_script") };
-  const props = renderWorkbench(detail);
-  const rewrite = screen.getByRole<HTMLInputElement>("radio", { name: /换说法/ });
-  const wash = screen.getByRole<HTMLInputElement>("radio", { name: /洗稿/ });
+  renderWorkbench(detail);
 
-  expect(rewrite.checked).toBe(true);
-  expect(wash.checked).toBe(false);
-  fireEvent.click(wash);
-  expect(props.onRemixPromptStyleChange).toHaveBeenCalledWith("wash");
+  expect(screen.queryByRole("radio", { name: /洗稿/ })).toBeNull();
+  expect(screen.queryByRole("radio", { name: /换说法/ })).toBeNull();
 });
 
 test("keeps source entry compact and closes the dialog without saving", () => {
@@ -526,6 +550,7 @@ test("exposes remake montage after a registered draft without replacing publish"
   detail.project.stage = "review";
   detail.assets = {
     continuous_script: asset("continuous_script"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
     mix_draft: asset("mix_draft"),
@@ -547,6 +572,7 @@ test("hides remake montage while a montage task is still running", () => {
   detail.project.stage = "review";
   detail.assets = {
     continuous_script: asset("continuous_script"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
     mix_draft: asset("mix_draft"),
@@ -576,6 +602,7 @@ test("surfaces WeChat publishing copy with copy actions while still on mixing", 
   detail.project.stage = "mixing";
   detail.assets = {
     continuous_script: asset("continuous_script"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
     mix_draft: asset("mix_draft", "failed"),
@@ -628,6 +655,7 @@ test.each([
   detail.project.stage = "assets";
   detail.assets = {
     continuous_script: asset("continuous_script"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
   };
@@ -652,6 +680,7 @@ test("routes an invalid inherited background to the replacement control", () => 
   detail.project.stage = "assets";
   detail.assets = {
     continuous_script: asset("continuous_script"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
   };
@@ -671,6 +700,7 @@ test("requires a fresh source script when the generated continuous script is inv
   detail.project.stage = "assets";
   detail.assets = {
     continuous_script: asset("continuous_script", "stale"),
+    spoken_script: asset("spoken_script"),
     narration: asset("narration"),
     subtitle_srt: asset("subtitle_srt"),
   };

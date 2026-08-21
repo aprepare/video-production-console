@@ -371,7 +371,96 @@ func TestComposeKeepsYearAndPercentTogether(t *testing.T) {
 	}
 }
 
-func TestRenderSpokenScriptMatchesCaptionLinesWithoutBlanks(t *testing.T) {
+func TestComposeFromSpokenLinesKeepsLLMCuts(t *testing.T) {
+	script := "第一句第二句"
+	lines := []string{"第一句", "第二句"}
+	words := []Word{
+		{Text: "第一句", StartTime: 0, EndTime: 1},
+		{Text: "第二句", StartTime: 1, EndTime: 2},
+	}
+	captions, report, err := ComposeFromSpokenLines(script, lines, words, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Pass || len(captions) != 2 || captions[0].Text != "第一句" || captions[1].Text != "第二句" {
+		t.Fatalf("captions=%#v report=%#v", captions, report)
+	}
+	if captions[0].Start != 0 || captions[1].End != 2 {
+		t.Fatalf("times=%#v", captions)
+	}
+}
+
+func TestComposeFromSpokenLinesAlignsDigitizedNumbers(t *testing.T) {
+	// 口播稿 digitizes numbers (八月 → 8月) but the TTS reads the continuous
+	// script verbatim; alignment must treat the two spellings as equal.
+	tokens := []string{"你", "要", "是", "八", "月", "能", "踩", "准", "这", "一", "步"}
+	script := strings.Join(tokens, "")
+	lines := []string{"你要是8月", "能踩准这一步"}
+	captions, report, err := ComposeFromSpokenLines(script, lines, wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captions) != 2 || captions[0].Text != "你要是8月" {
+		t.Fatalf("captions=%#v", captions)
+	}
+	if captions[0].Start != 0 || captions[0].End < 1.9 || captions[0].End > 2.1 {
+		t.Fatalf("line 1 times=%#v", captions[0])
+	}
+	if captions[1].Start < captions[0].End-0.0001 || captions[1].End < 4.3 {
+		t.Fatalf("line 2 times=%#v", captions[1])
+	}
+	if !report.Pass {
+		t.Fatalf("report=%#v", report)
+	}
+}
+
+func TestComposeFromSpokenLinesAlignsSpelledOutPercent(t *testing.T) {
+	tokens := []string{"百", "分", "之", "六", "十", "七", "的", "人", "看", "不", "懂"}
+	script := strings.Join(tokens, "")
+	lines := []string{"67%的人", "看不懂"}
+	captions, report, err := ComposeFromSpokenLines(script, lines, wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captions) != 2 || !report.Pass {
+		t.Fatalf("captions=%#v report=%#v", captions, report)
+	}
+	if captions[1].Start < captions[0].End-0.0001 {
+		t.Fatalf("times overlap: %#v", captions)
+	}
+}
+
+func TestComposeFromSpokenLinesSurvivesInventedLine(t *testing.T) {
+	// A line the narration never spoke must not hard-fail the whole task any
+	// more; it becomes a zero-length caption that QC reports by text.
+	tokens := []string{"第", "一", "句", "第", "二", "句"}
+	script := strings.Join(tokens, "")
+	lines := []string{"第一句", "凭空多出来的话", "第二句"}
+	captions, report, err := ComposeFromSpokenLines(script, lines, wordsFrom(tokens, 0.4), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captions) != 3 {
+		t.Fatalf("captions=%#v", captions)
+	}
+	if report.Pass {
+		t.Fatalf("invented line must fail QC: %#v", report)
+	}
+	found := false
+	for _, failure := range report.Failures {
+		if strings.Contains(failure, "凭空多出来的话") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("failures must name the unaligned line: %#v", report.Failures)
+	}
+	if captions[2].Text != "第二句" || captions[2].End < 2.3 {
+		t.Fatalf("alignment after the invented line must recover: %#v", captions[2])
+	}
+}
+
+func TestRenderSpokenScript(t *testing.T) {
 	got := RenderSpokenScript([]Caption{
 		{Text: "第一句。", Start: 0, End: 1},
 		{Text: "  ", Start: 1, End: 1.1},

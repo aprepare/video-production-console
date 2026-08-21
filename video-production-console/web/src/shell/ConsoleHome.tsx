@@ -20,10 +20,9 @@ type ConsoleHomeProps = {
   hidden: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  onChooseProductionMode: () => void;
+  onOpenImageProjects: () => void;
   modeTitle: string;
   runtime: RuntimeState | null | undefined;
-  onOpenMediaLibrary: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
   accounts: Account[];
@@ -54,10 +53,9 @@ export function ConsoleHome({
   hidden,
   theme,
   onThemeChange,
-  onChooseProductionMode,
+  onOpenImageProjects,
   modeTitle,
   runtime,
-  onOpenMediaLibrary,
   onOpenSettings,
   onLogout,
   accounts,
@@ -135,8 +133,8 @@ export function ConsoleHome({
               <option value="dark">夜间</option>
             </select>
           </label>
-          <button type="button" className="header-button" onClick={onChooseProductionMode}>
-            制作方式
+          <button type="button" className="header-button" onClick={onOpenImageProjects}>
+            图文制作
           </button>
           {runtime && (
             <span
@@ -146,13 +144,10 @@ export function ConsoleHome({
                   : "runtime-state"
               }
             >
-              CLI {runtime.Running}/{runtime.Limit}
+              任务 {runtime.Running}/{runtime.Limit}
               {runtime.Queued > 0 ? ` · 排队 ${runtime.Queued}` : ""}
             </span>
           )}
-          <button className="header-button" onClick={onOpenMediaLibrary}>
-            素材库
-          </button>
           <button className="header-button" onClick={onOpenSettings}>
             设置
           </button>

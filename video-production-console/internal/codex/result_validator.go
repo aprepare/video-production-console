@@ -23,7 +23,9 @@ var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 var formalAssetTypes = map[domain.AssetType]bool{
 	domain.AssetSourceScript: true, domain.AssetTopicCard: true, domain.AssetContinuousScript: true,
+	domain.AssetSpokenScript: true, domain.AssetCaptionKeywords: true,
 	domain.AssetNarration: true, domain.AssetSubtitleSRT: true,
+	domain.AssetWordTiming: true,
 	domain.AssetAccountBackground: true, domain.AssetMixDraft: true, domain.AssetFinalVideo: true,
 }
 
@@ -593,6 +595,7 @@ var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 	domain.ActionRemixStandard:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixEnhanced:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionRemixSpokenLines: {},
 	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
 	domain.ActionMontagePlan:    montagePlanArtifactTypes(), domain.ActionMontageExecute: montageExecuteArtifactTypes(),
 }
@@ -614,8 +617,10 @@ var allowedAssetTypes = map[domain.TaskAction]map[domain.AssetType]bool{
 	domain.ActionRemixStandard:  {domain.AssetContinuousScript: true},
 	domain.ActionRemixEnhanced:  {domain.AssetContinuousScript: true},
 	domain.ActionRemixFromTopic: {domain.AssetContinuousScript: true},
+	domain.ActionRemixSpokenLines: {domain.AssetSpokenScript: true},
+	domain.ActionCaptionKeywords:  {domain.AssetCaptionKeywords: true},
 	domain.ActionRemixReview:    {domain.AssetContinuousScript: true},
-	domain.ActionMontagePlan:    {}, domain.ActionMontageExecute: {},
+	domain.ActionMontagePlan:    {domain.AssetWordTiming: true}, domain.ActionMontageExecute: {domain.AssetWordTiming: true},
 }
 
 type resultDirectoryEntry struct {

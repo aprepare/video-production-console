@@ -133,6 +133,12 @@ func TestSelectRemixOpenAIWhenPreferred(t *testing.T) {
 	if got := Select(domain.ActionRemixStandard, RuntimeOpenAI); got != RuntimeOpenAI {
 		t.Fatalf("got %q", got)
 	}
+	if got := Select(domain.ActionRemixSpokenLines, RuntimeOpenAI); got != RuntimeOpenAI {
+		t.Fatalf("spoken lines must follow the remix runtime, got %q", got)
+	}
+	if got := Select(domain.ActionCaptionKeywords, RuntimeOpenAI); got != RuntimeOpenAI {
+		t.Fatalf("caption keywords must follow the remix runtime, got %q", got)
+	}
 	if got := Select(domain.ActionTopicBrainstorm, RuntimeCodex); got != RuntimeCodex {
 		t.Fatalf("got %q", got)
 	}

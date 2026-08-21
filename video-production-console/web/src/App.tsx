@@ -3,12 +3,13 @@ import type { FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { apiRequest } from "./api/client";
+import { ModelOptionsProvider } from "./ModelSelect";
+import { modelOptionsList } from "./taskModel";
 import { AssetPreviewDialog } from "./assets/AssetPreviewDialog";
 import { ReviseDialog } from "./assets/ReviseDialog";
 import { LoginPage } from "./auth/LoginPage";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { ImageModeWorkbench } from "./image-mode/ImageModeWorkbench";
-import { MediaLibraryPanel } from "./media-library/MediaLibraryPanel";
 import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
 import { queryKeys } from "./query/keys";
@@ -18,8 +19,13 @@ import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { ConsoleHome } from "./shell/ConsoleHome";
-import { ModeHome } from "./production-modes/ModeHome";
-import { montageKindLabel, parseMontageKind, productionModes } from "./production-modes/catalog";
+import {
+  IMAGE_PROJECTS_HREF,
+  SCENIC_BOARD_HREF,
+  isShieldedProductionPath,
+  montageKindLabel,
+  visibleMontageKind,
+} from "./production-modes/catalog";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
 import { TaskDetailDialog } from "./tasks/TaskDetailDialog";
 import {
@@ -63,9 +69,8 @@ function writeProjectLocation(
   const pathname = projectID ? `/projects/${projectID}` : "/projects";
   const params = new URLSearchParams(preserveQuery ? window.location.search : "");
   const kind = new URLSearchParams(window.location.search).get("mode");
-  if (kind === "scenic" || kind === "movie" || kind === "image-video") {
-    params.set("mode", kind);
-  }
+  if (kind === "scenic") params.set("mode", kind);
+  else params.delete("mode");
   const search = params.toString() ? `?${params.toString()}` : "";
   const target = `${pathname}${search}`;
   const current = `${window.location.pathname}${window.location.search}`;
@@ -85,6 +90,7 @@ const textAssets = new Set([
   "topic_card",
   "continuous_script",
   "spoken_script",
+  "caption_keywords",
   "subtitle",
   "subtitle_srt",
 ]);
@@ -94,8 +100,9 @@ function App() {
   const client = useQueryClient();
   const [csrf, setCsrf] = useState("");
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
-  const route = parseLocation(window.location.pathname);
-  const montageKind = parseMontageKind(window.location.search);
+  const rawPathname = window.location.pathname;
+  const route = parseLocation(isShieldedProductionPath(rawPathname) ? "/projects" : rawPathname);
+  const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
   const montageRoute = route.view === "projects" || route.view === "project";
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
@@ -118,13 +125,14 @@ function App() {
   const [reviseOpen, setReviseOpen] = useState(false);
   const [reviseNotes, setReviseNotes] = useState("");
   const [accountFormOpen, setAccountFormOpen] = useState(false);
-  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
   const [directoryManifest, setDirectoryManifest] = useState<DirectoryManifest | null>(null);
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
+  const [videoExporting, setVideoExporting] = useState(false);
+  const videoExportAssetRef = useRef("");
   const [urlRevision, setURLRevision] = useState(0);
   const navigate = useCallback((href: string, mode: "push" | "replace" = "push") => {
     const current = `${window.location.pathname}${window.location.search}`;
@@ -132,6 +140,19 @@ function App() {
     window.history[mode === "push" ? "pushState" : "replaceState"]({}, "", href);
     setURLRevision((value) => value + 1);
   }, []);
+  useEffect(() => {
+    if (!authenticated) return;
+    const url = new URL(window.location.href);
+    const pausedPath = isShieldedProductionPath(url.pathname);
+    const root = url.pathname === "/" || url.pathname === "";
+    const mode = url.searchParams.get("mode");
+    const pausedMode = mode === "movie" || mode === "image-video";
+    if (!pausedPath && !root && !pausedMode) return;
+    const params = new URLSearchParams(url.search);
+    params.set("mode", "scenic");
+    const pathname = pausedPath || root ? "/projects" : url.pathname;
+    navigate(`${pathname}?${params.toString()}`, "replace");
+  }, [authenticated, navigate, urlRevision]);
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
   const detailRefreshTimerRef = useRef<number | null>(null);
@@ -225,9 +246,14 @@ function App() {
           const cacheIsStatic =
             task.action !== "montage.execute" ||
             (cached ? derivedMontagePhase(cached) === "registered" : false);
+          // A cached copy from while the task was still running must not be
+          // served after the list reports a terminal status, or the workbench
+          // keeps showing "生成中" forever.
+          const cacheIsCurrent = cached ? !liveTaskStatuses.has(cached.status) : false;
           if (
             cached &&
             cacheIsStatic &&
+            cacheIsCurrent &&
             !liveTaskStatuses.has(task.status) &&
             taskOpenIDRef.current !== task.id
           )
@@ -523,11 +549,12 @@ function App() {
       return;
     }
     if (
-      route.view === "mode-home"
-      || route.view === "not-found"
+      route.view === "not-found"
       || route.view === "image-projects"
       || route.view === "image-projects-advanced"
       || route.view === "image-project"
+      || route.view === "image-videos"
+      || route.view === "image-video"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -786,8 +813,8 @@ function App() {
   const answerTask = async (task: Task, providedAnswer?: string) => {
     const questions = taskQuestions(task);
     const prompt = questions.length
-      ? `Codex 正在等待你回复：\n\n${questions.join("\n")}\n\n请输入回答：`
-      : "请输入给 Codex 的回复";
+      ? `任务正在等待你回复：\n\n${questions.join("\n")}\n\n请输入回答：`
+      : "请输入回复内容";
     const answer = providedAnswer ?? window.prompt(prompt);
     if (!answer?.trim()) return;
     const response = await api(`/api/tasks/${task.id}/answer`, {
@@ -804,7 +831,7 @@ function App() {
   const cancelTask = async (task: Task) => {
     if (
       !window.confirm(
-        "确定停止这个 Codex 任务吗？\n\n停止后不会登记这次任务的产物，现有项目素材不会被覆盖。",
+        "确定停止这个任务吗？\n\n停止后不会登记这次任务的产物，现有项目素材不会被覆盖。",
       )
     )
       return;
@@ -823,7 +850,7 @@ function App() {
       setMessage(response.status === 409 ? "剪映草稿正在登记，无需重复操作。" : "剪映草稿登记重试失败。");
       return;
     }
-    setMessage("已重新排队登记剪映草稿，不会重新运行 Codex。");
+    setMessage("已重新排队登记剪映草稿，不会重新运行任务。");
     if (selected) await loadDetail(selected);
   };
   const openRegisteredDirectory = async (assetID: string) => {
@@ -844,6 +871,44 @@ function App() {
       setOpeningDirectory(false);
     }
   };
+  const exportRegisteredVideo = async (assetID: string) => {
+    if (videoExporting) return;
+    const response = await api(`/api/assets/${assetID}/export-video`, { method: "POST" });
+    if (!response.ok) {
+      setMessage(response.status === 403
+        ? "只能从控制台所在电脑导出视频。"
+        : response.status === 409
+          ? "已有导出任务在进行中，请等它结束。"
+          : "导出启动失败，请确认剪映已打开并停在首页。");
+      return;
+    }
+    videoExportAssetRef.current = assetID;
+    setVideoExporting(true);
+    setMessage("已开始控制剪映导出视频，期间请不要操作鼠标键盘。");
+  };
+  useEffect(() => {
+    if (!videoExporting) return;
+    const assetID = videoExportAssetRef.current;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const response = await api(`/api/assets/${assetID}/export-video`);
+          if (!response.ok) return;
+          const status = await response.json();
+          if (status.status === "done") {
+            setVideoExporting(false);
+            setMessage(`视频已导出：${status.output_path || "完成"}`);
+          } else if (status.status === "failed") {
+            setVideoExporting(false);
+            setMessage(`视频导出失败：${status.message || "未知原因"}`);
+          }
+        } catch {
+          // transient poll failure; keep polling
+        }
+      })();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [videoExporting, api]);
   const openAsset = async (asset: Asset) => {
     const url = `/api/assets/${asset.id}/content`;
     if (!textAssets.has(asset.type)) {
@@ -887,9 +952,7 @@ function App() {
       />
     );
 
-  const modalLayerOpen = Boolean(
-    preview || reviseOpen || settingsOpen || taskOpen || mediaLibraryOpen,
-  );
+  const modalLayerOpen = Boolean(preview || reviseOpen || settingsOpen || taskOpen);
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
   );
@@ -900,14 +963,13 @@ function App() {
     : [];
 
   return (
+    <ModelOptionsProvider options={modelOptionsList(settings?.public?.model_options)}>
     <div className={imageRoute ? "shell shell--image" : "shell"}>
-      {route.view === "mode-home" ? (
-        <ModeHome modes={productionModes} onNavigate={navigate} />
-      ) : route.view === "not-found" ? (
+      {route.view === "not-found" ? (
         <main className="notice" role="alert">
           <h1>404</h1>
           <p>页面不存在</p>
-          <button type="button" onClick={() => navigate("/")}>返回制作方式</button>
+          <button type="button" onClick={() => navigate(SCENIC_BOARD_HREF)}>返回风景混剪</button>
         </main>
       ) : imageRoute ? (
         <>
@@ -925,7 +987,7 @@ function App() {
                   <option value="dark">夜间</option>
                 </select>
               </label>
-              <button type="button" className="header-button" onClick={() => navigate("/")}>制作方式</button>
+              <button type="button" className="header-button" onClick={() => navigate(SCENIC_BOARD_HREF)}>风景混剪</button>
               <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
               <button className="header-button" onClick={() => void logout()}>退出</button>
             </div>
@@ -958,27 +1020,25 @@ function App() {
           onDelete={() => void projectActions.deleteProject()}
           mixKind={montageKind}
           onMix={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
-          onMovieMix={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库生成混剪草稿。")}
-          onImageVideoMix={() => void projectActions.startImageVideoTask("使用当前连续文案、配音、SRT、固定背景图和静帧库生成图片视频草稿。")}
           onRemakeMontage={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图重新生成混剪草稿。", { remake: true })}
-          onRemakeMovieMontage={() => void projectActions.startMovieMontageTask("使用当前连续文案、配音、SRT、固定背景图和电影切镜库重新生成混剪草稿。", { remake: true })}
-          onRemakeImageVideo={() => void projectActions.startImageVideoTask("使用当前连续文案、配音、SRT、固定背景图和静帧库重新生成图片视频草稿。", { remake: true })}
           onPublish={() => void projectActions.publishProject()}
           onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
           onSaveSourceScript={(content) => void projectActions.saveSourceScriptAndStartRemix(content)}
           onImportContinuousScript={(content) => void projectActions.importContinuousScript(content)}
           loadSourceScriptContent={projectActions.loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
+          onStartSpokenLines={() => void projectActions.startSpokenLinesTask()}
+          onStartCaptionKeywords={() => void projectActions.startCaptionKeywordsTask()}
           onGenerateNarration={() => void projectActions.generateNarration()}
           taskModel={projectActions.taskModel}
           onTaskModelChange={(value) => projectActions.setTaskModel(value)}
           taskModelDefaults={settings?.public}
-          remixPromptStyle={projectActions.remixPromptStyle}
-          onRemixPromptStyleChange={projectActions.setRemixPromptStyle}
           onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenTask={(task) => openTask(task as Task)}
           pendingActions={selectedPendingActions}
+          onExportVideo={(assetID) => void exportRegisteredVideo(assetID)}
+          videoExporting={videoExporting}
         />
       ) : selected ? (
         <main className="project-workbench project-workbench--loading">
@@ -996,10 +1056,9 @@ function App() {
           hidden={modalLayerOpen}
           theme={theme}
           onThemeChange={setTheme}
-          onChooseProductionMode={() => navigate("/")}
+          onOpenImageProjects={() => navigate(IMAGE_PROJECTS_HREF)}
           modeTitle={montageKindLabel(montageKind)}
           runtime={runtime}
-          onOpenMediaLibrary={() => setMediaLibraryOpen(true)}
           onOpenSettings={() => void settingsPanel.openDialog()}
           onLogout={() => void logout()}
           accounts={accounts}
@@ -1057,11 +1116,9 @@ function App() {
           onSubmit={(notes) => void projectActions.startRemixReview(notes)}
         />
       )}
-      {mediaLibraryOpen && (
-        <MediaLibraryPanel api={api} onClose={() => setMediaLibraryOpen(false)} />
-      )}
       {settingsOpen && settingsPanel.draft && (
         <SettingsPanel
+          api={api}
           settings={settings}
           draft={settingsPanel.draft}
           onDraftChange={settingsPanel.setDraft}
@@ -1070,6 +1127,7 @@ function App() {
           feedback={settingsPanel.feedback}
           onClose={settingsPanel.close}
           onSubmit={settingsPanel.save}
+          onSaveAndRestart={() => void settingsPanel.saveAndRestart()}
         />
       )}
       {taskOpen && (
@@ -1092,9 +1150,18 @@ function App() {
           }}
           onOpenDirectory={(assetID) => void openRegisteredDirectory(assetID)}
           onAnswer={(task, answer) => void answerTask(task, answer)}
+          currentScriptVersionID={detail?.assets.continuous_script?.id || ""}
+          onAdoptScript={(task) => {
+            closeTask();
+            void projectActions.adoptContinuousScript(
+              task.continuous_script || "",
+              task.model || "",
+            );
+          }}
         />
       )}
     </div>
+    </ModelOptionsProvider>
   );
 }
 

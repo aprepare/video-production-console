@@ -55,6 +55,8 @@ export const taskActionLabels: Record<string, string> = {
   "remix.enhanced": "增强二创文案",
   "remix.from_topic_card": "根据选题写文案",
   "remix.review": "文案检查",
+  "remix.spoken_lines": "生成口播稿",
+  "remix.caption_keywords": "标注字幕关键词",
   "montage.plan": "混剪方案",
   "montage.execute": "混剪草稿",
 };
@@ -88,7 +90,7 @@ export function derivedMontagePhase(task: Task) {
 export function montageHeadline(montage: MontageResult, phase: string) {
   switch (phase) {
     case "agent_running":
-      return "Codex 正在生成可登记的明文草稿";
+      return "正在生成可登记的明文草稿";
     case "registered":
       return "草稿已登记，可以在剪映中继续编辑";
     case "registering":
@@ -110,7 +112,7 @@ export function taskTitle(task: Task) {
   if (task.action === "montage.execute" && task.skill_name === "jianying-movie-montage") {
     return "电影混剪草稿";
   }
-  return taskActionLabels[task.action || ""] || task.skill_name || task.type || "Codex 任务";
+  return taskActionLabels[task.action || ""] || task.skill_name || task.type || "任务";
 }
 
 export function taskMessageContent(content: string) {
@@ -125,7 +127,7 @@ export function taskMessageContent(content: string) {
     const action = envelope.action;
     const status = envelope.status;
     if (status === "failed") return "任务没有完成，请查看下方失败原因。";
-    if (status === "awaiting_input") return "Codex 需要你补充信息，请在下方回复。";
+    if (status === "awaiting_input") return "任务需要你补充信息，请在下方回复。";
     if (action === "montage.execute") return "明文混剪草稿已生成并校验完成，尚未登记到剪映。";
     if (action === "topic.brainstorm") return "候选选题已生成，可以选择一个继续深化。";
     if (action === "topic.commit" || action === "topic.deepen")
@@ -178,6 +180,23 @@ export function taskEventProgress(event: TaskEvent, action = "") {
   if (/item\.started/i.test(kind) || /item\.started/i.test(raw))
     return "正在分析素材与选题方向";
   return "正在推进选题分析";
+}
+
+// taskResultWarnings digs the envelope warnings (e.g. 质检残留重合片段) out of
+// the result_completed event so the dialog can list them next to the summary.
+export function taskResultWarnings(task: Task): string[] {
+  for (const event of task.events || []) {
+    if (event.kind !== "result_completed" || !event.raw_json) continue;
+    try {
+      const parsed = JSON.parse(event.raw_json) as { warnings?: unknown };
+      if (Array.isArray(parsed.warnings)) {
+        return parsed.warnings.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 export function taskProgressStatus(task: Task) {

@@ -51,6 +51,7 @@ func (h *imageProjectsHandler) quickGenerate(w http.ResponseWriter, r *http.Requ
 		TextModel:       in.TextModel,
 		ReasoningEffort: in.ReasoningEffort,
 		ImageModel:      strings.TrimSpace(in.ImageModel),
+		OutputMode:      in.OutputMode,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -242,7 +243,10 @@ func decodeQuickGenerate(w http.ResponseWriter, r *http.Request) (imageProjectDr
 	in.TextModel = strings.TrimSpace(in.TextModel)
 	in.ReasoningEffort = strings.ToLower(strings.TrimSpace(in.ReasoningEffort))
 	in.ImageModel = strings.TrimSpace(in.ImageModel)
-	if strings.TrimSpace(in.Script) == "" || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > imageproject.MaxImages {
+	if in.OutputMode == "" {
+		in.OutputMode = domain.ImageProjectOutputModeImageSlideshow
+	}
+	if strings.TrimSpace(in.Script) == "" || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > imageproject.MaxImages || (in.OutputMode != domain.ImageProjectOutputModeImageSlideshow && in.OutputMode != domain.ImageProjectOutputModeImageToVideo) {
 		writeError(w, http.StatusBadRequest, "invalid_image_project", "Image project settings are invalid.")
 		return imageProjectDraft{}, false
 	}

@@ -11,6 +11,9 @@ const (
 	DefaultReasoningEffort = "medium"
 	KindCodex              = "codex"
 	KindRemix              = "remix"
+	// KindSpokenLines lets 口播稿 use its own configured model while still
+	// falling back to the remix model when the setting is empty.
+	KindSpokenLines = "spoken_lines"
 )
 
 var (
@@ -65,7 +68,7 @@ func Resolve(defaults, override Selection) (Selection, error) {
 	if override.Kind != "" {
 		defaults.Kind = override.Kind
 	}
-	if defaults.Kind == KindRemix {
+	if defaults.Kind == KindRemix || defaults.Kind == KindSpokenLines {
 		return normalizeOptionalEffort(defaults)
 	}
 	return Normalize(defaults)

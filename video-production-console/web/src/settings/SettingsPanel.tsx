@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { X } from "lucide-react";
 import { messageTone } from "../messageTone";
-import { ModelSelect } from "../ModelSelect";
-import { reasoningEfforts } from "../taskModel";
+import { ModelOptionsProvider, ModelSelect } from "../ModelSelect";
+import { modelOptionsList, reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
-import type { PublicSettings, Settings } from "../types";
+import type { BgmLibrary, BgmTrack, MontageStyle, PublicSettings, Settings } from "../types";
+import { formatTrackDuration, montageFonts, normalizeStyleColor, withMontageStyleDefaults } from "./montageStyle";
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   listen_addr: "监听地址",
@@ -50,12 +51,14 @@ const settingsTabs = [
   { id: "image", label: "图文" },
   { id: "voice", label: "配音" },
   { id: "montage", label: "混剪" },
+  { id: "style", label: "混剪样式" },
   { id: "system", label: "系统" },
 ] as const;
 
 type SettingsTab = (typeof settingsTabs)[number]["id"];
 
 type SettingsPanelProps = {
+  api: (path: string, init?: RequestInit) => Promise<Response>;
   settings: Settings | null;
   draft: PublicSettings;
   onDraftChange: (draft: PublicSettings) => void;
@@ -64,6 +67,7 @@ type SettingsPanelProps = {
   feedback: string;
   onClose: () => void;
   onSubmit: (event: FormEvent) => void;
+  onSaveAndRestart: () => void;
 };
 
 function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
@@ -72,6 +76,44 @@ function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
       {props.label}
       {props.children}
     </label>
+  );
+}
+
+function previewTop(y: number): string {
+  return `${Math.min(88, Math.max(8, 50 - y * 38))}%`;
+}
+
+function MontageStylePreview({ style }: { style: Required<MontageStyle> }) {
+  const captionY = style.caption_position === "bottom"
+    ? -0.3
+    : style.caption_position === "custom"
+      ? style.caption_y
+      : 0;
+  return (
+    <div className="montage-style-preview" aria-label="混剪样式预览">
+      <div className="montage-style-preview__stage">
+        {style.title_hidden ? null : (
+          <span
+            className="montage-style-preview__title"
+            style={{ color: style.title_color, fontSize: `${style.title_size}px`, top: previewTop(style.title_y) }}
+          >
+            主标题样例
+          </span>
+        )}
+        {style.subtitle_hidden ? null : (
+          <span
+            className="montage-style-preview__subtitle"
+            style={{ color: style.subtitle_color, fontSize: `${style.subtitle_size}px`, top: previewTop(style.subtitle_y) }}
+          >
+            副标题样例
+          </span>
+        )}
+        <p className="montage-style-preview__caption" style={{ top: previewTop(captionY) }}>
+          <span style={{ color: style.caption_color, fontSize: `${style.plain_size}px` }}>往后两个月</span>
+          <span style={{ color: style.keyword_color, fontSize: `${style.keyword_size}px` }}>发财</span>
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -111,6 +153,7 @@ function SliderField(props: {
 }
 
 export function SettingsPanel({
+  api,
   settings,
   draft,
   onDraftChange,
@@ -119,8 +162,70 @@ export function SettingsPanel({
   feedback,
   onClose,
   onSubmit,
+  onSaveAndRestart,
 }: SettingsPanelProps) {
   const [tab, setTab] = useState<SettingsTab>("remix");
+  const [newModelName, setNewModelName] = useState("");
+  const [bgmTracks, setBgmTracks] = useState<BgmTrack[] | null>(null);
+  const [bgmBusy, setBgmBusy] = useState(false);
+  const [bgmMessage, setBgmMessage] = useState("");
+  const montageStyle = withMontageStyleDefaults(draft.montage_style);
+  const patchMontageStyle = (patch: Partial<MontageStyle>) => {
+    const next = { ...patch };
+    if (next.caption_color) next.caption_color = normalizeStyleColor(next.caption_color);
+    if (next.keyword_color) next.keyword_color = normalizeStyleColor(next.keyword_color);
+    if (next.title_color) next.title_color = normalizeStyleColor(next.title_color);
+    if (next.subtitle_color) next.subtitle_color = normalizeStyleColor(next.subtitle_color);
+    onDraftChange({ ...draft, montage_style: { ...montageStyle, ...next } });
+  };
+
+  const loadBgmLibrary = useCallback(async () => {
+    setBgmBusy(true);
+    setBgmMessage("");
+    try {
+      const response = await api("/api/bgm-library");
+      if (!response.ok) throw new Error("bgm library request failed");
+      const payload = (await response.json()) as BgmLibrary;
+      setBgmTracks(payload.tracks || []);
+    } catch {
+      setBgmTracks([]);
+      setBgmMessage("BGM 列表读取失败。");
+    } finally {
+      setBgmBusy(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (tab === "style" && bgmTracks === null) void loadBgmLibrary();
+  }, [tab, bgmTracks, loadBgmLibrary]);
+
+  const rescanBgmLibrary = async () => {
+    setBgmBusy(true);
+    setBgmMessage("");
+    try {
+      const response = await api("/api/bgm-library/rescan", { method: "POST" });
+      if (!response.ok) throw new Error("bgm rescan failed");
+      const payload = (await response.json()) as BgmLibrary;
+      setBgmTracks(payload.tracks || []);
+      setBgmMessage(`扫描完成，共 ${(payload.tracks || []).length} 首。`);
+    } catch {
+      setBgmMessage("扫描失败，请检查 BGM 目录。");
+    } finally {
+      setBgmBusy(false);
+    }
+  };
+  const modelOptions = modelOptionsList(draft.model_options);
+  const addModelOption = () => {
+    const name = newModelName.trim();
+    if (!name || modelOptions.includes(name)) return;
+    onDraftChange({ ...draft, model_options: [...modelOptions, name].join("\n") });
+    setNewModelName("");
+  };
+  const removeModelOption = (name: string) =>
+    onDraftChange({
+      ...draft,
+      model_options: modelOptions.filter((option) => option !== name).join("\n"),
+    });
   const restartChangedFields = useMemo(() => {
     if (!settings?.restart_required || !settings.active_public) return [];
     const configured = settings.configured_public || settings.public;
@@ -141,6 +246,7 @@ export function SettingsPanel({
     || (tab === "voice" && (draft.aurastd_base_url || "").toLowerCase().startsWith("http://"));
 
   return (
+    <ModelOptionsProvider options={modelOptions}>
     <div className="modal-backdrop" onClick={onClose}>
       <form
         className="settings-modal"
@@ -160,7 +266,6 @@ export function SettingsPanel({
             <X size={20} aria-hidden="true" />
           </button>
         </div>
-        <p className="settings-note">密钥留空表示不改。</p>
         {feedback ? (
           <div
             className={`settings-feedback settings-feedback--${messageTone(feedback)}`}
@@ -213,6 +318,22 @@ export function SettingsPanel({
                   onChange={(remix_model) => onDraftChange({ ...draft, remix_model })}
                 />
               </Field>
+              <Field label="质检模型（留空=关闭质检）">
+                <ModelSelect
+                  aria-label="质检模型"
+                  value={draft.remix_check_model || ""}
+                  emptyLabel="关闭质检"
+                  onChange={(remix_check_model) => onDraftChange({ ...draft, remix_check_model })}
+                />
+              </Field>
+              <Field label="口播稿模型（留空=跟随二创模型）">
+                <ModelSelect
+                  aria-label="口播稿模型"
+                  value={draft.spoken_lines_model || ""}
+                  emptyLabel="跟随二创模型"
+                  onChange={(spoken_lines_model) => onDraftChange({ ...draft, spoken_lines_model })}
+                />
+              </Field>
               <Field label="二创思考强度">
                 <select
                   aria-label="二创思考强度"
@@ -244,6 +365,41 @@ export function SettingsPanel({
                   }
                 />
               </Field>
+              <div className="settings-field settings-field--wide model-options-manager">
+                <span>可选模型列表</span>
+                <ul className="model-options-list">
+                  {modelOptions.map((option) => (
+                    <li key={option}>
+                      <code>{option}</code>
+                      <button
+                        type="button"
+                        aria-label={`删除模型 ${option}`}
+                        onClick={() => removeModelOption(option)}
+                      >
+                        删除
+                      </button>
+                    </li>
+                  ))}
+                  {modelOptions.length === 0 ? <li className="muted">使用内置默认列表</li> : null}
+                </ul>
+                <div className="model-options-add">
+                  <input
+                    aria-label="新模型名称"
+                    value={newModelName}
+                    placeholder="输入模型名称"
+                    onChange={(event) => setNewModelName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addModelOption();
+                      }
+                    }}
+                  />
+                  <button type="button" onClick={addModelOption}>
+                    添加模型
+                  </button>
+                </div>
+              </div>
             </>
           ) : null}
           {tab === "image" ? (
@@ -282,7 +438,6 @@ export function SettingsPanel({
                   }
                 />
               </Field>
-              <p className="settings-note">模型和思考强度在进入图文项目后选择或填写。</p>
             </>
           ) : null}
           {tab === "voice" ? (
@@ -452,6 +607,215 @@ export function SettingsPanel({
               </Field>
             </>
           ) : null}
+          {tab === "style" ? (
+            <>
+              <MontageStylePreview style={montageStyle} />
+              <p className="settings-section-title">字幕</p>
+              <Field label="字幕字号">
+                <input
+                  type="number"
+                  aria-label="字幕字号"
+                  min={5}
+                  max={60}
+                  step={0.1}
+                  value={montageStyle.caption_size}
+                  onChange={(event) => patchMontageStyle({ caption_size: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="字幕颜色">
+                <input
+                  type="color"
+                  aria-label="字幕颜色"
+                  value={montageStyle.caption_color}
+                  onChange={(event) => patchMontageStyle({ caption_color: event.target.value })}
+                />
+              </Field>
+              <Field label="字幕位置">
+                <select
+                  aria-label="字幕位置"
+                  value={montageStyle.caption_position}
+                  onChange={(event) => patchMontageStyle({ caption_position: event.target.value })}
+                >
+                  <option value="middle">中间</option>
+                  <option value="bottom">底部</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </Field>
+              {montageStyle.caption_position === "custom" ? (
+                <Field label="字幕纵向位置">
+                  <input
+                    type="number"
+                    aria-label="字幕纵向位置"
+                    min={-1}
+                    max={1}
+                    step={0.01}
+                    value={montageStyle.caption_y}
+                    onChange={(event) => patchMontageStyle({ caption_y: Number(event.target.value) })}
+                  />
+                </Field>
+              ) : null}
+              <Field label="字幕字体">
+                <select
+                  aria-label="字幕字体"
+                  value={montageStyle.caption_font}
+                  onChange={(event) => patchMontageStyle({ caption_font: event.target.value })}
+                >
+                  {montageFonts.map((font) => (
+                    <option key={font} value={font}>{font}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="关键词字号">
+                <input
+                  type="number"
+                  aria-label="关键词字号"
+                  min={5}
+                  max={60}
+                  step={0.1}
+                  value={montageStyle.keyword_size}
+                  onChange={(event) => patchMontageStyle({ keyword_size: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="关键词颜色">
+                <input
+                  type="color"
+                  aria-label="关键词颜色"
+                  value={montageStyle.keyword_color}
+                  onChange={(event) => patchMontageStyle({ keyword_color: event.target.value })}
+                />
+              </Field>
+              <Field label="非关键词字号">
+                <input
+                  type="number"
+                  aria-label="非关键词字号"
+                  min={5}
+                  max={60}
+                  step={0.1}
+                  value={montageStyle.plain_size}
+                  onChange={(event) => patchMontageStyle({ plain_size: Number(event.target.value) })}
+                />
+              </Field>
+              <p className="settings-section-title">标题</p>
+              <Field label="显示主标题">
+                <input
+                  type="checkbox"
+                  aria-label="显示主标题"
+                  checked={!montageStyle.title_hidden}
+                  onChange={(event) => patchMontageStyle({ title_hidden: !event.target.checked })}
+                />
+              </Field>
+              <Field label="主标题字号">
+                <input
+                  type="number"
+                  aria-label="主标题字号"
+                  min={5}
+                  max={60}
+                  step={0.1}
+                  value={montageStyle.title_size}
+                  onChange={(event) => patchMontageStyle({ title_size: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="主标题颜色">
+                <input
+                  type="color"
+                  aria-label="主标题颜色"
+                  value={montageStyle.title_color}
+                  onChange={(event) => patchMontageStyle({ title_color: event.target.value })}
+                />
+              </Field>
+              <Field label="主标题纵向位置">
+                <input
+                  type="number"
+                  aria-label="主标题纵向位置"
+                  min={-1}
+                  max={1}
+                  step={0.01}
+                  value={montageStyle.title_y}
+                  onChange={(event) => patchMontageStyle({ title_y: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="显示副标题">
+                <input
+                  type="checkbox"
+                  aria-label="显示副标题"
+                  checked={!montageStyle.subtitle_hidden}
+                  onChange={(event) => patchMontageStyle({ subtitle_hidden: !event.target.checked })}
+                />
+              </Field>
+              <Field label="副标题字号">
+                <input
+                  type="number"
+                  aria-label="副标题字号"
+                  min={5}
+                  max={60}
+                  step={0.1}
+                  value={montageStyle.subtitle_size}
+                  onChange={(event) => patchMontageStyle({ subtitle_size: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="副标题颜色">
+                <input
+                  type="color"
+                  aria-label="副标题颜色"
+                  value={montageStyle.subtitle_color}
+                  onChange={(event) => patchMontageStyle({ subtitle_color: event.target.value })}
+                />
+              </Field>
+              <Field label="副标题纵向位置">
+                <input
+                  type="number"
+                  aria-label="副标题纵向位置"
+                  min={-1}
+                  max={1}
+                  step={0.01}
+                  value={montageStyle.subtitle_y}
+                  onChange={(event) => patchMontageStyle({ subtitle_y: Number(event.target.value) })}
+                />
+              </Field>
+              <p className="settings-section-title">BGM</p>
+              <Field label="BGM 曲目">
+                <select
+                  aria-label="BGM 曲目"
+                  value={montageStyle.bgm_id}
+                  onChange={(event) => patchMontageStyle({ bgm_id: event.target.value })}
+                >
+                  <option value="builtin">内置默认</option>
+                  {montageStyle.bgm_id !== "builtin"
+                    && !(bgmTracks || []).some((track) => track.id === montageStyle.bgm_id) ? (
+                    <option value={montageStyle.bgm_id}>当前：{montageStyle.bgm_id}</option>
+                  ) : null}
+                  {(bgmTracks || []).map((track) => (
+                    <option key={track.id} value={track.id}>
+                      {track.name}（{formatTrackDuration(track.duration_s)}）
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <SliderField
+                label="BGM 音量"
+                value={montageStyle.bgm_volume}
+                min={0.01}
+                max={1}
+                step={0.01}
+                onChange={(value) => patchMontageStyle({ bgm_volume: value })}
+              />
+              <Field label="BGM 目录" wide>
+                <input
+                  value={draft.bgm_dir || ""}
+                  placeholder="本地 BGM 目录绝对路径"
+                  onChange={setText("bgm_dir")}
+                />
+              </Field>
+              <div className="settings-field">
+                <span>BGM 库</span>
+                <button type="button" disabled={bgmBusy} onClick={() => void rescanBgmLibrary()}>
+                  {bgmBusy ? "扫描中…" : "重新扫描"}
+                </button>
+                {bgmTracks === null && bgmBusy ? <small role="status">读取中…</small> : null}
+                {bgmMessage ? <small role="status">{bgmMessage}</small> : null}
+              </div>
+            </>
+          ) : null}
           {tab === "system" ? (
             <>
               <Field label="默认模型">
@@ -489,33 +853,6 @@ export function SettingsPanel({
                   ))}
                 </select>
               </Field>
-              <Field label="Codex CLI 路径">
-                <input value={draft.codex_binary_path || ""} placeholder="codex 可执行文件" onChange={setText("codex_binary_path")} />
-              </Field>
-              <label className="settings-field checkbox-field settings-field--wide">
-                <input
-                  type="checkbox"
-                  checked={draft.app_server_enabled || false}
-                  onChange={(event) =>
-                    onDraftChange({ ...draft, app_server_enabled: event.target.checked })
-                  }
-                />
-                启用任务实时交互服务
-              </label>
-              <Field label="Codex 工作目录白名单" wide>
-                <textarea
-                  value={(draft.codex_workspace_roots || []).join("\n")}
-                  onChange={(event) =>
-                    onDraftChange({
-                      ...draft,
-                      codex_workspace_roots: event.target.value
-                        .split("\n")
-                        .map((value) => value.trim())
-                        .filter(Boolean),
-                    })
-                  }
-                />
-              </Field>
             </>
           ) : null}
         </div>
@@ -524,10 +861,20 @@ export function SettingsPanel({
             当前地址使用 HTTP，密钥会明文传输。
           </p>
         ) : null}
-        <button className="save-settings" type="submit">
-          保存设置
-        </button>
+        <div className="settings-actions">
+          <button className="save-settings" type="submit">
+            保存设置
+          </button>
+          <button
+            className="save-settings save-settings--restart"
+            type="button"
+            onClick={onSaveAndRestart}
+          >
+            保存并重启
+          </button>
+        </div>
       </form>
     </div>
+    </ModelOptionsProvider>
   );
 }

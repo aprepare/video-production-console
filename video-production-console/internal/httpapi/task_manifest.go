@@ -14,6 +14,7 @@ import (
 
 	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/baokuan"
+	"video-production-console/internal/bgmlibrary"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
@@ -45,6 +46,28 @@ type TaskManifestRequest struct {
 // Implementations must leave the task unqueued when preparation fails.
 type TaskManifestPreparer interface {
 	Prepare(context.Context, domain.CodexTask, TaskManifestRequest) error
+}
+
+// resolveMontageBGM turns the configured bgm_id into a verified local file
+// with its analysis windows. A stale index entry fails the task with an
+// actionable message instead of silently falling back to the built-in track.
+func resolveMontageBGM(dataRoot string, style domain.MontageStyle) (*codex.ManifestBGM, error) {
+	index := bgmlibrary.LoadIndex(filepath.Join(dataRoot, bgmlibrary.IndexFileName))
+	track, ok := bgmlibrary.FindTrack(index, style.BGMID)
+	if !ok {
+		return nil, fmt.Errorf("所选 BGM 不在音乐库索引里，请在设置的混剪样式页重新扫描 BGM 库后重选")
+	}
+	info, err := os.Stat(track.Path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("BGM 文件 %s 已不存在，请重新扫描 BGM 库", track.Name)
+	}
+	return &codex.ManifestBGM{
+		Name: track.Name, FilePath: track.Path,
+		DurationS:    track.DurationS,
+		UsableHeadS:  track.UsableHeadS,
+		ClimaxStartS: track.ClimaxStartS, ClimaxDurationS: track.ClimaxDurationS,
+		Volume: style.BGMVolume,
+	}, nil
 }
 
 type runtimeSettingsProvider interface {
@@ -182,6 +205,15 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		settings.MixPreset = "image_video"
 	}
 	if task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute {
+		style := runtime.MontageStyle.Normalized()
+		settings.MontageStyle = &style
+		if style.BGMID != "" && style.BGMID != domain.BuiltinBGMID {
+			bgm, bgmErr := resolveMontageBGM(runtime.DataRoot, style)
+			if bgmErr != nil {
+				return bgmErr
+			}
+			settings.MontageBGM = bgm
+		}
 		decision := skillregistry.DecideMontagePlanVersion(snapshot)
 		settings.MontagePlanVersion = decision.Version
 		if decision.Warning != "" {
@@ -413,7 +445,11 @@ func (p *taskManifestPreparer) resolveDraftDisplayName(ctx context.Context, task
 	if len(shorts) > 0 {
 		shortTitle = strings.TrimSpace(shorts[0])
 	}
-	return montage.BuildDraftDisplayName(account.Name, project.Title, shortTitle, task.ID), nil
+	createdAt := task.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	return montage.BuildDraftDisplayName(account.Name, project.Title, shortTitle, createdAt), nil
 }
 
 // resolveStoredAssetPath keeps assets created by older console versions usable.
@@ -524,11 +560,13 @@ func snapshotTopicCandidatesInput(dataRoot, projectRoot, taskID, sourcePath stri
 func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain.AssetVersion, repo *taskManifestPreparer, ctx context.Context, projectID, sourceVersionID string) ([]domain.AssetVersion, error) {
 	types := map[domain.TaskAction][]domain.AssetType{
 		domain.ActionRemixStandard: {domain.AssetSourceScript}, domain.ActionRemixEnhanced: {domain.AssetSourceScript},
-		domain.ActionRemixFromTopic: {domain.AssetTopicCard},
-		domain.ActionRemixReview:    {domain.AssetContinuousScript},
-		domain.ActionMontagePlan:    {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
-		domain.ActionMontageExecute: {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
-		domain.ActionTopicDeepen:    {domain.AssetTopicCard},
+		domain.ActionRemixFromTopic:   {domain.AssetTopicCard},
+		domain.ActionRemixSpokenLines: {domain.AssetContinuousScript},
+		domain.ActionCaptionKeywords:  {domain.AssetSpokenScript},
+		domain.ActionRemixReview:      {domain.AssetContinuousScript},
+		domain.ActionMontagePlan:      {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
+		domain.ActionMontageExecute:   {domain.AssetContinuousScript, domain.AssetNarration, domain.AssetSubtitleSRT},
+		domain.ActionTopicDeepen:      {domain.AssetTopicCard},
 	}
 	if (action == domain.ActionRemixStandard || action == domain.ActionRemixEnhanced) && strings.TrimSpace(sourceVersionID) != "" {
 		version, err := repo.assets.Version(ctx, strings.TrimSpace(sourceVersionID))
@@ -580,6 +618,14 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 		}
 	}
 	if action == domain.ActionMontagePlan || action == domain.ActionMontageExecute {
+		if timing, ok := byType[domain.AssetWordTiming]; ok && timing.State == domain.AssetReady {
+			inputs = append(inputs, timing)
+		}
+		// Keyword annotations are optional: without them the planner falls
+		// back to its local keyword list.
+		if keywords, ok := byType[domain.AssetCaptionKeywords]; ok && keywords.State == domain.AssetReady {
+			inputs = append(inputs, keywords)
+		}
 		background, err := repo.assets.CurrentBackgroundForProject(ctx, projectID)
 		if err != nil {
 			return nil, fmt.Errorf("required asset %q is missing or not ready: %w", domain.AssetAccountBackground, err)
@@ -591,7 +637,7 @@ func manifestInputs(action domain.TaskAction, byType map[domain.AssetType]domain
 
 func remixActionOmitsGrok(action domain.TaskAction) bool {
 	switch action {
-	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
+	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixSpokenLines, domain.ActionCaptionKeywords, domain.ActionRemixReview:
 		return true
 	default:
 		return false
@@ -602,9 +648,7 @@ func normalizeRemixPromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "rewrite":
 		return "rewrite", nil
-	case "wash":
-		return "wash", nil
 	default:
-		return "", fmt.Errorf("remix_prompt_style must be rewrite or wash")
+		return "", fmt.Errorf("remix_prompt_style must be rewrite")
 	}
 }

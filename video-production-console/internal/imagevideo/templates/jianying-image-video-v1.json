@@ -1,0 +1,10 @@
+{
+  "version": "jianying-image-video-v1",
+  "canvas": {"width": 1080, "height": 1920},
+  "spoken_captions": false,
+  "editable_titles": false,
+  "image_duration_seconds": {"first_30_seconds": {"min": 4.3, "max": 4.6}, "subsequent_min": 6.0},
+  "motion_effects": ["subtle_zoom_in", "subtle_zoom_out", "subtle_pan_left", "subtle_pan_right"],
+  "transitions": ["fade_in", "fade_out"],
+  "image_to_video": {"resolution": "480p", "width": 480, "height": 848, "fps": 24, "durations_seconds": [6, 10, 15]}
+}

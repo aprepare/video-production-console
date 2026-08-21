@@ -171,6 +171,34 @@ func TestResolveTaskModelPrefersRemixModel(t *testing.T) {
 	}
 }
 
+func TestResolveTaskModelSpokenLinesFallsBackToRemixModel(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.CodexDefaultModel = "gpt-5.6-sol"
+	public.RemixModel = "cursor-grok-4.6-xhigh-fast"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := service.ResolveTaskModel(t.Context(), taskmodel.Selection{Kind: taskmodel.KindSpokenLines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Model != "cursor-grok-4.6-xhigh-fast" {
+		t.Fatalf("ResolveTaskModel()=%+v, want remix model fallback", selection)
+	}
+
+	public.SpokenLinesModel = "claude-sonnet-4-6"
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	selection, err = service.ResolveTaskModel(t.Context(), taskmodel.Selection{Kind: taskmodel.KindSpokenLines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Model != "claude-sonnet-4-6" {
+		t.Fatalf("ResolveTaskModel()=%+v, want dedicated 口播稿 model", selection)
+	}
+}
+
 func TestResolveTaskModelUsesCodexDefaultForMontage(t *testing.T) {
 	service, _, _, public := newSettingsTestService(t, Options{})
 	public.CodexDefaultModel = "gpt-5.6-sol"
@@ -242,6 +270,40 @@ func TestSettingsPublicRejectsInvalidCodexDefaultsWithoutPartialWrite(t *testing
 				t.Fatalf("invalid update was partial: %+v", view)
 			}
 		})
+	}
+}
+
+func TestRuntimeStartsWhenCodexBinaryIsMissing(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	if err := service.InitializeBootSettings(t.Context(), BootSettings{DataRoot: public.DataRoot}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatalf("Runtime() error=%v, want boot without Codex to succeed", err)
+	}
+	if runtime.DataRoot != public.DataRoot {
+		t.Fatalf("data root=%q", runtime.DataRoot)
+	}
+	if runtime.CodexBinaryPath != "" {
+		t.Fatalf("codex path=%q, want empty when it was never configured", runtime.CodexBinaryPath)
+	}
+}
+
+func TestRuntimeSkipsSecretsThatCannotBeDecrypted(t *testing.T) {
+	service, db, _, public := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO encrypted_secrets(key,ciphertext,version,updated_at) VALUES(?,?,?,?)`, SecretRemixAPIKey, "not-valid-ciphertext", 1, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatalf("Runtime() error=%v, want undecryptable secrets to be skipped", err)
+	}
+	if runtime.RemixAPIKey != "" {
+		t.Fatalf("remix key=%q, want empty after decrypt failure", runtime.RemixAPIKey)
 	}
 }
 
@@ -363,6 +425,55 @@ func TestSettingsValidationRejectsUnsafeValuesWithoutPartialWrite(t *testing.T) 
 	}
 }
 
+func TestMontageStyleRoundTripsAndValidates(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	public.MontageStyle = domain.MontageStyle{
+		CaptionSize: 24, CaptionColor: "#ffffff", CaptionPosition: "bottom",
+		KeywordColor: "#ff0000", BGMID: "abc123", BGMVolume: 0.4,
+	}
+	public.BGMDir = filepath.Join(t.TempDir(), "bgm")
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatalf("PutPublic() error=%v", err)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := view.Public.MontageStyle
+	if got.CaptionSize != 24 || got.CaptionColor != "#FFFFFF" || got.CaptionPosition != "bottom" {
+		t.Fatalf("caption style did not round trip: %+v", got)
+	}
+	if got.KeywordSize != 23 || got.KeywordColor != "#FF0000" || got.TitleSize != 16 {
+		t.Fatalf("defaults not filled: %+v", got)
+	}
+	if got.BGMID != "abc123" || got.BGMVolume != 0.4 || view.Public.BGMDir != public.BGMDir {
+		t.Fatalf("bgm selection did not round trip: %+v dir=%q", got, view.Public.BGMDir)
+	}
+	if got.CaptionTransformY() != -0.3 {
+		t.Fatalf("bottom position must map to -0.3, got %v", got.CaptionTransformY())
+	}
+	invalidStyles := []domain.MontageStyle{
+		{CaptionSize: 200},
+		{CaptionColor: "red"},
+		{CaptionPosition: "top"},
+		{CaptionFont: "不存在的字体"},
+		{BGMVolume: 3},
+		{CaptionPosition: "custom", CaptionY: 2},
+	}
+	for i, style := range invalidStyles {
+		bad := public
+		bad.MontageStyle = style
+		if _, err := service.PutPublic(t.Context(), bad); !errors.Is(err, ErrInvalidSettings) {
+			t.Fatalf("invalid style %d accepted: %v", i, err)
+		}
+	}
+	bad := public
+	bad.BGMDir = "relative\\bgm"
+	if _, err := service.PutPublic(t.Context(), bad); !errors.Is(err, ErrInvalidSettings) {
+		t.Fatalf("relative bgm_dir accepted: %v", err)
+	}
+}
+
 func TestSettingsAllowsSpecificLANListenAddress(t *testing.T) {
 	service, _, _, public := newSettingsTestService(t, Options{})
 	public.ListenAddr = "192.168.10.25:2030"
@@ -390,9 +501,17 @@ func TestSettingsSecretSizeAndCorruptionErrorsDoNotExposeSecretMaterial(t *testi
 		t.Fatal(err)
 	}
 	protector.corrupt = true
-	_, err := service.Runtime(t.Context())
-	if err == nil || strings.Contains(err.Error(), "do-not-echo") || strings.Contains(err.Error(), "cipher-boundary") {
-		t.Fatalf("runtime error leaked secret material: %v", err)
+	// A corrupted secret is skipped (treated as unconfigured) so the console
+	// still boots, and nothing of the secret material may surface anywhere.
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		if strings.Contains(err.Error(), "do-not-echo") || strings.Contains(err.Error(), "cipher-boundary") {
+			t.Fatalf("runtime error leaked secret material: %v", err)
+		}
+		t.Fatalf("undecryptable secret must be skipped, not fail runtime: %v", err)
+	}
+	if runtime.GrokAPIKey != "" {
+		t.Fatal("corrupted secret must not decode into runtime material")
 	}
 }
 
@@ -995,6 +1114,33 @@ func TestSettingsMediaIntelligenceDefaultsFillMissingValues(t *testing.T) {
 	}
 }
 
+func TestRuntimeClearsStaleFFmpegPathSoConsoleCanBoot(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	public.FFmpegPath = filepath.Join(t.TempDir(), "missing-ffmpeg.exe")
+	public.FFprobePath = filepath.Join(t.TempDir(), "missing-ffprobe.exe")
+	if _, err := service.repo.UpdatePublic(t.Context(), publicValues(public)); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatalf("Runtime() error=%v, want stale ffmpeg/ffprobe to be cleared instead of blocking boot", err)
+	}
+	if runtime.FFmpegPath != "" || runtime.FFprobePath != "" {
+		t.Fatalf("runtime binaries=%q/%q, want cleared", runtime.FFmpegPath, runtime.FFprobePath)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.FFmpegPath != "" || view.Public.FFprobePath != "" {
+		t.Fatalf("persisted binaries=%q/%q, want cleared so the next boot stays valid", view.Public.FFmpegPath, view.Public.FFprobePath)
+	}
+}
+
 func TestSettingsMediaIntelligenceRoundTripsValidConfiguration(t *testing.T) {
 	service, _, _, public := newSettingsTestService(t, Options{})
 	binaries := t.TempDir()
@@ -1176,6 +1322,7 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		AuraSTDLanguageBoost:   defaultAuraSTDLanguageBoost,
 		AuraSTDModifyIntensity: defaultAuraSTDModifyIntensity,
 		AuraSTDModifyTimbre:    defaultAuraSTDModifyTimbre,
+		MontageStyle:           domain.DefaultMontageStyle(),
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
 }

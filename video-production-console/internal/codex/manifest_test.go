@@ -111,6 +111,7 @@ func TestBuildManifestUsesOneDomainToWireActionMapping(t *testing.T) {
 		{domain.ActionRemixStandard, "finance-viral-remix", "standard"},
 		{domain.ActionRemixEnhanced, "finance-viral-remix", "enhanced"},
 		{domain.ActionRemixFromTopic, "finance-viral-remix", "from_topic_card"},
+		{domain.ActionRemixSpokenLines, "finance-viral-remix", "spoken_lines"},
 		{domain.ActionRemixReview, "finance-viral-remix", "review"},
 		{domain.ActionMontagePlan, "jianying-montage-draft", "plan"},
 		{domain.ActionMontageExecute, "jianying-montage-draft", "execute"},
@@ -231,6 +232,7 @@ func TestBuildManifestUsesActionSpecificInputRoles(t *testing.T) {
 		{domain.ActionRemixStandard, domain.AssetSourceScript, "primary_source"},
 		{domain.ActionRemixEnhanced, domain.AssetSourceScript, "primary_source"},
 		{domain.ActionRemixFromTopic, domain.AssetTopicCard, "topic_brief"},
+		{domain.ActionRemixSpokenLines, domain.AssetContinuousScript, "continuous_script"},
 		{domain.ActionRemixReview, domain.AssetContinuousScript, "review_target"},
 	} {
 		t.Run(string(tt.action), func(t *testing.T) {
@@ -272,6 +274,30 @@ func TestRemixOutputsRequireOnlyContinuousScript(t *testing.T) {
 				t.Fatalf("console manifest accepted spoken_script: %v", err)
 			}
 		})
+	}
+}
+
+func TestSpokenLinesOutputsRequireOnlySpokenScript(t *testing.T) {
+	root, projectID, accountID := t.TempDir(), uuid.NewString(), uuid.NewString()
+	source := filepath.Join(root, "continuous.txt")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskID := uuid.NewString()
+	input := BuildManifestInput{Task: domain.CodexTask{ID: taskID}, Project: &domain.Project{ID: projectID, AccountID: accountID}, Action: domain.ActionRemixSpokenLines, OutputDir: filepath.Join(root, "tasks", taskID, "output"), SkillSnapshot: domain.SkillSnapshot{ID: uuid.NewString()}, Inputs: []domain.AssetVersion{manifestVersion(projectID, accountID, domain.AssetContinuousScript, source)}}
+	manifest, err := BuildManifest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.ExpectedOutputs) != 1 || manifest.ExpectedOutputs[0].Type != "spoken_script" || !manifest.ExpectedOutputs[0].Required {
+		t.Fatalf("unexpected spoken-lines outputs: %#v", manifest.ExpectedOutputs)
+	}
+	if manifest.Inputs[0].Role != "continuous_script" {
+		t.Fatalf("role=%q", manifest.Inputs[0].Role)
+	}
+	input.ExpectedOutputs = []ExpectedOutput{{Type: "spoken_script", Required: true}, {Type: "continuous_script", Required: true}}
+	if _, err := BuildManifest(input); err == nil || !strings.Contains(err.Error(), "continuous_script") {
+		t.Fatalf("spoken-lines manifest accepted continuous_script output: %v", err)
 	}
 }
 
@@ -798,6 +824,8 @@ func requiredOutputsForTest(action domain.TaskAction) []ExpectedOutput {
 	switch action {
 	case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
 		return []ExpectedOutput{{Type: "continuous_script", Required: true}}
+	case domain.ActionRemixSpokenLines:
+		return []ExpectedOutput{{Type: "spoken_script", Required: true}}
 	default:
 		return []ExpectedOutput{}
 	}

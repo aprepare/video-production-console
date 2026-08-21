@@ -16,6 +16,8 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/httpapi"
 	"video-production-console/internal/imageproject"
+	"video-production-console/internal/imagevideo"
+	"video-production-console/internal/imagevideoruntime"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
@@ -48,12 +50,21 @@ type Options struct {
 	RemixCoordinator  httpapi.RemixCoordinator
 	// MediaCatalog overrides the default settings-backed catalog service;
 	// tests inject fakes through it.
-	MediaCatalog httpapi.CatalogService
+	MediaCatalog      httpapi.CatalogService
+	ImageVideoService *imagevideo.Service
+	ImageVideoStarter interface {
+		Kick(context.Context, string) error
+	}
+	ImageVideoCloser interface{ Close() }
+	// Restart spawns a replacement console process and schedules a graceful
+	// shutdown of this one. Nil disables POST /api/system/restart.
+	Restart func() error
 }
 
 // App is the HTTP application.
 type App struct {
 	handler http.Handler
+	close   func()
 }
 
 // New constructs the application and its routes.
@@ -108,14 +119,24 @@ func New(options Options) *App {
 		if options.Settings != nil {
 			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
 			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
-			imageProjectsHandler := httpapi.NewImageProjectsHandler(options.DB, options.Settings, imageproject.NewClient(nil))
+			imageVideoService := options.ImageVideoService
+			if imageVideoService == nil {
+				imageVideoService = imagevideo.NewService(store.NewImageProjectRepository(options.DB), store.NewImageVideoJobRepository(options.DB), imagevideoruntime.Provider{Inner: options.Settings}, nil)
+			}
+			imageProjectsHandler := httpapi.NewImageProjectsHandlerWithImageVideo(options.DB, options.Settings, imageproject.NewClient(nil), imageproject.NewHTTPChatClient(nil), imageVideoService, options.ImageVideoStarter)
 			mux.Handle("/api/image-projects", imageProjectsHandler)
 			mux.Handle("/api/image-projects/", imageProjectsHandler)
+			mux.Handle("/api/image-videos", imageProjectsHandler)
+			mux.Handle("/api/image-videos/", imageProjectsHandler)
+			mux.Handle("/api/image-video-jobs/", httpapi.NewImageVideoJobsHandler(options.DB, options.Settings, options.ImageVideoStarter, imageVideoService))
 			catalogService := options.MediaCatalog
 			if catalogService == nil {
 				catalogService = newMediaCatalogService(options.Settings)
 			}
 			mux.Handle("/api/media-catalog/", httpapi.NewMediaCatalogHandler(catalogService))
+			bgmHandler := httpapi.NewBGMLibraryHandler(options.Settings)
+			mux.Handle("/api/bgm-library", bgmHandler)
+			mux.Handle("/api/bgm-library/", bgmHandler)
 		}
 		if options.Skills != nil {
 			skillsHandler := httpapi.NewSkillsHandler(options.Skills)
@@ -153,13 +174,26 @@ func New(options Options) *App {
 		mux.Handle("/api/dependencies/", deps)
 		mux.Handle("/api/library/", deps)
 	}
+	if options.Restart != nil {
+		mux.HandleFunc("POST /api/system/restart", func(w http.ResponseWriter, _ *http.Request) {
+			if err := options.Restart(); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"code": "restart_failed", "message": "控制台重启失败，请手动重启。"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "restarting"})
+		})
+	}
 	mux.HandleFunc("GET /api/obsidian", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(options.Obsidian.Health())
 	})
 	mux.Handle("/", webui.Handler())
 	if options.AuthService == nil {
-		return &App{handler: logging.RequestID(mux)}
+		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser)}
 	}
 	authHandler := httpapi.NewAuthHandler(options.AuthService)
 	mux.Handle("/api/auth/", authHandler)
@@ -172,7 +206,14 @@ func New(options Options) *App {
 			return
 		}
 		protected.ServeHTTP(w, r)
-	}))}
+	})), close: closeImageVideo(options.ImageVideoCloser)}
+}
+
+func closeImageVideo(closer interface{ Close() }) func() {
+	if closer == nil {
+		return func() {}
+	}
+	return closer.Close
 }
 
 func projectRouteHandler(projects, tasks, narration http.Handler, taskRoutesEnabled bool) http.Handler {
@@ -243,4 +284,10 @@ func (s settingsWithScheduler) RepairBaokuanMCP(ctx context.Context) consoleSett
 // Handler returns the application's HTTP handler.
 func (a *App) Handler() http.Handler {
 	return a.handler
+}
+
+func (a *App) Close() {
+	if a != nil && a.close != nil {
+		a.close()
+	}
 }

@@ -2,6 +2,8 @@ import { ArrowRight } from "lucide-react";
 import type { ProductionModeDefinition } from "./catalog";
 import "./mode-home.css";
 
+// App 当前不挂载本页：登录后默认进风景混剪，电影混剪 / 图文视频入口已屏蔽。
+
 type ModeHomeProps = {
   modes: readonly ProductionModeDefinition[];
   onNavigate: (href: string) => void;

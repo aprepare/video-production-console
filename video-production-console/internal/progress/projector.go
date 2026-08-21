@@ -57,10 +57,20 @@ func Project(in Input) Event {
 	case in.Status == string(domain.TaskFailed) || strings.Contains(method, "failed"):
 		return Event{Kind: domain.SemanticFailure, Phase: "failed", DisplayText: "任务未能完成", Visible: true}
 	case method == "turn/completed" || in.Status == string(domain.TaskCompleted):
+		if in.Action == domain.ActionRemixSpokenLines {
+			return Event{Kind: domain.SemanticTurnCompleted, Phase: "completed", DisplayText: "口播稿已写完", Visible: true}
+		}
+		if in.Action == domain.ActionCaptionKeywords {
+			return Event{Kind: domain.SemanticTurnCompleted, Phase: "completed", DisplayText: "字幕关键词已标注", Visible: true}
+		}
 		if isRemixAction(in.Action) {
 			return Event{Kind: domain.SemanticTurnCompleted, Phase: "completed", DisplayText: "二创文案已写完", Visible: true}
 		}
 		return Event{Kind: domain.SemanticTurnCompleted, Phase: "completed", DisplayText: "处理已结束", Visible: true}
+	case in.Action == domain.ActionRemixSpokenLines:
+		return Event{Kind: domain.SemanticPhaseProgress, Phase: "processing", DisplayText: "正在生成口播稿", CoalesceKey: in.TaskID + ":processing:" + string(domain.SemanticPhaseProgress), Visible: true}
+	case in.Action == domain.ActionCaptionKeywords:
+		return Event{Kind: domain.SemanticPhaseProgress, Phase: "processing", DisplayText: "正在标注字幕关键词", CoalesceKey: in.TaskID + ":processing:" + string(domain.SemanticPhaseProgress), Visible: true}
 	case isRemixAction(in.Action):
 		return Event{Kind: domain.SemanticPhaseProgress, Phase: "processing", DisplayText: "正在写二创文案", CoalesceKey: in.TaskID + ":processing:" + string(domain.SemanticPhaseProgress), Visible: true}
 	case strings.Contains(raw, "grok_search.py") || strings.Contains(raw, "grok_search"):

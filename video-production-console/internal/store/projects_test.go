@@ -225,7 +225,8 @@ func TestSyncStageFromAssets(t *testing.T) {
 	}{
 		{name: "empty", want: domain.StageScript},
 		{name: "topic card only", assets: []domain.AssetType{domain.AssetTopicCard}, want: domain.StageScript},
-		{name: "continuous script", assets: []domain.AssetType{domain.AssetContinuousScript}, want: domain.StageAssets},
+		{name: "continuous script", assets: []domain.AssetType{domain.AssetContinuousScript}, want: domain.StageScript},
+		{name: "continuous and spoken", assets: []domain.AssetType{domain.AssetContinuousScript, domain.AssetSpokenScript}, want: domain.StageAssets},
 		{name: "narration and subtitles", assets: []domain.AssetType{domain.AssetNarration, domain.AssetSubtitleSRT}, want: domain.StageMixing},
 		{name: "mix draft", assets: []domain.AssetType{domain.AssetMixDraft}, want: domain.StageReview},
 		{name: "final video only", assets: []domain.AssetType{domain.AssetFinalVideo}, want: domain.StageReview},
@@ -346,6 +347,9 @@ func TestSyncStageFromAssetsDoesNotOverwriteConcurrentArchivedStage(t *testing.T
 		t.Fatal(err)
 	}
 	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, Type: domain.AssetContinuousScript, Path: "script", Filename: "script", MIMEType: "text/plain", SHA256: "script"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.assets.AddVersion(context.Background(), AddAssetVersion{ProjectID: &pid, Type: domain.AssetSpokenScript, Path: "spoken", Filename: "spoken", MIMEType: "text/plain", SHA256: "spoken"}); err != nil {
 		t.Fatal(err)
 	}
 

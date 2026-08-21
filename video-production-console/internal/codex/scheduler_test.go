@@ -266,6 +266,44 @@ func TestSchedulerRunsIndependentProjectlessTasksConcurrently(t *testing.T) {
 	t.Fatalf("snapshot = %#v, want two projectless tasks running concurrently", s.Snapshot())
 }
 
+func TestSchedulerRunsParallelRemixStandardTasksOnOneProject(t *testing.T) {
+	repo := schedulerDB(t)
+	_, _ = repo.DB().Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES
+		('account-1','A1','#000','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
+	_, _ = repo.DB().Exec(`INSERT INTO projects(id,account_id,title,stage,created_at,updated_at)
+		VALUES('project-1','account-1','P','script',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
+	root := t.TempDir()
+	s, err := NewScheduler(repo, 2, func(domain.CodexTask) (*exec.Cmd, string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=TestSchedulerBlockingProcess")
+		cmd.Env = append(os.Environ(), "VIDEO_CONSOLE_SCHEDULER_BLOCKING_PROCESS=1")
+		return cmd, root, nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	projectID := "project-1"
+	now := time.Now().UTC()
+	for _, task := range []domain.CodexTask{
+		{ID: "remix-model-a", ProjectID: &projectID, AccountID: "account-1", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "first", CreatedAt: now},
+		{ID: "remix-model-b", ProjectID: &projectID, AccountID: "account-1", Type: "remix", SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard, Status: domain.TaskQueued, PromptSnapshot: "second", CreatedAt: now.Add(time.Millisecond)},
+	} {
+		if err := s.Enqueue(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if snapshot := s.Snapshot(); snapshot.Running == 2 && snapshot.Queued == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("snapshot = %#v, want two remix.standard tasks running on one project", s.Snapshot())
+}
+
 func TestSchedulerCancelRunningTaskPersistsCancelledStatus(t *testing.T) {
 	repo := schedulerDB(t)
 	_, _ = repo.DB().Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES

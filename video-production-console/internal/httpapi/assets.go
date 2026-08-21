@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ type assetContentHandler struct {
 	db         *sql.DB
 	runtime    AssetRuntimeProvider
 	opener     assets.DesktopOpener
+	exportJob  *videoExportJob
 }
 
 type AssetRuntimeProvider interface {
@@ -56,10 +58,13 @@ func newAssetsHandler(repository assetContentStore, service *assets.Service, opt
 		options := optionValues[0]
 		h.db, h.runtime, h.opener = options.Database, options.Runtime, options.DesktopOpener
 	}
+	h.exportJob = &videoExportJob{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/assets/{id}/content", h.content)
 	mux.HandleFunc("GET /api/assets/{id}/directory-manifest", h.directoryManifest)
 	mux.HandleFunc("POST /api/assets/{id}/open-directory", h.openDirectory)
+	mux.HandleFunc("POST /api/assets/{id}/export-video", h.exportVideoStart)
+	mux.HandleFunc("GET /api/assets/{id}/export-video", h.exportVideoStatus)
 	return mux
 }
 
@@ -109,7 +114,7 @@ func (h *assetContentHandler) content(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, asset.Filename, info.ModTime(), file)
 }
 
-type registeredDirectory struct{ ID, Path, Root string }
+type registeredDirectory struct{ ID, Path, Root, DisplayName string }
 
 func (h *assetContentHandler) registeredDirectory(r *http.Request) (registeredDirectory, string, error) {
 	id := strings.TrimSpace(r.PathValue("id"))
@@ -120,15 +125,16 @@ func (h *assetContentHandler) registeredDirectory(r *http.Request) (registeredDi
 		return registeredDirectory{}, "asset_directory_unavailable", errors.New("directory asset service is unavailable")
 	}
 	var item registeredDirectory
-	err := h.db.QueryRowContext(r.Context(), `SELECT version.id,version.path
+	var manifestPath sql.NullString
+	err := h.db.QueryRowContext(r.Context(), `SELECT version.id,version.path,task.manifest_path
 		FROM asset_versions version
 		JOIN codex_tasks task ON task.id=version.source_task_id AND task.action='montage.execute'
 		JOIN montage_registration_attempts attempt
 		  ON attempt.task_id=version.source_task_id
 		 AND attempt.state='succeeded' AND attempt.registered_path=version.path
-		WHERE version.id=? AND version.state='ready' AND version.storage_kind='directory'
+		WHERE version.id=? AND version.state IN ('ready','stale') AND version.storage_kind='directory'
 		  AND version.type='mix_draft'
-		ORDER BY attempt.finished_at DESC,attempt.id DESC LIMIT 1`, id).Scan(&item.ID, &item.Path)
+		ORDER BY attempt.finished_at DESC,attempt.id DESC LIMIT 1`, id).Scan(&item.ID, &item.Path, &manifestPath)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return registeredDirectory{}, "asset_not_found", err
@@ -139,7 +145,14 @@ func (h *assetContentHandler) registeredDirectory(r *http.Request) (registeredDi
 	if err != nil || strings.TrimSpace(runtime.JianyingRoot) == "" {
 		return registeredDirectory{}, "asset_directory_unavailable", errors.New("trusted Jianying root is unavailable")
 	}
+	item.DisplayName = draftDisplayNameFromManifest(manifestPath.String)
 	handle, canonical, err := assets.OpenVerifiedDirectory(runtime.JianyingRoot, item.Path)
+	if err != nil && item.DisplayName != "" {
+		// Jianying renames the registered UUID folder to the draft's display
+		// name the first time the user opens the draft, which orphans the
+		// path we recorded at registration; look for the renamed folder.
+		handle, canonical, err = assets.OpenVerifiedDirectory(runtime.JianyingRoot, filepath.Join(runtime.JianyingRoot, item.DisplayName))
+	}
 	if err != nil {
 		return registeredDirectory{}, "asset_directory_invalid", err
 	}

@@ -368,7 +368,29 @@ func unclosedTitle(words []Word) bool {
 }
 
 func mustJoin(left, right string) bool {
-	return joinsAcrossASCII(left, right) || joinsNumericUnit(left, right)
+	return joinsAcrossASCII(left, right) || joinsNumericUnit(left, right) || protectedHanPair(left, right) || protectedPhrase(left, right)
+}
+
+func protectedPhrase(left, right string) bool {
+	pair := stripSpace(left) + stripSpace(right)
+	for _, phrase := range []string{"人工智能", "房地产", "百分比", "城镇化率", "租售比", "法拍房", "月供", "断供", "但是", "因此", "所以"} {
+		if len([]rune(pair)) >= 2 && strings.Contains(phrase, pair) {
+			return true
+		}
+	}
+	return false
+}
+
+// protectedHanPair prevents single-character vendor tokens from splitting
+// common inseparable compounds when balancing cues.
+func protectedHanPair(left, right string) bool {
+	pair := stripSpace(left) + stripSpace(right)
+	switch pair {
+	case "人工", "工智", "智能", "房地", "地产":
+		return true
+	default:
+		return false
+	}
 }
 
 func joinsNumericUnit(left, right string) bool {

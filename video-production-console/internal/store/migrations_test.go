@@ -63,13 +63,155 @@ func TestTimingMigrationCreatesPhaseSchemaAndStateVocabulary(t *testing.T) {
 	}
 }
 
+func TestWordTimingMigrationUpgradesLegacyChecksAndPreservesAssetStructures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "word-timing.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Build the latest predecessor schema, but deliberately retain the historical
+	// CHECK vocabularies that reject word_timing.
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	for i, migration := range migrations[:wordTimingAssetsMigrationVersion-1] {
+		migration = strings.ReplaceAll(migration, "'word_timing', ", "")
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply predecessor migration %d: %v", i+1, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?);
+INSERT INTO projects(id,account_id,title,stage,created_at,updated_at,publication_status) VALUES('p','a','P','script',?,?, 'draft');
+INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES('legacy','p','a','audio','/a','a.wav','audio/wav',1,'sha',1,'active',?);
+INSERT INTO asset_items(id,project_id,account_id,type,created_at,updated_at) VALUES('item','p','a','narration',?,?);
+INSERT INTO asset_versions(id,asset_id,project_id,account_id,type,version,path,filename,mime_type,size,sha256,state,created_at) VALUES('ver','item','p','a','narration',1,'/a','a.wav','audio/wav',1,'sha','ready',?);
+UPDATE asset_items SET current_version_id='ver' WHERE id='item'`, now, now, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TRIGGER asset_versions_scope_insert; DROP TRIGGER asset_versions_scope_update; DROP TRIGGER asset_items_current_version_insert; DROP TRIGGER asset_items_current_version_update; PRAGMA foreign_keys=OFF; INSERT INTO asset_items(id,project_id,account_id,type,created_at,updated_at,current_version_id) VALUES('broken','p','a','spoken_script',?,?, 'missing')`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if db != nil {
+		_ = db.Close()
+	}
+	if err == nil {
+		t.Fatal("Open succeeded with intentionally broken foreign key; migration should roll back")
+	}
+	check, checkErr := sql.Open("sqlite", path)
+	if checkErr != nil {
+		t.Fatal(checkErr)
+	}
+	defer check.Close()
+	if got := scalar(t, check, `SELECT MAX(version) FROM schema_migrations`); got != fmt.Sprint(wordTimingAssetsMigrationVersion-1) {
+		t.Fatalf("migration history=%s, want predecessor %d", got, wordTimingAssetsMigrationVersion-1)
+	}
+}
+
+func TestWordTimingMigrationAcceptsWordTimingRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "word-timing-success.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	for i, migration := range migrations[:wordTimingAssetsMigrationVersion-1] {
+		migration = strings.ReplaceAll(migration, "'word_timing', ", "")
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply predecessor migration %d: %v", i+1, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?);
+INSERT INTO projects(id,account_id,title,stage,created_at,updated_at,publication_status) VALUES('p','a','P','script',?,?, 'draft')`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO assets(id,project_id,account_id,type,path,filename,mime_type,size,sha256,version,status,created_at) VALUES('legacy','p','a','word_timing','/w','w.json','application/json',1,'sha',1,'active',CURRENT_TIMESTAMP);
+INSERT INTO asset_items(id,project_id,account_id,type,created_at,updated_at) VALUES('item','p','a','word_timing',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+INSERT INTO asset_versions(id,asset_id,project_id,account_id,type,version,path,filename,mime_type,size,sha256,state,created_at) VALUES('ver','item','p','a','word_timing',1,'/w','w.json','application/json',1,'sha','ready',CURRENT_TIMESTAMP);
+UPDATE asset_items SET current_version_id='ver' WHERE id='item'`); err != nil {
+		t.Fatalf("word_timing inserts: %v", err)
+	}
+	for _, name := range []string{"assets_project_type_idx", "asset_items_scope_type_uq", "asset_versions_asset_created_idx", "asset_versions_project_type_idx", "asset_versions_scope_insert", "asset_versions_scope_update"} {
+		if got := scalar(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE name=?`, name); got != "1" {
+			t.Fatalf("missing structure %s", name)
+		}
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM assets WHERE id='legacy'`); got != "1" {
+		t.Fatal("legacy row lost")
+	}
+}
+
+func TestWordTimingMigrationVersionStableWhenMigrationAppended(t *testing.T) {
+	original := migrations
+	if wordTimingAssetsMigrationVersion < 1 || wordTimingAssetsMigrationVersion > len(original) || !strings.Contains(original[wordTimingAssetsMigrationVersion-1], "assets_word_timing_backup") {
+		t.Fatalf("migration %d is not the word-timing migration", wordTimingAssetsMigrationVersion)
+	}
+	migrations = append(append([]string(nil), original...), "CREATE TABLE migration_after_word_timing (id INTEGER PRIMARY KEY);")
+	defer func() { migrations = original }()
+
+	path := filepath.Join(t.TempDir(), "word-timing-append.db")
+	legacy := createV1PredecessorSchema(t, path)
+	seedV1ProjectAssets(t, legacy, []legacyAssetFixture{
+		{id: "audio-b", path: "audio/b.mp3", filename: "b.mp3", mimeType: "audio/mpeg", size: 2, sha256: "b", version: 1, status: "active", createdAt: time.Now().UTC()},
+		{id: "audio-a", path: "audio/a.mp3", filename: "a.mp3", mimeType: "audio/mpeg", size: 1, sha256: "a", version: 1, status: "ready", createdAt: time.Now().UTC().Add(-time.Second)},
+	})
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := scalar(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='assets_project_type_version_lookup_idx'`); got != "1" {
+		t.Fatalf("compatibility lookup index=%s, want 1", got)
+	}
+	if got := scalar(t, db, `SELECT MAX(version) FROM schema_migrations`); got != fmt.Sprint(len(migrations)) {
+		t.Fatalf("migration history=%s, want %d", got, len(migrations))
+	}
+}
+
 func TestQueuedAtMigrationPreservesHistoricalTasksWithoutSyntheticPhases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "timing-upgrade.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
 	for i, migration := range migrations[:len(migrations)-1] {
@@ -79,6 +221,9 @@ func TestQueuedAtMigrationPreservesHistoricalTasksWithoutSyntheticPhases(t *test
 		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
 	}
 	now := time.Now().UTC()
 	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('a','A','#fff','active',?,?);
@@ -1439,7 +1584,17 @@ func TestImageProjectV2MigrationPreservesLegacyCardsWhileCappingConcurrency(t *t
 	if _, err := db.Exec(`PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
-	for i, migration := range migrations[:len(migrations)-1] {
+	migrationIndex := -1
+	for i, migration := range migrations {
+		if strings.Contains(migration, "CREATE TABLE image_projects_v2") {
+			migrationIndex = i
+			break
+		}
+	}
+	if migrationIndex < 0 {
+		t.Fatal("image project v2 migration not found")
+	}
+	for i, migration := range migrations[:migrationIndex] {
 		if _, err := db.Exec(migration); err != nil {
 			t.Fatalf("apply predecessor migration %d: %v", i+1, err)
 		}
@@ -1456,7 +1611,7 @@ func TestImageProjectV2MigrationPreservesLegacyCardsWhileCappingConcurrency(t *t
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(migrations[len(migrations)-1]); err != nil {
+	if _, err := db.Exec(migrations[migrationIndex]); err != nil {
 		t.Fatalf("apply image project v2 migration: %v", err)
 	}
 	if got := scalar(t, db, `SELECT image_count FROM image_projects WHERE id='legacy'`); got != "20" {

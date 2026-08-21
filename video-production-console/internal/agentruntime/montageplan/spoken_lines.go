@@ -18,9 +18,11 @@ const (
 )
 
 const (
-	boardTitleSize     = 16.0
-	boardSubtitleSize  = 9.2
-	boardTitleMinRunes = 6
+	boardTitleSize    = 16.0
+	boardSubtitleSize = 9.2
+	// A board title shorter than this reads as a fragment ("房子", "短");
+	// too-short copy falls back to the default board pair instead.
+	boardTitleMinRunes = 4
 	boardTitleMaxRunes = 15
 	// In the QC draft 8 runes at size 16 fill about 0.78 of the 1080 canvas, so
 	// one rune costs ~0.0061 of the width per size unit. 0.86 is the widest a
@@ -155,7 +157,7 @@ func spokenClauses(src []rune) []spokenClause {
 		start, strong = -1, false
 	}
 	for i, r := range src {
-		if isSpokenBreakRune(r) || unicode.IsSpace(r) {
+		if (isSpokenBreakRune(r) || unicode.IsSpace(r)) && !isDecimalPoint(src, i) {
 			flush(i)
 			if containsRune(spokenStrongBreaks, r) {
 				strong = true
@@ -168,6 +170,19 @@ func spokenClauses(src []rune) []spokenClause {
 	}
 	flush(len(src))
 	return clauses
+}
+
+// isDecimalPoint reports whether the '.' at src[i] joins two ASCII digits
+// (0.05%): that dot is part of a number, never a sentence-ending period, and
+// must survive punctuation stripping so captions keep reading 0.05%.
+func isDecimalPoint(src []rune, i int) bool {
+	if i < 0 || i >= len(src) || src[i] != '.' {
+		return false
+	}
+	if i == 0 || i+1 >= len(src) {
+		return false
+	}
+	return src[i-1] >= '0' && src[i-1] <= '9' && src[i+1] >= '0' && src[i+1] <= '9'
 }
 
 // mergeSpokenClauses folds a clause that is too short to read into its
@@ -378,7 +393,7 @@ func numericKeywordSpans(runes []rune) []CaptionSpan {
 			continue
 		}
 		numeralStart := i
-		for i < len(runes) && (containsRune(spokenNumerals, runes[i]) || unicode.IsDigit(runes[i])) {
+		for i < len(runes) && (containsRune(spokenNumerals, runes[i]) || unicode.IsDigit(runes[i]) || isDecimalPoint(runes, i)) {
 			if unicode.IsDigit(runes[i]) {
 				digits++
 			}

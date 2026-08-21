@@ -5,7 +5,7 @@ const projectID = "123e4567-e89b-12d3-a456-426614174000";
 
 describe("application routes", () => {
   test("parses each production page into an explicit route", () => {
-    expect(parseLocation("/")).toEqual({ view: "mode-home" });
+    expect(parseLocation("/")).toEqual({ view: "projects" });
     expect(parseLocation("/projects")).toEqual({ view: "projects" });
     expect(parseLocation(`/projects/${projectID}`)).toEqual({
       view: "project",
@@ -18,6 +18,11 @@ describe("application routes", () => {
       view: "image-project",
       projectID,
     });
+    expect(parseLocation("/image-videos")).toEqual({ view: "image-videos" });
+    expect(parseLocation(`/image-videos/${projectID}`)).toEqual({
+      view: "image-video",
+      projectID,
+    });
   });
 
   test("rejects malformed and extra route segments", () => {
@@ -27,6 +32,8 @@ describe("application routes", () => {
       `/projects/${projectID}/extra`,
       "/image-projects/not-a-uuid",
       `/image-projects/${projectID}/extra`,
+      "/image-videos/not-a-uuid",
+      `/image-videos/${projectID}/extra`,
     ]) {
       expect(parseLocation(pathname)).toEqual({ view: "not-found" });
     }

@@ -26,7 +26,7 @@ var publicSettingKeys = map[string]struct{}{
 	"codex_default_model": {}, "codex_default_reasoning_effort": {},
 	"baokuan_base_url": {}, "baokuan_mcp_executable": {},
 	"obsidian_vault": {}, "topic_cards_dir": {},
-	"grok_base_url": {}, "grok_model": {}, "remix_base_url": {}, "remix_model": {}, "remix_reasoning_effort": {}, "codex_binary_path": {},
+	"grok_base_url": {}, "grok_model": {}, "remix_base_url": {}, "remix_model": {}, "remix_reasoning_effort": {}, "remix_check_model": {}, "spoken_lines_model": {}, "model_options": {}, "codex_binary_path": {},
 	"image_base_url": {}, "image_model": {}, "image_text_base_url": {}, "image_text_model": {},
 	"image_text_reasoning_effort": {},
 	"image_stream":                {},
@@ -41,6 +41,7 @@ var publicSettingKeys = map[string]struct{}{
 	"media_catalog_path": {}, "ffmpeg_path": {}, "ffprobe_path": {},
 	"vision_base_url": {}, "vision_model": {}, "embedding_base_url": {}, "embedding_model": {},
 	"pexels_api_base_url": {}, "pixabay_api_base_url": {}, "max_external_results_per_query": {},
+	"bgm_dir": {}, "montage_style": {},
 }
 
 type EncryptedSecret struct {

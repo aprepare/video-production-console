@@ -29,7 +29,9 @@ type Delivery struct {
 	BilledWords int
 	// Duration is the end of the last caption. It is the only length available
 	// without decoding the audio, and a compressed stream has no computable one.
-	Duration float64
+	Duration       float64
+	TimingDocument WordTimingDocument
+	Words          []Word
 }
 
 // Synthesizer turns a script into audio plus word timings. Volcengine and
@@ -59,6 +61,9 @@ type ProduceRequest struct {
 	ModifyIntensity int
 	ModifyTimbre    int
 	SoundEffects    string
+	// SpokenLines, when set, are the LLM 口播稿 cuts. Produce times them
+	// against word timings instead of re-breaking the script.
+	SpokenLines []string
 }
 
 // QualityGateError reports captions that cannot be delivered. It carries the
@@ -111,19 +116,35 @@ func Produce(ctx context.Context, client Synthesizer, req ProduceRequest) (Deliv
 	if len(result.Words) == 0 {
 		return Delivery{}, fmt.Errorf("the voice returned no subtitle timings; enable word-level subtitles on the configured TTS provider")
 	}
-	captions, report, err := Compose(script, result.Words, req.Captions)
+	doc, err := NewWordTimingDocument(script, req.Provider, "", result.Words)
 	if err != nil {
 		return Delivery{}, err
 	}
+	var captions []Caption
+	var report QCReport
+	if len(req.SpokenLines) > 0 {
+		captions, report, err = ComposeFromSpokenLines(script, req.SpokenLines, result.Words, req.Captions)
+	} else {
+		captions, report, err = Compose(script, result.Words, req.Captions)
+	}
+	if err != nil {
+		return Delivery{}, err
+	}
+	spoken := RenderSpokenScript(captions)
+	if len(req.SpokenLines) > 0 {
+		spoken = strings.Join(nonEmptySpokenLines(req.SpokenLines), "\n")
+	}
 	delivery := Delivery{
-		Audio:        result.Audio,
-		AudioFormat:  format,
-		SRT:          RenderSRT(captions),
-		SpokenScript: RenderSpokenScript(captions),
-		Captions:     captions,
-		Report:       report,
-		Script:       script,
-		BilledWords:  result.BilledWords,
+		Audio:          result.Audio,
+		AudioFormat:    format,
+		SRT:            RenderSRT(captions),
+		SpokenScript:   spoken,
+		Captions:       captions,
+		Report:         report,
+		Script:         script,
+		BilledWords:    result.BilledWords,
+		TimingDocument: doc,
+		Words:          result.Words,
 	}
 	if len(captions) > 0 {
 		delivery.Duration = captions[len(captions)-1].End
@@ -175,4 +196,16 @@ func trimBullet(line string) (string, bool) {
 		}
 	}
 	return line, false
+}
+
+func nonEmptySpokenLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }

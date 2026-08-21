@@ -237,6 +237,7 @@ describe("ImageModeWorkbench", () => {
     expect(screen.queryByLabelText("对应原文")).toBeNull();
     expect(screen.queryByLabelText(/提示词/)).toBeNull();
     expect(screen.getByLabelText("图片名称")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "图片视频 / 图生视频" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "显示高级编辑" }));
     expect(screen.getByLabelText("对应原文")).toBeTruthy();
     expect(screen.getByLabelText(/提示词/)).toBeTruthy();

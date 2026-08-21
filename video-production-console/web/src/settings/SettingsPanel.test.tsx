@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsPanel } from "./SettingsPanel";
+import { montageStyleDefaults } from "./montageStyle";
 import type { PublicSettings, Settings } from "../types";
 
 afterEach(() => {
@@ -23,6 +24,9 @@ const draft: PublicSettings = {
   remix_base_url: "",
   remix_model: "",
   remix_reasoning_effort: "",
+  remix_check_model: "",
+  spoken_lines_model: "",
+  model_options: "",
   codex_task_project_root: "",
   image_base_url: "http://images.example.test/v1",
   image_model: "gpt-image-2",
@@ -100,11 +104,27 @@ const settings: Settings = {
   },
 };
 
+const bgmLibrary = {
+  dir: "C:\\bgm",
+  tracks: [
+    { id: "t1", name: "轻快钢琴", duration_s: 95, usable_head_s: 30, climax_start_s: 40, climax_duration_s: 20 },
+  ],
+};
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
   const onDraftChange = vi.fn();
   const onSecretDraftChange = vi.fn();
+  const api = vi.fn(async () => jsonResponse(bgmLibrary));
   render(
     <SettingsPanel
+      api={api}
       settings={settings}
       draft={draft}
       onDraftChange={onDraftChange}
@@ -113,10 +133,11 @@ function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {
       feedback=""
       onClose={() => {}}
       onSubmit={(event) => event.preventDefault()}
+      onSaveAndRestart={() => {}}
       {...overrides}
     />,
   );
-  return { onDraftChange, onSecretDraftChange };
+  return { onDraftChange, onSecretDraftChange, api };
 }
 
 function openTab(name: string) {
@@ -135,7 +156,6 @@ test("image tab only exposes service addresses and keys", () => {
   expect(screen.queryByRole("combobox", { name: /同时生成图片数/ })).toBeNull();
   expect(screen.queryByRole("combobox", { name: /图文文本思考强度/ })).toBeNull();
   expect(screen.queryByRole("checkbox", { name: /生图流式保活/ })).toBeNull();
-  expect(screen.getByText(/模型和思考强度在进入图文项目后选择或填写/)).toBeTruthy();
 });
 
 test("remix model fields are editable independently", () => {
@@ -210,13 +230,42 @@ test("the Volcengine voice IDs are editable after switching provider", () => {
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, tts_provider: "volc", volc_speech_speaker_id: "S_other_speaker" });
 });
 
-test("standalone conversation and local history controls are not shown", () => {
+test("codex CLI leftovers are gone from the system tab", () => {
   renderPanel();
   openTab("系统");
 
   expect(screen.queryByText("启用实时 Codex 对话服务")).toBeNull();
   expect(screen.queryByText("本机历史显示数量")).toBeNull();
-  expect(screen.getByText("启用任务实时交互服务")).toBeTruthy();
+  expect(screen.queryByText("启用任务实时交互服务")).toBeNull();
+  expect(screen.queryByText("Codex CLI 路径")).toBeNull();
+  expect(screen.queryByText("Codex 工作目录白名单")).toBeNull();
+  expect(screen.getByText("默认模型")).toBeTruthy();
+  expect(screen.getByText("同时运行任务数")).toBeTruthy();
+});
+
+test("the remix tab manages the shared model option list", () => {
+  const { onDraftChange } = renderPanel({
+    draft: { ...draft, model_options: "gpt-5.6-sol\ncustom-model" },
+  });
+
+  const remixModel = screen.getByRole("combobox", { name: "二创模型" }) as HTMLSelectElement;
+  expect([...remixModel.options].map((option) => option.value)).toEqual([
+    "",
+    "gpt-5.6-sol",
+    "custom-model",
+  ]);
+  fireEvent.change(screen.getByLabelText("新模型名称"), { target: { value: "new-model" } });
+  fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    model_options: "gpt-5.6-sol\ncustom-model\nnew-model",
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "删除模型 custom-model" }));
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    model_options: "gpt-5.6-sol",
+  });
 });
 
 test("the Volcengine API key is masked and only sent when a new value is typed", () => {
@@ -273,7 +322,7 @@ test("the montage tab exposes catalog and FFmpeg paths without analysis keys", (
 
 test("unused retrieval and catalog-builder keys stay off the settings form", () => {
   renderPanel();
-  for (const name of ["二创", "图文", "配音", "混剪", "系统"]) {
+  for (const name of ["二创", "图文", "配音", "混剪", "混剪样式", "系统"]) {
     openTab(name);
     expect(screen.queryByLabelText("Grok 检索 API 密钥")).toBeNull();
     expect(screen.queryByLabelText("Pexels API 密钥")).toBeNull();
@@ -281,6 +330,53 @@ test("unused retrieval and catalog-builder keys stay off the settings form", () 
     expect(screen.queryByLabelText("视觉分析 API Key")).toBeNull();
     expect(screen.queryByLabelText("向量模型 API Key")).toBeNull();
   }
+});
+
+test("the 混剪样式 tab binds caption, title and BGM fields with defaults", async () => {
+  const { onDraftChange } = renderPanel();
+  openTab("混剪样式");
+
+  const bgmSelect = (await screen.findByRole("combobox", { name: "BGM 曲目" })) as HTMLSelectElement;
+  expect([...bgmSelect.options].map((option) => option.value)).toEqual(["builtin", "t1"]);
+  expect(bgmSelect.options[1].textContent).toBe("轻快钢琴（1:35）");
+
+  fireEvent.change(screen.getByRole("spinbutton", { name: "字幕字号" }), { target: { value: "24" } });
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    montage_style: { ...montageStyleDefaults, caption_size: 24 },
+  });
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "显示主标题" }));
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    montage_style: { ...montageStyleDefaults, title_hidden: true },
+  });
+
+  fireEvent.change(screen.getByRole("textbox", { name: "BGM 目录" }), { target: { value: "D:\\bgm" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, bgm_dir: "D:\\bgm" });
+
+  expect(screen.getByLabelText("混剪样式预览").textContent).toContain("往后两个月");
+  expect(screen.getByLabelText("混剪样式预览").textContent).toContain("发财");
+  fireEvent.change(screen.getByRole("slider", { name: "BGM 音量滑杆" }), { target: { value: "0.4" } });
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    montage_style: { ...montageStyleDefaults, bgm_volume: 0.4 },
+  });
+  fireEvent.change(screen.getByLabelText("字幕颜色"), { target: { value: "#aabbcc" } });
+  expect(onDraftChange).toHaveBeenCalledWith({
+    ...draft,
+    montage_style: { ...montageStyleDefaults, caption_color: "#AABBCC" },
+  });
+});
+
+test("重新扫描 refreshes the BGM library and reports the result", async () => {
+  const { api } = renderPanel();
+  openTab("混剪样式");
+  await screen.findByRole("combobox", { name: "BGM 曲目" });
+
+  fireEvent.click(screen.getByRole("button", { name: "重新扫描" }));
+  expect(await screen.findByText("扫描完成，共 1 首。")).toBeTruthy();
+  expect(api).toHaveBeenCalledWith("/api/bgm-library/rescan", { method: "POST" });
 });
 
 test("an old settings response without image_base_url remains editable without an HTTP warning", () => {

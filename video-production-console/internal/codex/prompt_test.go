@@ -150,6 +150,10 @@ func TestResolveTaskActionRejectsSpokenConsoleWorkflow(t *testing.T) {
 	if _, _, err := ResolveTaskAction("remix", domain.ActionSpokenFormat); err == nil {
 		t.Fatal("deprecated remix.spoken_format action must not start a new console task")
 	}
+	action, resolved, err := ResolveTaskAction("remix", domain.ActionRemixSpokenLines)
+	if err != nil || action != domain.ActionRemixSpokenLines || resolved.WireAction != "spoken_lines" {
+		t.Fatalf("spoken_lines resolution = %q %#v %v", action, resolved, err)
+	}
 }
 
 func TestManifestPromptRejectsPathOutsideCanonicalTaskLocation(t *testing.T) {

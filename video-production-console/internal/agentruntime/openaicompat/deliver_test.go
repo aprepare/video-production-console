@@ -8,12 +8,13 @@ import (
 
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/spokenlines"
 )
 
 func TestWriteRemixDeliverablePassesValidator(t *testing.T) {
 	outputDir := t.TempDir()
 	script := "又一批人要发财了，人民币第三次换锚已经开始。前两波是美元外贸和土地房子，旧锚死了，利率下来，一百七十万亿存款在找出路。第三个锚先不说完，现在就上车。"
-	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), script); err != nil {
+	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), script, []string{"自检：该句与原文重合未修复「示例片段」"}, "质检（test-model）：发现 1 处与原文重合，返工未见改善，保留首稿，见警告。"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(outputDir, "result.json"))
@@ -22,6 +23,21 @@ func TestWriteRemixDeliverablePassesValidator(t *testing.T) {
 	}
 	if _, err := codex.ValidateResultEnvelopeJSON(raw, "11111111-1111-1111-1111-111111111111", domain.ActionRemixStandard, outputDir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWriteRemixDeliverableRejectsMalformedStructuredResponseWithoutFiles(t *testing.T) {
+	outputDir := t.TempDir()
+	raw := `{"continuous_script":"正文来了正文来了正文来了正文来了正文来了" trailing}`
+	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), raw, nil, ""); err == nil {
+		t.Fatal("expected malformed structured response to fail")
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("malformed response wrote %d files", len(entries))
 	}
 }
 
@@ -76,5 +92,57 @@ func TestPublishingPackageRewritesInventedHashtags(t *testing.T) {
 		if strings.Contains(desc, "#人民币") || strings.Contains(desc, "#财富趋势") {
 			t.Fatalf("invented hashtag leaked: %q", desc)
 		}
+	}
+}
+
+func TestWriteSpokenDeliverablePassesValidator(t *testing.T) {
+	outputDir := t.TempDir()
+	raw := "第一句。\n百分之六十七的人还在等。\n去看财富觉醒方法论。"
+	if err := writeSpokenDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", raw); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := os.ReadFile(filepath.Join(outputDir, "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codex.ValidateResultEnvelopeJSON(envelope, "11111111-1111-1111-1111-111111111111", domain.ActionRemixSpokenLines, outputDir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "spoken_script.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "67%") || !strings.Contains(string(got), " \n") {
+		t.Fatalf("spoken script=%q", got)
+	}
+}
+
+func TestWriteKeywordsDeliverablePassesValidator(t *testing.T) {
+	outputDir := t.TempDir()
+	lines := []string{"全国法拍房挂牌", "已经堆到40万套"}
+	raw := `{"lines":[
+		{"line":"全国法拍房挂牌","keywords":[{"text":"法拍房","kind":"warning"}]},
+		{"line":"已经堆到40万套","keywords":[{"text":"40万套","kind":"number"}]}
+	]}`
+	if err := writeKeywordsDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", raw, lines); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := os.ReadFile(filepath.Join(outputDir, "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codex.ValidateResultEnvelopeJSON(envelope, "11111111-1111-1111-1111-111111111111", domain.ActionCaptionKeywords, outputDir); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(outputDir, "caption_keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := spokenlines.ParseKeywordDoc(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Lines) != 2 || doc.Lines[0].Keywords[0].Text != "法拍房" {
+		t.Fatalf("stored keywords = %#v", doc)
 	}
 }

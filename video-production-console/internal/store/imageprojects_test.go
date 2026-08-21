@@ -229,3 +229,63 @@ func TestImageProjectRepositoryDeleteCascadesItems(t *testing.T) {
 		t.Fatalf("items after delete=%s", got)
 	}
 }
+
+func TestImageProjectRepositoryKeepsVideoProjectsOffZipList(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "image-video-list.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewImageProjectRepository(db)
+	now := time.Now().UTC()
+	zipID := uuid.NewString()
+	videoID := uuid.NewString()
+	if err := repo.Create(context.Background(), domain.ImageProject{ID: zipID, Title: "zip", Script: "文案。", ImageCount: 1, Ratio: "3:4", Style: "red_ink", Concurrency: 1, Status: "draft", RunMode: "manual", CreatedAt: now, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(context.Background(), domain.ImageProject{ID: videoID, Title: "video", Script: "口播。", ImageCount: 1, Ratio: "9:16", Style: "red_ink", Concurrency: 1, Status: "draft", RunMode: "video", CreatedAt: now, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != zipID {
+		t.Fatalf("zip list=%+v", listed)
+	}
+	videos, err := repo.ListVideo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(videos) != 1 || videos[0].ID != videoID || videos[0].RunMode != "video" {
+		t.Fatalf("video list=%+v", videos)
+	}
+}
+
+func TestImageProjectRepositorySaveVideoPlanWritesScenes(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "image-video-plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewImageProjectRepository(db)
+	now := time.Now().UTC()
+	id := uuid.NewString()
+	if err := repo.Create(context.Background(), domain.ImageProject{ID: id, Title: "video", Script: "第一句。第二句。", ImageCount: 1, Ratio: "9:16", Style: "red_ink", Concurrency: 2, Status: "draft", RunMode: "video", RunPhase: "planning", RunStatus: "running", CreatedAt: now, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	items := []domain.ImageProjectItem{
+		{Sequence: 1, SourceText: "第一句。", Title: "第一句标题", Prompt: "主标题「第一句标题」。赤墨风", Status: "pending"},
+		{Sequence: 2, SourceText: "第二句。", Title: "第二句标题", Prompt: "主标题「第二句标题」。赤墨风", Status: "pending"},
+	}
+	if err := repo.SaveVideoPlan(context.Background(), id, "家庭现金流", items, now); err != nil {
+		t.Fatal(err)
+	}
+	got, gotItems, err := repo.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "家庭现金流" || got.ImageCount != 2 || got.RunPhase != "imaging" || len(gotItems) != 2 {
+		t.Fatalf("saved=%+v items=%+v", got, gotItems)
+	}
+}

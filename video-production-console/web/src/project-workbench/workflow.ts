@@ -31,7 +31,7 @@ export function deriveProductionStage(detail: ProjectDetail): ProductionStage {
     isReady(detail, "subtitle_srt") &&
     isBackgroundReady(detail)
   ) return "mixing";
-  if (isReady(detail, "continuous_script")) return "assets";
+  if (isReady(detail, "continuous_script") && isReady(detail, "spoken_script")) return "assets";
   return "script";
 }
 
@@ -40,7 +40,10 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
   let computed: string[];
   switch (derivedStage) {
     case "script":
-      computed = isReady(detail, "continuous_script") ? [] : ["continuous_script"];
+      computed = [
+        ...(!isReady(detail, "continuous_script") ? ["continuous_script"] : []),
+        ...(isReady(detail, "continuous_script") && !isReady(detail, "spoken_script") ? ["spoken_script"] : []),
+      ];
       break;
     case "assets":
       computed = ["narration", "subtitle_srt"].filter((type) => !isReady(detail, type));
@@ -79,9 +82,11 @@ export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {
   const stage = deriveProductionStage(detail);
   if (stage === "published") return null;
   const base: PrimaryAction = stage === "script"
-    ? isReady(detail, "source_script")
-      ? { id: "start-source-remix", label: "开始正式二创", disabled: false }
-      : { id: "start-source-remix", label: "先粘贴同行原文", disabled: true }
+    ? !isReady(detail, "continuous_script")
+      ? isReady(detail, "source_script")
+        ? { id: "start-source-remix", label: "开始正式二创", disabled: false }
+        : { id: "start-source-remix", label: "先粘贴同行原文", disabled: true }
+      : { id: "start-spoken-lines", label: "生成口播稿", disabled: false }
     : stage === "assets"
       ? { id: "prepare-assets", label: "补齐制作素材", disabled: false }
       : stage === "mixing"

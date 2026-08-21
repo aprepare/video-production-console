@@ -109,7 +109,7 @@ func (r *ProjectRepository) SyncStageFromAssets(ctx context.Context, id string, 
 			}
 		}
 		target := domain.StageScript
-		if ready[domain.AssetContinuousScript] {
+		if ready[domain.AssetContinuousScript] && ready[domain.AssetSpokenScript] {
 			target = domain.StageAssets
 		}
 		if ready[domain.AssetNarration] && ready[domain.AssetSubtitleSRT] {

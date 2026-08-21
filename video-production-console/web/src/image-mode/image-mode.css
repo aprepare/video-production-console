@@ -483,6 +483,104 @@
   background: color-mix(in srgb, var(--workbench-danger) 8%, var(--workbench-surface));
 }
 
+.image-output-mode,
+.image-video-job-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--workbench-line);
+  border-radius: var(--radius-md);
+  background: var(--workbench-surface-muted);
+}
+
+.image-output-mode {
+  margin: 0;
+}
+
+.image-output-mode legend {
+  padding: 0 4px;
+  color: var(--workbench-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.image-output-mode label,
+.image-video-mode-cards label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--workbench-line);
+  border-radius: var(--radius-sm);
+  background: var(--workbench-surface);
+  cursor: pointer;
+}
+
+.image-output-mode label.is-selected,
+.image-video-mode-cards label.is-selected {
+  border-color: var(--workbench-teal);
+  box-shadow: inset 3px 0 0 var(--workbench-teal);
+}
+
+.image-output-mode label span,
+.image-video-mode-cards label span {
+  display: grid;
+  gap: 2px;
+}
+
+.image-output-mode small,
+.image-video-mode-cards small {
+  color: var(--workbench-muted);
+  font-weight: 500;
+}
+
+.image-video-job-panel {
+  margin-bottom: var(--space-5);
+  background: var(--workbench-surface);
+}
+
+.image-video-job-panel__head,
+.image-video-job-progress,
+.image-video-job-item {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.image-video-job-panel__head {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+}
+
+.image-video-job-panel__head h2,
+.image-video-job-panel__head p {
+  margin: 0;
+}
+
+.image-video-job-panel__head p {
+  color: var(--workbench-muted);
+}
+
+.image-video-job-status {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--workbench-surface-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.image-video-job-item {
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--workbench-line);
+  font-size: 13px;
+}
+
+.image-video-job-item small {
+  grid-column: 1 / -1;
+  color: var(--workbench-danger);
+}
+
 .image-mode-notice button {
   margin-top: var(--space-3);
 }

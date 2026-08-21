@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,7 +29,10 @@ import (
 	"video-production-console/internal/config"
 	"video-production-console/internal/conversation"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/grokvideo"
 	"video-production-console/internal/httpapi"
+	"video-production-console/internal/imagevideo"
+	"video-production-console/internal/imagevideoruntime"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/obsidian"
@@ -89,11 +93,14 @@ func main() {
 	settings.DatabasePath = filepath.Join(settings.DataRoot, "console.db")
 	codexPath, err := exec.LookPath(settings.CodexBinaryPath)
 	if err != nil {
-		fatal("resolve Codex binary", "error", err)
-	}
-	settings.CodexBinaryPath, err = filepath.Abs(codexPath)
-	if err != nil {
-		fatal("resolve absolute Codex binary path", "codex_binary_path", codexPath, "error", err)
+		slog.Warn("Codex CLI is not on PATH; remix will use OpenAI-compatible settings", "error", err)
+		settings.CodexBinaryPath = ""
+	} else {
+		settings.CodexBinaryPath, err = filepath.Abs(codexPath)
+		if err != nil {
+			slog.Warn("Codex CLI path could not be resolved; continuing without it", "codex_binary_path", codexPath, "error", err)
+			settings.CodexBinaryPath = ""
+		}
 	}
 	if settings.ObsidianVault != "" {
 		settings.ObsidianVault = absolutePath(settings.ObsidianVault)
@@ -143,7 +150,7 @@ func main() {
 	commandConfig := codex.Config{CodexBinaryPath: settings.CodexBinaryPath, MachineProfilePath: settings.MachineProfilePath, SecretEnvironment: runtimeSecretEnvironment(runtimeSettings, os.LookupEnv), Redactor: security.NewRedactor()}
 	assetService := assets.NewService(settings.DataRoot)
 	skillsService := skillregistry.NewService(store.NewSkillRepository(db), skillregistry.Options{
-		Roots: skillregistry.DefaultRoots(filepath.Join(homeDirectory, ".codex", "skills")),
+		Roots: skillregistry.ResolveRoots(executablePath, homeDirectory),
 	})
 	if _, scanErr := skillsService.ScanAll(context.Background()); scanErr != nil {
 		slog.Error("Skill scan completed with errors; manifest-backed tasks may be unavailable", "error", scanErr)
@@ -194,33 +201,37 @@ func main() {
 	legacyScheduler.SetCompletionObserver(remixCoordinator)
 	reconcileRemixWorkflows(context.Background(), remixCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
 	var montageCoordinator *montage.Coordinator
+	var trustedMontageRuntime montage.TrustedRuntime
+	var imageVideoRuntime montage.TrustedRuntime
 	if strings.TrimSpace(runtimeSettings.MachineProfilePath) != "" {
-		trustedMontageRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
+		resolvedRuntime, runtimeErr := montage.ResolveTrustedRuntime(runtimeSettings.MachineProfilePath, runtimeSettings.JianyingRoot)
 		if runtimeErr != nil {
-			fatal("resolve trusted montage runtime", "error", runtimeErr)
+			slog.Error("trusted montage runtime is unavailable; continuing without montage", "error", runtimeErr)
+		} else {
+			imageVideoRuntime = resolvedRuntime
+			currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft")
+			if skillErr != nil {
+				slog.Error("Jianying montage skill is unavailable; continuing without montage", "skill", "jianying-montage-draft", "error", skillErr)
+			} else if resolvedRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(resolvedRuntime, currentMontageSkill); runtimeErr != nil {
+				slog.Error("trusted Jianying reconciliation runtime is unavailable; continuing without montage", "error", runtimeErr)
+			} else {
+				trustedMontageRuntime = resolvedRuntime
+				montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
+				defer montageCoordinator.Close()
+				if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {
+					slog.Error("recover montage registrations", "error", recoverErr)
+				} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
+					slog.Info("recovered montage registrations", "queued", len(recovery.Queued), "interrupted", len(recovery.Interrupted))
+				}
+				reconcileMontageDisplayNames(context.Background(), montageCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
+				if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
+					slog.Error("audit registered montage drafts", "error", auditErr)
+				} else if audit.Staled > 0 {
+					slog.Warn("marked montage draft assets stale during startup audit", "staled", audit.Staled, "inspected", audit.Inspected)
+				}
+				legacyScheduler.SetCompletionGate(montageCoordinator)
+			}
 		}
-		currentMontageSkill, skillErr := skillsService.Latest(context.Background(), "jianying-montage-draft")
-		if skillErr != nil {
-			fatal("resolve current Jianying montage Skill", "skill", "jianying-montage-draft", "error", skillErr)
-		}
-		trustedMontageRuntime, runtimeErr = montage.WithTrustedReconciliationSkill(trustedMontageRuntime, currentMontageSkill)
-		if runtimeErr != nil {
-			fatal("resolve trusted Jianying reconciliation runtime", "error", runtimeErr)
-		}
-		montageCoordinator = montage.NewCoordinator(taskRepo, montage.NewRegistrar(montage.ExecRunner{}), trustedMontageRuntime)
-		defer montageCoordinator.Close()
-		if recovery, recoverErr := montageCoordinator.Recover(context.Background()); recoverErr != nil {
-			slog.Error("recover montage registrations", "error", recoverErr)
-		} else if len(recovery.Queued) > 0 || len(recovery.Interrupted) > 0 {
-			slog.Info("recovered montage registrations", "queued", len(recovery.Queued), "interrupted", len(recovery.Interrupted))
-		}
-		reconcileMontageDisplayNames(context.Background(), montageCoordinator, logging.Printf(slog.Default(), slog.LevelWarn))
-		if audit, auditErr := montageCoordinator.AuditMixDrafts(context.Background(), trustedMontageRuntime.JianyingRoot); auditErr != nil {
-			slog.Error("audit registered montage drafts", "error", auditErr)
-		} else if audit.Staled > 0 {
-			slog.Warn("marked montage draft assets stale during startup audit", "staled", audit.Staled, "inspected", audit.Inspected)
-		}
-		legacyScheduler.SetCompletionGate(montageCoordinator)
 	} else {
 		slog.Warn("montage registration is disabled because no machine profile is configured")
 	}
@@ -236,7 +247,7 @@ func main() {
 	var conversations *conversation.Service
 	var appServerHealth func() codexapp.Health
 	var completionRetryer httpapi.CompletionRetryer
-	if runtimeSettings.AppServerEnabled {
+	if runtimeSettings.AppServerEnabled && settings.CodexBinaryPath != "" {
 		manager := codexapp.NewManager(codexapp.NewCommandProcessFactory(codexapp.ProcessConfig{CodexBinary: settings.CodexBinaryPath, WorkingDirectory: workingDirectory, Environment: commandConfig.SafeEnvironment()}))
 		defer manager.Close()
 		appServerHealth = manager.Health
@@ -268,19 +279,100 @@ func main() {
 	if montageCoordinator != nil {
 		montageRetryer = montageCoordinator
 	}
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator})
+	imageVideoService := imagevideo.NewService(store.NewImageProjectRepository(db), store.NewImageVideoJobRepository(db), imagevideoruntime.Provider{Inner: settingsService}, nil)
+	var imageVideoLifecycle *imagevideo.Lifecycle
+	if imageVideoRuntime.MachineProfilePath != "" && imageVideoRuntime.PythonBinary != "" && imageVideoRuntime.JianyingRoot != "" {
+		mediaProcessor, mediaErr := imagevideo.NewMediaProcessor(imagevideoruntime.Snapshot(runtimeSettings))
+		if mediaErr != nil {
+			slog.Warn("image-to-video media runtime is unavailable; slideshow jobs remain available", "error", mediaErr)
+			mediaProcessor = nil
+		}
+		var provider imagevideo.VideoProvider
+		if strings.TrimSpace(runtimeSettings.GrokBaseURL) != "" && strings.TrimSpace(runtimeSettings.GrokAPIKey) != "" {
+			if client, clientErr := grokvideo.NewFromRuntime(runtimeSettings, nil, security.NewRedactor()); clientErr == nil {
+				provider = grokvideo.WorkerProvider{Client: client}
+			} else {
+				slog.Warn("image video provider is unavailable; image-to-video jobs will report configuration errors", "error", clientErr)
+			}
+		}
+		var imageVideoLifecycleForWorker *imagevideo.Lifecycle
+		worker, workerErr := imagevideo.NewWorker(imagevideo.WorkerConfig{Repository: store.NewImageVideoJobRepository(db), Provider: provider, Media: mediaProcessor, DataRoot: runtimeSettings.DataRoot, Owner: "console-image-video", DraftReady: func(callbackCtx context.Context, jobID string) error {
+			if imageVideoLifecycleForWorker == nil {
+				return nil
+			}
+			return imageVideoLifecycleForWorker.DraftReady(callbackCtx, jobID)
+		}})
+		if workerErr != nil {
+			slog.Warn("image video worker disabled", "error", workerErr)
+		} else {
+			registrar, registrarErr := imagevideo.NewHostRegistrar(runtimeSettings.DataRoot, imageVideoRuntime.JianyingRoot, imageVideoRuntime.MachineProfilePath, montage.ValidateImageVideoRegistration)
+			if registrarErr != nil {
+				slog.Warn("image video registrar disabled", "error", registrarErr)
+			} else {
+				lifecycle, lifecycleErr := imagevideo.NewLifecycle(imagevideo.LifecycleConfig{Repository: store.NewImageVideoJobRepository(db), Worker: worker, DataRoot: runtimeSettings.DataRoot, PythonBinary: imageVideoRuntime.PythonBinary, DraftScript: filepath.Join(workingDirectory, "scripts", "image-video-draft", "build_image_video_draft.py"), MachineProfilePath: imageVideoRuntime.MachineProfilePath, JianyingRoot: imageVideoRuntime.JianyingRoot, SkillSnapshotID: imagevideo.BuiltInManifestSkillID(), Registrar: registrar})
+				if lifecycleErr != nil {
+					slog.Warn("image video lifecycle disabled", "error", lifecycleErr)
+				} else {
+					imageVideoLifecycle = lifecycle
+					imageVideoLifecycleForWorker = lifecycle
+					imageVideoService = imagevideo.NewService(store.NewImageProjectRepository(db), store.NewImageVideoJobRepository(db), imagevideoruntime.Provider{Inner: settingsService}, func(jobID string) { _ = lifecycle.Kick(context.Background(), jobID) })
+					imageVideoService.SetRegistrationRetry(lifecycle.RetryRegistration)
+				}
+			}
+		}
+	} else {
+		slog.Warn("image video draft registration is disabled because the trusted Jianying runtime is unavailable")
+	}
+	serveCtx, requestShutdown := context.WithCancel(signalCtx)
+	defer requestShutdown()
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator, ImageVideoService: imageVideoService, ImageVideoStarter: imageVideoLifecycle, ImageVideoCloser: imageVideoLifecycle, Restart: newSelfRestart(workingDirectory, requestShutdown)})
+	defer application.Close()
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
-	if err := serveUntilShutdown(signalCtx, server); err != nil {
+	if err := serveUntilShutdown(serveCtx, server); err != nil {
 		slog.Error("serve video production console", "listen_addr", settings.ListenAddr, "error", err)
 	}
 }
 
+const defaultInitialPassword = "123456"
+
 // fatal reports an unrecoverable startup failure through the structured logger
 // and exits, preserving the log.Fatal semantics of the startup chain.
 func fatal(message string, args ...any) {
+	text := formatStartupFailure(message, args...)
 	slog.Error(message, args...)
+	logPath := writeStartupErrorLog(text)
+	if logPath != "" {
+		text += "\n\n日志文件: " + logPath
+	}
+	showFatalDialog("视频生产控制台启动失败", text)
 	os.Exit(1)
+}
+
+func formatStartupFailure(message string, args ...any) string {
+	var b strings.Builder
+	b.WriteString(message)
+	for i := 0; i+1 < len(args); i += 2 {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "%v=%v", args[i], args[i+1])
+	}
+	if len(args)%2 == 1 {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "%v", args[len(args)-1])
+	}
+	return b.String()
+}
+
+func writeStartupErrorLog(text string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(filepath.Dir(exe), "console-startup-error.log")
+	if writeErr := os.WriteFile(path, []byte(text+"\n"), 0o644); writeErr != nil {
+		return ""
+	}
+	return path
 }
 
 type completionObserverSetter interface {
@@ -511,7 +603,7 @@ func runMontageScriptCommand(args []string) error {
 }
 
 func runOpenAICompatCommand(args []string) error {
-	var manifestPath, skillRoot, outputLast, model, reasoningEffort string
+	var manifestPath, skillRoot, outputLast, model, reasoningEffort, checkModel string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--manifest":
@@ -544,6 +636,12 @@ func runOpenAICompatCommand(args []string) error {
 			}
 			i++
 			reasoningEffort = args[i]
+		case "--check-model":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--check-model requires a value")
+			}
+			i++
+			checkModel = args[i]
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -555,6 +653,7 @@ func runOpenAICompatCommand(args []string) error {
 		OutputLastMessage: outputLast,
 		Model:             model,
 		ReasoningEffort:   reasoningEffort,
+		CheckModel:        checkModel,
 		BaseURL:           baseURL,
 		APIKey:            apiKey,
 	})
@@ -826,9 +925,11 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 	if err != nil {
 		return nil, err
 	}
-	skillRoot, err := resolveSkillRoot(resolved.Skill)
-	if err != nil {
-		return nil, err
+	// The skill directory only feeds an optional prompt excerpt; a missing
+	// directory must not block remix tasks.
+	skillRoot, skillErr := resolveSkillRoot(resolved.Skill)
+	if skillErr != nil {
+		skillRoot = ""
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -844,12 +945,17 @@ func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestP
 	args := []string{
 		"openai-compat-run",
 		"--manifest", manifestPath,
-		"--skill-root", skillRoot,
 		"--output-last-message", cfg.OutputLastMessage,
 		"--model", model,
 	}
+	if skillRoot != "" {
+		args = append(args, "--skill-root", skillRoot)
+	}
 	if effort := strings.TrimSpace(task.ReasoningEffort); effort != "" {
 		args = append(args, "--reasoning-effort", effort)
+	}
+	if checkModel := strings.TrimSpace(cfg.SecretEnvironment["REMIX_CHECK_MODEL"]); checkModel != "" {
+		args = append(args, "--check-model", checkModel)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = cfg.WorkingDirectory
@@ -1048,6 +1154,9 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 	if runtime.RemixModel != "" {
 		environment["REMIX_MODEL"] = runtime.RemixModel
 	}
+	if runtime.RemixCheckModel != "" {
+		environment["REMIX_CHECK_MODEL"] = runtime.RemixCheckModel
+	}
 	if runtime.PexelsAPIKey != "" {
 		environment["PEXELS_API_KEY"] = runtime.PexelsAPIKey
 	}
@@ -1093,8 +1202,9 @@ func initializeAdministrator(ctx context.Context, admin func(context.Context) (s
 		return fmt.Errorf("read administrator: %w", err)
 	}
 	password, ok := lookupEnv(initialPasswordEnvironment)
-	if !ok {
-		return fmt.Errorf("%s is required when no administrator exists", initialPasswordEnvironment)
+	if !ok || strings.TrimSpace(password) == "" {
+		password = defaultInitialPassword
+		slog.Warn("bootstrapped administrator with the default password; change it after the first login")
 	}
 	if err := bootstrap(ctx, password); err != nil {
 		return fmt.Errorf("bootstrap administrator: %w", err)
@@ -1102,9 +1212,65 @@ func initializeAdministrator(ctx context.Context, admin func(context.Context) (s
 	return nil
 }
 
+// restartWaitEnv marks a process spawned by the in-app restart. The child
+// retries binding for a while so the parent has time to release the port.
+const restartWaitEnv = "VIDEO_CONSOLE_RESTART_WAIT"
+
+// newSelfRestart spawns a fresh console process with the same arguments and
+// then asks the current server to shut down gracefully. The child waits on
+// "port in use" errors, so the handover needs no coordination beyond that.
+func newSelfRestart(workingDirectory string, requestShutdown context.CancelFunc) func() error {
+	return func() error {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve executable: %w", err)
+		}
+		cmd := exec.Command(exe, os.Args[1:]...)
+		cmd.Dir = workingDirectory
+		cmd.Env = append(os.Environ(), restartWaitEnv+"=1")
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("start replacement process: %w", err)
+		}
+		_ = cmd.Process.Release()
+		slog.Info("restart requested; replacement process started", "pid", cmd.Process.Pid)
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			requestShutdown()
+		}()
+		return nil
+	}
+}
+
+func listenAndServe(server *http.Server) error {
+	var window time.Duration
+	if os.Getenv(restartWaitEnv) == "1" {
+		window = 20 * time.Second
+	}
+	deadline := time.Now().Add(window)
+	for {
+		listener, err := net.Listen("tcp", server.Addr)
+		if err == nil {
+			return server.Serve(listener)
+		}
+		if !isAddrInUse(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	text := err.Error()
+	return strings.Contains(text, "address already in use") ||
+		strings.Contains(text, "Only one usage of each socket address")
+}
+
 func serveUntilShutdown(ctx context.Context, server *http.Server) error {
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServe() }()
+	go func() { errCh <- listenAndServe(server) }()
 
 	select {
 	case err := <-errCh:

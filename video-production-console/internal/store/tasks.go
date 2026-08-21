@@ -441,6 +441,38 @@ func (r *TaskRepository) ActiveByProjectAction(ctx context.Context, projectID st
 	return task, nil
 }
 
+// ActiveListByProjectAction returns every task that can still consume or
+// produce project inputs for an action, newest first. Multi-model remix
+// fan-out needs the full list so a new model can start while another runs.
+func (r *TaskRepository) ActiveListByProjectAction(ctx context.Context, projectID string, action domain.TaskAction) ([]domain.CodexTask, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM codex_tasks
+		WHERE project_id=? AND action=? AND status IN ('queued','running','awaiting_input')
+		ORDER BY created_at DESC,id DESC`, projectID, action)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []domain.CodexTask
+	for rows.Next() {
+		var task domain.CodexTask
+		var storedAction sql.NullString
+		if err := rows.Scan(
+			&task.ID, &task.ProjectID, &task.AccountID, &task.Type, &task.SkillName, &storedAction, &task.Status,
+			&task.CodexSessionID, &task.ChatSessionID, &task.CodexThreadID, &task.CodexTurnID,
+			&task.CompletionPhase, &task.Transport, &task.PromptSnapshot, &task.ModelName,
+			&task.ReasoningEffort, &task.ResultSummary, &task.ErrorCode, &task.ErrorMessage,
+			&task.CreatedAt, &task.QueuedAt, &task.StartedAt, &task.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		if storedAction.Valid {
+			task.Action = domain.TaskAction(storedAction.String)
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
 // GetByCodexTurn resolves the formal App Server task bound to a transport
 // turn. The browser never supplies this identifier; it comes only from the
 // console-owned Broker's durable turn mapping.

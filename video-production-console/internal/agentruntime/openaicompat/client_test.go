@@ -37,13 +37,30 @@ func TestReadSSEContentJoinsDeltas(t *testing.T) {
 }
 
 func TestParseRemixDraftReadsJSONOrPlainText(t *testing.T) {
-	draft := parseRemixDraft("```json\n{\"continuous_script\":\"正文来了正文来了正文来了正文来了正文来了\"}\n```")
+	draft, err := parseRemixDraft("```json\n{\"continuous_script\":\"正文来了正文来了正文来了正文来了正文来了\"}\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if draft.ContinuousScript != "正文来了正文来了正文来了正文来了正文来了" {
 		t.Fatalf("draft=%+v", draft)
 	}
-	plain := parseRemixDraft("又一批人要发财了，人民币第三次换锚已经开始。")
+	plain, err := parseRemixDraft("又一批人要发财了，人民币第三次换锚已经开始。")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(plain.ContinuousScript, "第三次换锚") {
 		t.Fatalf("plain=%+v", plain)
+	}
+}
+
+func TestParseRemixDraftRecoversTrailingClosingBrace(t *testing.T) {
+	raw := "{\"continuous_script\":\"正文来了正文来了正文来了正文来了正文来了\",\"machine\":{\"hook\":\"钩子\"}}\n}"
+	draft, err := parseRemixDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.ContinuousScript != "正文来了正文来了正文来了正文来了正文来了" {
+		t.Fatalf("structured response leaked into script: %q", draft.ContinuousScript)
 	}
 }
 

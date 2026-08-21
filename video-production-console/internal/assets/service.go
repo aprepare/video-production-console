@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -14,9 +15,11 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -35,7 +38,7 @@ const MaxAudioAssetSize int64 = 200 << 20
 
 func MaxSizeForType(assetType domain.AssetType) int64 {
 	switch assetType {
-	case domain.AssetSourceScript, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetSubtitleSRT, domain.AssetSubtitle:
+	case domain.AssetSourceScript, domain.AssetContinuousScript, domain.AssetSpokenScript, domain.AssetCaptionKeywords, domain.AssetSubtitleSRT, domain.AssetSubtitle, domain.AssetWordTiming:
 		return MaxTextAssetSize
 	case domain.AssetNarration, domain.AssetAudio:
 		return MaxAudioAssetSize
@@ -52,6 +55,7 @@ var (
 	ErrInvalidAccountID    = errors.New("invalid account ID")
 	ErrInvalidProjectAsset = errors.New("invalid project asset")
 	ErrProjectAssetTooBig  = errors.New("project asset exceeds 500 MiB")
+	scriptHashPattern      = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 )
 
 const (
@@ -104,7 +108,7 @@ func (s *Service) saveProjectAsset(projectID string, targetType, validationType 
 	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	allowed := map[domain.AssetType]map[string]bool{
-		domain.AssetSourceScript: {".txt": true, ".md": true}, domain.AssetTopicCard: {".txt": true, ".md": true}, domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true},
+		domain.AssetSourceScript: {".txt": true, ".md": true}, domain.AssetTopicCard: {".txt": true, ".md": true}, domain.AssetContinuousScript: {".txt": true, ".md": true}, domain.AssetSpokenScript: {".txt": true, ".md": true}, domain.AssetCaptionKeywords: {".json": true}, domain.AssetWordTiming: {".json": true},
 		domain.AssetSubtitleSRT: {".srt": true}, domain.AssetSubtitle: {".srt": true}, domain.AssetNarration: {".mp3": true, ".wav": true, ".m4a": true}, domain.AssetAudio: {".mp3": true, ".wav": true, ".m4a": true},
 		domain.AssetMixDraft: {".mp4": true}, domain.AssetFinalVideo: {".mp4": true},
 	}
@@ -330,6 +334,50 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 		return "", err
 	}
 	defer file.Close()
+	if assetType == domain.AssetWordTiming {
+		type wordTimingWord struct {
+			Text       string  `json:"text"`
+			Start      float64 `json:"start_time"`
+			End        float64 `json:"end_time"`
+			Confidence float64 `json:"confidence"`
+		}
+		var envelope struct {
+			SchemaVersion int              `json:"schema_version"`
+			Script        string           `json:"script"`
+			Provider      string           `json:"provider"`
+			ScriptHash    string           `json:"script_hash"`
+			Hash          string           `json:"hash,omitempty"`
+			Duration      float64          `json:"duration"`
+			Words         []wordTimingWord `json:"words"`
+		}
+		dec := json.NewDecoder(io.LimitReader(file, MaxTextAssetSize+1))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&envelope); err != nil || envelope.SchemaVersion != 1 || strings.TrimSpace(envelope.Script) == "" || strings.TrimSpace(envelope.Provider) == "" || len(envelope.Words) == 0 || !scriptHashPattern.MatchString(envelope.ScriptHash) || math.IsNaN(envelope.Duration) || math.IsInf(envelope.Duration, 0) || envelope.Duration <= 0 {
+			return "", nil
+		}
+		scriptDigest := sha256.Sum256([]byte(envelope.Script))
+		if envelope.ScriptHash != "sha256:"+hex.EncodeToString(scriptDigest[:]) {
+			return "", nil
+		}
+		var extra any
+		if dec.Decode(&extra) != io.EOF {
+			return "", nil
+		}
+		prev := -1.0
+		for _, word := range envelope.Words {
+			if strings.TrimSpace(word.Text) == "" || math.IsNaN(word.Start) || math.IsInf(word.Start, 0) || math.IsNaN(word.End) || math.IsInf(word.End, 0) || word.Start < 0 || word.End <= word.Start || word.Start < prev {
+				return "", nil
+			}
+			if math.IsNaN(word.Confidence) || math.IsInf(word.Confidence, 0) {
+				return "", nil
+			}
+			prev = word.End
+		}
+		if math.Abs(envelope.Duration-prev) > 1e-9 {
+			return "", nil
+		}
+		return "application/json", nil
+	}
 	if assetType == domain.AssetSourceScript || assetType == domain.AssetTopicCard || assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitleSRT || assetType == domain.AssetSubtitle {
 		reader := bufio.NewReader(file)
 		hasContent := false

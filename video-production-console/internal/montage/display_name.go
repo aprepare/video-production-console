@@ -2,6 +2,7 @@ package montage
 
 import (
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -9,7 +10,9 @@ const windowsReservedDraftCharacters = `<>:"/\|?*`
 
 // BuildDraftDisplayName returns presentation metadata for a Jianying draft.
 // It does not determine the task workspace or registered directory name.
-func BuildDraftDisplayName(account, project, shortTitle, taskID string) string {
+// The suffix is the local creation time (MMDD-HHMM) so drafts sort readably
+// in the Jianying list.
+func BuildDraftDisplayName(account, project, shortTitle string, createdAt time.Time) string {
 	label := strings.TrimSpace(shortTitle)
 	if label == "" {
 		label = strings.TrimSpace(project)
@@ -19,7 +22,7 @@ func BuildDraftDisplayName(account, project, shortTitle, taskID string) string {
 	return strings.Join([]string{
 		fallbackDraftLabel(account, "未命名账号"),
 		fallbackDraftLabel(label, "未命名项目"),
-		taskSuffix(taskID),
+		createdAt.Local().Format("0102-1504"),
 	}, "_")
 }
 
@@ -65,10 +68,3 @@ func fallbackDraftLabel(value, fallback string) string {
 	return value
 }
 
-func taskSuffix(taskID string) string {
-	suffix := strings.ToLower(strings.ReplaceAll(taskID, "-", ""))
-	if len(suffix) > 6 {
-		suffix = suffix[len(suffix)-6:]
-	}
-	return suffix
-}

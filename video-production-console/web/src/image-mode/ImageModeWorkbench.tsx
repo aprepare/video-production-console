@@ -570,15 +570,7 @@ export function ImageModeWorkbench({
         <div>
           <span className="eyebrow">图文模式</span>
           <h1>{detail.project.title}</h1>
-          {isQuick ? (
-            <div className="image-title-edit">
-              <label>
-                图文项目名称
-                <input value={titleDraft} maxLength={120} onChange={(event) => setTitleDraft(event.target.value)} />
-              </label>
-              <button type="button" disabled={Boolean(busy) || !titleDraft.trim() || titleDraft.trim() === detail.project.title} onClick={() => void saveTitle()}>{busy === "title" ? "正在保存…" : "保存名称"}</button>
-            </div>
-          ) : null}
+          {isQuick ? <div className="image-title-edit"><label>图文项目名称<input value={titleDraft} maxLength={120} onChange={(event) => setTitleDraft(event.target.value)} /></label><button type="button" disabled={Boolean(busy) || !titleDraft.trim() || titleDraft.trim() === detail.project.title} onClick={() => void saveTitle()}>{busy === "title" ? "正在保存…" : "保存名称"}</button></div> : null}
           <p>比例 {detail.project.ratio} · {detail.items.length} 张 · 第一张是封面 · 最终文案不二创{typeof detail.project.success_count === "number" ? ` · 成功 ${detail.project.success_count}` : ""}</p>
         </div>
         <div className="image-mode-actions">
@@ -596,10 +588,7 @@ export function ImageModeWorkbench({
             <RefreshCw size={16} aria-hidden="true" />
             {busy === "all" ? "正在生成…" : "生成缺失图片"}
           </button>
-          <button type="button" disabled={Boolean(busy)} onClick={() => setPublishingOpen(true)}>
-            <FileText size={16} aria-hidden="true" />
-            图文标题及描述
-          </button>
+          <button type="button" disabled={Boolean(busy)} onClick={() => setPublishingOpen(true)}><FileText size={16} aria-hidden="true" />图文标题及描述</button>
           <button type="button" className={primaryAction === "download" ? "primary" : undefined} disabled={Boolean(busy) || !allReady} onClick={() => void downloadArchive()}>
             <Download size={16} aria-hidden="true" />
             {busy === "download" ? "正在打包…" : "打包下载"}

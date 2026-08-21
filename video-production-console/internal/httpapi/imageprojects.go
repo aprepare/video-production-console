@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/imageproject"
+	"video-production-console/internal/imagevideo"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskmodel"
@@ -32,11 +33,13 @@ type imageRuntimeProvider interface {
 const maxImageArchiveEntrySize int64 = 32 << 20
 
 type imageProjectsHandler struct {
-	repo      *store.ImageProjectRepository
-	runtime   imageRuntimeProvider
-	generator imageproject.Generator
-	planner   imageproject.ChatClient
-	jobs      *imageProjectJobs
+	repo             *store.ImageProjectRepository
+	runtime          imageRuntimeProvider
+	generator        imageproject.Generator
+	planner          imageproject.ChatClient
+	jobs             *imageProjectJobs
+	imageVideo       *imageVideoJobsHandler
+	produceNarration func(context.Context, domain.ImageProject) (imagevideo.NarrationArtifact, error)
 }
 
 func NewImageProjectsHandler(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator) http.Handler {
@@ -44,7 +47,15 @@ func NewImageProjectsHandler(db *sql.DB, runtime imageRuntimeProvider, generator
 }
 
 func NewImageProjectsHandlerWithPlanner(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator, planner imageproject.ChatClient) http.Handler {
-	h := &imageProjectsHandler{repo: store.NewImageProjectRepository(db), runtime: runtime, generator: generator, planner: planner, jobs: newImageProjectJobs()}
+	return NewImageProjectsHandlerWithImageVideo(db, runtime, generator, planner, nil, nil)
+}
+
+func NewImageProjectsHandlerWithImageVideo(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator, planner imageproject.ChatClient, service *imagevideo.Service, starter imageVideoJobStarter) http.Handler {
+	return newImageProjectsHandler(db, runtime, generator, planner, service, starter, nil)
+}
+
+func newImageProjectsHandler(db *sql.DB, runtime imageRuntimeProvider, generator imageproject.Generator, planner imageproject.ChatClient, service *imagevideo.Service, starter imageVideoJobStarter, produceNarration func(context.Context, domain.ImageProject) (imagevideo.NarrationArtifact, error)) http.Handler {
+	h := &imageProjectsHandler{repo: store.NewImageProjectRepository(db), runtime: runtime, generator: generator, planner: planner, jobs: newImageProjectJobs(), imageVideo: &imageVideoJobsHandler{repo: store.NewImageVideoJobRepository(db), starter: starter, db: db, runtime: runtime, service: service}, produceNarration: produceNarration}
 	_ = h.repo.MarkRunningQuickProjectsInterrupted(context.Background(), time.Now().UTC())
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/image-projects", h.list)
@@ -64,6 +75,16 @@ func NewImageProjectsHandlerWithPlanner(db *sql.DB, runtime imageRuntimeProvider
 	mux.HandleFunc("POST /api/image-projects/{id}/items/{item}/generate", h.generateOne)
 	mux.HandleFunc("GET /api/image-projects/{id}/items/{item}/image", h.image)
 	mux.HandleFunc("GET /api/image-projects/{id}/download", h.download)
+	mux.HandleFunc("POST /api/image-projects/{id}/image-video-jobs", h.imageVideo.create)
+	mux.HandleFunc("PATCH /api/image-projects/{id}/output-mode", h.updateOutputMode)
+	mux.HandleFunc("GET /api/image-video-jobs/{id}", h.imageVideo.get)
+	mux.HandleFunc("POST /api/image-video-jobs/{id}/retry-failed", h.imageVideo.retryFailed)
+	mux.HandleFunc("POST /api/image-video-jobs/{id}/cancel", h.imageVideo.cancel)
+	mux.HandleFunc("POST /api/image-video-jobs/{id}/retry-registration", h.imageVideo.retryRegistration)
+	mux.HandleFunc("GET /api/image-videos", h.listVideos)
+	mux.HandleFunc("POST /api/image-videos", h.createVideo)
+	mux.HandleFunc("GET /api/image-videos/{id}", h.getVideo)
+	mux.HandleFunc("POST /api/image-videos/{id}/resume", h.resumeVideo)
 	return mux
 }
 
@@ -189,7 +210,7 @@ func (h *imageProjectsHandler) create(w http.ResponseWriter, r *http.Request) {
 			attempts = 2
 		}
 	}
-	project := domain.ImageProject{ID: uuid.NewString(), Title: in.Title, Script: in.Script, ImageCount: len(segments), Ratio: in.Ratio, Style: in.Style, CustomStyle: strings.TrimSpace(in.CustomStyle), Concurrency: in.Concurrency, Status: "draft", ImageAttempts: attempts, CreatedAt: now, UpdatedAt: now, PublishingCandidates: in.PublishingCandidates}
+	project := domain.ImageProject{ID: uuid.NewString(), Title: in.Title, Script: in.Script, ImageCount: len(segments), Ratio: in.Ratio, Style: in.Style, CustomStyle: strings.TrimSpace(in.CustomStyle), Concurrency: in.Concurrency, Status: "draft", ImageAttempts: attempts, OutputMode: in.OutputMode, CreatedAt: now, UpdatedAt: now, PublishingCandidates: in.PublishingCandidates}
 	if len(project.PublishingCandidates) == 5 {
 		p := 1
 		project.SelectedPosition = &p
@@ -210,20 +231,21 @@ func (h *imageProjectsHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 type imageProjectDraft struct {
-	Title                string                       `json:"title"`
-	Script               string                       `json:"script"`
-	ImageCount           int                          `json:"image_count"`
-	Ratio                string                       `json:"ratio"`
-	Style                string                       `json:"style"`
-	CustomStyle          string                       `json:"custom_style"`
-	Concurrency          int                          `json:"concurrency"`
-	TextModel            string                       `json:"text_model"`
-	ReasoningEffort      string                       `json:"reasoning_effort"`
-	ConfirmedSegments    []imageproject.Segment       `json:"segments"`
-	PublishingCandidates []domain.PublishingCandidate `json:"publishing_candidates"`
-	SelectedPosition     int                          `json:"selected_position"`
-	ImageAttempts        int                          `json:"image_attempts"`
-	ImageModel           string                       `json:"image_model"`
+	Title                string                        `json:"title"`
+	Script               string                        `json:"script"`
+	ImageCount           int                           `json:"image_count"`
+	Ratio                string                        `json:"ratio"`
+	Style                string                        `json:"style"`
+	CustomStyle          string                        `json:"custom_style"`
+	Concurrency          int                           `json:"concurrency"`
+	TextModel            string                        `json:"text_model"`
+	ReasoningEffort      string                        `json:"reasoning_effort"`
+	ConfirmedSegments    []imageproject.Segment        `json:"segments"`
+	PublishingCandidates []domain.PublishingCandidate  `json:"publishing_candidates"`
+	SelectedPosition     int                           `json:"selected_position"`
+	ImageAttempts        int                           `json:"image_attempts"`
+	ImageModel           string                        `json:"image_model"`
+	OutputMode           domain.ImageProjectOutputMode `json:"output_mode"`
 }
 
 func decodeImageProjectDraft(w http.ResponseWriter, r *http.Request) (imageProjectDraft, bool) {
@@ -235,7 +257,10 @@ func decodeImageProjectDraft(w http.ResponseWriter, r *http.Request) (imageProje
 	in.Title = strings.TrimSpace(in.Title)
 	in.TextModel = strings.TrimSpace(in.TextModel)
 	in.ReasoningEffort = strings.ToLower(strings.TrimSpace(in.ReasoningEffort))
-	if in.Title == "" || strings.TrimSpace(in.Script) == "" || utf8.RuneCountInString(in.Title) > 120 || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > imageproject.MaxImages {
+	if in.OutputMode == "" {
+		in.OutputMode = domain.ImageProjectOutputModeImageSlideshow
+	}
+	if in.Title == "" || strings.TrimSpace(in.Script) == "" || utf8.RuneCountInString(in.Title) > 120 || len([]byte(in.Script)) > 1<<20 || !validRatio(in.Ratio) || !validStyle(in.Style) || (in.Style == "custom" && strings.TrimSpace(in.CustomStyle) == "") || in.Concurrency < 1 || in.Concurrency > imageproject.MaxImages || (in.OutputMode != domain.ImageProjectOutputModeImageSlideshow && in.OutputMode != domain.ImageProjectOutputModeImageToVideo) {
 		writeError(w, http.StatusBadRequest, "invalid_image_project", "Image project settings are invalid.")
 		return imageProjectDraft{}, false
 	}
@@ -390,7 +415,50 @@ func (h *imageProjectsHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "image_project_read_failed", "The image project could not be read.")
 		return
 	}
-	writeJSON(w, http.StatusOK, domain.ImageProjectDetail{Project: project, Items: items})
+	response := imageProjectDetailResponse{Project: imageProjectPublic{ImageProject: project}, Items: items}
+	if h.imageVideo != nil && h.imageVideo.repo != nil {
+		if job, jobErr := h.imageVideo.repo.GetLatestForProject(r.Context(), project.ID); jobErr == nil {
+			response.Project.ImageVideoJobID = job.ID
+			if detail, detailErr := h.imageVideo.repo.GetDetail(r.Context(), job.ID); detailErr == nil {
+				public := toPublicImageVideoDetail(detail)
+				response.Project.ImageVideoJob = &public
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+type imageProjectDetailResponse struct {
+	Project    imageProjectPublic        `json:"project"`
+	Items      []domain.ImageProjectItem `json:"items"`
+	Publishing domain.PublishingState    `json:"publishing,omitempty"`
+}
+
+type imageProjectPublic struct {
+	domain.ImageProject
+	ImageVideoJobID string                  `json:"image_video_job_id,omitempty"`
+	ImageVideoJob   *publicImageVideoDetail `json:"image_video_job,omitempty"`
+}
+
+func (h *imageProjectsHandler) updateOutputMode(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		OutputMode domain.ImageProjectOutputMode `json:"output_mode"`
+	}
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &input); err != nil {
+		writeDecodeError(w, err, "invalid_output_mode", "A valid output mode is required.")
+		return
+	}
+	err := h.repo.UpdateOutputMode(r.Context(), r.PathValue("id"), input.OutputMode, time.Now().UTC())
+	switch {
+	case errors.Is(err, store.ErrImageProjectNotFound):
+		writeError(w, http.StatusNotFound, "image_project_not_found", "The image project was not found.")
+	case errors.Is(err, store.ErrImageProjectOutputModeLocked):
+		writeError(w, http.StatusConflict, "output_mode_locked", "The output mode is locked after the job starts.")
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "invalid_output_mode", "The output mode is invalid.")
+	default:
+		h.get(w, r)
+	}
 }
 
 func (h *imageProjectsHandler) updateItem(w http.ResponseWriter, r *http.Request) {

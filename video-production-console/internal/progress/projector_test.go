@@ -36,6 +36,17 @@ func TestProjectDoesNotTreatGrokModelNameAsWebSearch(t *testing.T) {
 	}
 }
 
+func TestProjectSpokenLinesProgressCopy(t *testing.T) {
+	running := Project(Input{TaskID: "task", Action: "remix.spoken_lines", Method: "item.started"})
+	if running.DisplayText != "正在生成口播稿" {
+		t.Fatalf("running = %+v", running)
+	}
+	done := Project(Input{TaskID: "task", Action: "remix.spoken_lines", Status: "completed"})
+	if done.DisplayText != "口播稿已写完" {
+		t.Fatalf("done = %+v", done)
+	}
+}
+
 func TestTimingProjectionUsesTheSharedObservableClassifier(t *testing.T) {
 	got, ok := ProjectTiming(Input{Method: "item.started", RawJSON: `{"item":{"id":"search-1","command":"python grok_search.py --query private"}}`})
 	if !ok || got.PhaseKey != "web_research" || got.Boundary != phasetiming.BoundaryStart || got.ExternalItemID != "search-1" {

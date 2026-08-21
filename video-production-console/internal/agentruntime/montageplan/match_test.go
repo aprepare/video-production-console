@@ -408,7 +408,7 @@ func TestBuildV2ScenicMixesCatalogBrollWithoutIntentMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "scenic_mixed_pool") {
+	if !strings.Contains(joined, "scenic_landscape_pool") {
 		t.Fatalf("scenic must mix index + catalog broll, notes=%v", plan.PlannerNotes)
 	}
 	if !strings.Contains(joined, "scenic_catalog_broll: merged") {
@@ -423,7 +423,7 @@ func TestBuildV2ScenicMixesCatalogBrollWithoutIntentMatch(t *testing.T) {
 		}
 	}
 	if len(plan.Timeline) == 0 {
-		t.Fatal("expected mixed scenic timeline")
+		t.Fatal("expected scenic timeline")
 	}
 }
 
@@ -552,7 +552,7 @@ func TestBuildV2EmptyCatalogFallsBackToLandscapeIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(plan.PlannerNotes, "\n")
-	if !strings.Contains(joined, "scenic_mixed_pool") && !strings.Contains(joined, "falling back to media index") {
+	if !strings.Contains(joined, "scenic_landscape_pool") {
 		t.Fatalf("expected mixed scenic pool, got %v", plan.PlannerNotes)
 	}
 	for _, shot := range plan.Timeline {

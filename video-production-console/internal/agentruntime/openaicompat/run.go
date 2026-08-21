@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"video-production-console/internal/domain"
+	"video-production-console/internal/spokenlines"
 )
 
 // Options configures the OpenAI-compatible remix/topic runner.
@@ -15,7 +18,10 @@ type Options struct {
 	OutputLastMessage string
 	Model             string
 	ReasoningEffort   string
-	BaseURL           string
+	// CheckModel runs the post-draft overlap self-check; empty disables the
+	// check so the writer model's output is delivered as-is.
+	CheckModel string
+	BaseURL    string
 	APIKey            string
 	MaxSteps          int
 	PythonBinary      string
@@ -40,22 +46,24 @@ type manifestLite struct {
 
 const (
 	PromptStyleRewrite = "rewrite"
-	PromptStyleWash    = "wash"
 
 	// RewritePromptStamp 是 rewrite 系统提示词的版本标注。
-	// 来源：独立「文案进化台」试写法拍房 / 存款蒸发 / 换锚后的 2026-08-19 中老年定稿。
-	// 只作仓库标注，不发给模型。wash 路径未改。
-	RewritePromptStamp = "文案进化台 2026-08-19 中老年定稿"
+	// 来源：独立「文案进化台」试写法拍房 / 存款蒸发 / 换锚后的 2026-08-19 中老年定稿；
+	// 2026-08-21 增补：篇幅跟原文走、顺序/切口分工说明、短句急停节奏示范、
+	// 钩子例子改为示范性质（必须从原文题材现找），并删掉禁词表里的笔误「换毛」。
+	// 2026-08-21 爆款回流：复盘账号 5 篇爆款（转发率最高 5.6% 的是「紧急提醒＋具体
+	// 日期」开头）后增补【截止日通知感】开头形态与【互动引导】软规则（转发走家庭
+	// 责任、评论留许愿口，禁止喊口令式硬引导）。
+	// 只作仓库标注，不发给模型。
+	RewritePromptStamp = "文案进化台 2026-08-21 爆款回流定稿"
 )
 
 func NormalizePromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", PromptStyleRewrite:
 		return PromptStyleRewrite, nil
-	case PromptStyleWash:
-		return PromptStyleWash, nil
 	default:
-		return "", fmt.Errorf("remix_prompt_style must be rewrite or wash")
+		return "", fmt.Errorf("remix_prompt_style must be rewrite")
 	}
 }
 
@@ -66,8 +74,8 @@ func Run(opts Options) error {
 	manifestPath := strings.TrimSpace(opts.ManifestPath)
 	skillRoot := strings.TrimSpace(opts.SkillRoot)
 	outPath := strings.TrimSpace(opts.OutputLastMessage)
-	if manifestPath == "" || skillRoot == "" || outPath == "" {
-		return fmt.Errorf("manifest, skill-root, and output-last-message are required")
+	if manifestPath == "" || outPath == "" {
+		return fmt.Errorf("manifest and output-last-message are required")
 	}
 	baseURL := strings.TrimSpace(opts.BaseURL)
 	apiKey := strings.TrimSpace(opts.APIKey)
@@ -94,17 +102,29 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, err)
 	}
 
+	action := strings.TrimSpace(manifest.Action)
+	if action == "" {
+		action = string(domain.ActionRemixStandard)
+	}
+	if action == string(domain.ActionCaptionKeywords) {
+		return runCaptionKeywords(opts, manifest, outPath)
+	}
 	source, err := readPrimarySource(manifest)
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	skillMD, _ := os.ReadFile(filepath.Join(skillRoot, "SKILL.md"))
-	style, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle)
-	if err != nil {
+	if action == string(domain.ActionRemixSpokenLines) {
+		return runSpokenLines(opts, manifest, source, outPath)
+	}
+	var skillMD []byte
+	if skillRoot != "" {
+		skillMD, _ = os.ReadFile(filepath.Join(skillRoot, "SKILL.md"))
+	}
+	if _, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	system := buildWriterPrompt(string(skillMD), style)
-	user := buildWriterUser(manifest, source, style)
+	system := buildWriterPrompt(string(skillMD))
+	user := buildWriterUser(manifest, source)
 
 	client := opts.Client
 	if client == nil {
@@ -122,11 +142,8 @@ func Run(opts Options) error {
 	if len(resp.Choices) == 0 {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
-	action := manifest.Action
-	if action == "" {
-		action = "remix.standard"
-	}
-	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, resp.Choices[0].Message.Content); err != nil {
+	content, checkWarnings, checkNote := repairSourceOverlap(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
+	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
 	resultFile := filepath.Join(manifest.OutputDir, "result.json")
@@ -170,23 +187,125 @@ func readTextFile(path string) (string, error) {
 	return text, nil
 }
 
+func runSpokenLines(opts Options, manifest manifestLite, source, outPath string) error {
+	fail := func(err error) error {
+		return writeFailure(outPath, opts.ManifestPath, err)
+	}
+	client := opts.Client
+	if client == nil {
+		client = &HTTPChatClient{BaseURL: strings.TrimSpace(opts.BaseURL), APIKey: strings.TrimSpace(opts.APIKey)}
+	}
+	model := strings.TrimSpace(opts.Model)
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	resp, err := client.Chat(ChatRequest{
+		Model:           model,
+		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
+		Stream:          true,
+		Messages: []Message{
+			{Role: "system", Content: spokenlines.SystemPrompt},
+			{Role: "user", Content: spokenlines.UserPrompt(source)},
+		},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	if len(resp.Choices) == 0 {
+		return fail(fmt.Errorf("empty chat choices"))
+	}
+	if err := writeSpokenDeliverable(manifest.OutputDir, manifest.TaskID, resp.Choices[0].Message.Content); err != nil {
+		return fail(err)
+	}
+	resultFile := filepath.Join(manifest.OutputDir, "result.json")
+	fileRaw, err := os.ReadFile(resultFile)
+	if err != nil {
+		return fail(err)
+	}
+	if err := writeEnvelope(outPath, fileRaw); err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
+// runCaptionKeywords asks the model which terms of each 口播稿 line deserve
+// on-screen emphasis and writes the caption_keywords.json asset.
+func runCaptionKeywords(opts Options, manifest manifestLite, outPath string) error {
+	fail := func(err error) error {
+		return writeFailure(outPath, opts.ManifestPath, err)
+	}
+	var spokenPath string
+	for _, input := range manifest.Inputs {
+		if strings.TrimSpace(input.Type) == "spoken_script" {
+			spokenPath = input.Path
+			break
+		}
+	}
+	if spokenPath == "" {
+		return fail(fmt.Errorf("manifest is missing a spoken_script input"))
+	}
+	raw, err := readTextFile(spokenPath)
+	if err != nil {
+		return fail(err)
+	}
+	formatted, err := spokenlines.Format(raw)
+	if err != nil {
+		return fail(err)
+	}
+	lines := spokenlines.Lines(formatted)
+	client := opts.Client
+	if client == nil {
+		client = &HTTPChatClient{BaseURL: strings.TrimSpace(opts.BaseURL), APIKey: strings.TrimSpace(opts.APIKey)}
+	}
+	model := strings.TrimSpace(opts.Model)
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	resp, err := client.Chat(ChatRequest{
+		Model:           model,
+		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
+		Stream:          true,
+		Messages: []Message{
+			{Role: "system", Content: spokenlines.KeywordSystemPrompt},
+			{Role: "user", Content: spokenlines.KeywordUserPrompt(lines)},
+		},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	if len(resp.Choices) == 0 {
+		return fail(fmt.Errorf("empty chat choices"))
+	}
+	if err := writeKeywordsDeliverable(manifest.OutputDir, manifest.TaskID, resp.Choices[0].Message.Content, lines); err != nil {
+		return fail(err)
+	}
+	resultFile := filepath.Join(manifest.OutputDir, "result.json")
+	fileRaw, err := os.ReadFile(resultFile)
+	if err != nil {
+		return fail(err)
+	}
+	if err := writeEnvelope(outPath, fileRaw); err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
 // buildWriterPrompt 拼系统提示词。
 //
-// rewrite（默认）= RewritePromptStamp（文案进化台 2026-08-19 中老年定稿）。
+// rewrite（默认）= RewritePromptStamp（文案进化台 2026-08-21 爆款回流定稿）。
 // 相对控制台旧版加了这些刀：
 //   - 先锁六件套爆款机器（钩子 / 未揭晓 / 证明 / 差距 / 情绪 / 收口）
 //   - 关键数字必须原词，禁止「很多」「心惊的数」
 //   - 对仗钩子不能写成更软的解释句
 //   - 【中老年听得懂】开场禁锚点/换锚/货币/认知等黑话
+//   - 【截止日通知感】原文有真实日期时开头写成紧急提醒（爆款复盘：转发率最高的开头形态）
+//   - 【互动引导】转发走家庭责任、评论留许愿口；快转发/扣1/接接接一律判失败
 //   - 禁止按「第N个难题」对照译文，中间必须换切口
-//   - 密度失败标准写死：钩子听不懂 / 数字糊了 / 写顺了 / 对照没了 / 降温成课
+//   - 密度失败标准写死：钩子听不懂 / 数字糊了 / 写顺了 / 对照没了 / 降温成课 / 喊口令引导
 //
-// wash 路径未改。落盘 JSON 仍走 writerJSONContract（标题/描述/话题/cta）。
+// 落盘 JSON 仍走 writerJSONContract（标题/描述/话题/cta）。
 // 模型可额外返回 machine；parseRemixDraft 忽略未知字段，控制台仍以 continuous_script 为准。
-func buildWriterPrompt(skillMD, style string) string {
-	if style == PromptStyleWash {
-		return buildWashPrompt()
-	}
+func buildWriterPrompt(skillMD string) string {
 	var b strings.Builder
 	b.WriteString("你是财经视频号二创写手。只写文案，不要调用工具，不要读写文件，不要解释过程。\n")
 	b.WriteString("\n【先锁爆款机器】\n")
@@ -201,24 +320,39 @@ func buildWriterPrompt(skillMD, style string) string {
 	b.WriteString("写稿时这六条一条都不能丢。\n")
 	b.WriteString("\n【硬性保留】\n")
 	b.WriteString("- 不换题，不降温，不补圆原文故意不说完的答案，不收成家庭理财课\n")
+	b.WriteString("- 篇幅跟原文走：正文字数控制在原文的 0.8～1.2 倍。不许缩成摘要，也不许注水拉长\n")
 	b.WriteString("- 课程名固定《财富觉醒方法论》，入口主页橱窗；原文另有课名时跟原文\n")
 	b.WriteString("- 关键数字必须原词留下（套数、日均、比例、年限、单价、金额、城数）。禁止改成「很多」「心惊的数」「差不多」这类形容词或约数\n")
+	b.WriteString("- 数字原词不等于整句照搬：带数字的数据句同样必须换说法重讲，只有数字本身一个不动。原稿写「2001年外汇储备2100多亿美元，到2014年最猛的时候3.99万亿」，新稿就得换成类似「外汇储备从2001年的2100多亿美元，一路堆到2014年顶点的3.99万亿」的新句子。数据句原样照搬按留原句判失败\n")
 	b.WriteString("- 例子必须自洽：本金乘利率要对上利息\n")
 	b.WriteString("- 原稿的推进顺序不能倒\n")
 	b.WriteString("- 第一句必须接住原稿钩子力度；原稿若是对仗打脸，新稿第一句必须还是对仗打脸，两边都得是大白话，用新词，不许写成更软的解释句或中介口吻\n")
 	b.WriteString("- 禁止用熬夜、站位、人生感悟开场\n")
 	b.WriteString("\n【中老年听得懂——钩子先过这一关】\n")
 	b.WriteString("听的人是四十五到六十五岁，第一句必须像跟邻居说话，一听就懂，不用停下来问「这是啥意思」。\n")
-	b.WriteString("- 钩子用具体事：存折上的钱少了、利息不够买早饭、房子挂出去没人问、银行柜台上利率条换了\n")
-	b.WriteString("- 开场禁止：锚点、换锚、换毛、货币、结汇、印钞、认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场\n")
+	b.WriteString("- 钩子用具体事，说的必须是观众自家能摸到的东西。比如写存款就说存折上的钱少了、利息不够买早饭；写房子就说挂出去半年没人问。这些只是示范口吻，具体用哪件事必须从这篇原文的题材里现找，不许套用示范原句\n")
+	b.WriteString("- 开场禁止：锚点、换锚、货币、结汇、印钞、认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场\n")
 	b.WriteString("- 对仗可以，但两边都得是他们生活里的词。能说「三年前抢着买叫投资，现在想卖没人要」，不能说「第一次锚定美元，第二次锚定房地产」\n")
 	b.WriteString("- 黑话如果原文中段才出现，后文用大白话解释一次再往下走，不准扔在第一句\n")
+	b.WriteString("\n【截止日通知感——原文有真实时间节点时优先用】\n")
+	b.WriteString("原文里若有具体日期、政策生效日、会议日或数据发布日，第一句优先写成一条紧急提醒，而不是一段观点。通知的节奏是：点名人群＋提醒口吻＋具体日期＋「你还有时间准备」＋过了这天差距当场拉开。\n")
+	b.WriteString("- 示范节奏（只学结构，字面必须换，日期必须来自原文）：「还把钱死死捂在银行卡里的，我紧急提一句，X月X号之前你还有时间准备。过了这天，规矩就变，门槛就抬。」\n")
+	b.WriteString("- 日期必须是原文里真实出现的，禁止编造日期、挪动日期或把模糊时间说成具体日子；原文没有时间节点就不用这个开头，不许硬造截止日\n")
+	b.WriteString("- 通知感开头也要接住原稿钩子力度，提醒的是观众自家的钱和日子，不是播报新闻\n")
+	b.WriteString("\n【互动引导——写成内容，不写成口号】\n")
+	b.WriteString("- 转发走家庭责任：结尾收口处把这件事指向观众的家人，比如「一家人里至少要有一个人听懂」「听懂的别只转给别人，自己先弄明白」。让观众自己觉得该转给老伴、转进家庭群，而不是被喊着转发\n")
+	b.WriteString("- 评论留许愿口：全篇最多留一个让观众想留一句话的口子，放在讲完上一轮谁富了、或点明这回轮到谁之后，比如「上一轮你踩没踩中，评论区说一句」「觉得这回该轮到自己的，留个记号」。只留口子，不逼着评论\n")
+	b.WriteString("- 禁止喊口令：不许出现「快转发」「转发给几个群」「评论扣1」「接接接」「见者发财」「不转不是」这类硬引导，一出现即整稿失败\n")
+	b.WriteString("- 转发引导和评论口子各最多一处，不能打断正文推进，收口的主任务仍是催上车，不是催转发\n")
+	b.WriteString("- 上面引号里的互动句都只是示范口吻，字面必须换成贴这篇题材的新说法，不许原样照抄\n")
 	b.WriteString("\n【允许换、但禁止洗没】\n")
+	b.WriteString("先分清楚哪个不能动、哪个必须动：论点推进顺序跟原稿走（就是【硬性保留】里说的顺序）；必须换的是每个论点下面的例子、画面、人物和现场。顺序不动，画面必须动，两条不冲突。\n")
 	b.WriteString("- 禁止逐段同义改写，禁止按「第N个难题」对照译文\n")
 	b.WriteString("- 中间论证必须换切口（现场、人物、一个动作），不能是原稿换词\n")
 	b.WriteString("- 禁止照抄或轻微改写原稿金句、比喻和专属例子，这些画面必须换成新的\n")
 	b.WriteString("- 中后段也不能留原稿原句\n")
 	b.WriteString("- 开场句式和比喻可以换，但钩子类型、信息密度、短句急停节奏不能被磨平\n")
+	b.WriteString("- 短句急停的节奏长这样（只学节奏，字面必须换）：「房子卖不动了。不是降价卖不动。是白送都没人接。」三句一顿，每句砸进一个新信息，不许把它们并成一个长句\n")
 	b.WriteString("\n【密度失败标准——出现任一条即整稿失败】\n")
 	b.WriteString("- 前3秒没有明确钩子，或钩子要解释才能懂\n")
 	b.WriteString("- 开场出现锚点、换锚、货币、认知等中老年听着费劲的词\n")
@@ -226,6 +360,8 @@ func buildWriterPrompt(skillMD, style string) string {
 	b.WriteString("- 短句急停被改成顺滑长段，信息密度明显下降\n")
 	b.WriteString("- 普通人对照/阶层差距被删软或删掉\n")
 	b.WriteString("- 听起来像换了一篇更温和的家庭理财文\n")
+	b.WriteString("- 正文比原文短了两成以上，或明显注水变长\n")
+	b.WriteString("- 出现「快转发」「评论扣1」「接接接」这类喊口令式互动引导，或编造了原文里没有的截止日期\n")
 	b.WriteString("\n按四十五到六十五岁口播来写。少用书面词。句子短，像当面说话。写成能念的连续口播，不要讲解员作文。\n")
 	b.WriteString(writerJSONContract())
 	b.WriteString("rewrite 还必须带 machine：对象，含 hook / unanswered / proof / gap / emotion / cta 六句（锁机器）。控制台落盘仍以 continuous_script 为准。\n")
@@ -236,37 +372,19 @@ func buildWriterPrompt(skillMD, style string) string {
 	return b.String()
 }
 
-func buildWashPrompt() string {
-	var b strings.Builder
-	b.WriteString("你是财经视频号洗稿写手。只写文案，不要调用工具，不要读写文件，不要解释过程。\n")
-	b.WriteString("按洗稿来，不要另写一篇。机器、顺序、数字、历史例子、比喻、课名和上车结构都以原文为准，必须还在。\n")
-	b.WriteString("只做这些事：切成适合口播的短段、改成更顺口的标点、轻微换词、修好明显错字。\n")
-	b.WriteString("不要换题，不要补圆原文故意不说完的答案，不要改成家庭理财课，不要新编一套机制，不要把金句和例子换成另一套。\n")
-	b.WriteString("课名跟原文走；原文没有课名时用《财富觉醒方法论》，入口主页橱窗。\n")
-	b.WriteString("关键数字保留，本金乘利率要对上利息。按四十五到六十五岁口播来写。\n")
-	b.WriteString("原稿的推进顺序不能倒。\n")
-	b.WriteString(writerJSONContract())
-	return b.String()
-}
-
 func writerJSONContract() string {
 	return "只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。\n" +
 		"continuous_script 必须是完整连续口播正文。\n" +
 		"titles、short_titles、descriptions 必须从这篇口播长出来，讲的是同一件事。禁止拿别的成稿标题来凑数，也不要用提示词里没有出现在原文里的情节做标题。\n" +
-		"titles 8到12条。short_titles 恰好5条、每条6到16个字、不要#。descriptions 恰好3条。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。三条描述末尾都带这同一组标签，topics 也只用这组，不要自造其他#。cta 一句催促上车。\n"
+		"titles 8到12条。short_titles 恰好5条、每条最多15个字、不要#。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。三条描述末尾都带这同一组标签，topics 也只用这组，不要自造其他#。cta 一句催促上车。\n"
 }
 
-func buildWriterUser(manifest manifestLite, source, style string) string {
+func buildWriterUser(manifest manifestLite, source string) string {
 	var b strings.Builder
-	if style == PromptStyleWash {
-		b.WriteString("下面是同行原文。按洗稿来写，不要另写一篇。先用一句话写出这篇仍在让观众追问什么，再写口播。\n")
-		b.WriteString("保留原稿的推进顺序、数字、历史例子、比喻、课名和上车结构。只改气口、标点和少量用词。如果听起来像换了一篇文章，就算失败。\n")
-	} else {
-		// 文案进化台 2026-08-19 用户侧：先锁机器，再换皮；钩子必须五十岁以上一听就懂。
-		b.WriteString("下面是同行原文，只当证据，不当逐句模板。先从原文锁机器，再用一句话写出这篇新稿仍在让观众追问什么，再写全新口播。\n")
-		b.WriteString("同一条机器换一层完全不同的说法和例子。第一句必须让五十岁以上的人不用停下来问「这是啥意思」。不要套提示词里没有出现在原文里的情节。如果听起来还是原稿换词，或钩子/数字/密度被磨平，或开场在讲概念，就算失败。\n")
-		b.WriteString("标题和短标题也必须跟这篇新口播走，不要沿用上一篇成稿的标题。\n")
-	}
+	// 文案进化台 2026-08-19 用户侧：先锁机器，再换皮；钩子必须五十岁以上一听就懂。
+	b.WriteString("下面是同行原文，只当证据，不当逐句模板。先从原文锁机器，再用一句话写出这篇新稿仍在让观众追问什么，再写全新口播。\n")
+	b.WriteString("同一条机器换一层完全不同的说法和例子。第一句必须让五十岁以上的人不用停下来问「这是啥意思」。不要套提示词里没有出现在原文里的情节。如果听起来还是原稿换词，或钩子/数字/密度被磨平，或开场在讲概念，就算失败。\n")
+	b.WriteString("标题和短标题也必须跟这篇新口播走，不要沿用上一篇成稿的标题。\n")
 	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
 		b.WriteString("修改要求：\n")
 		b.WriteString(notes)

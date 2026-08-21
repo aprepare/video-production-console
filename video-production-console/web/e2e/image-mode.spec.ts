@@ -212,7 +212,7 @@ test("advanced image route keeps the manual segment-preview flow", async ({ page
   await mockImageConsole(page, "advanced");
   await page.goto("/");
 
-  await page.getByRole("button", { name: "进入图文制作" }).click();
+  await page.getByRole("button", { name: "图文制作" }).click();
   await expect(page.getByRole("heading", { name: "图文项目", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "高级手动模式" }).click();
   await expect(page).toHaveURL(/\/image-projects\/advanced\/?$/);

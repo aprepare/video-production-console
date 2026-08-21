@@ -238,6 +238,80 @@ func TestScanAllRegistersMovieMontageWhenPresent(t *testing.T) {
 	}
 }
 
+func TestResolveRootsFallsBackToHomeWhenBundleMissing(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	executablePath := filepath.Join(t.TempDir(), "app", "video-production-console.exe")
+	if err := os.MkdirAll(filepath.Dir(executablePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRoots(executablePath, home)
+	want := DefaultRoots(filepath.Join(home, ".codex", "skills"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("roots=%+v, want home fallback %+v", got, want)
+	}
+}
+
+func TestResolveRootsPrefersBundledSkillWhenPresent(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	install := t.TempDir()
+	executablePath := filepath.Join(install, "video-production-console.exe")
+	bundledRemix := filepath.Join(install, "skills", "finance-viral-remix")
+	if err := os.MkdirAll(bundledRemix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRoots(executablePath, home)
+	wantHome := filepath.Join(home, ".codex", "skills")
+	if rootByName(got, "finance-viral-remix") != bundledRemix {
+		t.Fatalf("remix root=%q, want bundled %q", rootByName(got, "finance-viral-remix"), bundledRemix)
+	}
+	if rootByName(got, "finance-topic-selector") != filepath.Join(wantHome, "finance-topic-selector") {
+		t.Fatalf("topic selector should stay on home when not bundled")
+	}
+}
+
+func TestScanAllUsesBundledRequiredSkillsWithoutHomeCopy(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	install := t.TempDir()
+	executablePath := filepath.Join(install, "video-production-console.exe")
+	for _, name := range []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"} {
+		writeSkillFile(t, filepath.Join(install, "skills", name, "SKILL.md"), "skill")
+	}
+	service := NewService(nil, Options{Roots: ResolveRoots(executablePath, home)})
+	snapshots, err := service.ScanAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 3 {
+		t.Fatalf("snapshots=%d, want the three required bundled skills", len(snapshots))
+	}
+}
+
+func TestResolveRootsIgnoresBundledFileThatIsNotDirectory(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user")
+	install := t.TempDir()
+	executablePath := filepath.Join(install, "video-production-console.exe")
+	if err := os.MkdirAll(filepath.Join(install, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(install, "skills", "finance-viral-remix"), []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRoots(executablePath, home)
+	want := filepath.Join(home, ".codex", "skills", "finance-viral-remix")
+	if rootByName(got, "finance-viral-remix") != want {
+		t.Fatalf("remix root=%q, want home %q", rootByName(got, "finance-viral-remix"), want)
+	}
+}
+
+func rootByName(roots []Root, name string) string {
+	for _, root := range roots {
+		if root.Name == name {
+			return root.Path
+		}
+	}
+	return ""
+}
+
 func TestSkillLatestPreservesRepositoryFailures(t *testing.T) {
 	want := errors.New("database unavailable")
 	_, err := NewService(failingSkillRepository{err: want}).Latest(t.Context(), "skill")

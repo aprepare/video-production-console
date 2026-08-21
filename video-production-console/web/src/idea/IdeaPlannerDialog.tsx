@@ -132,7 +132,7 @@ export function IdeaPlannerDialog({
             <div className="idea-messages">
               {session.messages?.map((item) => (
                 <div className={`idea-message ${item.role}`} key={item.id}>
-                  <b>{item.role === "user" ? "你" : "Codex"}</b>
+                  <b>{item.role === "user" ? "你" : "模型"}</b>
                   <p>{item.content}</p>
                 </div>
               ))}
@@ -145,7 +145,7 @@ export function IdeaPlannerDialog({
                 <div className="idea-progress-head">
                   <span className={`idea-progress-dot ${task?.status || "queued"}`} />
                   <strong>
-                    {task ? taskProgressStatus(task) : "已发送，正在等待 Codex 启动"}
+                    {task ? taskProgressStatus(task) : "已发送，正在等待任务启动"}
                   </strong>
                 </div>
                 {task?.events?.length ? (

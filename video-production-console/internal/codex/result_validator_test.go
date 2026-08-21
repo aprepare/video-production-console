@@ -439,6 +439,18 @@ func TestValidateResultEnvelopeRejectsActionAssetMismatchAndMalformedMediaType(t
 	}
 }
 
+func TestValidateResultEnvelopeAcceptsWordTimingForMontage(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	file := filepath.Join(out, "word_timing.json")
+	if err := os.WriteFile(file, []byte(`{"words":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionMontagePlan, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetWordTiming, Path: file, StorageKind: domain.StorageFile, Filename: "word_timing.json", MIME: "application/json", Size: 12, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, envelope.Action, out); err != nil {
+		t.Fatalf("montage plan rejected word_timing asset: %v", err)
+	}
+}
+
 func TestValidateResultEnvelopeRejectsSpokenScriptForRemixActions(t *testing.T) {
 	out, taskID := t.TempDir(), uuid.NewString()
 	file := filepath.Join(out, "spoken_script.txt")
@@ -476,6 +488,19 @@ func TestValidateResultEnvelopeRejectsSpokenScriptForNonRemixAction(t *testing.T
 	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionTopicBrainstorm, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetSpokenScript, Path: file, StorageKind: domain.StorageFile, Filename: "spoken.txt", MIME: "text/plain", Size: 6, SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
 	if err := ValidateResultEnvelope(envelope, taskID, domain.ActionTopicBrainstorm, out); err == nil || !strings.Contains(err.Error(), "spoken_script") {
 		t.Fatalf("non-remix action accepted spoken_script: %v", err)
+	}
+}
+
+func TestValidateResultEnvelopeAcceptsSpokenScriptForSpokenLines(t *testing.T) {
+	out, taskID := t.TempDir(), uuid.NewString()
+	body := []byte("第一句 \n")
+	file := filepath.Join(out, "spoken_script.txt")
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ResultEnvelope{SchemaVersion: ProtocolSchemaVersion, TaskID: taskID, Action: domain.ActionRemixSpokenLines, Status: "completed", Summary: "done", Questions: []Question{}, Artifacts: []ArtifactOutput{}, AssetOutputs: []AssetOutput{{Type: domain.AssetSpokenScript, Path: file, StorageKind: domain.StorageFile, Filename: "spoken_script.txt", MIME: "text/plain; charset=utf-8", Size: int64(len(body)), SHA256: sha256HexForTest(t, file)}}, Warnings: []string{}}
+	if err := ValidateResultEnvelope(envelope, taskID, domain.ActionRemixSpokenLines, out); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -541,7 +566,7 @@ func TestSpokenConsoleProtocolIsAbsentFromSchemas(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, forbidden := range []string{"remix.spoken_format", "spoken_script"} {
+		for _, forbidden := range []string{"remix.spoken_format"} {
 			if strings.Contains(string(data), forbidden) {
 				t.Fatalf("%s still exposes deprecated console value %q", name, forbidden)
 			}

@@ -59,10 +59,10 @@ const sentenceBoundaryRunes = "。！？!?；;"
 var conclusionMarkers = []string{"所以", "因此", "记住", "结论", "最后"}
 var turningPointMarkers = []string{"但是", "然而", "真正", "其实", "可惜"}
 
-// parseSRTSentences reads word-level, phrase-level, or sentence-level SRT.
-// Word-level cues stay glued until 。！？; cues longer than phraseCueMinMS
-// are treated as finished phrases even without punctuation.
-func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
+// parseSRTCues reads an SRT file and returns one TimedSentence per cue,
+// exactly as authored. Spoken-mode captions consume these directly so the
+// 口播稿 line breaks survive; sentence gluing lives in glueSRTCues.
+func parseSRTCues(r io.Reader) ([]TimedSentence, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("read srt: %w", err)
@@ -70,11 +70,7 @@ func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 	text := strings.ReplaceAll(string(stripBOM(raw)), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 
-	type srtEntry struct {
-		startMS, endMS int64
-		text           string
-	}
-	entries := make([]srtEntry, 0, 64)
+	cues := make([]TimedSentence, 0, 64)
 	for i := 0; i < len(lines); {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -86,11 +82,11 @@ func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 			line = strings.TrimSpace(lines[i])
 		}
 		if !strings.Contains(line, "-->") {
-			return nil, fmt.Errorf("srt entry %d has no timing line: %q", len(entries)+1, line)
+			return nil, fmt.Errorf("srt entry %d has no timing line: %q", len(cues)+1, line)
 		}
 		startMS, endMS, err := parseSRTTimeRange(line)
 		if err != nil {
-			return nil, fmt.Errorf("srt entry %d: %w", len(entries)+1, err)
+			return nil, fmt.Errorf("srt entry %d: %w", len(cues)+1, err)
 		}
 		i++
 		var parts []string
@@ -102,25 +98,41 @@ func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 			parts = append(parts, part)
 			i++
 		}
-		entries = append(entries, srtEntry{startMS: startMS, endMS: endMS, text: strings.Join(parts, "")})
+		cues = append(cues, TimedSentence{StartMS: startMS, EndMS: endMS, Text: strings.Join(parts, "")})
 	}
+	return cues, nil
+}
 
-	sentences := make([]TimedSentence, 0, len(entries))
+// parseSRTSentences reads word-level, phrase-level, or sentence-level SRT.
+// Word-level cues stay glued until 。！？; cues longer than phraseCueMinMS
+// are treated as finished phrases even without punctuation.
+func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
+	cues, err := parseSRTCues(r)
+	if err != nil {
+		return nil, err
+	}
+	return glueSRTCues(cues), nil
+}
+
+// glueSRTCues folds word-level cues into sentences. Cues ending on 。！？ or
+// running longer than phraseCueMinMS close the sentence they belong to.
+func glueSRTCues(cues []TimedSentence) []TimedSentence {
+	sentences := make([]TimedSentence, 0, len(cues))
 	var curStart, curEnd int64
 	var builder strings.Builder
 	open := false
-	for _, entry := range entries {
-		if entry.text == "" {
+	for _, cue := range cues {
+		if cue.Text == "" {
 			continue
 		}
 		if !open {
-			curStart = entry.startMS
+			curStart = cue.StartMS
 			builder.Reset()
 			open = true
 		}
-		curEnd = entry.endMS
-		builder.WriteString(entry.text)
-		if endsWithSentenceBoundary(entry.text) || entry.endMS-entry.startMS >= phraseCueMinMS {
+		curEnd = cue.EndMS
+		builder.WriteString(cue.Text)
+		if endsWithSentenceBoundary(cue.Text) || cue.EndMS-cue.StartMS >= phraseCueMinMS {
 			sentences = append(sentences, TimedSentence{StartMS: curStart, EndMS: curEnd, Text: builder.String()})
 			open = false
 		}
@@ -128,7 +140,7 @@ func parseSRTSentences(r io.Reader) ([]TimedSentence, error) {
 	if open && strings.TrimSpace(builder.String()) != "" {
 		sentences = append(sentences, TimedSentence{StartMS: curStart, EndMS: curEnd, Text: builder.String()})
 	}
-	return sentences, nil
+	return sentences
 }
 
 func isAllDigits(s string) bool {

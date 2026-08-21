@@ -159,10 +159,36 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "account_read_failed", "Account could not be read.")
 		return
 	}
-	if action == domain.ActionRemixStandard {
+	if action == domain.ActionRemixSpokenLines || action == domain.ActionCaptionKeywords {
 		active, activeErr := h.repo.ActiveByProjectAction(r.Context(), pid, action)
 		if activeErr == nil {
-			requestedSource := strings.TrimSpace(in.SourceVersionID)
+			writeJSON(w, http.StatusOK, viewTask(active))
+			return
+		}
+		if !errors.Is(activeErr, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "active_task_read_failed", "Active task could not be read.")
+			return
+		}
+	}
+	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: modelKindForAction(action)})
+	if e != nil {
+		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
+		return
+	}
+	if action == domain.ActionRemixStandard {
+		// Multi-model fan-out: a live remix only blocks a new one when it uses
+		// the same model. Same model + same (or unspecified) source reuses the
+		// live task; a different model starts in parallel.
+		actives, activeErr := h.repo.ActiveListByProjectAction(r.Context(), pid, action)
+		if activeErr != nil {
+			writeError(w, http.StatusInternalServerError, "active_task_read_failed", "Active remix task could not be read.")
+			return
+		}
+		requestedSource := strings.TrimSpace(in.SourceVersionID)
+		for _, active := range actives {
+			if active.ModelName != selection.Model {
+				continue
+			}
 			if requestedSource == "" {
 				writeJSON(w, http.StatusOK, viewTask(active))
 				return
@@ -172,26 +198,17 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, viewTask(active))
 				return
 			}
-			writeError(w, http.StatusConflict, "active_remix_conflict", "A remix task is already active with a different source version; wait for it to finish before starting another remix.")
-			return
-		}
-		if !errors.Is(activeErr, sql.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, "active_task_read_failed", "Active remix task could not be read.")
+			writeError(w, http.StatusConflict, "active_remix_conflict", "A remix task with the same model is already active on a different source version; wait for it to finish before starting another remix.")
 			return
 		}
 	}
 	id := uuid.NewString()
 	p := pid
-	selection, e := resolveTaskModel(r.Context(), h.models, taskmodel.Selection{Model: in.Model, ReasoningEffort: in.ReasoningEffort, Kind: modelKindForAction(action)})
-	if e != nil {
-		writeError(w, 400, "invalid_task_model", "Task model selection is invalid.")
-		return
-	}
 	manifestRequest := in.TaskManifestRequest
 	if remixActionOmitsGrok(action) {
 		style, err := normalizeRemixPromptStyle(manifestRequest.RemixPromptStyle)
 		if err != nil {
-			writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite or wash.")
+			writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite.")
 			return
 		}
 		manifestRequest.RemixPromptStyle = style

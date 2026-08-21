@@ -314,15 +314,15 @@ func TestBuildV2ProducesTypedPlan(t *testing.T) {
 
 	graphics := plan["graphics"].(map[string]any)
 	captions := graphics["captions"].(map[string]any)
-	if captions["mode"] != "off" {
+	if captions["mode"] != "spoken" {
 		t.Fatalf("captions mode = %v", captions["mode"])
 	}
 	items, ok := captions["items"].([]any)
 	if !ok {
 		t.Fatalf("items must be a list, got %#v", captions["items"])
 	}
-	if len(items) != 0 {
-		t.Fatalf("default plan must not paint spoken captions: %#v", items)
+	if len(items) == 0 {
+		t.Fatalf("default plan must paint spoken captions from the SRT")
 	}
 	if _, forbidden := graphics["caption_tracks"]; forbidden {
 		t.Fatal("v2 graphics must not carry the v1 caption_tracks marker")
@@ -995,8 +995,9 @@ func TestIsLandscapeItemAcceptsScenicCityAndFinance(t *testing.T) {
 		{RelativePath: "movies/bank.mp4", Tags: []string{"银行柜台"}},
 	}
 	for _, item := range keep {
-		if !isLandscapeItem(item) {
-			t.Fatalf("should keep %#v", item)
+		want := strings.EqualFold(strings.TrimSpace(item.Category), "nature_landscape")
+		if isLandscapeItem(item) != want {
+			t.Fatalf("Nature_Landscape-only predicate mismatch for %#v", item)
 		}
 	}
 	for _, item := range drop {

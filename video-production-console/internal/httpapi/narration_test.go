@@ -116,16 +116,82 @@ func seedContinuousScript(t *testing.T, service *assets.Service, repository *nar
 	})
 }
 
-func narrationDelivery() narration.Delivery {
-	return narration.Delivery{
-		Audio:       validProjectMP3(),
-		AudioFormat: "mp3",
-		SRT:         "1\n00:00:00,000 --> 00:00:02,000\n第一句\n\n",
-		Captions:    []narration.Caption{{Start: 0, End: 2, Text: "第一句"}},
-		SpokenScript: "第一句",
-		Report:      narration.QCReport{Pass: true, TextCoverage: 1, Warnings: []string{"字幕节奏偏快"}},
-		BilledWords: 3,
-		Duration:    2,
+func seedSpokenScript(t *testing.T, service *assets.Service, repository *narrationTestStore, projectID, text string) {
+	t.Helper()
+	saved, err := service.SaveTextVersion(projectID, domain.AssetSpokenScript, "spoken_script.txt", text)
+	if err != nil {
+		t.Fatalf("seed spoken script: %v", err)
+	}
+	id := projectID
+	repository.assets = append(repository.assets, domain.Asset{
+		ID: uuid.NewString(), ProjectID: &id, Type: domain.AssetSpokenScript,
+		Version: 1, Path: saved.Path, Filename: "spoken_script.txt", MIMEType: saved.MIMEType,
+		Size: saved.Size, SHA256: saved.SHA256, Status: string(domain.AssetReady),
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
+func seedNarrationInputs(t *testing.T, service *assets.Service, repository *narrationTestStore, projectID, continuous, spoken string) {
+	t.Helper()
+	seedContinuousScript(t, service, repository, projectID, continuous)
+	if spoken == "" {
+		spoken = continuous
+	}
+	seedSpokenScript(t, service, repository, projectID, spoken)
+}
+
+func narrationDelivery(provider ...string) narration.Delivery {
+	providerName := "volc"
+	if len(provider) > 0 {
+		providerName = provider[0]
+	}
+	words := []narration.Word{{Text: "hello", StartTime: 0, EndTime: 2, Confidence: 1}}
+	timing, _ := narration.NewWordTimingDocument("hello", providerName, "", words)
+	return narration.Delivery{Audio: validProjectMP3(), AudioFormat: "mp3", SRT: "1\n00:00:00,000 --> 00:00:02,000\nhello\n", Captions: []narration.Caption{{Start: 0, End: 2, Text: "hello"}}, SpokenScript: "hello", Report: narration.QCReport{Pass: true, TextCoverage: 1, Warnings: []string{"subtitle timing advisory"}}, BilledWords: 3, Duration: 2, Script: "hello", Words: words, TimingDocument: timing}
+}
+
+func TestNarrationRejectsInvalidWordTimingBeforeRegisteringAssets(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*narration.Delivery)
+	}{
+		{"invalid interval", func(d *narration.Delivery) { d.Words[0].EndTime = d.Words[0].StartTime }},
+		{"script hash mismatch", func(d *narration.Delivery) { d.TimingDocument.ScriptHash = "sha256:bad" }},
+		{"document script mismatch", func(d *narration.Delivery) { d.TimingDocument.Script = "different" }},
+		{"document words mismatch", func(d *narration.Delivery) { d.TimingDocument.Words[0].Text = "different" }},
+		{"document provider mismatch", func(d *narration.Delivery) { d.TimingDocument.Provider = "other" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			projectID := uuid.NewString()
+			repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
+			handler, service, root := newNarrationTestHandler(t, repository, narrationTestSettings{runtime: configuredNarrationRuntime()}, func(_ context.Context, _ narration.ProduceRequest) (narration.Delivery, error) {
+				d := narrationDelivery("volc")
+				tc.mutate(&d)
+				return d, nil
+			})
+			seedNarrationInputs(t, service, repository, projectID, "hello", "hello")
+			response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadGateway {
+				t.Fatalf("status = %d, body = %s", response.StatusCode, readResponseBody(t, response))
+			}
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Code != "narration_timing_invalid" {
+				t.Fatalf("code = %q", body.Code)
+			}
+			if got := repository.addedTypes(); len(got) != 0 {
+				t.Fatalf("added assets = %v", got)
+			}
+			if _, err := os.Stat(filepath.Join(root, "projects", projectID, "narration")); !os.IsNotExist(err) {
+				t.Fatalf("narration directory exists or stat failed: %v", err)
+			}
+		})
 	}
 }
 
@@ -137,9 +203,9 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 		narrationTestSettings{runtime: configuredNarrationRuntime()},
 		func(_ context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
 			got = request
-			return narrationDelivery(), nil
+			return narrationDelivery(request.Provider), nil
 		})
-	seedContinuousScript(t, service, repository, projectID, "# 标题\n\n第一句。")
+	seedNarrationInputs(t, service, repository, projectID, "# 标题\n\n第一句。", "第一句")
 
 	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 	defer response.Body.Close()
@@ -150,6 +216,7 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 		Narration        assetView `json:"narration"`
 		SubtitleSRT      assetView `json:"subtitle_srt"`
 		SpokenScript     assetView `json:"spoken_script"`
+		WordTiming       assetView `json:"word_timing"`
 		Captions         int       `json:"captions"`
 		DurationSeconds  float64   `json:"duration_seconds"`
 		BilledCharacters int       `json:"billed_characters"`
@@ -159,9 +226,12 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Script != "# 标题\n\n第一句。" || got.SpeakerID != "ConsoleVoiceOne" || got.Provider != "volc" {
-		t.Errorf("produce request = %+v, want the stored script and configured voice", got)
+		t.Errorf("produce request = %+v, want the continuous script as TTS input and configured voice", got)
 	}
-	if view.Narration.Filename != "narration.mp3" || view.SubtitleSRT.Filename != "narration.srt" || view.SpokenScript.Filename != "spoken_script.txt" {
+	if len(got.SpokenLines) != 1 || got.SpokenLines[0] != "第一句" {
+		t.Errorf("spoken lines = %v, want the 口播稿 lines for subtitle cuts", got.SpokenLines)
+	}
+	if view.Narration.Filename != "narration.mp3" || view.SubtitleSRT.Filename != "narration.srt" || view.SpokenScript.Filename != "spoken_script.txt" || view.WordTiming.Filename == "" {
 		t.Errorf("view = %+v, want audio, SRT, and spoken lines named", view)
 	}
 	if view.Captions != 1 || view.DurationSeconds != 2 || view.BilledCharacters != 3 {
@@ -170,19 +240,47 @@ func TestNarrationStoresAudioAndSubtitleFromTheContinuousScript(t *testing.T) {
 	if len(view.Warnings) != 1 {
 		t.Errorf("warnings = %v, want the gate's advisory passed through", view.Warnings)
 	}
-	if types := repository.addedTypes(); len(types) != 3 || types[0] != "narration" || types[1] != "subtitle_srt" || types[2] != "spoken_script" {
-		t.Errorf("registered asset types = %v, want narration, subtitle, then spoken script", types)
+	if types := repository.addedTypes(); len(types) != 3 || types[0] != "narration" || types[1] != "subtitle_srt" || types[2] != "word_timing" {
+		t.Errorf("registered asset types = %v, want narration, subtitle, then word timing", types)
 	}
 	// The stage gate reads assets from the database, so a narration that is not
 	// followed by a stage sync leaves the project stuck at the asset stage.
 	if repository.synced != 1 {
 		t.Errorf("stage syncs = %d, want exactly one after a successful run", repository.synced)
 	}
-	for _, dir := range []string{"narration", "subtitle_srt", "spoken_script"} {
+	for _, dir := range []string{"narration", "subtitle_srt", "spoken_script", "word_timing"} {
 		entries, err := os.ReadDir(filepath.Join(root, "projects", projectID, dir))
 		if err != nil || len(entries) != 1 {
 			t.Errorf("%s entries = %v, err = %v", dir, entries, err)
 		}
+	}
+	// The API exposes the logical filename, while managed assets are persisted
+	// under UUID-backed paths. Read the registered asset path and keep the
+	// response filename assertion above focused on its public contract.
+	var wordTimingPath string
+	for _, asset := range repository.added {
+		if asset.Type == domain.AssetWordTiming {
+			wordTimingPath = asset.Path
+			break
+		}
+	}
+	if wordTimingPath == "" {
+		t.Fatal("word timing asset was not registered")
+	}
+	b, err := os.ReadFile(wordTimingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var timing struct {
+		SchemaVersion int               `json:"schema_version"`
+		Words         []json.RawMessage `json:"words"`
+		ScriptHash    string            `json:"script_hash"`
+	}
+	if err := json.Unmarshal(b, &timing); err != nil {
+		t.Fatalf("word timing JSON: %v", err)
+	}
+	if timing.SchemaVersion == 0 || len(timing.Words) == 0 || timing.ScriptHash == "" {
+		t.Fatalf("invalid word timing envelope: %+v", timing)
 	}
 }
 
@@ -227,6 +325,20 @@ func TestNarrationRequiresAReadyContinuousScript(t *testing.T) {
 	}
 }
 
+func TestNarrationRequiresAReadySpokenScript(t *testing.T) {
+	projectID := uuid.NewString()
+	repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
+	handler, service, _ := newNarrationTestHandler(t, repository,
+		narrationTestSettings{runtime: configuredNarrationRuntime()},
+		func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
+			t.Error("synthesis must not be billed without a spoken script")
+			return narration.Delivery{}, nil
+		})
+	seedContinuousScript(t, service, repository, projectID, "文案")
+	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
+	assertAPIError(t, response, http.StatusConflict, "spoken_script_missing")
+}
+
 func TestNarrationUsesAuraSTDVoiceSettingsWhenConfigured(t *testing.T) {
 	projectID := uuid.NewString()
 	repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
@@ -248,9 +360,9 @@ func TestNarrationUsesAuraSTDVoiceSettingsWhenConfigured(t *testing.T) {
 		}},
 		func(_ context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
 			got = request
-			return narrationDelivery(), nil
+			return narrationDelivery(request.Provider), nil
 		})
-	seedContinuousScript(t, service, repository, projectID, "货还在。")
+	seedNarrationInputs(t, service, repository, projectID, "货还在。", "货还在")
 
 	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 	defer response.Body.Close()
@@ -283,7 +395,7 @@ func TestNarrationReportsMissingVendorConfiguration(t *testing.T) {
 					t.Error("synthesis must not run without credentials")
 					return narration.Delivery{}, nil
 				})
-			seedContinuousScript(t, service, repository, projectID, "文案")
+			seedNarrationInputs(t, service, repository, projectID, "文案", "文案")
 			response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 			assertAPIError(t, response, http.StatusServiceUnavailable, "narration_not_configured")
 		})
@@ -302,7 +414,7 @@ func TestNarrationSurfacesQualityGateFailuresWithoutStoringFiles(t *testing.T) {
 				Failures: []string{"cue 3 lasts 0.20s, below the 0.50s floor"},
 			}}
 		})
-	seedContinuousScript(t, service, repository, projectID, "文案")
+	seedNarrationInputs(t, service, repository, projectID, "文案", "文案")
 
 	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 	defer response.Body.Close()
@@ -333,7 +445,7 @@ func TestNarrationMapsVendorAndProjectFailures(t *testing.T) {
 			func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
 				return narration.Delivery{}, errors.New("code 45000000: speaker permission denied")
 			})
-		seedContinuousScript(t, service, repository, projectID, "文案")
+		seedNarrationInputs(t, service, repository, projectID, "文案", "文案")
 		response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", nil)
 		assertAPIError(t, response, http.StatusBadGateway, "narration_synthesis_failed")
 	})
@@ -378,7 +490,7 @@ func TestNarrationRefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 			<-release
 			return narrationDelivery(), nil
 		})
-	seedContinuousScript(t, service, repository, projectID, "文案")
+	seedNarrationInputs(t, service, repository, projectID, "文案", "文案")
 
 	done := make(chan int, 1)
 	go func() {
@@ -403,7 +515,7 @@ func TestNarrationKeepsTheAudioWhenSubtitleRegistrationFails(t *testing.T) {
 	repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
 	root := t.TempDir()
 	service := assets.NewService(root)
-	seedContinuousScript(t, service, repository, projectID, "文案")
+	seedNarrationInputs(t, service, repository, projectID, "文案", "文案")
 	handler := newNarrationHandler(&narrationSubtitleFailure{store: repository}, service, NarrationHandlerOptions{
 		Runtime: narrationTestSettings{runtime: configuredNarrationRuntime()},
 		Produce: func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {

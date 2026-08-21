@@ -62,8 +62,34 @@ func (h *taskResultsHandler) result(w http.ResponseWriter, r *http.Request) {
 		if publishing, publishingErr := h.publishingPackage(r, task.ID); publishingErr == nil && publishing != nil {
 			view["publishing_package"] = publishing
 		}
+		if script, versionID, scriptErr := h.continuousScript(r, task.ID); scriptErr == nil && script != "" {
+			view["continuous_script"] = script
+			view["continuous_script_version_id"] = versionID
+		}
 	}
 	writeJSON(w, 200, view)
+}
+
+// continuousScript returns the script text this task registered, so operators
+// can compare drafts from parallel multi-model remixes even after a later
+// task's version became current.
+func (h *taskResultsHandler) continuousScript(r *http.Request, taskID string) (string, string, error) {
+	var versionID, path string
+	err := h.repo.DB().QueryRowContext(r.Context(), `SELECT id,path FROM asset_versions
+		WHERE source_task_id=? AND type='continuous_script'
+		ORDER BY created_at DESC,id DESC LIMIT 1`, taskID).Scan(&versionID, &path)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 {
+		return "", "", errors.New("continuous script file unavailable")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(string(data)), versionID, nil
 }
 
 type publishingPackageView = publishing.Package

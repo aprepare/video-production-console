@@ -10,7 +10,7 @@
     "task_id": {"type": "string", "format": "uuid"},
     "job_id": {"type": "string", "format": "uuid"},
     "skill": {"enum": ["finance-topic-selector", "finance-viral-remix", "jianying-montage-draft"]},
-    "action": {"enum": ["topic.brainstorm", "topic.commit", "topic.deepen", "remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.review", "montage.plan", "montage.execute"]},
+    "action": {"enum": ["topic.brainstorm", "topic.commit", "topic.deepen", "remix.standard", "remix.enhanced", "remix.from_topic_card", "remix.spoken_lines", "remix.caption_keywords", "remix.review", "montage.plan", "montage.execute"]},
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -93,7 +93,7 @@
         "machine_profile_path": {"type": "string", "minLength": 1},
         "draft_display_name": {"type": "string", "minLength": 1},
         "revision_notes": {"type": "string"},
-        "remix_prompt_style": {"type": "string", "enum": ["rewrite", "wash"]},
+        "remix_prompt_style": {"type": "string", "enum": ["rewrite"]},
         "remix_base_url": {"type": "string"},
         "remix_model": {"type": "string"},
         "remix_reasoning_effort": {
@@ -107,7 +107,45 @@
         "vision_model": {"type": "string"},
         "embedding_base_url": {"type": "string"},
         "embedding_model": {"type": "string"},
-        "montage_plan_version": {"type": "string", "enum": ["1.0", "2.0"]}
+        "montage_plan_version": {"type": "string", "enum": ["1.0", "2.0"]},
+        "montage_style": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "caption_size": {"type": "number", "minimum": 5, "maximum": 60},
+            "caption_color": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+            "caption_position": {"type": "string", "enum": ["middle", "bottom", "custom"]},
+            "caption_y": {"type": "number", "minimum": -1, "maximum": 1},
+            "caption_font": {"type": "string"},
+            "plain_size": {"type": "number", "minimum": 5, "maximum": 60},
+            "keyword_size": {"type": "number", "minimum": 5, "maximum": 60},
+            "keyword_color": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+            "title_hidden": {"type": "boolean"},
+            "title_size": {"type": "number", "minimum": 5, "maximum": 60},
+            "title_color": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+            "title_y": {"type": "number", "minimum": -1, "maximum": 1},
+            "subtitle_hidden": {"type": "boolean"},
+            "subtitle_size": {"type": "number", "minimum": 5, "maximum": 60},
+            "subtitle_color": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+            "subtitle_y": {"type": "number", "minimum": -1, "maximum": 1},
+            "bgm_id": {"type": "string"},
+            "bgm_volume": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+          }
+        },
+        "montage_bgm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "file_path", "duration_s", "usable_head_s", "climax_start_s", "climax_duration_s", "volume"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "file_path": {"type": "string", "minLength": 1},
+            "duration_s": {"type": "number", "exclusiveMinimum": 0},
+            "usable_head_s": {"type": "number", "exclusiveMinimum": 0},
+            "climax_start_s": {"type": "number", "minimum": 0},
+            "climax_duration_s": {"type": "number", "exclusiveMinimum": 0},
+            "volume": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+          }
+        }
       }
     }
   },
@@ -123,10 +161,14 @@
     {"if": {"properties": {"action": {"const": "montage.execute"}}}, "then": {"properties": {"expected_outputs": {"allOf": [{"contains": {"properties": {"type": {"const": "production_plan"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}, {"contains": {"properties": {"type": {"const": "plaintext_workspace"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}]}}}},
     {"if": {"properties": {"action": {"enum": ["remix.standard", "remix.enhanced"]}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "source_script"}, "role": {"const": "primary_source"}}}}}}},
     {"if": {"properties": {"action": {"const": "remix.from_topic_card"}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "topic_card"}, "role": {"const": "topic_brief"}}}}}}},
-    {"if": {"properties": {"action": {"const": "remix.review"}}}, "then": {"properties": {"inputs": {"items": {"oneOf": [{"properties": {"type": {"const": "source_script"}, "role": {"const": "review_target"}}}, {"properties": {"type": {"const": "continuous_script"}, "role": {"const": "review_target"}}}]}}}}},
-    {"if": {"properties": {"action": {"enum": ["montage.plan", "montage.execute"]}}}, "then": {"properties": {"inputs": {"items": {"oneOf": [{"properties": {"type": {"const": "continuous_script"}, "role": {"const": "continuous_script"}}}, {"properties": {"type": {"const": "narration"}, "role": {"const": "narration"}}}, {"properties": {"type": {"const": "subtitle_srt"}, "role": {"const": "subtitle_srt"}}}, {"properties": {"type": {"const": "account_background"}, "role": {"const": "account_background"}}}]}}}}}
+    {"if": {"properties": {"action": {"const": "remix.review"}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "continuous_script"}, "role": {"const": "review_target"}}}}}}},
+    {"if": {"properties": {"action": {"const": "remix.spoken_lines"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "spoken_script"}, "required": {"const": true}}}, "contains": {"properties": {"type": {"const": "spoken_script"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
+    {"if": {"properties": {"action": {"const": "remix.spoken_lines"}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "continuous_script"}, "role": {"const": "continuous_script"}}}}}}},
+    {"if": {"properties": {"action": {"const": "remix.caption_keywords"}}}, "then": {"properties": {"expected_outputs": {"items": {"properties": {"type": {"const": "caption_keywords"}, "required": {"const": true}}}, "contains": {"properties": {"type": {"const": "caption_keywords"}, "required": {"const": true}}, "required": ["type", "required"]}, "minContains": 1}}}},
+    {"if": {"properties": {"action": {"const": "remix.caption_keywords"}}}, "then": {"properties": {"inputs": {"items": {"properties": {"type": {"const": "spoken_script"}, "role": {"const": "spoken_script"}}}}}}},
+    {"if": {"properties": {"action": {"enum": ["montage.plan", "montage.execute"]}}}, "then": {"properties": {"inputs": {"items": {"oneOf": [{"properties": {"type": {"const": "continuous_script"}, "role": {"const": "continuous_script"}}}, {"properties": {"type": {"const": "narration"}, "role": {"const": "narration"}}}, {"properties": {"type": {"const": "word_timing"}, "role": {"const": "word_timing"}}}, {"properties": {"type": {"const": "subtitle_srt"}, "role": {"const": "subtitle_srt"}}}, {"properties": {"type": {"const": "caption_keywords"}, "role": {"const": "caption_keywords"}}}, {"properties": {"type": {"const": "account_background"}, "role": {"const": "account_background"}}}]}}}}}
   ],
   "$defs": {
-    "assetType": {"enum": ["source_script", "topic_card", "continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft", "final_video"]}
+    "assetType": {"enum": ["source_script", "topic_card", "continuous_script", "spoken_script", "caption_keywords", "narration", "word_timing", "subtitle_srt", "account_background", "mix_draft", "final_video"]}
   }
 }

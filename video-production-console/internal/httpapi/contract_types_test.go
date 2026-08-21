@@ -14,8 +14,7 @@ import (
 )
 
 // Go response structs and the frontend types that read them are both written by
-// hand, with no code generation between them (see docs/OPTIMIZATION-BACKLOG.md
-// P2-5). This test is the cheap half of that plan: it pins the pairs so a
+// hand, with no code generation between them. This test pins the pairs so a
 // rename on either side fails here instead of silently becoming `undefined` in
 // the browser.
 //
@@ -35,17 +34,6 @@ var responseContracts = []struct {
 	{"task event", domain.TaskEvent{}, "tasks/event-types.ts", "TaskEvent"},
 	{"semantic event", domain.SemanticEvent{}, "tasks/event-types.ts", "SemanticEvent"},
 	{"project", projectView{}, "project-workbench/types.ts", "ProjectSummary"},
-	{"media catalog status", CatalogStatus{}, "api/mediaCatalog.ts", "MediaCatalogStatus"},
-	{"media catalog counts", CatalogCounts{}, "api/mediaCatalog.ts", "MediaCatalogCounts"},
-	{"media catalog active job", CatalogActiveJob{}, "api/mediaCatalog.ts", "MediaCatalogActiveJob"},
-	{"media catalog warning", CatalogWarning{}, "api/mediaCatalog.ts", "MediaCatalogWarning"},
-	{"media catalog source", CatalogSource{}, "api/mediaCatalog.ts", "MediaCatalogSource"},
-	{"media catalog sources page", CatalogSourcesPage{}, "api/mediaCatalog.ts", "MediaCatalogSourcesPage"},
-	{"media catalog providers", CatalogProviders{}, "api/mediaCatalog.ts", "MediaCatalogProviders"},
-	{"media catalog provider status", CatalogProviderStatus{}, "api/mediaCatalog.ts", "MediaCatalogProviderStatus"},
-	{"media catalog remote asset", CatalogRemoteAsset{}, "api/mediaCatalog.ts", "MediaCatalogRemoteAsset"},
-	{"media catalog search page", CatalogSearchPage{}, "api/mediaCatalog.ts", "MediaCatalogSearchPage"},
-	{"media catalog import result", CatalogImportResult{}, "api/mediaCatalog.ts", "MediaCatalogImportResult"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

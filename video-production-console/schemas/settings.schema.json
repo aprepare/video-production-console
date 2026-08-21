@@ -86,6 +86,8 @@
           "type": "string",
           "enum": ["", "low", "medium", "high", "xhigh", "max", "ultra"]
         },
+        "remix_check_model": { "type": "string", "maxLength": 256 },
+        "model_options": { "type": "string", "maxLength": 4096 },
         "image_base_url": {
           "type": "string",
           "maxLength": 2048,
@@ -177,7 +179,32 @@
           "default": "https://pixabay.com",
           "pattern": "^(?:$|https://pixabay\\.com(?:/[^#?]*)?)$"
         },
-        "max_external_results_per_query": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
+        "max_external_results_per_query": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 },
+        "bgm_dir": { "type": "string", "maxLength": 1024 },
+        "montage_style": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "caption_size": { "type": "number", "minimum": 5, "maximum": 60 },
+            "caption_color": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+            "caption_position": { "type": "string", "enum": ["middle", "bottom", "custom"] },
+            "caption_y": { "type": "number", "minimum": -1, "maximum": 1 },
+            "caption_font": { "type": "string", "maxLength": 64 },
+            "plain_size": { "type": "number", "minimum": 5, "maximum": 60 },
+            "keyword_size": { "type": "number", "minimum": 5, "maximum": 60 },
+            "keyword_color": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+            "title_hidden": { "type": "boolean" },
+            "title_size": { "type": "number", "minimum": 5, "maximum": 60 },
+            "title_color": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+            "title_y": { "type": "number", "minimum": -1, "maximum": 1 },
+            "subtitle_hidden": { "type": "boolean" },
+            "subtitle_size": { "type": "number", "minimum": 5, "maximum": 60 },
+            "subtitle_color": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+            "subtitle_y": { "type": "number", "minimum": -1, "maximum": 1 },
+            "bgm_id": { "type": "string", "maxLength": 128 },
+            "bgm_volume": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+          }
+        }
       }
     },
     "publicSettingsUpdate": {
@@ -229,6 +256,8 @@
             "remix_base_url",
             "remix_model",
             "remix_reasoning_effort",
+            "remix_check_model",
+            "model_options",
             "image_base_url",
             "image_model",
             "image_text_base_url",
@@ -271,7 +300,9 @@
             "embedding_model",
             "pexels_api_base_url",
             "pixabay_api_base_url",
-            "max_external_results_per_query"
+            "max_external_results_per_query",
+            "bgm_dir",
+            "montage_style"
           ]
         }
       ]

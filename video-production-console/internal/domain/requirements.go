@@ -10,8 +10,14 @@ const (
 	ActionRemixEnhanced   TaskAction = "remix.enhanced"
 	ActionRemixFromTopic  TaskAction = "remix.from_topic_card"
 	// Deprecated: retained so historical task and audit data can be decoded.
-	ActionSpokenFormat   TaskAction = "remix.spoken_format"
-	ActionRemixReview    TaskAction = "remix.review"
+	ActionSpokenFormat TaskAction = "remix.spoken_format"
+	// ActionRemixSpokenLines turns a ready continuous_script into the
+	// one-line 口播稿 used for TTS and subtitle cuts.
+	ActionRemixSpokenLines TaskAction = "remix.spoken_lines"
+	// ActionCaptionKeywords marks warning/number terms per 口播稿 line for
+	// the montage caption emphasis (red/gold spans).
+	ActionCaptionKeywords TaskAction = "remix.caption_keywords"
+	ActionRemixReview     TaskAction = "remix.review"
 	ActionMontagePlan    TaskAction = "montage.plan"
 	ActionMontageExecute TaskAction = "montage.execute"
 )
@@ -40,8 +46,10 @@ type prerequisite struct {
 var actionAssets = map[TaskAction][]AssetType{
 	ActionRemixStandard:  {AssetSourceScript},
 	ActionRemixEnhanced:  {AssetSourceScript},
-	ActionRemixFromTopic: {AssetTopicCard},
-	ActionRemixReview:    {AssetContinuousScript},
+	ActionRemixFromTopic:    {AssetTopicCard},
+	ActionRemixSpokenLines:  {AssetContinuousScript},
+	ActionCaptionKeywords:   {AssetSpokenScript},
+	ActionRemixReview:       {AssetContinuousScript},
 	ActionMontagePlan:    {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
 	ActionMontageExecute: {AssetContinuousScript, AssetNarration, AssetSubtitleSRT, AssetAccountBackground},
 }

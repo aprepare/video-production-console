@@ -118,7 +118,7 @@ export type MontagePlanQC = {
   broll_ratio: number;
   movie_ratio: number;
   image_ratio: number;
-  caption_mode: "off" | "highlights_only";
+  caption_mode: "off" | "highlights_only" | "spoken";
   caption_coverage: number;
   obvious_effect_count: number;
   warnings?: Array<string | { code?: string; message?: string }>;
@@ -138,6 +138,7 @@ export type ProjectDetail = {
 
 export type PrimaryActionID =
   | "start-source-remix"
+  | "start-spoken-lines"
   | "prepare-assets"
   | "start-mixing"
   | "publish";

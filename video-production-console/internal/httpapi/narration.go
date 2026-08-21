@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/narration"
 	consoleSettings "video-production-console/internal/settings"
+	"video-production-console/internal/spokenlines"
 	"video-production-console/internal/store"
 )
 
@@ -70,6 +72,7 @@ type narrationView struct {
 	Narration        assetView `json:"narration"`
 	SubtitleSRT      assetView `json:"subtitle_srt"`
 	SpokenScript     assetView `json:"spoken_script"`
+	WordTiming       assetView `json:"word_timing"`
 	Captions         int       `json:"captions"`
 	DurationSeconds  float64   `json:"duration_seconds"`
 	BilledCharacters int       `json:"billed_characters"`
@@ -100,16 +103,31 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.inFlight.Delete(id)
 
-	script, code, err := h.readContinuousScript(r.Context(), id)
+	scriptText, code, err := h.readContinuousScript(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusConflict, code, err.Error())
 		return
 	}
-	request, code, err := h.produceRequest(r.Context(), script)
+	spokenRaw, spokenAsset, code, err := h.readSpokenScript(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusConflict, code, err.Error())
+		return
+	}
+	formatted, err := spokenlines.Format(spokenRaw)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "spoken_script_invalid", "口播稿无法按一句一行整理，请重做口播稿。")
+		return
+	}
+	// TTS reads the continuous script (natural punctuation, no artificial line
+	// breaks); the 口播稿 lines only cut the subtitles against the word timings.
+	speech := spokenlines.SpeechFromScript(scriptText)
+	lines := spokenlines.Lines(formatted)
+	request, code, err := h.produceRequest(r.Context(), speech)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, code, err.Error())
 		return
 	}
+	request.SpokenLines = lines
 	ctx, cancel := context.WithTimeout(r.Context(), narrationTimeout)
 	defer cancel()
 	delivery, err := h.synthesize(ctx, request)
@@ -122,6 +140,23 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 		}
 		logging.LoggerFrom(r.Context()).Error("synthesize narration", "project_id", id, "error", err)
 		writeError(w, http.StatusBadGateway, "narration_synthesis_failed", "配音合成失败："+err.Error())
+		return
+	}
+	rebuiltTiming, timingErr := narration.NewWordTimingDocument(delivery.Script, request.Provider, delivery.TimingDocument.Hash, delivery.Words)
+	validTiming := timingErr == nil && delivery.TimingDocument.SchemaVersion == rebuiltTiming.SchemaVersion &&
+		delivery.TimingDocument.Script == rebuiltTiming.Script && delivery.TimingDocument.Provider == rebuiltTiming.Provider &&
+		delivery.TimingDocument.Hash == rebuiltTiming.Hash && delivery.TimingDocument.ScriptHash == rebuiltTiming.ScriptHash &&
+		delivery.TimingDocument.Duration == rebuiltTiming.Duration && len(delivery.TimingDocument.Words) == len(rebuiltTiming.Words)
+	if validTiming {
+		for i := range rebuiltTiming.Words {
+			if delivery.TimingDocument.Words[i] != rebuiltTiming.Words[i] {
+				validTiming = false
+				break
+			}
+		}
+	}
+	if !validTiming {
+		writeError(w, http.StatusBadGateway, "narration_timing_invalid", "閰嶉煶鏃犳硶鐢熸垚鏈夋晥鐨勫瓧鏃堕棿鏂囨。")
 		return
 	}
 
@@ -143,15 +178,16 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, code, "字幕文件无法登记："+err.Error())
 		return
 	}
-	spokenText := delivery.SpokenScript
-	if strings.TrimSpace(spokenText) == "" {
-		spokenText = narration.RenderSpokenScript(delivery.Captions)
+	timingBytes, marshalErr := json.Marshal(delivery.TimingDocument)
+	if marshalErr != nil {
+		writeError(w, http.StatusInternalServerError, "asset_save_failed", marshalErr.Error())
+		return
 	}
-	spoken, status, code, err := h.registerAsset(r.Context(), id, domain.AssetSpokenScript, "spoken_script.txt", func() (assets.SavedAsset, error) {
-		return h.assets.SaveTextVersion(id, domain.AssetSpokenScript, "spoken_script.txt", spokenText)
+	timing, status, code, err := h.registerAsset(r.Context(), id, domain.AssetWordTiming, "narration.word_timing.json", func() (assets.SavedAsset, error) {
+		return h.assets.SaveProjectAsset(id, domain.AssetWordTiming, "narration.word_timing.json", bytes.NewReader(timingBytes))
 	})
 	if err != nil {
-		writeError(w, status, code, "配音断句无法登记："+err.Error())
+		writeError(w, status, code, err.Error())
 		return
 	}
 	if syncer, ok := h.repository.(interface {
@@ -163,7 +199,8 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, narrationView{
 		Narration: toAssetView(audio), SubtitleSRT: toAssetView(subtitle),
-		SpokenScript: toAssetView(spoken),
+		SpokenScript: toAssetView(spokenAsset),
+		WordTiming:   toAssetView(timing),
 		Captions:     len(delivery.Captions), DurationSeconds: delivery.Duration,
 		BilledCharacters: delivery.BilledWords, Warnings: delivery.Report.Warnings,
 	})
@@ -176,9 +213,9 @@ func (h *narrationHandler) synthesize(ctx context.Context, request narration.Pro
 	return narration.Delivery{}, errors.New("narration synthesis is not wired")
 }
 
-// readContinuousScript returns the text of the current continuous script. The
-// script is the only input: word timings come back from synthesis, so no
-// separate transcription step can disagree with it.
+// readContinuousScript returns the text of the current continuous script,
+// which is what the TTS engine reads. Word timings come back from synthesis,
+// and the 口播稿 lines are aligned against them for subtitles.
 func (h *narrationHandler) readContinuousScript(ctx context.Context, projectID string) (string, string, error) {
 	all, err := h.repository.ListAssets(ctx, projectID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -204,6 +241,33 @@ func (h *narrationHandler) readContinuousScript(ctx context.Context, projectID s
 		return "", "continuous_script_missing", errors.New("连续文案是空的。")
 	}
 	return string(data), "", nil
+}
+
+func (h *narrationHandler) readSpokenScript(ctx context.Context, projectID string) (string, domain.Asset, string, error) {
+	all, err := h.repository.ListAssets(ctx, projectID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", domain.Asset{}, "project_assets_failed", errors.New("项目素材无法读取。")
+	}
+	asset, ok := latestAssetsByType(all)[string(domain.AssetSpokenScript)]
+	if !ok || asset.Status != string(domain.AssetReady) {
+		return "", domain.Asset{}, "spoken_script_missing", errors.New("请先生成口播稿，再生成配音与字幕。")
+	}
+	file, info, err := h.assets.OpenAsset(asset)
+	if err != nil {
+		return "", domain.Asset{}, "spoken_script_missing", errors.New("口播稿文件缺失，请重新生成口播稿。")
+	}
+	defer file.Close()
+	if info.IsDir() {
+		return "", domain.Asset{}, "spoken_script_missing", errors.New("口播稿文件缺失，请重新生成口播稿。")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxNarrationScriptBytes))
+	if err != nil {
+		return "", domain.Asset{}, "spoken_script_missing", errors.New("口播稿无法读取。")
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return "", domain.Asset{}, "spoken_script_missing", errors.New("口播稿是空的。")
+	}
+	return string(data), asset, "", nil
 }
 
 // produceRequest assembles the vendor call from stored settings. The API key

@@ -69,7 +69,7 @@ test("keeps the global modal and notification layers above the mobile action bar
 });
 
 test("project location parsing accepts UUID detail paths and rejects invalid paths", () => {
-  expect(parseLocation("/")).toEqual({ view: "mode-home" });
+  expect(parseLocation("/")).toEqual({ view: "projects" });
   expect(parseLocation("/projects")).toEqual({ view: "projects" });
   expect(parseLocation(`/projects/${routedProjectID}`)).toEqual({
     view: "project",
@@ -92,25 +92,39 @@ test("an invalid direct path preserves URL", async () => {
 
   const alert = await screen.findByRole("alert");
   expect(within(alert).getByRole("heading", { name: "404", level: 1 })).toBeTruthy();
-  expect(within(alert).getByRole("button", { name: "返回制作方式" })).toBeTruthy();
+  expect(within(alert).getByRole("button", { name: "返回风景混剪" })).toBeTruthy();
   await waitFor(() => expect(window.location.pathname).toBe("/projects/not-a-project"));
 });
 
-test("root chooser navigates to image mode and montage entry navigates to projects", async () => {
+test("root opens the scenic board and the header switches to image mode", async () => {
   window.history.replaceState({}, "", "/");
   vi.stubGlobal("fetch", baseFetch((path) => path === "/api/projects" ? json([]) : path === "/api/image-projects" ? json([]) : undefined));
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "进入图文制作" }));
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
+  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+  expect(window.location.search).toBe("?mode=scenic");
+  fireEvent.click(screen.getByRole("button", { name: "图文制作" }));
   expect(window.location.pathname).toBe("/image-projects");
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
-  fireEvent.click(await screen.findByRole("button", { name: "进入风景混剪" }));
+  fireEvent.click(screen.getByRole("button", { name: "风景混剪" }));
   expect(window.location.pathname).toBe("/projects");
   expect(window.location.search).toBe("?mode=scenic");
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
 });
 
-test("the root chooser does not load workflow-specific data", async () => {
+test("shielded image-video URLs redirect to the scenic board", async () => {
+  window.history.replaceState({}, "", "/image-videos");
+  vi.stubGlobal("fetch", baseFetch((path) => path === "/api/projects" ? json([]) : undefined));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
+  await waitFor(() => expect(window.location.pathname).toBe("/projects"));
+  expect(window.location.search).toBe("?mode=scenic");
+  expect(screen.queryByRole("heading", { name: "口播拆段生图", level: 1 })).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入图文视频" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入电影混剪" })).toBeNull();
+});
+
+test("the scenic home board loads montage accounts and projects", async () => {
   const requests: string[] = [];
   window.history.replaceState({}, "", "/");
   vi.stubGlobal("fetch", baseFetch((path) => {
@@ -120,8 +134,10 @@ test("the root chooser does not load workflow-specific data", async () => {
 
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
-  expect(requests).toEqual(["/api/auth/me"]);
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
+  expect(requests).toContain("/api/auth/me");
+  expect(requests).toContain("/api/accounts");
+  expect(requests).toContain("/api/projects");
 });
 
 test("the image project route does not load montage accounts, projects, or runtime", async () => {
@@ -138,17 +154,19 @@ test("the image project route does not load montage accounts, projects, or runti
   expect(requests).not.toContain("/api/accounts");
   expect(requests).not.toContain("/api/projects");
   expect(requests).not.toContain("/api/runtime");
-  expect(requests).toContain("/api/settings");
-  expect(requests).toContain("/api/image-projects");
+  await waitFor(() => {
+    expect(requests).toContain("/api/settings");
+    expect(requests).toContain("/api/image-projects");
+  });
 });
 
-test("popstate returns to root chooser", async () => {
+test("popstate from image mode returns to the scenic board", async () => {
   window.history.replaceState({}, "", "/image-projects");
   vi.stubGlobal("fetch", baseFetch((path) => path === "/api/image-projects" ? json([]) : path === "/api/projects" ? json([]) : undefined));
   render(<App />);
   await screen.findByRole("heading", { name: "图文项目", level: 1 });
   window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate"));
-  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
 });
 
 test("a direct image project path restores detail and popstate returns to the image list", async () => {
@@ -275,7 +293,7 @@ test("clicking a project pushes a durable project path", async () => {
   expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
 });
 
-test("production pages return to the chooser without a binary mode switch", async () => {
+test("production pages switch between scenic and image from the header", async () => {
   vi.stubGlobal("fetch", baseFetch((path) => {
     if (path === "/api/projects") return json([]);
     if (path === "/api/image-projects") return json([]);
@@ -284,12 +302,11 @@ test("production pages return to the chooser without a binary mode switch", asyn
   render(<App />);
   expect(await screen.findByRole("heading", { name: "视频项目" })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
-  fireEvent.click(await screen.findByRole("button", { name: "进入图文制作" }));
+  fireEvent.click(screen.getByRole("button", { name: "图文制作" }));
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "制作方式" }));
-  expect(await screen.findByRole("heading", { name: "选择制作方式", level: 1 })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "风景混剪" }));
+  expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
 });
 
 test("the standalone Codex conversation entry is not exposed", async () => {
@@ -318,7 +335,7 @@ test("a direct project path restores the same project", async () => {
   expect(screen.getByRole("button", { name: "先粘贴同行原文" })).toBeTruthy();
   expect(screen.getByRole("region", { name: "当前项目资产" })).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Codex 对话摘要" })).toBeNull();
-  for (const phrase of ["给我选题", "深化一下", "生成选题卡", "口播稿", "remix.spoken_format", "待发布"]) {
+  for (const phrase of ["给我选题", "深化一下", "生成选题卡", "remix.spoken_format", "待发布"]) {
     expect(screen.queryByText(phrase, { exact: false })).toBeNull();
   }
 });
@@ -362,57 +379,14 @@ test("the project workbench starts remix.standard from a saved source script", a
   expect(taskBodies[0]).toMatchObject({
     action: "remix.standard",
     source_version_id: "source-1",
-    remix_prompt_style: "rewrite",
   });
+  expect(taskBodies[0]).not.toHaveProperty("remix_prompt_style");
 });
 
-test("the project workbench starts remix.standard with the wash prompt style", async () => {
-  const taskBodies: Record<string, unknown>[] = [];
-  const project = {
-    id: routedProjectID,
-    account_id: "account-1",
-    title: "可恢复的视频项目",
-    stage: "script",
-  };
-  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
-  vi.stubGlobal(
-    "fetch",
-    baseFetch((path, method, init) => {
-      if (path === "/api/projects") return json([project]);
-      if (path === `/api/projects/${routedProjectID}`)
-        return json({
-          project,
-          assets: { source_script: sourceScriptAsset() },
-          missing_assets: [],
-        });
-      if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
-      if (path === "/api/assets/source-1/content") return new Response("同行原文正文", { status: 200 });
-      if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
-        taskBodies.push(JSON.parse(String(init?.body)));
-        return json({ id: "task-remix-1" }, 201);
-      }
-    }),
-  );
-  render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "查看或替换同行原文" }));
-  await waitFor(() =>
-    expect((screen.getByLabelText("同行原文") as HTMLTextAreaElement).value).toBe("同行原文正文"),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "取消" }));
-  fireEvent.click(screen.getByRole("radio", { name: /洗稿/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "开始正式二创" }));
-
-  await waitFor(() => expect(taskBodies).toHaveLength(1));
-  expect(taskBodies[0]).toMatchObject({
-    action: "remix.standard",
-    source_version_id: "source-1",
-    remix_prompt_style: "wash",
-  });
-});
-
-test("imports a finished script and skips remix to reach narration", async () => {
+test("imports a finished script and auto-starts spoken lines", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "成品文案项目", stage: "script" };
   const calls: Array<{ path: string; method?: string }> = [];
+  const taskBodies: Record<string, unknown>[] = [];
   let imported = false;
   window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method, init) => {
@@ -421,7 +395,7 @@ test("imports a finished script and skips remix to reach narration", async () =>
       return json({
         project,
         assets: imported ? { continuous_script: testAsset("continuous_script") } : {},
-        missing_assets: imported ? ["narration", "subtitle_srt"] : ["continuous_script"],
+        missing_assets: imported ? ["spoken_script"] : ["continuous_script"],
       });
     }
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
@@ -433,24 +407,28 @@ test("imports a finished script and skips remix to reach narration", async () =>
     }
     if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
       calls.push({ path, method });
-      return json({ id: "should-not-start" }, 201);
+      taskBodies.push(JSON.parse(String(init?.body)));
+      return json({ id: "spoken-task" }, 201);
     }
   }));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，跳到配音" }));
+  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，接着生成口播稿" }));
   fireEvent.change(await screen.findByLabelText("成品文案"), { target: { value: "八月这一波要发财的人" } });
-  fireEvent.click(screen.getByRole("button", { name: "保存并跳到配音" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存并生成口播稿" }));
 
   await waitFor(() => expect(calls).toEqual([
     { path: `/api/projects/${routedProjectID}/assets/continuous_script`, method: "POST" },
+    { path: `/api/projects/${routedProjectID}/tasks`, method: "POST" },
   ]));
-  expect(await screen.findByText("成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。")).toBeTruthy();
-  expect((await screen.findByRole<HTMLButtonElement>("button", { name: "生成配音与字幕" })).disabled).toBe(false);
+  expect(taskBodies[0]).toMatchObject({ type: "remix", action: "remix.spoken_lines" });
+  expect(await screen.findByText("口播稿任务已启动。完成后字幕会按这些行切。")).toBeTruthy();
+  expect((await screen.findByRole<HTMLButtonElement>("button", { name: /生成配音与字幕/ })).disabled).toBe(true);
 });
 
-test("imports remix JSON through the finished-script dialog and skips remix", async () => {
+test("imports remix JSON through the finished-script dialog and auto-starts spoken lines", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "JSON文案项目", stage: "script" };
   const calls: Array<{ path: string; method?: string }> = [];
+  const taskBodies: Record<string, unknown>[] = [];
   const remixJSON = JSON.stringify({
     continuous_script: "又一批人要发财了。人民币第三次换锚已经开始。",
     titles: ["人民币第三次换锚来了", "下一批先富的人在哪", "旧锚退潮钱去哪", "一百七十万亿在找出口", "第三个锚先不说完", "窗口不会一直开着", "看懂资金方向先上车", "别只盯着工资存款"],
@@ -467,7 +445,7 @@ test("imports remix JSON through the finished-script dialog and skips remix", as
       return json({
         project,
         assets: imported ? { continuous_script: testAsset("continuous_script") } : {},
-        missing_assets: imported ? ["narration", "subtitle_srt"] : ["continuous_script"],
+        missing_assets: imported ? ["spoken_script"] : ["continuous_script"],
         publishing_package: imported ? { short_titles: ["第三次换锚来了"], cta: "上车" } : undefined,
       });
     }
@@ -480,19 +458,22 @@ test("imports remix JSON through the finished-script dialog and skips remix", as
     }
     if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
       calls.push({ path, method });
-      return json({ id: "should-not-start" }, 201);
+      taskBodies.push(JSON.parse(String(init?.body)));
+      return json({ id: "spoken-task" }, 201);
     }
   }));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，跳到配音" }));
+  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，接着生成口播稿" }));
   fireEvent.change(await screen.findByLabelText("成品文案"), { target: { value: remixJSON } });
-  fireEvent.click(screen.getByRole("button", { name: "保存并跳到配音" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存并生成口播稿" }));
 
   await waitFor(() => expect(calls).toEqual([
     { path: `/api/projects/${routedProjectID}/assets/continuous_script`, method: "POST" },
+    { path: `/api/projects/${routedProjectID}/tasks`, method: "POST" },
   ]));
-  expect(await screen.findByText("成品文案和发布标题已导入，已跳到配音步骤。可直接生成配音与字幕。")).toBeTruthy();
-  expect((await screen.findByRole<HTMLButtonElement>("button", { name: "生成配音与字幕" })).disabled).toBe(false);
+  expect(taskBodies[0]).toMatchObject({ type: "remix", action: "remix.spoken_lines" });
+  expect(await screen.findByText("口播稿任务已启动。完成后字幕会按这些行切。")).toBeTruthy();
+  expect((await screen.findByRole<HTMLButtonElement>("button", { name: /生成配音与字幕/ })).disabled).toBe(true);
 });
 
 test("the project workbench starts mixing through the formal montage task API", async () => {
@@ -505,6 +486,8 @@ test("the project workbench starts mixing through the formal montage task API", 
       project,
       assets: {
         continuous_script: testAsset("continuous_script"),
+        spoken_script: testAsset("spoken_script"),
+        caption_keywords: testAsset("caption_keywords"),
         narration: testAsset("narration"),
         subtitle_srt: testAsset("subtitle_srt"),
       },
@@ -526,7 +509,7 @@ test("the project workbench starts mixing through the formal montage task API", 
   expect(JSON.stringify(requests[0].body)).not.toContain("spoken");
 });
 
-test("the project workbench starts movie mixing through the movie montage task API", async () => {
+test("movie and image-video query modes stay on scenic mixing", async () => {
   const project = { id: routedProjectID, account_id: "account-1", title: "电影混剪项目", stage: "mixing" };
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
   window.history.replaceState({}, "", `/projects/${routedProjectID}?mode=movie`);
@@ -536,6 +519,8 @@ test("the project workbench starts movie mixing through the movie montage task A
       project,
       assets: {
         continuous_script: testAsset("continuous_script"),
+        spoken_script: testAsset("spoken_script"),
+        caption_keywords: testAsset("caption_keywords"),
         narration: testAsset("narration"),
         subtitle_srt: testAsset("subtitle_srt"),
       },
@@ -545,45 +530,41 @@ test("the project workbench starts movie mixing through the movie montage task A
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
     if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
       requests.push({ path, body: JSON.parse(String(init?.body)) });
-      return json({ id: "movie-montage-task" }, 202);
+      return json({ id: "montage-task" }, 202);
     }
   }));
   render(<App />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "开始电影混剪" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始风景混剪" }));
 
   await waitFor(() => expect(requests).toHaveLength(1));
-  expect(requests[0].body).toMatchObject({ type: "movie_montage" });
+  expect(requests[0].body).toMatchObject({ type: "montage" });
+  expect(screen.queryByRole("button", { name: "开始电影混剪" })).toBeNull();
+  await waitFor(() => expect(window.location.search).toBe("?mode=scenic"));
 });
 
-test("the project workbench starts image-video mixing through the image_video task API", async () => {
-  const project = { id: routedProjectID, account_id: "account-1", title: "图片视频项目", stage: "mixing" };
-  const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
-  window.history.replaceState({}, "", `/projects/${routedProjectID}?mode=image-video`);
+test("a ready spoken script auto-starts the caption keyword task", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "关键词项目", stage: "assets" };
+  const taskBodies: Array<Record<string, unknown>> = [];
+  window.history.replaceState({}, "", `/projects/${routedProjectID}`);
   vi.stubGlobal("fetch", baseFetch((path, method, init) => {
     if (path === "/api/projects") return json([project]);
     if (path === `/api/projects/${routedProjectID}`) return json({
       project,
-      assets: {
-        continuous_script: testAsset("continuous_script"),
-        narration: testAsset("narration"),
-        subtitle_srt: testAsset("subtitle_srt"),
-      },
+      assets: { continuous_script: testAsset("continuous_script"), spoken_script: testAsset("spoken_script") },
       background_reference: testAsset("account_background"),
-      missing_assets: [],
+      missing_assets: ["narration", "subtitle_srt"],
     });
     if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
     if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
-      requests.push({ path, body: JSON.parse(String(init?.body)) });
-      return json({ id: "image-video-task" }, 202);
+      taskBodies.push(JSON.parse(String(init?.body)));
+      return json({ id: "keywords-task" }, 202);
     }
   }));
   render(<App />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "开始图片视频" }));
-
-  await waitFor(() => expect(requests).toHaveLength(1));
-  expect(requests[0].body).toMatchObject({ type: "image_video" });
+  await waitFor(() => expect(taskBodies).toHaveLength(1));
+  expect(taskBodies[0]).toMatchObject({ type: "remix", action: "remix.caption_keywords" });
 });
 
 test("the assets stage generates narration and subtitles through the project narration endpoint", async () => {
@@ -594,7 +575,7 @@ test("the assets stage generates narration and subtitles through the project nar
     if (path === "/api/projects") return json([project]);
     if (path === `/api/projects/${routedProjectID}`) return json({
       project,
-      assets: { continuous_script: testAsset("continuous_script") },
+      assets: { continuous_script: testAsset("continuous_script"), spoken_script: testAsset("spoken_script") },
       background_reference: testAsset("account_background"),
       missing_assets: ["narration", "subtitle_srt"],
     });
@@ -850,6 +831,8 @@ test("contains no legacy project drawer or bypass production controls in App sou
     expect(source).not.toContain("●");
     for (const mojibake of ["锟", "�", "Ã", "鈥"]) expect(source).not.toContain(mojibake);
   }
+  expect(appSource).not.toContain("ModeHome");
+  expect(appSource).not.toContain("ImageVideoStudio");
   expect(appSource).not.toContain("{selected && (\n        <div\n          className=\"drawer-backdrop\"");
   expect(taskDialogSource).toContain('<details className="registered-directory-technical">');
   expect(taskDialogSource).toContain('<summary>路径与文件清单</summary>');
@@ -869,7 +852,7 @@ test.each([
       detailReads += 1;
       return json({
         project,
-        assets: { continuous_script: testAsset("continuous_script") },
+        assets: { continuous_script: testAsset("continuous_script"), spoken_script: testAsset("spoken_script") },
         background_reference: testAsset("account_background"),
         missing_assets: [type],
       });
@@ -905,7 +888,7 @@ test("replaces the selected project's account background through the existing ac
       detailReads += 1;
       return json({
         project,
-        assets: { continuous_script: testAsset("continuous_script") },
+        assets: { continuous_script: testAsset("continuous_script"), spoken_script: testAsset("spoken_script") },
         background_reference: { ...testAsset("account_background"), mime_type: "image/png" },
         missing_assets: [],
       });
@@ -961,7 +944,6 @@ test("saves a source script before starting remix.standard with its version id",
     type: "remix",
     action: "remix.standard",
     source_version_id: "source-version-1",
-    remix_prompt_style: "rewrite",
   });
   await waitFor(() => expect(detailReads).toBeGreaterThan(1));
 });
@@ -1386,8 +1368,6 @@ test("settings show model defaults and use the PUT response as the saved draft",
   const effort = screen.getByRole("combobox", { name: "默认推理强度" });
   expect((model as HTMLSelectElement).value).toBe("gpt-default");
   expect((effort as HTMLSelectElement).value).toBe("high");
-  expect(screen.getByText("密钥留空表示不改。")).toBeTruthy();
-
   fireEvent.change(model, { target: { value: "grok-4.6" } });
   fireEvent.change(effort, { target: { value: "max" } });
   fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
@@ -1631,8 +1611,8 @@ test("a timing summary with no phases preserves the legacy empty-phase meaning",
   expect(screen.queryByText("未命名阶段")).toBeNull();
 });
 
-test("an existing continuous script advances to asset preparation without a second remix control", async () => {
-  const taskRequests: string[] = [];
+test("an existing continuous script starts spoken lines instead of jumping to assets", async () => {
+  const taskBodies: Record<string, unknown>[] = [];
   const project = {
     id: routedProjectID,
     account_id: "account-1",
@@ -1642,7 +1622,7 @@ test("an existing continuous script advances to asset preparation without a seco
   vi.stubGlobal("confirm", vi.fn(() => false));
   vi.stubGlobal(
     "fetch",
-    baseFetch((path, method) => {
+    baseFetch((path, method, init) => {
       if (path === "/api/projects") return json([project]);
       if (path === `/api/projects/${routedProjectID}`)
         return json({
@@ -1657,22 +1637,24 @@ test("an existing continuous script advances to asset preparation without a seco
               state: "ready",
             },
           },
-          missing_assets: [],
+          missing_assets: ["spoken_script"],
         });
       if (path === `/api/tasks?project_id=${routedProjectID}`) return json([]);
       if (path === `/api/projects/${routedProjectID}/tasks` && method === "POST") {
-        taskRequests.push(path);
-        return json({ id: "task-new" }, 201);
+        taskBodies.push(JSON.parse(String(init?.body)));
+        return json({ id: "task-spoken" }, 201);
       }
     }),
   );
 
   render(<App />);
   fireEvent.click(await screen.findByText("养老金选题"));
-  expect(await screen.findByRole("button", { name: "补齐制作素材" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "生成口播稿" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "开始二创文案" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "补齐制作素材" })).toBeNull();
   expect(confirm).not.toHaveBeenCalled();
-  expect(taskRequests).toHaveLength(0);
+  await waitFor(() => expect(taskBodies).toHaveLength(1));
+  expect(taskBodies[0]).toMatchObject({ type: "remix", action: "remix.spoken_lines" });
 });
 
 test("the home board no longer exposes topic planning", async () => {

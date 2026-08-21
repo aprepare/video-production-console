@@ -13,8 +13,23 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"video-production-console/internal/domain"
+	"video-production-console/internal/narration"
 	"video-production-console/internal/publishing"
+	"video-production-console/internal/spokenlines"
 )
+
+// manifestBGM mirrors codex.ManifestBGM: an analyzed local music file that
+// replaces the built-in verified BGM.
+type manifestBGM struct {
+	Name            string  `json:"name"`
+	FilePath        string  `json:"file_path"`
+	DurationS       float64 `json:"duration_s"`
+	UsableHeadS     float64 `json:"usable_head_s"`
+	ClimaxStartS    float64 `json:"climax_start_s"`
+	ClimaxDurationS float64 `json:"climax_duration_s"`
+	Volume          float64 `json:"volume"`
+}
 
 const (
 	sfxMinGapSeconds   = 12.0
@@ -66,15 +81,17 @@ type manifestFile struct {
 		Path string `json:"path"`
 	} `json:"inputs"`
 	NonSecretSettings struct {
-		MediaIndexPath     string `json:"media_index_path"`
-		MediaRoot          string `json:"media_root"`
-		MachineProfilePath string `json:"machine_profile_path"`
-		DraftDisplayName   string `json:"draft_display_name"`
-		BoardTitle         string `json:"board_title"`
-		BoardSubtitle      string `json:"board_subtitle"`
-		MediaCatalogPath   string `json:"media_catalog_path"`
-		FFprobePath        string `json:"ffprobe_path"`
-		DataRoot           string `json:"data_root"`
+		MediaIndexPath     string               `json:"media_index_path"`
+		MediaRoot          string               `json:"media_root"`
+		MachineProfilePath string               `json:"machine_profile_path"`
+		DraftDisplayName   string               `json:"draft_display_name"`
+		BoardTitle         string               `json:"board_title"`
+		BoardSubtitle      string               `json:"board_subtitle"`
+		MediaCatalogPath   string               `json:"media_catalog_path"`
+		FFprobePath        string               `json:"ffprobe_path"`
+		DataRoot           string               `json:"data_root"`
+		MontageStyle       *domain.MontageStyle `json:"montage_style"`
+		MontageBGM         *manifestBGM         `json:"montage_bgm"`
 	} `json:"non_secret_settings"`
 	Project *struct {
 		ID        string `json:"id"`
@@ -85,16 +102,20 @@ type manifestFile struct {
 // planContext carries everything both plan builders derive from Options and
 // the task manifest before they diverge into v1 or v2 output.
 type planContext struct {
-	manifest   manifestFile
-	narration  string
-	background string
-	scriptPath string
-	srtPath    string
-	duration   float64
-	mediaRoot  string
-	mediaIndex string
-	resources  montageResources
-	limit      int
+	manifest     manifestFile
+	narration    string
+	background   string
+	scriptPath   string
+	srtPath      string
+	duration     float64
+	mediaRoot    string
+	mediaIndex   string
+	resources    montageResources
+	limit        int
+	timingPath   string
+	timing       *narration.WordTimingDocument
+	keywords     *spokenlines.KeywordDoc
+	keywordsNote string
 }
 
 // loadPlanContext validates the options, decodes the manifest, measures the
@@ -145,8 +166,8 @@ func loadPlanContext(opts Options) (*planContext, error) {
 			roles[role] = input.Path
 		}
 	}
-	narration := roles["narration"]
-	if narration == "" {
+	narrationPath := roles["narration"]
+	if narrationPath == "" {
 		return nil, fmt.Errorf("manifest missing narration input")
 	}
 	background := roles["account_background"]
@@ -154,12 +175,21 @@ func loadPlanContext(opts Options) (*planContext, error) {
 		return nil, fmt.Errorf("manifest missing account_background input")
 	}
 
-	duration, err := durationFn(narration)
+	duration, err := durationFn(narrationPath)
 	if err != nil {
 		return nil, fmt.Errorf("measure narration duration: %w", err)
 	}
 	if duration <= 0.5 {
 		return nil, fmt.Errorf("narration duration must be positive")
+	}
+	timingPath := roles["word_timing"]
+	var timing *narration.WordTimingDocument
+	if timingPath != "" {
+		doc, err := decodeWordTiming(timingPath)
+		if err != nil {
+			return nil, err
+		}
+		timing = &doc
 	}
 
 	profilePath := strings.TrimSpace(manifest.NonSecretSettings.MachineProfilePath)
@@ -184,9 +214,9 @@ func loadPlanContext(opts Options) (*planContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &planContext{
+	ctx := &planContext{
 		manifest:   manifest,
-		narration:  narration,
+		narration:  narrationPath,
 		background: background,
 		scriptPath: roles["continuous_script"],
 		srtPath:    roles["subtitle_srt"],
@@ -195,7 +225,50 @@ func loadPlanContext(opts Options) (*planContext, error) {
 		mediaIndex: mediaIndex,
 		resources:  resources,
 		limit:      limit,
-	}, nil
+		timingPath: timingPath,
+		timing:     timing,
+	}
+	// Keyword annotations are optional and never block a montage: a missing
+	// or malformed file just falls back to the local keyword list.
+	if keywordsPath := roles["caption_keywords"]; keywordsPath != "" {
+		if raw, readErr := os.ReadFile(keywordsPath); readErr != nil {
+			ctx.keywordsNote = "caption_keywords_unreadable: " + readErr.Error()
+		} else if doc, parseErr := spokenlines.ParseKeywordDoc(stripBOM(raw)); parseErr != nil {
+			ctx.keywordsNote = "caption_keywords_invalid: " + parseErr.Error()
+		} else {
+			ctx.keywords = &doc
+		}
+	}
+	return ctx, nil
+}
+
+func decodeWordTiming(path string) (narration.WordTimingDocument, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return narration.WordTimingDocument{}, fmt.Errorf("read word timing: %w", err)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(stripBOM(raw))))
+	dec.DisallowUnknownFields()
+	var in narration.WordTimingDocument
+	if err := dec.Decode(&in); err != nil {
+		return narration.WordTimingDocument{}, fmt.Errorf("decode word timing: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return narration.WordTimingDocument{}, fmt.Errorf("word timing must contain one JSON value")
+	}
+	if in.SchemaVersion != 1 {
+		return narration.WordTimingDocument{}, fmt.Errorf("unsupported word timing schema_version")
+	}
+	doc, err := narration.NewWordTimingDocument(in.Script, in.Provider, in.Hash, in.Words)
+	if err != nil {
+		return narration.WordTimingDocument{}, err
+	}
+	if strings.TrimSpace(in.ScriptHash) == "" || in.ScriptHash != doc.ScriptHash {
+		return narration.WordTimingDocument{}, fmt.Errorf("word timing script_hash mismatch")
+	}
+	doc.Hash, doc.Provider = in.Hash, in.Provider
+	return doc, nil
 }
 
 // Build writes an approved production_plan.json for console montage.execute.
@@ -274,8 +347,8 @@ func Build(opts Options) error {
 			"sfx":       buildSFXPlacements(duration, resources.SFX),
 		},
 		"graphics": map[string]any{
-			"title":          map[string]any{"text": title, "chars_min": 6, "chars_max": 8, "size_min": 16, "y": 0.6, "full_duration": true},
-			"subtitle":       map[string]any{"text": subtitle, "chars_min": 6, "chars_max": 8, "size_min": 9.2, "y": 0.49, "full_duration": true},
+			"title":          map[string]any{"text": title, "chars_min": boardTitleMinRunes, "chars_max": boardTitleMaxRunes, "size_min": 16, "y": 0.6, "full_duration": true},
+			"subtitle":       map[string]any{"text": subtitle, "chars_min": boardTitleMinRunes, "chars_max": boardTitleMaxRunes, "size_min": 9.2, "y": 0.49, "full_duration": true},
 			"boundary_lines": map[string]any{"asset_width_px": 1080, "asset_height_px": 6, "top_y": 0.38, "bottom_y": -0.38, "full_duration": true},
 			"caption_tracks": "forbidden",
 		},
@@ -398,6 +471,239 @@ func buildSFXPlacements(duration float64, library []verifiedSFX) []map[string]an
 		})
 	}
 	return out
+}
+
+func timingHighlightCaptions(doc *narration.WordTimingDocument, durations ...float64) []CaptionItem {
+	if doc == nil {
+		return []CaptionItem{}
+	}
+	duration := doc.Duration
+	if len(durations) > 0 && durations[0] > 0 {
+		duration = durations[0]
+	}
+	keys := []string{"但是", "然而", "不过", "所以", "因此", "结论", "总结", "关键", "最后"}
+	var out []CaptionItem
+	for i := 0; i < len(doc.Words); i++ {
+		text := doc.Words[i].Text
+		j := i
+		for j+1 < len(doc.Words) && j-i < 4 {
+			text += doc.Words[j+1].Text
+			j++
+		}
+		hit := false
+		for _, k := range keys {
+			if strings.Contains(text, k) {
+				hit = true
+			}
+		}
+		if !hit && !strings.Contains(text, "%") {
+			continue
+		}
+		j = i
+		for j+1 < len(doc.Words) && j-i < 4 {
+			n := doc.Words[j+1].Text
+			if strings.Contains(n, "但是") || strings.Contains(n, "然而") || strings.Contains(n, "不过") || strings.Contains(n, "所以") || strings.Contains(n, "因此") || strings.Contains(n, "结论") || strings.Contains(n, "总结") || strings.Contains(n, "关键") || strings.Contains(n, "最后") || strings.Contains(n, "%") || len([]rune(n)) <= 2 {
+				j++
+			} else {
+				break
+			}
+		}
+		start := doc.Words[i].StartTime
+		end := doc.Words[j].EndTime
+		if end-start < 2 {
+			end = start + 2
+		}
+		if end-start > 4 {
+			end = start + 4
+		}
+		if end > duration {
+			end = duration
+		}
+		if end <= start {
+			continue
+		}
+		if len(out) > 0 && start < out[len(out)-1].EndS {
+			continue
+		}
+		txt := ""
+		for k := i; k <= j; k++ {
+			txt += doc.Words[k].Text
+		}
+		kind := CaptionConclusion
+		if strings.Contains(txt, "%") || strings.ContainsAny(txt, "0123456789") {
+			kind = CaptionNumber
+		} else if strings.Contains(txt, "但是") || strings.Contains(txt, "然而") || strings.Contains(txt, "不过") {
+			kind = CaptionTurningPoint
+		}
+		if len(out) > 0 {
+			covered := 0.0
+			for _, x := range out {
+				covered += x.EndS - x.StartS
+			}
+			if covered+end-start > duration*0.25 {
+				break
+			}
+		}
+		out = append(out, CaptionItem{Text: txt, StartS: start, EndS: end, Kind: kind, Style: "highlight_v1", Intro: "none"})
+	}
+	return out
+}
+
+// sfxBudget scales the cue count with runtime — about one hit per 45 seconds,
+// capped at the plan validator's 12 — so a six-minute script keeps landing
+// hits at its turning points all the way through instead of spending the whole
+// allowance inside the number-dense opening minute.
+func sfxBudget(duration float64) int {
+	budget := int(duration/45) + 1
+	if budget < 1 {
+		budget = 1
+	}
+	if duration >= sfxLongFormSeconds && budget < 3 {
+		budget = 3
+	}
+	if budget > 12 {
+		budget = 12
+	}
+	return budget
+}
+
+func buildSemanticSFXPlacements(duration float64, library []verifiedSFX, doc *narration.WordTimingDocument) []map[string]any {
+	if doc == nil {
+		return buildSFXPlacements(duration, library)
+	}
+	base := buildSFXPlacements(duration, library)
+	if len(library) == 0 {
+		return base
+	}
+	type sfxCue struct {
+		start float64
+		kind  string
+		turn  bool
+	}
+	var candidates []sfxCue
+	for i := range doc.Words {
+		// The window starts at the current word (including i == 0) and may
+		// consume at most three following words when adjacent in time.
+		semantic := doc.Words[i].Text
+		for k := i + 1; k < len(doc.Words) && k <= i+3; k++ {
+			if doc.Words[k].StartTime-doc.Words[k-1].EndTime > 1 {
+				break
+			}
+			semantic += doc.Words[k].Text
+		}
+		kind := semanticSFXKind(semantic, doc.Words[i].Text)
+		if kind == "" {
+			continue
+		}
+		start := roundSFXStart(doc.Words[i].StartTime)
+		if start < sfxMinGapSeconds || start >= duration {
+			continue
+		}
+		candidates = append(candidates, sfxCue{start: start, kind: kind, turn: kind != "sfx_water_drop"})
+	}
+	budget := sfxBudget(duration)
+	selected := []sfxCue{{start: 0, kind: "sfx_opening_hit", turn: true}}
+	fits := func(start float64) bool {
+		for _, s := range selected {
+			delta := start - s.start
+			if delta < 0 {
+				delta = -delta
+			}
+			if delta < sfxMinGapSeconds {
+				return false
+			}
+		}
+		return true
+	}
+	// One cue per time bucket: slicing the runtime into budget-sized windows
+	// forces the hits to follow the script all the way to the end instead of
+	// spending every slot inside the number-dense opening minute. Inside a
+	// bucket the first turning point beats any number cue.
+	if budget > 1 && len(candidates) > 0 {
+		bucketLen := duration / float64(budget)
+		for b := 0; b < budget && len(selected) < budget; b++ {
+			lo := float64(b) * bucketLen
+			hi := lo + bucketLen
+			var pick *sfxCue
+			for idx := range candidates {
+				c := &candidates[idx]
+				if c.start < lo || c.start >= hi || !fits(c.start) {
+					continue
+				}
+				if pick == nil || (c.turn && !pick.turn) {
+					pick = c
+				}
+				if pick.turn {
+					break
+				}
+			}
+			if pick != nil {
+				selected = append(selected, *pick)
+			}
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].start < selected[j].start })
+	if duration >= sfxLongFormSeconds {
+		for len(selected) < 3 {
+			n := selected[len(selected)-1].start + sfxMinGapSeconds
+			if n >= duration {
+				break
+			}
+			selected = append(selected, sfxCue{start: n, kind: "sfx_whoosh", turn: true})
+		}
+		if len(selected) < 3 {
+			return base
+		}
+	}
+	byKey := make(map[string]verifiedSFX, len(library))
+	for _, item := range library {
+		byKey[item.CacheKey] = item
+	}
+	out := make([]map[string]any, 0, len(selected))
+	for _, c := range selected {
+		x, ok := byKey[c.kind]
+		if !ok {
+			// Never substitute a different semantic type when a resource is
+			// absent; the cue is omitted and long-form fallback below can apply.
+			continue
+		}
+		out = append(out, map[string]any{"name": x.Name, "effect_id": x.EffectID, "resource_id": x.ResourceID, "cache_key": x.CacheKey, "start_s": c.start, "db": -8})
+	}
+	if duration >= sfxLongFormSeconds && len(out) < 3 {
+		return base
+	}
+	return out
+}
+
+func semanticSFXKind(window, token string) string {
+	// Turns and conclusions outrank numbers: a clause like 但是到2026年 is a
+	// narrative beat first and a statistic second, and 爆款口播稿 packs digits
+	// into nearly every sentence, so number-first classification drowns the
+	// real beats.
+	for _, k := range []string{"记住", "说白了", "最惨", "\u7ed3\u8bba", "\u603b\u7ed3", "\u5173\u952e", "\u6700\u540e", "缁撹", "鎬荤粨", "鍏抽敭", "鏈€鍚?"} {
+		if strings.Contains(window, k) {
+			return "sfx_conclusion_hit"
+		}
+	}
+	// 爆款口播稿 rarely writes 但是/然而 in full — its turns are colloquial
+	// (但、结果、你以为、真相), so those count too.
+	for _, k := range []string{"\u4f46", "\u7136\u800c", "\u4e0d\u8fc7", "\u6240\u4ee5", "\u56e0\u6b64", "结果", "你以为", "真相", "反过来", "也就是说", "换句话说", "问题来了", "注意", "别急", "浣嗘槸", "鐒惰€?)", "涓嶈繃", "鎵€浠?)", "鍥犳"} {
+		if strings.Contains(window, k) {
+			return "sfx_whoosh"
+		}
+	}
+	// A few timing providers split the mojibake form of 然而 into these
+	// single-rune tokens; require the pair in the same adjacent window.
+	if strings.ContainsRune(window, '\u5a34') && strings.ContainsRune(window, '\u95ba') {
+		return "sfx_whoosh"
+	}
+	if strings.ContainsRune(window, '\u6d63') && strings.ContainsRune(window, '\u93c4') {
+		return "sfx_whoosh"
+	}
+	if strings.ContainsAny(window, "0123456789%") {
+		return "sfx_water_drop"
+	}
+	return ""
 }
 
 func roundSFXStart(value float64) float64 {
@@ -722,9 +1028,13 @@ func onScreenTitleSource(draftDisplayName string) string {
 	if name == "" {
 		return "时代观察"
 	}
-	// Format from montage.BuildDraftDisplayName: account_label_taskSuffix
-	if i := strings.LastIndex(name, "_"); i > 0 && len(name)-i-1 == 6 && isHexSuffix(name[i+1:]) {
-		name = name[:i]
+	// Format from montage.BuildDraftDisplayName: account_label_MMDD-HHMM
+	// (older drafts carried a 6-hex task suffix instead).
+	if i := strings.LastIndex(name, "_"); i > 0 {
+		suffix := name[i+1:]
+		if (len(suffix) == 6 && isHexSuffix(suffix)) || isClockSuffix(suffix) {
+			name = name[:i]
+		}
 	}
 	if i := strings.Index(name, "_"); i > 0 && i+1 < len(name) {
 		name = name[i+1:]
@@ -742,6 +1052,22 @@ func isHexSuffix(value string) bool {
 	}
 	for _, r := range value {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// isClockSuffix matches the MMDD-HHMM datetime suffix on draft display names.
+func isClockSuffix(value string) bool {
+	if len(value) != 9 || value[4] != '-' {
+		return false
+	}
+	for i, r := range value {
+		if i == 4 {
+			continue
+		}
+		if r < '0' || r > '9' {
 			return false
 		}
 	}
@@ -767,7 +1093,7 @@ func boardTitles(ctx *planContext, aiTitle, aiSubtitle string) (string, string) 
 	return FitBoardTitlePair(onScreenTitleSource(ctx.manifest.NonSecretSettings.DraftDisplayName), subtitleSrc)
 }
 
-// FitBoardTitlePair clamps on-screen board copy to 6–8 characters.
+// FitBoardTitlePair keeps non-empty on-screen board copy up to 15 characters.
 func FitBoardTitlePair(titleSrc, subtitleSrc string) (string, string) {
 	return titlePair(titleSrc, subtitleSrc)
 }
@@ -797,9 +1123,9 @@ func titlePair(titleSrc, subtitleSrc string) (string, string) {
 	return title, subtitle
 }
 
-// fitBoardTitle keeps publishing copy intact up to the board limit. Copy shorter
-// than the minimum is not padded, and copy inside the limit is never truncated:
-// the board shrinks its font instead (see boardTextSize).
+// fitBoardTitle keeps publishing copy intact up to the board limit. Empty copy
+// uses the fallback, and copy inside the limit is never truncated: the board
+// shrinks its font instead (see boardTextSize).
 func fitBoardTitle(src, fallback string) string {
 	runes := []rune(strings.TrimSpace(src))
 	if len(runes) < boardTitleMinRunes {

@@ -32,12 +32,16 @@ function taskLabel(task: ProjectTask) {
 
 type ProjectTaskSummaryProps = {
   task?: ProjectTask;
+  remixTasks?: ProjectTask[];
   onOpenTask: (task: ProjectTask) => void;
 };
 
-export function ProjectTaskSummary({ task, onOpenTask }: ProjectTaskSummaryProps) {
+export function ProjectTaskSummary({ task, remixTasks = [], onOpenTask }: ProjectTaskSummaryProps) {
   const assistantMessages = task?.messages?.filter((message) => message.role === "assistant") || [];
   const latestAssistant = assistantMessages[assistantMessages.length - 1];
+  // Only worth a list when several models produced (or are producing) drafts
+  // for comparison; the single-task case is already the card above.
+  const showRemixList = remixTasks.length > 1;
 
   return (
     <section className="project-task-summary" aria-label="当前任务摘要">
@@ -51,7 +55,6 @@ export function ProjectTaskSummary({ task, onOpenTask }: ProjectTaskSummaryProps
             <div>
               <span>CURRENT TASK</span>
               <h2>当前任务</h2>
-              <p>查看状态、回复问题或打开执行记录</p>
             </div>
           </div>
 
@@ -80,6 +83,25 @@ export function ProjectTaskSummary({ task, onOpenTask }: ProjectTaskSummaryProps
                   <p>{latestAssistant.content}</p>
                 </div>
               ) : null}
+              {showRemixList ? (
+                <div className="remix-task-list" aria-label="文案任务对比">
+                  <span className="remix-task-list__title">各模型文案（点开任务可看全文）</span>
+                  {remixTasks.map((remixTask) => (
+                    <button
+                      type="button"
+                      key={remixTask.id}
+                      className="remix-task-list__item"
+                      onClick={() => onOpenTask(remixTask)}
+                    >
+                      <strong>{taskModelLabel(remixTask) || "默认模型"}</strong>
+                      <span className={`task-summary-status task-summary-status--${statusTone(remixTask.status)}`}>
+                        <span aria-hidden="true" />
+                        {statusLabels[remixTask.status] || remixTask.status}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <details className="technical-history">
                 <summary>
                   <ChevronDown size={15} aria-hidden="true" />
@@ -96,7 +118,6 @@ export function ProjectTaskSummary({ task, onOpenTask }: ProjectTaskSummaryProps
             <div className="task-summary-empty">
               <span className="task-summary-empty__icon" aria-hidden="true"><MessageSquare size={22} /></span>
               <strong>还没有任务记录</strong>
-              <p>执行左侧主动作后，任务进度和需要确认的问题会集中显示在这里。</p>
             </div>
           )}
         </div>

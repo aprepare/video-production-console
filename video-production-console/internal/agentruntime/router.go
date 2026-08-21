@@ -150,7 +150,8 @@ func Select(action domain.TaskAction, preferred RuntimeName) RuntimeName {
 func isLLMAction(action domain.TaskAction) bool {
 	switch action {
 	case domain.ActionTopicBrainstorm, domain.ActionTopicCommit, domain.ActionTopicDeepen,
-		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
+		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic,
+		domain.ActionRemixSpokenLines, domain.ActionCaptionKeywords, domain.ActionRemixReview:
 		return true
 	default:
 		return false

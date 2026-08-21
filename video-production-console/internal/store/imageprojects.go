@@ -14,6 +14,7 @@ import (
 
 var ErrImageProjectNotFound = errors.New("image project not found")
 var ErrImageProjectItemNotFound = errors.New("image project item not found")
+var ErrImageProjectOutputModeLocked = errors.New("image project output mode locked")
 
 type ImageProjectRepository struct{ db *sql.DB }
 
@@ -21,9 +22,12 @@ func NewImageProjectRepository(db *sql.DB) *ImageProjectRepository {
 	return &ImageProjectRepository{db: db}
 }
 
-const imageProjectSelectCols = `id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model`
+const imageProjectSelectCols = `id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model,output_mode,output_mode_locked_at,account_id,template_version,template_fingerprint`
 
 func normalizeImageProject(project domain.ImageProject) domain.ImageProject {
+	if project.OutputMode == "" {
+		project.OutputMode = domain.ImageProjectOutputModeImageSlideshow
+	}
 	if project.RunMode == "" {
 		project.RunMode = "manual"
 	}
@@ -41,11 +45,14 @@ func normalizeImageProject(project domain.ImageProject) domain.ImageProject {
 
 func scanImageProject(scanner interface{ Scan(dest ...any) error }, project *domain.ImageProject) error {
 	var selected sql.NullInt64
+	var outputMode, accountID, templateVersion, templateFingerprint sql.NullString
+	var outputModeLockedAt sql.NullTime
 	if err := scanner.Scan(
 		&project.ID, &project.Title, &project.Script, &project.ImageCount, &project.Ratio, &project.Style, &project.CustomStyle,
 		&project.Concurrency, &project.Status, &project.CreatedAt, &project.UpdatedAt, &selected,
 		&project.RunMode, &project.RunPhase, &project.RunStatus, &project.PhaseError, &project.PublishingError,
 		&project.SuccessCount, &project.FailureCount, &project.ImageAttempts, &project.TextModel, &project.ReasoningEffort, &project.ImageModel,
+		&outputMode, &outputModeLockedAt, &accountID, &templateVersion, &templateFingerprint,
 	); err != nil {
 		return err
 	}
@@ -53,6 +60,24 @@ func scanImageProject(scanner interface{ Scan(dest ...any) error }, project *dom
 		value := int(selected.Int64)
 		project.SelectedPosition = &value
 	}
+	if outputMode.Valid {
+		project.OutputMode = domain.ImageProjectOutputMode(outputMode.String)
+	}
+	if outputModeLockedAt.Valid {
+		value := outputModeLockedAt.Time
+		project.OutputModeLockedAt = &value
+	}
+	if accountID.Valid {
+		value := accountID.String
+		project.AccountID = &value
+	}
+	if templateVersion.Valid {
+		project.TemplateVersion = templateVersion.String
+	}
+	if templateFingerprint.Valid {
+		project.TemplateFingerprint = templateFingerprint.String
+	}
+	*project = normalizeImageProject(*project)
 	return nil
 }
 
@@ -118,7 +143,7 @@ func (r *ImageProjectRepository) Create(ctx context.Context, project domain.Imag
 			_ = tx.Rollback()
 		}
 	}()
-	_, err = tx.ExecContext(ctx, `INSERT INTO image_projects(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, project.ID, project.Title, project.Script, project.ImageCount, project.Ratio, project.Style, project.CustomStyle, project.Concurrency, project.Status, project.CreatedAt, project.UpdatedAt, project.SelectedPosition, project.RunMode, project.RunPhase, project.RunStatus, project.PhaseError, project.PublishingError, project.SuccessCount, project.FailureCount, project.ImageAttempts, project.TextModel, project.ReasoningEffort, project.ImageModel)
+	_, err = tx.ExecContext(ctx, `INSERT INTO image_projects(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model,output_mode,output_mode_locked_at,account_id,template_version,template_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, project.ID, project.Title, project.Script, project.ImageCount, project.Ratio, project.Style, project.CustomStyle, project.Concurrency, project.Status, project.CreatedAt, project.UpdatedAt, project.SelectedPosition, project.RunMode, project.RunPhase, project.RunStatus, project.PhaseError, project.PublishingError, project.SuccessCount, project.FailureCount, project.ImageAttempts, project.TextModel, project.ReasoningEffort, project.ImageModel, project.OutputMode, project.OutputModeLockedAt, project.AccountID, project.TemplateVersion, project.TemplateFingerprint)
 	if err != nil {
 		return err
 	}
@@ -131,7 +156,7 @@ func (r *ImageProjectRepository) Create(ctx context.Context, project domain.Imag
 				role = "content"
 			}
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO image_project_items(id,project_id,sequence,role,source_text,title,prompt,status,created_at,updated_at,attempt_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, item.ID, item.ProjectID, item.Sequence, role, item.SourceText, item.Title, item.Prompt, item.Status, item.CreatedAt, item.UpdatedAt, item.AttemptCount)
+		_, err = tx.ExecContext(ctx, `INSERT INTO image_project_items(id,project_id,sequence,role,source_text,title,prompt,status,created_at,updated_at,attempt_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, item.ID, project.ID, item.Sequence, role, item.SourceText, item.Title, item.Prompt, item.Status, item.CreatedAt, item.UpdatedAt, item.AttemptCount)
 		if err != nil {
 			return err
 		}
@@ -146,7 +171,24 @@ func (r *ImageProjectRepository) Create(ctx context.Context, project domain.Imag
 }
 
 func (r *ImageProjectRepository) List(ctx context.Context) ([]domain.ImageProject, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT `+imageProjectSelectCols+` FROM image_projects ORDER BY updated_at DESC,id DESC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+imageProjectSelectCols+` FROM image_projects WHERE run_mode != 'video' ORDER BY updated_at DESC,id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	projects := []domain.ImageProject{}
+	for rows.Next() {
+		var project domain.ImageProject
+		if err := scanImageProject(rows, &project); err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	return projects, rows.Err()
+}
+
+func (r *ImageProjectRepository) ListVideo(ctx context.Context) ([]domain.ImageProject, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+imageProjectSelectCols+` FROM image_projects WHERE run_mode = 'video' ORDER BY updated_at DESC,id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -172,14 +214,22 @@ func (r *ImageProjectRepository) Get(ctx context.Context, id string) (domain.Ima
 		return domain.ImageProject{}, nil, err
 	}
 	rowsPub, err := r.db.QueryContext(ctx, `SELECT position,title,description FROM image_project_publishing_candidates WHERE project_id=? ORDER BY position`, id)
-	if err == nil {
-		defer rowsPub.Close()
-		for rowsPub.Next() {
-			var c domain.PublishingCandidate
-			if rowsPub.Scan(&c.Position, &c.Title, &c.Description) == nil {
-				project.PublishingCandidates = append(project.PublishingCandidates, c)
-			}
+	if err != nil {
+		return domain.ImageProject{}, nil, err
+	}
+	for rowsPub.Next() {
+		var c domain.PublishingCandidate
+		if err := rowsPub.Scan(&c.Position, &c.Title, &c.Description); err != nil {
+			rowsPub.Close()
+			return domain.ImageProject{}, nil, err
 		}
+		project.PublishingCandidates = append(project.PublishingCandidates, c)
+	}
+	if err := rowsPub.Close(); err != nil {
+		return domain.ImageProject{}, nil, err
+	}
+	if err := rowsPub.Err(); err != nil {
+		return domain.ImageProject{}, nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,sequence,role,source_text,title,prompt,status,image_path,mime_type,width,height,error_message,created_at,updated_at,attempt_count FROM image_project_items WHERE project_id=? ORDER BY sequence`, id)
 	if err != nil {
@@ -453,8 +503,58 @@ func (r *ImageProjectRepository) MarkItemAttempts(ctx context.Context, itemID st
 }
 
 func (r *ImageProjectRepository) MarkRunningQuickProjectsInterrupted(ctx context.Context, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE image_projects SET run_status='interrupted',updated_at=? WHERE run_mode='quick' AND run_status='running'`, at)
+	_, err := r.db.ExecContext(ctx, `UPDATE image_projects SET run_status='interrupted',updated_at=? WHERE run_mode IN ('quick','video') AND run_status='running'`, at)
 	return err
+}
+
+func (r *ImageProjectRepository) SaveVideoPlan(ctx context.Context, id, title string, items []domain.ImageProjectItem, at time.Time) (returnErr error) {
+	title = strings.TrimSpace(title)
+	if title == "" || utf8.RuneCountInString(title) > 120 {
+		return errors.New("invalid project title")
+	}
+	if len(items) < 1 || len(items) > 60 {
+		return errors.New("video scene count must be between 1 and 60")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if returnErr != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM image_project_items WHERE project_id=?`, id); err != nil {
+		return err
+	}
+	for _, item := range items {
+		role := item.Role
+		if role == "" {
+			if item.Sequence == 1 {
+				role = "cover"
+			} else {
+				role = "content"
+			}
+		}
+		itemID := item.ID
+		if itemID == "" {
+			itemID = uuid.NewString()
+		}
+		if strings.TrimSpace(item.Prompt) == "" || strings.TrimSpace(item.Title) == "" || strings.TrimSpace(item.SourceText) == "" {
+			return errors.New("video scene title, source text, and prompt are required")
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO image_project_items(id,project_id,sequence,role,source_text,title,prompt,status,created_at,updated_at,attempt_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, itemID, id, item.Sequence, role, item.SourceText, item.Title, item.Prompt, item.Status, at, at, item.AttemptCount); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE image_projects SET title=?,image_count=?,run_phase='imaging',updated_at=? WHERE id=? AND run_mode='video'`, title, len(items), at, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return ErrImageProjectNotFound
+	}
+	return tx.Commit()
 }
 
 func (r *ImageProjectRepository) UpdateProjectTitle(ctx context.Context, projectID, title string, at time.Time) error {
@@ -470,4 +570,29 @@ func (r *ImageProjectRepository) UpdateProjectTitle(ctx context.Context, project
 		return ErrImageProjectNotFound
 	}
 	return nil
+}
+
+func (r *ImageProjectRepository) UpdateOutputMode(ctx context.Context, projectID string, outputMode domain.ImageProjectOutputMode, at time.Time) error {
+	if outputMode != domain.ImageProjectOutputModeImageSlideshow && outputMode != domain.ImageProjectOutputModeImageToVideo {
+		return errors.New("invalid image project output mode")
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE image_projects SET output_mode=?,updated_at=? WHERE id=? AND output_mode_locked_at IS NULL`, outputMode, at, projectID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n == 1 {
+		return nil
+	}
+	var lockedAt sql.NullTime
+	err = r.db.QueryRowContext(ctx, `SELECT output_mode_locked_at FROM image_projects WHERE id=?`, projectID).Scan(&lockedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrImageProjectNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if lockedAt.Valid {
+		return ErrImageProjectOutputModeLocked
+	}
+	return ErrImageProjectNotFound
 }

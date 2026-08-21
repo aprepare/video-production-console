@@ -743,6 +743,42 @@ func encodeSizedPNG(t *testing.T, width, height int) []byte {
 	return buffer.Bytes()
 }
 
+func TestSaveProjectAssetAcceptsWordTimingJSON(t *testing.T) {
+	svc := NewService(t.TempDir())
+	saved, err := svc.SaveProjectAsset(uuid.NewString(), domain.AssetWordTiming, "narration.word_timing.json", strings.NewReader(`{"schema_version":1,"script":"hello","provider":"test","words":[{"text":"hello","start_time":0,"end_time":1,"confidence":0.9}],"script_hash":"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","hash":"vendor-hash","duration":1}`))
+	if err != nil {
+		t.Fatalf("SaveProjectAsset timing: %v", err)
+	}
+	if saved.MIMEType != "application/json" {
+		t.Fatalf("MIME = %q, want application/json", saved.MIMEType)
+	}
+}
+
+func TestSaveProjectAssetRejectsInvalidWordTimingJSON(t *testing.T) {
+	base := `{"schema_version":1,"script":"hello","provider":"test","words":[{"text":"hello","start_time":0,"end_time":1,"confidence":0.9}],"script_hash":"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","duration":1}`
+	for _, tt := range []struct{ name, data string }{
+		{"unknown top-level", strings.Replace(base, `,"duration":1}`, `,"duration":1,"extra":true}`, 1)},
+		{"unknown word", strings.Replace(base, `}],"script_hash"`, `,"x":1}],"script_hash"`, 1)},
+		{"schema", strings.Replace(base, `"schema_version":1`, `"schema_version":2`, 1)},
+		{"empty script", strings.Replace(base, `"script":"hello"`, `"script":""`, 1)},
+		{"empty provider", strings.Replace(base, `"provider":"test"`, `"provider":""`, 1)},
+		{"bad hash format", strings.Replace(base, `sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`, `sha256:abc`, 1)},
+		{"hash content mismatch", strings.Replace(base, `sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`, `sha256:0cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`, 1)},
+		{"empty word", strings.Replace(base, `"text":"hello"`, `"text":""`, 1)},
+		{"negative start", strings.Replace(base, `"start_time":0`, `"start_time":-1`, 1)},
+		{"overlap", strings.Replace(base, `[{"text":"hello","start_time":0,"end_time":1,"confidence":0.9}]`, `[{"text":"a","start_time":0,"end_time":1,"confidence":0.9},{"text":"b","start_time":0.5,"end_time":2,"confidence":0.9}]`, 1)},
+		{"end before start", strings.Replace(base, `"end_time":1`, `"end_time":0`, 1)},
+		{"duration mismatch", strings.Replace(base, `"duration":1`, `"duration":2`, 1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(t.TempDir()).SaveProjectAsset(uuid.NewString(), domain.AssetWordTiming, "timing.json", strings.NewReader(tt.data))
+			if !errors.Is(err, ErrInvalidProjectAsset) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func allFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string

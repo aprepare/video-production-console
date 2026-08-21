@@ -23,15 +23,17 @@ type ActionResolution struct {
 }
 
 var actionResolutions = map[domain.TaskAction]ActionResolution{
-	domain.ActionTopicBrainstorm: {Skill: "finance-topic-selector", WireAction: "brainstorm"},
-	domain.ActionTopicCommit:     {Skill: "finance-topic-selector", WireAction: "commit_topic"},
-	domain.ActionTopicDeepen:     {Skill: "finance-topic-selector", WireAction: "deepen"},
-	domain.ActionRemixStandard:   {Skill: "finance-viral-remix", WireAction: "standard"},
-	domain.ActionRemixEnhanced:   {Skill: "finance-viral-remix", WireAction: "enhanced"},
-	domain.ActionRemixFromTopic:  {Skill: "finance-viral-remix", WireAction: "from_topic_card"},
-	domain.ActionRemixReview:     {Skill: "finance-viral-remix", WireAction: "review"},
-	domain.ActionMontagePlan:     {Skill: "jianying-montage-draft", WireAction: "plan"},
-	domain.ActionMontageExecute:  {Skill: "jianying-montage-draft", WireAction: "execute"},
+	domain.ActionTopicBrainstorm:  {Skill: "finance-topic-selector", WireAction: "brainstorm"},
+	domain.ActionTopicCommit:      {Skill: "finance-topic-selector", WireAction: "commit_topic"},
+	domain.ActionTopicDeepen:      {Skill: "finance-topic-selector", WireAction: "deepen"},
+	domain.ActionRemixStandard:    {Skill: "finance-viral-remix", WireAction: "standard"},
+	domain.ActionRemixEnhanced:    {Skill: "finance-viral-remix", WireAction: "enhanced"},
+	domain.ActionRemixFromTopic:   {Skill: "finance-viral-remix", WireAction: "from_topic_card"},
+	domain.ActionRemixSpokenLines: {Skill: "finance-viral-remix", WireAction: "spoken_lines"},
+	domain.ActionCaptionKeywords:  {Skill: "finance-viral-remix", WireAction: "caption_keywords"},
+	domain.ActionRemixReview:      {Skill: "finance-viral-remix", WireAction: "review"},
+	domain.ActionMontagePlan:      {Skill: "jianying-montage-draft", WireAction: "plan"},
+	domain.ActionMontageExecute:   {Skill: "jianying-montage-draft", WireAction: "execute"},
 }
 
 func ResolveAction(action domain.TaskAction) (ActionResolution, error) {
@@ -126,6 +128,23 @@ type ManifestSettings struct {
 	EmbeddingModel       string `json:"embedding_model,omitempty"`
 	MontagePlanVersion   string `json:"montage_plan_version,omitempty"`
 	MixPreset            string `json:"mix_preset,omitempty"`
+	// MontageStyle carries the user's caption/title/BGM styling into the
+	// planner; MontageBGM is the resolved custom track when the style does
+	// not use the built-in verified BGM.
+	MontageStyle *domain.MontageStyle `json:"montage_style,omitempty"`
+	MontageBGM   *ManifestBGM         `json:"montage_bgm,omitempty"`
+}
+
+// ManifestBGM is one analyzed local music file selected for the montage.
+// All windows are seconds; Volume is the linear track volume (0..1].
+type ManifestBGM struct {
+	Name            string  `json:"name"`
+	FilePath        string  `json:"file_path"`
+	DurationS       float64 `json:"duration_s"`
+	UsableHeadS     float64 `json:"usable_head_s"`
+	ClimaxStartS    float64 `json:"climax_start_s"`
+	ClimaxDurationS float64 `json:"climax_duration_s"`
+	Volume          float64 `json:"volume"`
 }
 
 type BuildManifestInput struct {
@@ -641,11 +660,13 @@ var engineeringInputTypes = map[string]bool{
 var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 	domain.ActionTopicBrainstorm: {"topic_candidates": true},
 	domain.ActionTopicCommit:     {"topic_card": true}, domain.ActionTopicDeepen: {"topic_card": true},
-	domain.ActionRemixStandard:  {"continuous_script": true},
-	domain.ActionRemixEnhanced:  {"continuous_script": true},
-	domain.ActionRemixFromTopic: {"continuous_script": true},
-	domain.ActionRemixReview:    {"continuous_script": true},
-	domain.ActionMontagePlan:    {"production_plan": true},
+	domain.ActionRemixStandard:    {"continuous_script": true},
+	domain.ActionRemixEnhanced:    {"continuous_script": true},
+	domain.ActionRemixFromTopic:   {"continuous_script": true},
+	domain.ActionRemixSpokenLines: {"spoken_script": true},
+	domain.ActionCaptionKeywords:  {"caption_keywords": true},
+	domain.ActionRemixReview:      {"continuous_script": true},
+	domain.ActionMontagePlan:      {"production_plan": true},
 	// A montage execution produces a validated plaintext workspace only. The
 	// trusted host registers it into Jianying before a formal mix_draft asset
 	// can exist.
@@ -653,20 +674,24 @@ var expectedOutputAllowlist = map[domain.TaskAction]map[string]bool{
 }
 
 var actionInputRoles = map[domain.TaskAction]map[domain.AssetType]string{
-	domain.ActionTopicDeepen:    {domain.AssetTopicCard: "topic_card"},
-	domain.ActionRemixStandard:  {domain.AssetSourceScript: "primary_source"},
-	domain.ActionRemixEnhanced:  {domain.AssetSourceScript: "primary_source"},
-	domain.ActionRemixFromTopic: {domain.AssetTopicCard: "topic_brief"},
-	domain.ActionRemixReview:    {domain.AssetSourceScript: "review_target", domain.AssetContinuousScript: "review_target"},
-	domain.ActionMontagePlan:    {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
-	domain.ActionMontageExecute: {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetAccountBackground: "account_background"},
+	domain.ActionTopicDeepen:      {domain.AssetTopicCard: "topic_card"},
+	domain.ActionRemixStandard:    {domain.AssetSourceScript: "primary_source"},
+	domain.ActionRemixEnhanced:    {domain.AssetSourceScript: "primary_source"},
+	domain.ActionRemixFromTopic:   {domain.AssetTopicCard: "topic_brief"},
+	domain.ActionRemixSpokenLines: {domain.AssetContinuousScript: "continuous_script"},
+	domain.ActionCaptionKeywords:  {domain.AssetSpokenScript: "spoken_script"},
+	domain.ActionRemixReview:      {domain.AssetSourceScript: "review_target", domain.AssetContinuousScript: "review_target"},
+	domain.ActionMontagePlan:      {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetWordTiming: "word_timing", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetCaptionKeywords: "caption_keywords", domain.AssetAccountBackground: "account_background"},
+	domain.ActionMontageExecute:   {domain.AssetContinuousScript: "continuous_script", domain.AssetNarration: "narration", domain.AssetWordTiming: "word_timing", domain.AssetSubtitleSRT: "subtitle_srt", domain.AssetCaptionKeywords: "caption_keywords", domain.AssetAccountBackground: "account_background"},
 }
 
 var requiredExpectedOutputTypes = map[domain.TaskAction][]string{
 	domain.ActionTopicBrainstorm: {"topic_candidates"}, domain.ActionTopicCommit: {"topic_card"}, domain.ActionTopicDeepen: {"topic_card"},
 	domain.ActionRemixStandard: {"continuous_script"}, domain.ActionRemixEnhanced: {"continuous_script"}, domain.ActionRemixFromTopic: {"continuous_script"},
-	domain.ActionRemixReview: {"continuous_script"},
-	domain.ActionMontagePlan: {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
+	domain.ActionRemixSpokenLines: {"spoken_script"},
+	domain.ActionCaptionKeywords:  {"caption_keywords"},
+	domain.ActionRemixReview:      {"continuous_script"},
+	domain.ActionMontagePlan:      {"production_plan"}, domain.ActionMontageExecute: {"production_plan", "plaintext_workspace"},
 }
 
 func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
@@ -680,9 +705,11 @@ func defaultExpectedOutputs(action domain.TaskAction) []ExpectedOutput {
 
 var requiredInputRoles = map[domain.TaskAction][]string{
 	domain.ActionRemixStandard: {"primary_source"}, domain.ActionRemixEnhanced: {"primary_source"},
-	domain.ActionRemixFromTopic: {"topic_brief"},
-	domain.ActionMontagePlan:    {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
-	domain.ActionMontageExecute: {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+	domain.ActionRemixFromTopic:   {"topic_brief"},
+	domain.ActionRemixSpokenLines: {"continuous_script"},
+	domain.ActionCaptionKeywords:  {"spoken_script"},
+	domain.ActionMontagePlan:      {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
+	domain.ActionMontageExecute:   {string(domain.AssetContinuousScript), string(domain.AssetNarration), string(domain.AssetSubtitleSRT), string(domain.AssetAccountBackground)},
 }
 
 func validateActionManifestContract(manifest TaskManifest) error {

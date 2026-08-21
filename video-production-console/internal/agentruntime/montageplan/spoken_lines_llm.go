@@ -125,7 +125,7 @@ const captionPackCacheVersion = "caption_pack_v2"
 const lineBreakerSystemPrompt = `你给竖屏财经口播同时做三件事：断行、选关键词、写板上主副标题。只输出一个 JSON 对象，不要解释，不要 Markdown，不要长篇推理。
 
 格式：
-{"board_title":"6到15字","board_subtitle":"6到15字","sentences":[[{"text":"一行","keywords":["词"]},...],...]}
+{"board_title":"最多15字","board_subtitle":"最多15字","sentences":[[{"text":"一行","keywords":["词"]},...],...]}
 
 sentences 第 i 项对应输入第 i 句。
 

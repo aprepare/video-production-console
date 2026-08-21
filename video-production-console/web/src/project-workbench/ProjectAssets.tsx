@@ -52,8 +52,8 @@ const assetDefinitions: Array<{
   },
   {
     type: "spoken_script",
-    label: "配音断句",
-    description: "按配音时间轴切好的逐句文案，与 SRT 字幕同一刀。",
+    label: "口播稿",
+    description: "按一句一行切好的口播正文，配音字幕按这些行切。",
     accept: ".txt,text/plain",
     icon: List,
   },
@@ -83,6 +83,12 @@ type ProjectAssetsProps = {
   onReviseContinuousScript?: () => void;
   onImportContinuousScript?: () => void;
   onRemakeMontage?: () => void;
+  onStartSpokenLines?: () => void;
+  spokenLinesLive?: boolean;
+  onStartCaptionKeywords?: () => void;
+  captionKeywordsLive?: boolean;
+  onExportVideo?: (assetID: string) => void;
+  videoExporting?: boolean;
   onGenerateNarration?: () => void;
   pendingActions: string[];
   uploadRequest: AssetUploadRequest;
@@ -97,6 +103,12 @@ export function ProjectAssets({
   onReviseContinuousScript,
   onImportContinuousScript,
   onRemakeMontage,
+  onStartSpokenLines,
+  spokenLinesLive = false,
+  onStartCaptionKeywords,
+  captionKeywordsLive = false,
+  onExportVideo,
+  videoExporting = false,
   onGenerateNarration,
   pendingActions,
   uploadRequest,
@@ -110,12 +122,16 @@ export function ProjectAssets({
 
   const isPending = (_type: ProjectAssetUploadType) => pendingActions.length > 0;
   const narrationGenerating = pendingActions.includes("generate-narration");
+  const spokenGenerating = spokenLinesLive || pendingActions.includes("spoken-lines");
   const continuousScriptReady = detail.assets.continuous_script?.state === "ready";
+  const spokenScriptReady = detail.assets.spoken_script?.state === "ready";
   const narrationDisabledReason = !continuousScriptReady
     ? "连续文案尚未就绪，请先备好连续文案"
-    : pendingActions.length && !narrationGenerating
-      ? "当前项目还有其他操作在进行中"
-      : "";
+    : !spokenScriptReady
+      ? "口播稿尚未就绪，请先生成口播稿"
+      : pendingActions.length && !narrationGenerating
+        ? "当前项目还有其他操作在进行中"
+        : "";
   const backgroundState = assetState(detail.background_reference || undefined);
   const readyAssetCount = assetDefinitions.reduce((count, definition) => (
     detail.assets[definition.type]?.state === "ready" ? count + 1 : count
@@ -133,7 +149,6 @@ export function ProjectAssets({
         <div>
           <span>PROJECT ASSETS</span>
           <h2>当前项目资产</h2>
-          <p>所有文件仅归属于“{detail.project.title}”</p>
         </div>
         <div className="asset-inventory" aria-label={`${readyAssetCount} 个资产已就绪，共 ${assetDefinitions.length + 1} 个`}>
           <strong>{String(readyAssetCount).padStart(2, "0")}</strong>
@@ -144,10 +159,9 @@ export function ProjectAssets({
       <div className="project-assets__list">
         {assetDefinitions.map((definition) => {
           const asset = detail.assets[definition.type];
-          const generating = narrationGenerating
-            && (definition.type === "narration"
-              || definition.type === "subtitle_srt"
-              || definition.type === "spoken_script");
+          const generating = (narrationGenerating
+            && (definition.type === "narration" || definition.type === "subtitle_srt"))
+            || (spokenGenerating && definition.type === "spoken_script");
           const state = assetState(asset, generating);
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
@@ -171,7 +185,6 @@ export function ProjectAssets({
                 {isRegisteredDraft ? (
                   <>
                     <strong className="project-asset__display-name">{draftDisplayName}</strong>
-                    <p>{definition.description}</p>
                     <details className="technical-history project-asset__technical">
                       <summary>技术信息</summary>
                       <dl>
@@ -185,8 +198,7 @@ export function ProjectAssets({
                   </>
                 ) : (
                   <>
-                    <p>{definition.description}</p>
-                    {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>等待上传 · 补齐后可继续制作</small>}
+                    {asset ? <small>{asset.filename} · v{asset.version}</small> : <small>等待上传</small>}
                   </>
                 )}
               </div>
@@ -213,6 +225,44 @@ export function ProjectAssets({
                   <button type="button" onClick={onRemakeMontage} aria-label="重做混剪">
                     <RotateCcw size={15} aria-hidden="true" />
                     重做
+                  </button>
+                ) : null}
+                {isRegisteredDraft && onExportVideo ? (
+                  <button
+                    type="button"
+                    onClick={() => onExportVideo(registeredDraft?.id || asset.id)}
+                    disabled={videoExporting}
+                    aria-busy={videoExporting}
+                    title="控制本机剪映自动导出成品视频，期间请不要操作鼠标键盘"
+                    aria-label={videoExporting ? "正在导出视频" : "导出视频"}
+                  >
+                    <Clapperboard size={15} aria-hidden="true" />
+                    {videoExporting ? "正在导出…" : "导出视频"}
+                  </button>
+                ) : null}
+                {definition.type === "spoken_script" && onStartSpokenLines && continuousScriptReady && asset ? (
+                  <button
+                    type="button"
+                    onClick={onStartSpokenLines}
+                    disabled={spokenGenerating || Boolean(pendingActions.length)}
+                    aria-busy={spokenGenerating}
+                    aria-label={spokenGenerating ? "正在生成口播稿" : "重做口播稿"}
+                  >
+                    <WandSparkles size={15} aria-hidden="true" />
+                    {spokenGenerating ? "正在生成…" : "重做口播稿"}
+                  </button>
+                ) : null}
+                {definition.type === "spoken_script" && onStartCaptionKeywords && spokenScriptReady ? (
+                  <button
+                    type="button"
+                    onClick={onStartCaptionKeywords}
+                    disabled={captionKeywordsLive || spokenGenerating}
+                    aria-busy={captionKeywordsLive}
+                    title="按当前口播稿重新标注字幕关键词，完成后重做混剪即可生效"
+                    aria-label={captionKeywordsLive ? "正在标注字幕关键词" : "重标关键词"}
+                  >
+                    <WandSparkles size={15} aria-hidden="true" />
+                    {captionKeywordsLive ? "正在标注…" : "重标关键词"}
                   </button>
                 ) : null}
                 {definition.type === "narration" && onGenerateNarration ? (
@@ -269,7 +319,6 @@ export function ProjectAssets({
                 {backgroundState.label}
               </span>
             </div>
-            <p>由当前账号提供，混剪时作为该项目的固定画面来源。</p>
             <small>{detail.background_reference?.filename || "当前账号尚未配置"}</small>
           </div>
           <div className="project-asset__actions">

@@ -103,8 +103,11 @@ func (s *TaskScheduler) dispatch() {
 		// Project-less planning tasks are independent. Giving all of them the
 		// empty lock key accidentally serialized every account's topic work.
 		// Use the task ID unless a real project needs exclusive asset writes.
+		// remix.standard is a pure LLM run that only registers its asset in one
+		// SQLite transaction at completion, so multiple models may generate the
+		// same project's script in parallel without the project lock.
 		key := t.ID
-		if t.ProjectID != nil {
+		if t.ProjectID != nil && t.Action != domain.ActionRemixStandard {
 			key = *t.ProjectID
 		}
 		s.mu.Lock()

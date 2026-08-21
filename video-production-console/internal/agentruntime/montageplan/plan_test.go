@@ -1,12 +1,53 @@
 package montageplan
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDecodeWordTimingStrict(t *testing.T) {
+	dir := t.TempDir()
+	sum := sha256.Sum256([]byte("hello"))
+	valid := fmt.Sprintf(`{"schema_version":1,"script":"hello","script_hash":"sha256:%x","words":[{"text":"hello","start_time":0,"end_time":1}]}`, sum)
+	p := filepath.Join(dir, "timing.json")
+	if err := os.WriteFile(p, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeWordTiming(p); err != nil {
+		t.Fatalf("valid timing: %v", err)
+	}
+	if err := os.WriteFile(p, append([]byte(valid), []byte(" {}")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeWordTiming(p); err == nil {
+		t.Fatal("trailing JSON must fail")
+	}
+	if err := os.WriteFile(p, []byte(`{"schema_version":1,"script":"hello","script_hash":"sha256:bad","words":[{"text":"hello","start_time":0,"end_time":1}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeWordTiming(p); err == nil {
+		t.Fatal("script hash mismatch must fail")
+	}
+	unknownTopLevel := fmt.Sprintf(`{"schema_version":1,"script":"hello","script_hash":"sha256:%x","words":[{"text":"hello","start_time":0,"end_time":1}],"unexpected":true}`, sum)
+	if err := os.WriteFile(p, []byte(unknownTopLevel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeWordTiming(p); err == nil {
+		t.Fatal("unknown top-level field must fail")
+	}
+	unknownWordField := fmt.Sprintf(`{"schema_version":1,"script":"hello","script_hash":"sha256:%x","words":[{"text":"hello","start_time":0,"end_time":1,"unexpected":true}]}`, sum)
+	if err := os.WriteFile(p, []byte(unknownWordField), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeWordTiming(p); err == nil {
+		t.Fatal("unknown word field must fail")
+	}
+}
 
 func assertSafeExecutionActions(t *testing.T, raw any) {
 	t.Helper()

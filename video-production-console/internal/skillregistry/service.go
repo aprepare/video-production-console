@@ -73,13 +73,55 @@ func NewService(repo Repository, optionValues ...Options) *Service {
 	return &Service{repo: repo, roots: append([]Root(nil), options.Roots...), now: options.Now}
 }
 
+func productionSkillNames() []string {
+	return []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
+}
+
 func DefaultRoots(skillsBase string) []Root {
-	names := []string{"finance-topic-selector", "finance-viral-remix", "jianying-montage-draft", "jianying-movie-montage"}
+	names := productionSkillNames()
 	roots := make([]Root, 0, len(names))
 	for _, name := range names {
 		roots = append(roots, Root{Name: name, Path: filepath.Join(skillsBase, name)})
 	}
 	return roots
+}
+
+// ResolveRoots prefers a skill directory shipped next to the executable and
+// falls back to ~/.codex/skills for any name that is not bundled.
+func ResolveRoots(executablePath, home string) []Root {
+	homeBase := filepath.Join(home, ".codex", "skills")
+	bundledBase := bundledSkillsDir(executablePath)
+	roots := make([]Root, 0, len(productionSkillNames()))
+	for _, name := range productionSkillNames() {
+		path := filepath.Join(homeBase, name)
+		if bundledBase != "" {
+			if candidate := filepath.Join(bundledBase, name); isSkillDir(candidate) {
+				path = candidate
+			}
+		}
+		roots = append(roots, Root{Name: name, Path: path})
+	}
+	return roots
+}
+
+func bundledSkillsDir(executablePath string) string {
+	if strings.TrimSpace(executablePath) == "" {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(filepath.Clean(executablePath)), "skills")
+	resolved, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	if !isSkillDir(resolved) {
+		return ""
+	}
+	return resolved
+}
+
+func isSkillDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func (s *Service) Roots() []Root { return append([]Root(nil), s.roots...) }

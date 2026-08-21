@@ -24,6 +24,9 @@ var publicFieldLabels = map[string]string{
 	"remix_base_url":                 "二创服务地址",
 	"remix_model":                    "二创模型",
 	"remix_reasoning_effort":         "二创思考强度",
+	"remix_check_model":              "质检模型",
+	"spoken_lines_model":             "口播稿模型",
+	"model_options":                  "可选模型列表",
 	"image_base_url":                 "生图服务地址",
 	"image_model":                    "生图模型",
 	"image_text_base_url":            "图文文本模型地址",
@@ -59,6 +62,8 @@ var publicFieldLabels = map[string]string{
 	"media_catalog_path":             "素材库目录",
 	"ffmpeg_path":                    "FFmpeg 路径",
 	"ffprobe_path":                   "FFprobe 路径",
+	"bgm_dir":                        "BGM 目录",
+	"montage_style":                  "混剪样式",
 }
 
 func publicSettingJSONKeys() map[string]struct{} {

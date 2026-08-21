@@ -9,13 +9,13 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "文案进化台 2026-08-19 中老年定稿" {
+	if RewritePromptStamp != "文案进化台 2026-08-21 爆款回流定稿" {
 		t.Fatalf("stamp=%q", RewritePromptStamp)
 	}
 }
 
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
-	system := buildWriterPrompt("# skill", PromptStyleRewrite)
+	system := buildWriterPrompt("# skill")
 	for _, want := range []string{
 		"禁止逐段同义改写",
 		"机器以原文为准",
@@ -38,7 +38,7 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 			t.Fatalf("rewrite prompt must not hardcode plot %q", forbid)
 		}
 	}
-	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套", PromptStyleRewrite)
+	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套")
 	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题也必须跟这篇新口播走") || !strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
 	}
@@ -50,7 +50,7 @@ func TestWriterPromptSkillExcerptDoesNotReinjectFixedPlot(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	system := buildWriterPrompt(string(raw), PromptStyleRewrite)
+	system := buildWriterPrompt(string(raw))
 	if !strings.Contains(system, "# 补充约束") {
 		t.Fatalf("expected skill excerpt in system prompt")
 	}
@@ -61,32 +61,13 @@ func TestWriterPromptSkillExcerptDoesNotReinjectFixedPlot(t *testing.T) {
 	}
 }
 
-func TestWashPromptKeepsSourceAndOnlyCutsPhrasing(t *testing.T) {
-	system := buildWriterPrompt("# skill\n禁止照抄金句", PromptStyleWash)
-	for _, want := range []string{"按洗稿来", "切成适合口播的短段", "轻微换词", "原稿的推进顺序不能倒", "本金乘利率", "#干货分享"} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("wash system missing %q", want)
-		}
-	}
-	for _, forbid := range []string{"禁止逐段同义改写", "禁止照抄", "补充约束", "不当逐句模板", "第三次换锚", "一百七十万亿", "先发财换锚"} {
-		if strings.Contains(system, forbid) {
-			t.Fatalf("wash system has %q: %s", forbid, system)
-		}
-	}
-	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套", PromptStyleWash)
-	if !strings.Contains(user, "不要另写一篇") || strings.Contains(user, "不当逐句模板") {
-		t.Fatalf("wash user=%q", user)
-	}
-}
-
 func TestNormalizePromptStyle(t *testing.T) {
 	got, err := NormalizePromptStyle("")
 	if err != nil || got != PromptStyleRewrite {
 		t.Fatalf("empty=%q err=%v", got, err)
 	}
-	got, err = NormalizePromptStyle("WASH")
-	if err != nil || got != PromptStyleWash {
-		t.Fatalf("wash=%q err=%v", got, err)
+	if _, err := NormalizePromptStyle("wash"); err == nil {
+		t.Fatal("wash style has been removed and must be rejected")
 	}
 	if _, err := NormalizePromptStyle("paraphrase"); err == nil {
 		t.Fatal("expected invalid style")
@@ -142,11 +123,11 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	}
 }
 
-func TestRunSendsWashPromptWhenManifestStyleIsWash(t *testing.T) {
+func TestRunRejectsRemovedWashStyle(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
-	_ = os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("# skill\n禁止照抄金句"), 0o644)
+	_ = os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("# skill"), 0o644)
 	sourcePath := filepath.Join(root, "source.txt")
 	_ = os.WriteFile(sourcePath, []byte("又一批人要发财了。人民币要第三次换锚。"), 0o644)
 	outputDir := filepath.Join(root, "output")
@@ -159,27 +140,24 @@ func TestRunSendsWashPromptWhenManifestStyleIsWash(t *testing.T) {
 	})
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	client := &textClient{content: remixJSON}
+	last := filepath.Join(root, "last.json")
 	if err := Run(Options{
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
-		OutputLastMessage: filepath.Join(root, "last.json"),
+		OutputLastMessage: last,
 		Model:             "test-model",
 		BaseURL:           "http://example.invalid/v1",
 		APIKey:            "test-key",
 		Client:            client,
 	}); err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("Run must write a failure envelope, err=%v", err)
 	}
-	if len(client.last.Messages) < 2 {
-		t.Fatalf("messages=%d", len(client.last.Messages))
+	body, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
 	}
-	system := client.last.Messages[0].Content
-	user := client.last.Messages[1].Content
-	if !strings.Contains(system, "按洗稿来") || strings.Contains(system, "禁止逐段同义改写") || strings.Contains(system, "补充约束") {
-		t.Fatalf("system=%s", system)
-	}
-	if !strings.Contains(user, "不要另写一篇") || strings.Contains(user, "不当逐句模板") {
-		t.Fatalf("user=%s", user)
+	if !strings.Contains(string(body), `"failed"`) || !strings.Contains(string(body), "remix_prompt_style") {
+		t.Fatalf("wash manifests must be rejected, envelope=%s", body)
 	}
 }
 
@@ -208,6 +186,44 @@ func TestRunWritesFilesWhenModelReturnsPlainScript(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(outputDir, "continuous_script.txt"))
 	if !strings.Contains(string(got), "第三次换锚") {
 		t.Fatalf("script=%s", got)
+	}
+}
+
+func TestRunWritesSpokenScriptFromContinuousInput(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	sourcePath := filepath.Join(root, "continuous.txt")
+	_ = os.WriteFile(sourcePath, []byte("百分之六十七的人还在等窗口。"), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "task-spoken-1", "action": "remix.spoken_lines", "skill": "finance-viral-remix",
+		"output_dir": outputDir,
+		"inputs":     []any{map[string]any{"type": "continuous_script", "role": "continuous_script", "path": sourcePath}},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	client := &textClient{content: "百分之六十七的人\n还在等窗口。"}
+	if err := Run(Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: filepath.Join(root, "last.json"),
+		Model:             "test-model",
+		BaseURL:           "http://example.invalid/v1",
+		APIKey:            "test-key",
+		Client:            client,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(client.last.Messages[0].Content, "一句一行") {
+		t.Fatalf("system=%q", client.last.Messages[0].Content)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "spoken_script.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "67%") {
+		t.Fatalf("spoken=%s", got)
 	}
 }
 

@@ -12,8 +12,6 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { RemixPromptStyleFields } from "../RemixPromptStyleFields";
-import type { RemixPromptStyle } from "../RemixPromptStyleFields";
 import { TaskModelFields } from "../TaskModelFields";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { MontagePlanQC, ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
@@ -50,20 +48,23 @@ export type ProjectWorkbenchProps = {
   onImportContinuousScript: (content: string) => void;
   loadSourceScriptContent?: (assetID: string) => Promise<string>;
   onReviseContinuousScript?: () => void;
+  onStartSpokenLines?: () => void;
+  onStartCaptionKeywords?: () => void;
   onGenerateNarration?: () => void;
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults?: TaskModelDefaults;
-  remixPromptStyle: RemixPromptStyle;
-  onRemixPromptStyleChange: (value: RemixPromptStyle) => void;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onOpenTask: (task: ProjectTask) => void;
   pendingActions: string[];
+  onExportVideo?: (assetID: string) => void;
+  videoExporting?: boolean;
 };
 
 const missingLabels: Record<string, string> = {
   continuous_script: "连续文案",
+  spoken_script: "口播稿",
   narration: "配音",
   subtitle_srt: "SRT 字幕",
   account_background: "账号背景图",
@@ -133,7 +134,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     : mixKind === "image-video"
       ? "重做图片视频"
       : "重做混剪";
-  const displayAction = action?.id === "start-mixing" ? { ...action, label: mixLabel } : action;
+  const spokenLinesLive = props.tasks.some((task) =>
+    task.action === "remix.spoken_lines"
+    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  const displayAction = action?.id === "start-mixing"
+    ? { ...action, label: mixLabel }
+    : action?.id === "start-spoken-lines" && spokenLinesLive
+      ? { ...action, label: "正在生成口播稿", disabled: true }
+      : action;
   const missing = missingProductionInputs(detail);
   const currentTask = [...props.tasks]
     .filter((task) => ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status))
@@ -172,6 +180,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const importOpenButtonRef = useRef<HTMLButtonElement>(null);
   const sourceDialogRef = useRef<HTMLElement>(null);
   const importDialogRef = useRef<HTMLElement>(null);
+  const spokenAutoKey = useRef("");
+  const keywordAutoKey = useRef("");
   const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
@@ -182,7 +192,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const sourceRemixPending = props.pendingActions.includes("source-remix") || sourceRemixLive;
   const importScriptPending = props.pendingActions.includes("save-continuous-script");
   const showTaskModel = Boolean(
-    action && ["start-source-remix", "start-mixing"].includes(action.id),
+    action && ["start-source-remix", "start-spoken-lines", "start-mixing"].includes(action.id),
   );
   const montageLive = props.tasks.some((task) =>
     task.action === "montage.execute"
@@ -204,7 +214,39 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     setImportScript("");
     setImportDialogOpen(false);
     setCopiedKey("");
+    spokenAutoKey.current = "";
+    keywordAutoKey.current = "";
   }, [detail.project.id]);
+
+  useEffect(() => {
+    if (!props.onStartSpokenLines) return;
+    if (action?.id !== "start-spoken-lines" || action.disabled) return;
+    if (spokenLinesLive || props.pendingActions.length > 0) return;
+    // While parallel multi-model remixes are still running, a later completion
+    // would immediately stale this 口播稿; wait until every remix has finished
+    // and the operator's chosen script is current.
+    if (sourceRemixLive) return;
+    const versionKey = detail.assets.continuous_script?.id;
+    if (!versionKey || spokenAutoKey.current === versionKey) return;
+    spokenAutoKey.current = versionKey;
+    props.onStartSpokenLines();
+  }, [action, spokenLinesLive, sourceRemixLive, props.pendingActions, props.onStartSpokenLines, detail.assets.continuous_script?.id]);
+
+  // 口播稿就绪后自动标注字幕关键词。这是可选增强：失败或缺席时混剪
+  // 回落到本地词表，所以不占主按钮，也不阻塞配音。
+  const captionKeywordsLive = props.tasks.some((task) =>
+    task.action === "remix.caption_keywords"
+    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+  useEffect(() => {
+    if (!props.onStartCaptionKeywords) return;
+    if (detail.assets.spoken_script?.state !== "ready") return;
+    if (detail.assets.caption_keywords?.state === "ready") return;
+    if (captionKeywordsLive) return;
+    const versionKey = detail.assets.spoken_script?.id;
+    if (!versionKey || keywordAutoKey.current === versionKey) return;
+    keywordAutoKey.current = versionKey;
+    props.onStartCaptionKeywords();
+  }, [captionKeywordsLive, props.onStartCaptionKeywords, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
 
   useEffect(() => {
     if (!copiedKey) return;
@@ -300,14 +342,16 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     };
   }, [loadSourceScriptContent, sourceAssetID]);
 
-  const knownMissing = new Set(["continuous_script", "narration", "subtitle_srt", "account_background", "mix_draft"]);
+  const knownMissing = new Set(["continuous_script", "spoken_script", "narration", "subtitle_srt", "account_background", "mix_draft"]);
   const unknownMissing = missing.find((type) => !knownMissing.has(type));
   const pendingForAction = action?.id === "start-mixing"
     ? "montage"
-    : action?.id === "publish"
-      ? "publish"
-      : "";
-  const actionPending = projectPending || (action?.id === "start-source-remix" && sourceRemixLive) || (action?.id === "prepare-assets"
+    : action?.id === "start-spoken-lines"
+      ? "spoken-lines"
+      : action?.id === "publish"
+        ? "publish"
+        : "";
+  const actionPending = projectPending || (action?.id === "start-source-remix" && sourceRemixLive) || (action?.id === "start-spoken-lines" && spokenLinesLive) || (action?.id === "prepare-assets"
     ? missing.some((type) => props.pendingActions.includes(`upload:${type}`))
     : pendingForAction ? props.pendingActions.includes(pendingForAction) : false);
 
@@ -319,6 +363,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (!action || action.disabled) return;
     if (action.id === "start-source-remix") {
       if (sourceScript.trim()) props.onSaveSourceScript(sourceScript.trim());
+    }
+    else if (action.id === "start-spoken-lines") {
+      props.onStartSpokenLines?.();
     }
     else if (action.id === "start-mixing") {
       if (mixKind === "movie") props.onMovieMix?.();
@@ -392,6 +439,11 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           <h1>{detail.project.title}</h1>
           <div className="workbench-title__details">
             <p>{montageKindLabel(mixKind)} · #{detail.project.id.slice(0, 8)}</p>
+            {mixKind === "image-video" ? (
+              <p>
+                这是旧的「口播配静帧」混剪，仍会使用风景素材库。要用 AI 图片做成剪映草稿，请回首页进入「图文制作」。
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="workbench-masthead__actions">
@@ -480,22 +532,16 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               onChange={(event) => setSourceScript(event.target.value)}
               placeholder="把同行文章全文粘贴到这里…"
             />
-            <RemixPromptStyleFields
-              name="remix-prompt-style-dialog"
-              value={props.remixPromptStyle}
-              onChange={props.onRemixPromptStyleChange}
+            <TaskModelFields
+              value={props.taskModel}
+              onChange={props.onTaskModelChange}
+              defaults={props.taskModelDefaults}
+              labelPrefix="工作台"
+              purpose="remix"
+              multiModel
             />
-            {showTaskModel ? (
-              <TaskModelFields
-                value={props.taskModel}
-                onChange={props.onTaskModelChange}
-                defaults={props.taskModelDefaults}
-                labelPrefix="工作台"
-                purpose="remix"
-              />
-            ) : null}
             <footer>
-              <small>未保存不会写入项目。</small>
+              <small />
               <div>
                 <button type="button" className="source-script-dialog__cancel" onClick={() => setSourceDialogOpen(false)}>取消</button>
                 <button
@@ -558,7 +604,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               />
             </label>
             <footer>
-              <small>JSON 会自动拆出连续文案，标题和描述一并收下。保存后跳到配音，不启动二创。</small>
+              <small />
               <div>
                 <button type="button" className="source-script-dialog__cancel" onClick={() => setImportDialogOpen(false)}>取消</button>
                 <button
@@ -568,7 +614,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   disabled={!importScript.trim() || importScriptPending}
                   aria-busy={importScriptPending}
                 >
-                  {importScriptPending ? "正在导入…" : "保存并跳到配音"}
+                  {importScriptPending ? "正在导入…" : "保存并生成口播稿"}
                 </button>
               </div>
             </footer>
@@ -608,15 +654,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   onClick={openImportDialog}
                   disabled={importScriptPending}
                 >
-                  导入成品文案，跳到配音
+                  导入成品文案，接着生成口播稿
                 </button>
-              ) : null}
-              {displayAction.id === "start-source-remix" && !sourceDialogOpen ? (
-                <RemixPromptStyleFields
-                  name="remix-prompt-style-panel"
-                  value={props.remixPromptStyle}
-                  onChange={props.onRemixPromptStyleChange}
-                />
               ) : null}
               {showTaskModel ? (
                 <TaskModelFields
@@ -624,26 +663,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   onChange={props.onTaskModelChange}
                   defaults={props.taskModelDefaults}
                   labelPrefix="工作台"
-                  purpose={displayAction.id === "start-source-remix" ? "remix" : "codex"}
+                  purpose={
+                    displayAction.id === "start-source-remix"
+                      ? "remix"
+                      : displayAction.id === "start-spoken-lines"
+                        ? "spoken"
+                        : "codex"
+                  }
+                  multiModel={displayAction.id === "start-source-remix"}
                 />
               ) : null}
-              <p className="primary-action-panel__hint">
-                {unknownMissing
-                  ? `无法识别缺项 ${unknownMissing}，请刷新项目。`
-                  : displayAction.disabled
-                  ? "任务完成后会切换到下一步。"
-                  : displayAction.id === "start-source-remix"
-                    ? "选好转写方式后开始二创。已经改好的连续文案或换说法 JSON，可以直接导入并跳到配音。"
-                    : displayAction.id === "start-mixing"
-                      ? mixKind === "movie"
-                        ? "用电影切镜库生成剪映草稿。"
-                        : mixKind === "image-video"
-                          ? "用静帧库生成剪映草稿。"
-                          : "用风景库生成剪映草稿。"
-                      : displayAction.id === "publish"
-                        ? "确认后标记为已发布。"
-                        : "先补齐当前文件。"}
-              </p>
+              {unknownMissing ? (
+                <p className="primary-action-panel__hint">{`无法识别缺项 ${unknownMissing}，请刷新项目。`}</p>
+              ) : null}
             </>
           ) : (
             <div className="primary-action-panel__complete"><CircleCheck size={20} aria-hidden="true" /> 项目流程已完成</div>
@@ -673,12 +705,12 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 <strong>{currentTaskIsLive
                   ? currentTask.action === "montage.execute"
                     ? currentTask.skill_name === "jianying-movie-montage" ? "电影混剪草稿处理中" : "混剪草稿处理中"
-                    : "Codex 正在处理"
+                    : "任务处理中"
                   : "最近任务"}</strong>
                 <small>{currentTask.result_summary || "查看进度与问题"}</small>
                 <span className="active-task-summary__link">查看任务 <ArrowRight size={13} aria-hidden="true" /></span>
               </button>
-            ) : <p>执行主动作后会在此显示进度。</p>}
+            ) : <p>空闲</p>}
           </div>
         </section>
 
@@ -688,7 +720,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <div>
                 <span>PUBLISHING COPY</span>
                 <h2>发布文案</h2>
-                <p>复制后即可粘贴到视频号。</p>
               </div>
               {publishingTask ? <span className="publishing-review__source">来自最近二创结果</span> : null}
             </div>
@@ -717,10 +748,23 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                       onCopy={() => void copyPublishingText("short-title", primaryShortTitle)}
                     />
                   </div>
-                  <p>{primaryShortTitle || "暂未生成短标题"}</p>
-                  {shortTitles.length > 1 ? (
-                    <ol>{shortTitles.slice(1, 4).map((title) => <li key={title}>{title}</li>)}</ol>
-                  ) : null}
+                  {shortTitles.length ? (
+                    <div className="short-title-row">
+                      {shortTitles.map((title) => (
+                        <button
+                          type="button"
+                          key={title}
+                          className={`short-title-chip${copiedKey === `short-title:${title}` ? " is-copied" : ""}`}
+                          onClick={() => void copyPublishingText(`short-title:${title}`, title)}
+                          title="点击复制"
+                        >
+                          {title}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>暂未生成短标题</p>
+                  )}
                 </section>
               </div>
             ) : (
@@ -745,11 +789,24 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onReviseContinuousScript={props.onReviseContinuousScript}
           onImportContinuousScript={stage === "script" ? openImportDialog : undefined}
           onRemakeMontage={remakeCurrent ? onRemakeCurrent : undefined}
+          onStartSpokenLines={props.onStartSpokenLines}
+          spokenLinesLive={spokenLinesLive}
+          onStartCaptionKeywords={props.onStartCaptionKeywords}
+          captionKeywordsLive={captionKeywordsLive}
+          onExportVideo={props.onExportVideo}
+          videoExporting={props.videoExporting}
           onGenerateNarration={props.onGenerateNarration}
           pendingActions={props.pendingActions}
           uploadRequest={uploadRequest}
         />
-        <ProjectTaskSummary task={currentTask} onOpenTask={props.onOpenTask} />
+        <ProjectTaskSummary
+          task={currentTask}
+          remixTasks={[...props.tasks]
+            .filter((task) => task.action === "remix.standard")
+            .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+            .slice(0, 4)}
+          onOpenTask={props.onOpenTask}
+        />
       </div>
 
       <div className="mobile-primary-action-bar" aria-label="移动端下一主动作">
@@ -772,7 +829,11 @@ function warningText(warning: string | { code?: string; message?: string }) {
 
 function MontagePlanQCCard(props: { qc: MontagePlanQC }) {
   const { qc } = props;
-  const captionLabel = qc.caption_mode === "off" ? "关闭字幕" : "只显示重点句";
+  const captionLabel = qc.caption_mode === "off"
+    ? "关闭字幕"
+    : qc.caption_mode === "spoken"
+      ? "口播稿逐行字幕"
+      : "只显示重点句";
   const warnings = (qc.warnings || []).map(warningText).filter(Boolean);
   return (
     <section className="montage-plan-qc" aria-label="本次混剪计划摘要">

@@ -28,9 +28,10 @@ const (
 
 // SpokenCaptionsEnabled paints SRT lines on the 字幕 track.
 //
-// 2026-08-18：口播字幕排版不好，先整轨屏蔽。板上标题/副标题仍保留。
-// 实现和单测留着，改回 true 即可恢复默认 spoken。
-const SpokenCaptionsEnabled = false
+// 2026-08-18 曾因排版不好整轨屏蔽；当时的行是代码按 10 字硬切的。
+// 2026-08-21 重新打开：口播稿（≤9 内容字一行）落地后 SRT 已是行级，
+// spokenCaptionsFromLineCues 一对一上屏，不再粘合或重切。
+const SpokenCaptionsEnabled = true
 
 // Known media_mix_policy presets; unknown names fail instead of defaulting.
 const (
@@ -54,22 +55,25 @@ const v2NeutralMatchReason = "P1中性过渡镜头：语义匹配接入前使用
 
 // ProductionPlanV2 is the typed v2 plan written to production_plan.json.
 type ProductionPlanV2 struct {
-	PlanVersion        string           `json:"plan_version"`
-	Status             string           `json:"status"`
-	ModelRole          string           `json:"model_role"`
-	ProjectName        string           `json:"project_name"`
-	ProjectDurationS   float64          `json:"project_duration_s"`
-	Concurrency        ConcurrencyV2    `json:"concurrency"`
-	Inputs             InputsV2         `json:"inputs"`
-	MediaMixPolicy     MediaMixPolicyV2 `json:"media_mix_policy"`
-	Timeline           []TimelineShotV2 `json:"timeline"`
-	Graphics           GraphicsV2       `json:"graphics"`
-	Audio              AudioV2          `json:"audio"`
-	QCExpectations     QCExpectations   `json:"qc_expectations"`
-	ExecutionActions   []string         `json:"execution_actions"`
-	KnownMissingAssets []any            `json:"known_missing_assets"`
-	PlannerNotes       []string         `json:"planner_notes"`
-	Approval           ApprovalV2       `json:"approval"`
+	PlanVersion      string           `json:"plan_version"`
+	Status           string           `json:"status"`
+	ModelRole        string           `json:"model_role"`
+	ProjectName      string           `json:"project_name"`
+	ProjectDurationS float64          `json:"project_duration_s"`
+	Concurrency      ConcurrencyV2    `json:"concurrency"`
+	Inputs           InputsV2         `json:"inputs"`
+	MediaMixPolicy   MediaMixPolicyV2 `json:"media_mix_policy"`
+	Timeline         []TimelineShotV2 `json:"timeline"`
+	Graphics         GraphicsV2       `json:"graphics"`
+	// StyleOverrides adjusts size/color/y/font of the spoken caption styles
+	// in the skill's verified text_styles; absent means policy defaults.
+	StyleOverrides     map[string]map[string]any `json:"style_overrides,omitempty"`
+	Audio              AudioV2                   `json:"audio"`
+	QCExpectations     QCExpectations            `json:"qc_expectations"`
+	ExecutionActions   []string                  `json:"execution_actions"`
+	KnownMissingAssets []any                     `json:"known_missing_assets"`
+	PlannerNotes       []string                  `json:"planner_notes"`
+	Approval           ApprovalV2                `json:"approval"`
 }
 
 type ConcurrencyV2 struct {
@@ -160,6 +164,10 @@ type BrandTextV2 struct {
 	SizeMin      float64 `json:"size_min"`
 	Y            float64 `json:"y"`
 	FullDuration bool    `json:"full_duration"`
+	// Enabled=false drops the overlay entirely; Color overrides the
+	// hardcoded gold/white when present ([r,g,b] each 0..1).
+	Enabled bool      `json:"enabled"`
+	Color   []float64 `json:"color,omitempty"`
 }
 
 type BoundaryLinesV2 struct {
@@ -293,6 +301,11 @@ func BuildV2(opts Options) error {
 		opts.CatalogPath = strings.TrimSpace(ctx.manifest.NonSecretSettings.MediaCatalogPath)
 	}
 	notes := []string{"deterministic console planner v2"}
+	if ctx.timing != nil {
+		notes = append(notes, "style_preset=finance_tension")
+	} else {
+		notes = append(notes, "style_preset=finance_calm")
+	}
 	var catalog CatalogReader
 	var closer func()
 	var candidates []rankedCandidate
@@ -304,7 +317,7 @@ func BuildV2(opts Options) error {
 			return resolveErr
 		}
 	} else {
-		notes = append(notes, "scenic_mixed_pool: landscape/city/finance, no intent match")
+		notes = append(notes, "scenic_landscape_pool: Nature_Landscape only, no intent match")
 		var resolveErr error
 		catalog, closer, resolveErr = resolveCatalog(opts)
 		if resolveErr != nil {
@@ -372,7 +385,7 @@ func BuildV2(opts Options) error {
 			notes = append(notes, mergeNotes...)
 		}
 		if len(candidates) == 0 {
-			return fmt.Errorf("scenic pool produced no landscape/city/finance clips")
+			return fmt.Errorf("scenic pool produced no Nature_Landscape clips")
 		}
 	}
 	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
@@ -385,31 +398,46 @@ func BuildV2(opts Options) error {
 	var captionWarnings []string
 	var captionPack CaptionPack
 	if mode == CaptionHighlightsOnly || mode == CaptionSpoken {
-		var sentences []TimedSentence
+		var cues []TimedSentence
 		if ctx.srtPath != "" {
 			file, err := os.Open(ctx.srtPath)
 			if err != nil {
 				return fmt.Errorf("open subtitle srt: %w", err)
 			}
-			sentences, err = parseSRTSentences(file)
+			cues, err = parseSRTCues(file)
 			file.Close()
 			if err != nil {
 				return fmt.Errorf("parse subtitle srt: %w", err)
 			}
 		}
+		sentences := glueSRTCues(cues)
 		narrationMS := int64(math.Round(ctx.duration * 1000))
 		if mode == CaptionSpoken {
-			// Spoken captions still come from the user's SRT timings. Line
-			// breaks use the local splitter until CaptionLLMLineBreakerEnabled
-			// is turned back on; keyword highlighting stays off with it.
 			captions.TargetCoverageMin = 0
 			captions.TargetCoverageMax = 1
-			captions.Items, captionPack, captionWarnings = spokenCaptionsFromSentences(
-				sentences, narrationMS, opts.LineBreaker, captionLinesCachePath(ctx))
+			if lineLevelSRT(cues) {
+				// 口播稿 line-level SRT: one cue is one finished caption
+				// line, so nothing is glued or re-split and model keyword
+				// annotations ride straight onto their lines.
+				captions.Items, captionWarnings = spokenCaptionsFromLineCues(
+					cues, narrationMS, buildLineKeywordIndex(ctx.keywords))
+			} else {
+				// Older word/sentence-level SRT still goes through gluing
+				// plus the deterministic splitter.
+				captions.Items, captionPack, captionWarnings = spokenCaptionsFromSentences(
+					sentences, narrationMS, opts.LineBreaker, captionLinesCachePath(ctx))
+			}
+			if ctx.keywordsNote != "" {
+				captionWarnings = append(captionWarnings, ctx.keywordsNote)
+			}
 		} else {
 			captions.TargetCoverageMin = captionCoverageMin
 			captions.TargetCoverageMax = captionCoverageMax
-			captions.Items, captionWarnings = selectHighlightCaptions(sentences, narrationMS, mode)
+			if ctx.timing != nil {
+				captions.Items = timingHighlightCaptions(ctx.timing, ctx.duration)
+			} else {
+				captions.Items, captionWarnings = selectHighlightCaptions(sentences, narrationMS, mode)
+			}
 		}
 	}
 	title, subtitle := boardTitles(ctx, captionPack.BoardTitle, captionPack.BoardSubtitle)
@@ -428,6 +456,13 @@ func BuildV2(opts Options) error {
 	}
 	notes = append(notes, captionWarnings...)
 
+	style := planMontageStyle(ctx)
+	bgm := bgmPlacement(ctx.resources.BGM)
+	if custom := ctx.manifest.NonSecretSettings.MontageBGM; custom != nil {
+		bgm = customBGMPlacement(*custom, style.BGMVolume)
+	} else if style.BGMVolume > 0 {
+		bgm["linear_volume"] = style.BGMVolume
+	}
 	workspace := filepath.Join(ctx.manifest.OutputDir, "workspace", ctx.manifest.JobID)
 	plan := ProductionPlanV2{
 		PlanVersion:      "2.0",
@@ -460,11 +495,13 @@ func BuildV2(opts Options) error {
 		Graphics: GraphicsV2{
 			Title: BrandTextV2{
 				Text: title, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
-				SizeMin: boardTextSize(len([]rune(title)), boardTitleSize), Y: 0.6, FullDuration: true,
+				SizeMin: boardTextSize(len([]rune(title)), style.TitleSize), Y: style.TitleY, FullDuration: true,
+				Enabled: !style.TitleHidden, Color: hexToRGB(style.TitleColor),
 			},
 			Subtitle: BrandTextV2{
 				Text: subtitle, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
-				SizeMin: boardTextSize(len([]rune(subtitle)), boardSubtitleSize), Y: 0.49, FullDuration: true,
+				SizeMin: boardTextSize(len([]rune(subtitle)), style.SubtitleSize), Y: style.SubtitleY, FullDuration: true,
+				Enabled: !style.SubtitleHidden, Color: hexToRGB(style.SubtitleColor),
 			},
 			BoundaryLines: BoundaryLinesV2{
 				AssetWidthPx: 1080, AssetHeightPx: 6, TopY: 0.38, BottomY: -0.38, FullDuration: true,
@@ -472,10 +509,11 @@ func BuildV2(opts Options) error {
 			ChapterLabels: []TextOverlayV2{},
 			Captions:      captions,
 		},
+		StyleOverrides: buildStyleOverrides(style),
 		Audio: AudioV2{
 			Narration: map[string]any{"path": ctx.narration, "db": 5, "start_s": 0},
-			BGM:       bgmPlacement(ctx.resources.BGM),
-			SFX:       buildSFXPlacements(ctx.duration, ctx.resources.SFX),
+			BGM:       bgm,
+			SFX:       buildSemanticSFXPlacements(ctx.duration, ctx.resources.SFX, ctx.timing),
 		},
 		QCExpectations: QCExpectations{
 			MaxObviousEffectsPer30S:   1,
@@ -791,12 +829,21 @@ func mergeScenicCatalogBroll(ctx context.Context, catalog CatalogReader, candida
 		if shot.item.Kind == mediaKindMovie {
 			continue
 		}
+		if !isNatureLandscapeItem(shot.item) {
+			continue
+		}
 		extra = append(extra, rankedCandidate{Item: shot.item})
 	}
 	extra = resolveCandidatePaths(extra, mediaRoot)
 	before := len(candidates)
 	merged := mergeRankedCandidates(candidates, extra)
 	return merged, []string{fmt.Sprintf("scenic_catalog_broll: merged %d", len(merged)-before)}, nil
+}
+
+func isNatureLandscapeItem(item mediaItem) bool {
+	raw := strings.TrimSpace(item.Category)
+	key := strings.ToLower(strings.ReplaceAll(raw, " ", "_"))
+	return key == "nature_landscape"
 }
 
 func resolveCandidatePaths(candidates []rankedCandidate, mediaRoot string) []rankedCandidate {

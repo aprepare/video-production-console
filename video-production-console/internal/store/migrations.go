@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var migrations = []string{
@@ -43,7 +44,7 @@ CREATE TABLE assets (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('continuous_script', 'spoken_script', 'audio', 'subtitle', 'account_background', 'mix_draft', 'final_video')),
+    type TEXT NOT NULL CHECK (type IN ('continuous_script', 'spoken_script', 'word_timing', 'audio', 'subtitle', 'account_background', 'mix_draft', 'final_video')),
     path TEXT NOT NULL,
     filename TEXT NOT NULL,
     mime_type TEXT NOT NULL,
@@ -154,7 +155,7 @@ CREATE TABLE asset_items (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
     current_version_id TEXT REFERENCES asset_versions(id) ON DELETE SET NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
@@ -167,7 +168,7 @@ CREATE TABLE asset_versions (
     asset_id TEXT NOT NULL REFERENCES asset_items(id) ON DELETE CASCADE,
     project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
     version INTEGER NOT NULL CHECK (version > 0),
     storage_kind TEXT NOT NULL DEFAULT 'file' CHECK (storage_kind IN ('file', 'directory')),
     path TEXT NOT NULL,
@@ -901,7 +902,284 @@ ALTER TABLE image_projects ADD COLUMN text_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE image_projects ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';
 ALTER TABLE image_projects ADD COLUMN image_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE image_project_items ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0);`,
+	`CREATE TABLE assets_word_timing_backup AS SELECT * FROM assets;
+CREATE TABLE asset_items_word_timing_backup AS SELECT * FROM asset_items;
+CREATE TABLE asset_versions_word_timing_backup AS SELECT * FROM asset_versions;
+
+DROP TABLE asset_versions;
+DROP TABLE asset_items;
+DROP TABLE assets;
+
+CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('continuous_script', 'spoken_script', 'word_timing', 'audio', 'subtitle', 'account_background', 'mix_draft', 'final_video')),
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    source_task_id TEXT REFERENCES codex_tasks(id) ON DELETE SET NULL
+);
+INSERT INTO assets SELECT * FROM assets_word_timing_backup;
+CREATE INDEX assets_project_type_idx ON assets(project_id, type, version DESC);
+CREATE UNIQUE INDEX assets_project_type_version_uq ON assets(project_id, type, version) WHERE project_id IS NOT NULL;
+
+CREATE TABLE asset_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    current_version_id TEXT REFERENCES asset_versions(id) ON DELETE SET NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+INSERT INTO asset_items SELECT * FROM asset_items_word_timing_backup;
+CREATE UNIQUE INDEX asset_items_scope_type_uq ON asset_items(IFNULL(project_id, ''), account_id, type);
+
+CREATE TABLE asset_versions (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES asset_items(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    version INTEGER NOT NULL CHECK (version > 0),
+    storage_kind TEXT NOT NULL DEFAULT 'file' CHECK (storage_kind IN ('file', 'directory')),
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    parent_version_id TEXT REFERENCES asset_versions(id) ON DELETE SET NULL,
+    source_task_id TEXT REFERENCES codex_tasks(id) ON DELETE SET NULL,
+    state TEXT NOT NULL CHECK (state IN ('missing', 'ready', 'stale', 'generating', 'failed')),
+    stale_reason TEXT,
+    created_at DATETIME NOT NULL,
+    UNIQUE(asset_id, version)
+);
+INSERT INTO asset_versions SELECT * FROM asset_versions_word_timing_backup;
+CREATE INDEX asset_versions_asset_created_idx ON asset_versions(asset_id, version DESC);
+CREATE INDEX asset_versions_project_type_idx ON asset_versions(project_id, type, created_at DESC);
+
+CREATE TRIGGER asset_versions_scope_insert
+BEFORE INSERT ON asset_versions
+WHEN NOT EXISTS (SELECT 1 FROM asset_items AS item WHERE item.id = NEW.asset_id AND item.project_id IS NEW.project_id AND item.account_id = NEW.account_id AND item.type = NEW.type)
+OR (NEW.parent_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS parent WHERE parent.id = NEW.parent_version_id AND parent.asset_id = NEW.asset_id))
+BEGIN SELECT RAISE(ABORT, 'asset version scope or parent does not match asset item'); END;
+CREATE TRIGGER asset_versions_scope_update
+BEFORE UPDATE OF asset_id, project_id, account_id, type, parent_version_id ON asset_versions
+WHEN NOT EXISTS (SELECT 1 FROM asset_items AS item WHERE item.id = NEW.asset_id AND item.project_id IS NEW.project_id AND item.account_id = NEW.account_id AND item.type = NEW.type)
+OR (NEW.parent_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS parent WHERE parent.id = NEW.parent_version_id AND parent.asset_id = NEW.asset_id))
+OR EXISTS (SELECT 1 FROM asset_items AS item WHERE item.current_version_id = OLD.id AND item.id <> NEW.asset_id)
+OR EXISTS (SELECT 1 FROM asset_versions AS child WHERE child.parent_version_id = OLD.id AND child.asset_id <> NEW.asset_id)
+BEGIN SELECT RAISE(ABORT, 'asset version scope or parent does not match asset item'); END;
+CREATE TRIGGER asset_items_current_version_insert
+BEFORE INSERT ON asset_items
+WHEN NEW.current_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.id = NEW.current_version_id AND version.asset_id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'current asset version does not belong to asset item'); END;
+CREATE TRIGGER asset_items_current_version_update
+BEFORE UPDATE OF current_version_id ON asset_items
+WHEN NEW.current_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.id = NEW.current_version_id AND version.asset_id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'current asset version does not belong to asset item'); END;
+CREATE TRIGGER asset_items_scope_update
+BEFORE UPDATE OF project_id, account_id, type ON asset_items
+WHEN EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.asset_id = NEW.id AND NOT (version.project_id IS NEW.project_id AND version.account_id = NEW.account_id AND version.type = NEW.type))
+BEGIN SELECT RAISE(ABORT, 'asset item scope does not match existing versions'); END;
+
+DROP TABLE assets_word_timing_backup;
+DROP TABLE asset_items_word_timing_backup;
+DROP TABLE asset_versions_word_timing_backup;`,
+	`ALTER TABLE image_projects ADD COLUMN output_mode TEXT NOT NULL DEFAULT 'image_slideshow' CHECK (output_mode IN ('image_slideshow','image_to_video'));
+ALTER TABLE image_projects ADD COLUMN output_mode_locked_at DATETIME;
+ALTER TABLE image_projects ADD COLUMN account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL;
+ALTER TABLE image_projects ADD COLUMN template_version TEXT;
+ALTER TABLE image_projects ADD COLUMN template_fingerprint TEXT;
+CREATE TABLE image_video_jobs (
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES image_projects(id) ON DELETE CASCADE,
+ output_mode TEXT NOT NULL CHECK(output_mode IN ('image_slideshow','image_to_video')), account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+ template_version TEXT NOT NULL, template_fingerprint TEXT NOT NULL,
+ idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','canceled')),
+ model TEXT NOT NULL, resolution TEXT NOT NULL, concurrency_limit INTEGER NOT NULL CHECK(concurrency_limit BETWEEN 1 AND 6), retry_round INTEGER NOT NULL DEFAULT 0 CHECK(retry_round >= 0),
+ phase TEXT NOT NULL CHECK(phase IN ('preparing','narration','media','draft','registration','completed')),
+ draft_status TEXT, registration_status TEXT, lease_owner TEXT, lease_expires_at DATETIME, version INTEGER NOT NULL DEFAULT 1,
+ narration_relative_path TEXT, narration_fingerprint TEXT, timing_relative_path TEXT, timing_fingerprint TEXT, draft_relative_path TEXT, draft_fingerprint TEXT, manifest_relative_path TEXT, manifest_fingerprint TEXT, receipt_relative_path TEXT, receipt_fingerprint TEXT, error_code TEXT, error_message TEXT, started_at DATETIME, finished_at DATETIME,
+ created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX image_video_one_active_job ON image_video_jobs(project_id) WHERE status IN ('pending','running');
+CREATE TABLE image_video_job_items (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES image_video_jobs(id) ON DELETE CASCADE,
+ image_project_item_id TEXT NOT NULL REFERENCES image_project_items(id) ON DELETE RESTRICT, ordinal INTEGER NOT NULL CHECK(ordinal > 0), status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','canceled')), retry_round INTEGER NOT NULL DEFAULT 0 CHECK(retry_round >= 0), attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), max_attempts INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts BETWEEN 1 AND 3),
+ timeline_duration_us INTEGER NOT NULL CHECK(timeline_duration_us > 0), requested_duration_seconds INTEGER CHECK(requested_duration_seconds IS NULL OR requested_duration_seconds IN (6,10,15)), actual_duration_us INTEGER CHECK(actual_duration_us IS NULL OR actual_duration_us > 0),
+ input_image_relative_path TEXT NOT NULL, input_image_sha256 TEXT NOT NULL, output_video_relative_path TEXT, output_video_sha256 TEXT, provider_request_id TEXT, lease_owner TEXT, lease_expires_at DATETIME, version INTEGER NOT NULL DEFAULT 1, error_code TEXT, error_message TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(job_id,ordinal)
+);
+CREATE TRIGGER image_video_job_items_project_match_insert
+BEFORE INSERT ON image_video_job_items
+WHEN NOT EXISTS (
+ SELECT 1 FROM image_video_jobs AS job
+ JOIN image_project_items AS item ON item.project_id = job.project_id
+ WHERE job.id = NEW.job_id AND item.id = NEW.image_project_item_id
+)
+BEGIN SELECT RAISE(ABORT, 'image video job item project mismatch'); END;
+CREATE TRIGGER image_video_job_items_project_match_update
+BEFORE UPDATE OF job_id, image_project_item_id ON image_video_job_items
+WHEN NOT EXISTS (
+ SELECT 1 FROM image_video_jobs AS job
+ JOIN image_project_items AS item ON item.project_id = job.project_id
+ WHERE job.id = NEW.job_id AND item.id = NEW.image_project_item_id
+)
+BEGIN SELECT RAISE(ABORT, 'image video job item project mismatch'); END;
+CREATE TABLE image_video_job_attempts (
+ id TEXT PRIMARY KEY, job_item_id TEXT NOT NULL REFERENCES image_video_job_items(id) ON DELETE CASCADE,
+ retry_round INTEGER NOT NULL CHECK(retry_round >= 0), attempt INTEGER NOT NULL CHECK(attempt > 0), idempotency_key TEXT NOT NULL UNIQUE,
+ request_fingerprint TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','canceled')), error_code TEXT, error_message TEXT, provider_request_id TEXT, output_video_relative_path TEXT, output_video_sha256 TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(job_item_id,retry_round,attempt)
+ );`,
+	`DROP TRIGGER IF EXISTS image_video_job_items_project_match_insert;
+DROP TRIGGER IF EXISTS image_video_job_items_project_match_update;
+ALTER TABLE image_video_job_attempts RENAME TO image_video_job_attempts_v24;
+ALTER TABLE image_video_job_items RENAME TO image_video_job_items_v24;
+CREATE TABLE image_video_job_items (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES image_video_jobs(id) ON DELETE CASCADE,
+ image_project_item_id TEXT NOT NULL REFERENCES image_project_items(id) ON DELETE RESTRICT, ordinal INTEGER NOT NULL CHECK(ordinal > 0), status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','canceled')), retry_round INTEGER NOT NULL DEFAULT 0 CHECK(retry_round >= 0), attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), max_attempts INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts BETWEEN 1 AND 3),
+ timeline_duration_us INTEGER NOT NULL CHECK(timeline_duration_us > 0), requested_duration_seconds INTEGER CHECK(requested_duration_seconds IS NULL OR requested_duration_seconds IN (6,10,15)), actual_duration_us INTEGER CHECK(actual_duration_us IS NULL OR actual_duration_us > 0),
+ input_image_relative_path TEXT NOT NULL, input_image_sha256 TEXT NOT NULL, output_video_relative_path TEXT, output_video_sha256 TEXT, provider_request_id TEXT, lease_owner TEXT, lease_expires_at DATETIME, version INTEGER NOT NULL DEFAULT 1, error_code TEXT, error_message TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(job_id,ordinal)
+);
+INSERT INTO image_video_job_items SELECT * FROM image_video_job_items_v24;
+CREATE TRIGGER image_video_job_items_project_match_insert
+BEFORE INSERT ON image_video_job_items
+WHEN NOT EXISTS (SELECT 1 FROM image_video_jobs AS job JOIN image_project_items AS item ON item.project_id = job.project_id WHERE job.id = NEW.job_id AND item.id = NEW.image_project_item_id)
+BEGIN SELECT RAISE(ABORT, 'image video job item project mismatch'); END;
+CREATE TRIGGER image_video_job_items_project_match_update
+BEFORE UPDATE OF job_id, image_project_item_id ON image_video_job_items
+WHEN NOT EXISTS (SELECT 1 FROM image_video_jobs AS job JOIN image_project_items AS item ON item.project_id = job.project_id WHERE job.id = NEW.job_id AND item.id = NEW.image_project_item_id)
+BEGIN SELECT RAISE(ABORT, 'image video job item project mismatch'); END;
+CREATE TABLE image_video_job_attempts (
+ id TEXT PRIMARY KEY, job_item_id TEXT NOT NULL REFERENCES image_video_job_items(id) ON DELETE CASCADE,
+ retry_round INTEGER NOT NULL CHECK(retry_round >= 0), attempt INTEGER NOT NULL CHECK(attempt > 0), idempotency_key TEXT NOT NULL UNIQUE,
+ request_fingerprint TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','canceled')), error_code TEXT, error_message TEXT, provider_request_id TEXT, output_video_relative_path TEXT, output_video_sha256 TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(job_item_id,retry_round,attempt)
+);
+INSERT INTO image_video_job_attempts SELECT * FROM image_video_job_attempts_v24;
+DROP TABLE image_video_job_attempts_v24;
+DROP TABLE image_video_job_items_v24;`,
+	`DROP INDEX IF EXISTS image_projects_updated_idx;
+CREATE TABLE image_projects_v25 (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    script TEXT NOT NULL,
+    image_count INTEGER NOT NULL CHECK (image_count BETWEEN 1 AND 60),
+    ratio TEXT NOT NULL CHECK (ratio IN ('3:4','4:3','9:16','1:1')),
+    style TEXT NOT NULL,
+    custom_style TEXT NOT NULL DEFAULT '',
+    concurrency INTEGER NOT NULL CHECK (concurrency BETWEEN 1 AND 18),
+    status TEXT NOT NULL CHECK (status IN ('draft','generating','ready','partial','failed')),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    selected_position INTEGER,
+    run_mode TEXT NOT NULL DEFAULT 'manual' CHECK(run_mode IN ('manual','quick','video')),
+    run_phase TEXT NOT NULL DEFAULT 'idle' CHECK(run_phase IN ('idle','planning','prompting','imaging','completed')),
+    run_status TEXT NOT NULL DEFAULT 'idle' CHECK(run_status IN ('idle','running','failed','completed','interrupted')),
+    phase_error TEXT NOT NULL DEFAULT '',
+    publishing_error TEXT NOT NULL DEFAULT '',
+    success_count INTEGER NOT NULL DEFAULT 0 CHECK(success_count >= 0),
+    failure_count INTEGER NOT NULL DEFAULT 0 CHECK(failure_count >= 0),
+    image_attempts INTEGER NOT NULL DEFAULT 2 CHECK(image_attempts BETWEEN 1 AND 4),
+    text_model TEXT NOT NULL DEFAULT '',
+    reasoning_effort TEXT NOT NULL DEFAULT '',
+    image_model TEXT NOT NULL DEFAULT '',
+    output_mode TEXT NOT NULL DEFAULT 'image_slideshow' CHECK (output_mode IN ('image_slideshow','image_to_video')),
+    output_mode_locked_at DATETIME,
+    account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+    template_version TEXT,
+    template_fingerprint TEXT
+);
+INSERT INTO image_projects_v25(id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model,output_mode,output_mode_locked_at,account_id,template_version,template_fingerprint)
+SELECT id,title,script,image_count,ratio,style,custom_style,concurrency,status,created_at,updated_at,selected_position,run_mode,run_phase,run_status,phase_error,publishing_error,success_count,failure_count,image_attempts,text_model,reasoning_effort,image_model,output_mode,output_mode_locked_at,account_id,template_version,template_fingerprint FROM image_projects;
+DROP TABLE image_projects;
+ALTER TABLE image_projects_v25 RENAME TO image_projects;
+CREATE INDEX image_projects_updated_idx ON image_projects(updated_at DESC, id);`,
+	// caption_keywords was added to the domain without widening the SQLite
+	// CHECK constraint, so every 字幕关键词 registration failed with
+	// result_persistence_failed on existing databases. Rebuild the two v2
+	// asset tables with the type allowed.
+	`CREATE TABLE asset_items_caption_backup AS SELECT * FROM asset_items;
+CREATE TABLE asset_versions_caption_backup AS SELECT * FROM asset_versions;
+
+DROP TABLE asset_versions;
+DROP TABLE asset_items;
+
+CREATE TABLE asset_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'caption_keywords', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    current_version_id TEXT REFERENCES asset_versions(id) ON DELETE SET NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+INSERT INTO asset_items SELECT * FROM asset_items_caption_backup;
+CREATE UNIQUE INDEX asset_items_scope_type_uq ON asset_items(IFNULL(project_id, ''), account_id, type);
+
+CREATE TABLE asset_versions (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES asset_items(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('source_script', 'topic_card', 'continuous_script', 'spoken_script', 'caption_keywords', 'narration', 'word_timing', 'subtitle_srt', 'account_background', 'mix_draft', 'final_video')),
+    version INTEGER NOT NULL CHECK (version > 0),
+    storage_kind TEXT NOT NULL DEFAULT 'file' CHECK (storage_kind IN ('file', 'directory')),
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    parent_version_id TEXT REFERENCES asset_versions(id) ON DELETE SET NULL,
+    source_task_id TEXT REFERENCES codex_tasks(id) ON DELETE SET NULL,
+    state TEXT NOT NULL CHECK (state IN ('missing', 'ready', 'stale', 'generating', 'failed')),
+    stale_reason TEXT,
+    created_at DATETIME NOT NULL,
+    UNIQUE(asset_id, version)
+);
+INSERT INTO asset_versions SELECT * FROM asset_versions_caption_backup;
+CREATE INDEX asset_versions_asset_created_idx ON asset_versions(asset_id, version DESC);
+CREATE INDEX asset_versions_project_type_idx ON asset_versions(project_id, type, created_at DESC);
+
+CREATE TRIGGER asset_versions_scope_insert
+BEFORE INSERT ON asset_versions
+WHEN NOT EXISTS (SELECT 1 FROM asset_items AS item WHERE item.id = NEW.asset_id AND item.project_id IS NEW.project_id AND item.account_id = NEW.account_id AND item.type = NEW.type)
+OR (NEW.parent_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS parent WHERE parent.id = NEW.parent_version_id AND parent.asset_id = NEW.asset_id))
+BEGIN SELECT RAISE(ABORT, 'asset version scope or parent does not match asset item'); END;
+CREATE TRIGGER asset_versions_scope_update
+BEFORE UPDATE OF asset_id, project_id, account_id, type, parent_version_id ON asset_versions
+WHEN NOT EXISTS (SELECT 1 FROM asset_items AS item WHERE item.id = NEW.asset_id AND item.project_id IS NEW.project_id AND item.account_id = NEW.account_id AND item.type = NEW.type)
+OR (NEW.parent_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS parent WHERE parent.id = NEW.parent_version_id AND parent.asset_id = NEW.asset_id))
+OR EXISTS (SELECT 1 FROM asset_items AS item WHERE item.current_version_id = OLD.id AND item.id <> NEW.asset_id)
+OR EXISTS (SELECT 1 FROM asset_versions AS child WHERE child.parent_version_id = OLD.id AND child.asset_id <> NEW.asset_id)
+BEGIN SELECT RAISE(ABORT, 'asset version scope or parent does not match asset item'); END;
+CREATE TRIGGER asset_items_current_version_insert
+BEFORE INSERT ON asset_items
+WHEN NEW.current_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.id = NEW.current_version_id AND version.asset_id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'current asset version does not belong to asset item'); END;
+CREATE TRIGGER asset_items_current_version_update
+BEFORE UPDATE OF current_version_id ON asset_items
+WHEN NEW.current_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.id = NEW.current_version_id AND version.asset_id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'current asset version does not belong to asset item'); END;
+CREATE TRIGGER asset_items_scope_update
+BEFORE UPDATE OF project_id, account_id, type ON asset_items
+WHEN EXISTS (SELECT 1 FROM asset_versions AS version WHERE version.asset_id = NEW.id AND NOT (version.project_id IS NEW.project_id AND version.account_id = NEW.account_id AND version.type = NEW.type))
+BEGIN SELECT RAISE(ABORT, 'asset item scope does not match existing versions'); END;
+
+DROP TABLE asset_versions_caption_backup;
+DROP TABLE asset_items_caption_backup;`,
 }
+
+const wordTimingAssetsMigrationVersion = 23
 
 // migration2V1DuplicateAssetsCompatibilitySQL preserves migration 2's lookup
 // intent for the one predecessor state where its unique index cannot be built.
@@ -971,6 +1249,12 @@ func migrate(db *sql.DB) (returnErr error) {
 				migration = migration2V1DuplicateAssetsCompatibilitySQL
 			}
 		}
+		if version == wordTimingAssetsMigrationVersion {
+			migration, err = adaptWordTimingAssetsIndex(ctx, conn, migration)
+			if err != nil {
+				return fmt.Errorf("inspect word timing asset indexes: %w", err)
+			}
+		}
 
 		if _, err := conn.ExecContext(ctx, migration); err != nil {
 			return fmt.Errorf("apply migration %d: %w", version, err)
@@ -1015,6 +1299,21 @@ func migrate(db *sql.DB) (returnErr error) {
 	}
 	committed = true
 	return nil
+}
+
+func adaptWordTimingAssetsIndex(ctx context.Context, conn *sql.Conn, migration string) (string, error) {
+	var uniqueExists int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='assets_project_type_version_uq'`).Scan(&uniqueExists); err != nil {
+		return "", err
+	}
+	if uniqueExists != 0 {
+		return migration, nil
+	}
+	// Migration 2's duplicate-row compatibility path intentionally keeps a
+	// non-unique lookup index. Recreate that shape after rebuilding assets.
+	return strings.Replace(migration,
+		"CREATE UNIQUE INDEX assets_project_type_version_uq ON assets(project_id, type, version) WHERE project_id IS NOT NULL;",
+		"CREATE INDEX assets_project_type_version_lookup_idx ON assets(project_id, type, version) WHERE project_id IS NOT NULL;", 1), nil
 }
 
 func requiresV1DuplicateAssetsCompatibility(ctx context.Context, conn *sql.Conn) (bool, error) {

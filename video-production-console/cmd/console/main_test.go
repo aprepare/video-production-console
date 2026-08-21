@@ -59,11 +59,12 @@ func TestInitializeAdministratorSkipsBootstrapForExistingAdmin(t *testing.T) {
 	}
 }
 
-func TestInitializeAdministratorRequiresExplicitPassword(t *testing.T) {
+func TestInitializeAdministratorUsesDefaultPasswordWhenUnset(t *testing.T) {
+	var got string
 	err := initializeAdministrator(context.Background(), func(context.Context) (store.Admin, error) {
 		return store.Admin{}, store.ErrUnauthenticated
-	}, func(context.Context, string) error {
-		t.Fatal("bootstrap called without password")
+	}, func(_ context.Context, password string) error {
+		got = password
 		return nil
 	}, func(key string) (string, bool) {
 		if key != initialPasswordEnvironment {
@@ -71,8 +72,20 @@ func TestInitializeAdministratorRequiresExplicitPassword(t *testing.T) {
 		}
 		return "", false
 	})
-	if err == nil || !strings.Contains(err.Error(), initialPasswordEnvironment) {
-		t.Fatalf("err=%v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != defaultInitialPassword {
+		t.Fatalf("password=%q, want default %q", got, defaultInitialPassword)
+	}
+}
+
+func TestFormatStartupFailureIncludesMessageAndAttrs(t *testing.T) {
+	got := formatStartupFailure("load runtime settings", "error", errors.New("settings are invalid: ffmpeg_path"))
+	for _, want := range []string{"load runtime settings", "settings are invalid: ffmpeg_path"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatted=%q, want %q", got, want)
+		}
 	}
 }
 
@@ -637,6 +650,42 @@ func TestCodexCommandFactoryUsesOpenAICompatWhenConfigured(t *testing.T) {
 	joined = strings.Join(cmd.Args, " ")
 	if !strings.Contains(joined, "--reasoning-effort") || !strings.Contains(joined, "high") {
 		t.Fatalf("expected reasoning effort in %#v", cmd.Args)
+	}
+}
+
+func TestOpenAICompatCommandSurvivesMissingSkillDirectory(t *testing.T) {
+	t.Setenv(agentruntime.EnvLLMRuntime, "openai_compat")
+	t.Setenv(agentruntime.EnvOpenAIBaseURL, "https://example.invalid/v1")
+	t.Setenv(agentruntime.EnvOpenAIAPIKey, "test-key")
+	dataRoot := t.TempDir()
+	base := testCodexCommandConfig(t, filepath.Join(t.TempDir(), "schema.json"))
+	makeCommand, _ := newCodexCommandFactories(config.Config{DataRoot: dataRoot}, base, func(string) (string, error) {
+		return "", fmt.Errorf("skill directory removed")
+	})
+	projectID := "project-remix"
+	taskID := "task-remix-noskill"
+	task := domain.CodexTask{ID: taskID, ProjectID: &projectID, Type: "remix", Action: domain.ActionRemixStandard, ModelName: "gpt-test"}
+	root, _, err := managedTaskRoot(dataRoot, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot, err := managedTaskDirectory(root, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "task_manifest.json"), []byte(`{"task_id":"task-remix-noskill"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, _, err := makeCommand(task)
+	if err != nil {
+		t.Fatalf("missing skill dir must not block remix: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "openai-compat-run") {
+		t.Fatalf("args=%#v", cmd.Args)
+	}
+	if strings.Contains(joined, "--skill-root") {
+		t.Fatalf("skill-root should be omitted when unresolved: %#v", cmd.Args)
 	}
 }
 

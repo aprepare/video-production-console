@@ -2,7 +2,6 @@ import { useCallback, useRef, useState } from "react";
 import type { FormEvent, RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query/keys";
-import type { RemixPromptStyle } from "../RemixPromptStyleFields";
 import type { TaskModelOverride } from "../taskModel";
 import type { Asset, NarrationGeneration, Project, ProjectDetail } from "../types";
 import { unwrapImportedScript } from "./import-script";
@@ -64,7 +63,6 @@ export function useProjectActions({
     model: "",
     reasoningEffort: "",
   });
-  const [remixPromptStyle, setRemixPromptStyle] = useState<RemixPromptStyle>("rewrite");
 
   const lockAction = useCallback((projectID: string, action: string) => {
     const key = `${projectID}:${action}`;
@@ -210,26 +208,43 @@ export function useProjectActions({
         if (selectedIDRef.current !== projectID) return;
         sourceVersionID = asset.id;
       }
-      const started = await startProjectTaskMutation.mutateAsync({
-        projectID,
-        body: {
-          account_id: project.account_id,
-          type: "remix",
-          action: "remix.standard",
-          prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
-          source_version_id: sourceVersionID,
-          remix_prompt_style: remixPromptStyle,
-          ...modelOverrideBody(),
-        },
-      });
+      // Multi-model fan-out: every checked model gets its own remix task so
+      // the drafts can be compared. No checked model = one task with the
+      // single override (or the inherited default).
+      const fanOutModels = (taskModel.models || []).map((model) => model.trim()).filter(Boolean);
+      const modelRuns: string[] = fanOutModels.length ? fanOutModels : [taskModel.model.trim()];
+      const baseBody = {
+        account_id: project.account_id,
+        type: "remix",
+        action: "remix.standard",
+        prompt: "基于当前项目保存的同行原文生成正式连续二创文案，并登记为项目资产。",
+        source_version_id: sourceVersionID,
+      };
+      const results = await Promise.all(
+        modelRuns.map((model) =>
+          startProjectTaskMutation.mutateAsync({
+            projectID,
+            body: {
+              ...baseBody,
+              ...(model ? { model } : {}),
+              ...(taskModel.reasoningEffort ? { reasoning_effort: taskModel.reasoningEffort } : {}),
+            },
+          }),
+        ),
+      );
       if (selectedIDRef.current !== projectID) return;
-      if (!started) {
+      const startedCount = results.filter(Boolean).length;
+      if (startedCount === 0) {
         setMessage("原文已保存，但二创任务启动失败，请检查模型配置后重试。");
         await loadDetail(project);
         return;
       }
-      setTaskModel({ model: "", reasoningEffort: "" });
-      setMessage("同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。");
+      setTaskModel({ model: "", reasoningEffort: "", models: [] });
+      setMessage(
+        modelRuns.length > 1
+          ? `同行原文已保存，已用 ${startedCount}/${modelRuns.length} 个模型启动二创任务，完成后可在任务记录里对比各模型文案。`
+          : "同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。",
+      );
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("原文保存或二创任务启动失败，请检查网络连接后重试。");
@@ -261,7 +276,7 @@ export function useProjectActions({
       });
       if (!started) {
         if (selectedIDRef.current === projectID)
-          setMessage("混剪任务启动失败，请检查项目素材与 Codex 配置后重试。");
+          setMessage("混剪任务启动失败，请检查项目素材与模型配置后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
@@ -441,11 +456,42 @@ export function useProjectActions({
       if (selectedIDRef.current !== projectID) return;
       onContinuousScriptSaved(unpacked.script);
       setMessage(unpacked.fromJSON && unpacked.hasPublishing
-        ? "成品文案和发布标题已导入，已跳到配音步骤。可直接生成配音与字幕。"
-        : "成品文案已导入，已跳到配音步骤。可直接生成配音与字幕。");
+        ? "成品文案和发布标题已导入，接着生成口播稿。"
+        : "成品文案已导入，接着生成口播稿。");
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("成品文案导入失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
+  // adoptContinuousScript registers a chosen task's draft as a new
+  // continuous_script version, so parallel multi-model results are not stuck
+  // with whichever model happened to finish last.
+  const adoptContinuousScript = async (content: string, modelLabel: string) => {
+    if (!selected) return;
+    const script = content.trim();
+    if (!script) {
+      setMessage("该任务没有可采用的文案。");
+      return;
+    }
+    const project = selected;
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "save-continuous-script");
+    if (!lockKey) return;
+    try {
+      const saved = await saveContinuousScriptMutation.mutateAsync({ projectID, content: script });
+      if (!saved) {
+        if (selectedIDRef.current === projectID) setMessage("采用文案失败，请稍后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      onContinuousScriptSaved(script);
+      setMessage(`已采用 ${modelLabel || "该任务"} 的文案为当前版本，口播稿等下游会按新版本重新生成。`);
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("采用文案失败，请检查网络连接后重试。");
     } finally {
       unlockAction(lockKey);
     }
@@ -476,7 +522,7 @@ export function useProjectActions({
       });
       if (!started) {
         if (selectedIDRef.current === projectID)
-          setMessage("打回重做任务启动失败，请检查当前连续文案与 Codex 配置后重试。");
+          setMessage("打回重做任务启动失败，请检查当前连续文案与模型配置后重试。");
         return;
       }
       if (selectedIDRef.current !== projectID) return;
@@ -491,12 +537,87 @@ export function useProjectActions({
     }
   };
 
+  const startSpokenLinesTask = async () => {
+    if (!selected) return;
+    const project = selected;
+    const projectDetail = detail;
+    if (!projectDetail || projectDetail.project.id !== project.id) {
+      setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
+      return;
+    }
+    if (projectDetail.assets.continuous_script?.state !== "ready") {
+      setMessage("请先备好连续文案，再生成口播稿。");
+      return;
+    }
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "spoken-lines");
+    if (!lockKey) return;
+    try {
+      const started = await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
+          account_id: project.account_id,
+          type: "remix",
+          action: "remix.spoken_lines",
+          prompt: "按一句一行、每行不超过九个字，把当前连续文案切成口播稿。",
+          ...modelOverrideBody(),
+        },
+      });
+      if (!started) {
+        if (selectedIDRef.current === projectID)
+          setMessage("口播稿任务启动失败，请检查连续文案与模型配置后重试。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      setTaskModel({ model: "", reasoningEffort: "" });
+      setMessage("口播稿任务已启动。完成后字幕会按这些行切。");
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("口播稿任务启动失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
+  const startCaptionKeywordsTask = async () => {
+    if (!selected) return;
+    const project = selected;
+    const projectDetail = detail;
+    if (!projectDetail || projectDetail.project.id !== project.id) return;
+    if (projectDetail.assets.spoken_script?.state !== "ready") return;
+    const projectID = project.id;
+    const lockKey = lockAction(projectID, "caption-keywords");
+    if (!lockKey) return;
+    try {
+      await startProjectTaskMutation.mutateAsync({
+        projectID,
+        body: {
+          account_id: project.account_id,
+          type: "remix",
+          action: "remix.caption_keywords",
+          prompt: "为口播稿每一行挑出值得放大强调的警示词和数字。",
+          ...modelOverrideBody(),
+        },
+      });
+    } catch (error) {
+      // 关键词标注是可选增强：失败时混剪回落本地词表，不打断用户。
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        console.warn("caption keywords task failed to start", error);
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
   const generateNarration = async () => {
     if (!selected) return;
     const project = selected;
     const projectID = project.id;
     if (detail?.project.id !== projectID || detail.assets.continuous_script?.state !== "ready") {
       setMessage("请先备好连续文案，再生成配音与字幕。");
+      return;
+    }
+    if (detail.assets.spoken_script?.state !== "ready") {
+      setMessage("请先生成口播稿，再生成配音与字幕。");
       return;
     }
     const lockKey = lockAction(projectID, "generate-narration");
@@ -683,8 +804,6 @@ export function useProjectActions({
     pendingActions,
     taskModel,
     setTaskModel,
-    remixPromptStyle,
-    setRemixPromptStyle,
     createProject,
     loadSourceScriptContent,
     saveSourceScriptAndStartRemix,
@@ -694,6 +813,9 @@ export function useProjectActions({
     publishProject,
     saveContinuousScript,
     importContinuousScript,
+    adoptContinuousScript,
+    startSpokenLinesTask,
+    startCaptionKeywordsTask,
     startRemixReview,
     generateNarration,
     uploadAsset,

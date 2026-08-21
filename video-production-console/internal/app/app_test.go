@@ -274,7 +274,7 @@ func TestImageProjectRoutesRequireAuthentication(t *testing.T) {
 	}
 	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
 	application := New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, AuthService: auth, Settings: settings})
-	for _, path := range []string{"/api/image-projects", "/api/image-projects/" + uuid.NewString() + "/download"} {
+	for _, path := range []string{"/api/image-projects", "/api/image-projects/" + uuid.NewString() + "/download", "/api/image-videos", "/api/image-videos/" + uuid.NewString()} {
 		response := httptest.NewRecorder()
 		application.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusUnauthorized {

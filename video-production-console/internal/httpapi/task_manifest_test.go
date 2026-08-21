@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -374,8 +375,19 @@ func TestTaskManifestPreparerFreezesDraftDisplayNameFromFirstShortTitle(t *testi
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_"+task.ID[len(task.ID)-6:] {
-		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
+	assertDraftDisplayName(t, manifest.NonSecretSettings.DraftDisplayName, "财富觉醒02_存款大搬家")
+}
+
+// assertDraftDisplayName checks the label part and the MMDD-HHMM clock suffix
+// without pinning the wall time the manifest was frozen at.
+func assertDraftDisplayName(t *testing.T, got, wantPrefix string) {
+	t.Helper()
+	if !strings.HasPrefix(got, wantPrefix+"_") {
+		t.Fatalf("draft display name=%q, want prefix %q", got, wantPrefix)
+	}
+	suffix := got[len(wantPrefix)+1:]
+	if !regexp.MustCompile(`^\d{4}-\d{4}$`).MatchString(suffix) {
+		t.Fatalf("draft display name=%q, want MMDD-HHMM suffix, got %q", got, suffix)
 	}
 }
 
@@ -565,9 +577,7 @@ func TestTaskManifestPreparerUsesImportedPublishingPackageShortTitle(t *testing.
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_存款大搬家_"+task.ID[len(task.ID)-6:] {
-		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
-	}
+	assertDraftDisplayName(t, manifest.NonSecretSettings.DraftDisplayName, "财富觉醒02_存款大搬家")
 }
 
 func TestTaskManifestPreparerFallsBackToProjectTitleWithoutPublishingPackage(t *testing.T) {
@@ -583,9 +593,7 @@ func TestTaskManifestPreparerFallsBackToProjectTitleWithoutPublishingPackage(t *
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.NonSecretSettings.DraftDisplayName != "财富觉醒02_项目兜底_"+task.ID[len(task.ID)-6:] {
-		t.Fatalf("draft display name=%q", manifest.NonSecretSettings.DraftDisplayName)
-	}
+	assertDraftDisplayName(t, manifest.NonSecretSettings.DraftDisplayName, "财富觉醒02_项目兜底")
 }
 
 func TestMontageResultSeparatesDisplayNameFromUUIDStorageName(t *testing.T) {
@@ -666,23 +674,13 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 }
 
-func TestTaskManifestPreparerFreezesWashRemixPromptStyle(t *testing.T) {
+func TestTaskManifestPreparerRejectsRemovedWashStyle(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, true)
 	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
 	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
-	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{RemixPromptStyle: "wash"}); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest codex.TaskManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.NonSecretSettings.RemixPromptStyle != "wash" {
-		t.Fatalf("remix style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	err := preparer.Prepare(context.Background(), task, TaskManifestRequest{RemixPromptStyle: "wash"})
+	if err == nil || !strings.Contains(err.Error(), "remix_prompt_style") {
+		t.Fatalf("wash style must be rejected, err=%v", err)
 	}
 }
 
@@ -832,6 +830,16 @@ func TestTaskHTTPReusesActiveStandardRemixOnlyForSameSourceVersion(t *testing.T)
 			}
 		})
 	}
+	t.Run("different model starts a parallel remix", func(t *testing.T) {
+		body := `{"account_id":"` + accountID + `","type":"remix","action":"remix.standard","prompt":"go","source_version_id":"` + source.ID + `","model":"model-b"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusCreated || scheduler.enqueued != 1 {
+			t.Fatalf("status=%d enqueued=%d body=%s", recorder.Code, scheduler.enqueued, recorder.Body.String())
+		}
+	})
 }
 
 func TestTaskManifestPreparerPersistsFormalTaskForLegacyExecWhenAppServerIsEnabled(t *testing.T) {

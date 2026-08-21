@@ -8,10 +8,16 @@ const (
 	AssetSourceScript     AssetType = "source_script"
 	AssetTopicCard        AssetType = "topic_card"
 	AssetContinuousScript AssetType = "continuous_script"
-	// AssetSpokenScript is the post-TTS one-line-per-cue sheet. Remix must not
-	// emit it; narration derives it from the same captions as the SRT.
-	AssetSpokenScript      AssetType = "spoken_script"
+	// AssetSpokenScript is the one-line 口播稿 used for TTS and SRT cuts.
+	// remix.spoken_lines writes it; narration times those lines and does not
+	// replace a ready copy.
+	AssetSpokenScript AssetType = "spoken_script"
+	// AssetCaptionKeywords marks the emphasis terms per 口播稿 line
+	// (warning terms red, numbers gold). remix.caption_keywords writes it;
+	// the montage plan reads it and falls back to a local list without it.
+	AssetCaptionKeywords AssetType = "caption_keywords"
 	AssetNarration         AssetType = "narration"
+	AssetWordTiming        AssetType = "word_timing"
 	AssetSubtitleSRT       AssetType = "subtitle_srt"
 	AssetAccountBackground AssetType = "account_background"
 	AssetMixDraft          AssetType = "mix_draft"
@@ -80,10 +86,13 @@ type AssetDependency struct {
 }
 
 var invalidates = map[AssetType][]AssetType{
-	AssetSourceScript:      {AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetTopicCard:         {AssetContinuousScript, AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetContinuousScript:  {AssetNarration, AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
-	AssetNarration:         {AssetSpokenScript, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetSourceScript:      {AssetContinuousScript, AssetNarration, AssetWordTiming, AssetSpokenScript, AssetCaptionKeywords, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetTopicCard:         {AssetContinuousScript, AssetNarration, AssetWordTiming, AssetSpokenScript, AssetCaptionKeywords, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetContinuousScript:  {AssetSpokenScript, AssetCaptionKeywords, AssetNarration, AssetWordTiming, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetSpokenScript:      {AssetCaptionKeywords, AssetNarration, AssetWordTiming, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetCaptionKeywords:   {AssetMixDraft, AssetFinalVideo},
+	AssetNarration:         {AssetWordTiming, AssetSubtitleSRT, AssetMixDraft, AssetFinalVideo},
+	AssetWordTiming:        {AssetMixDraft, AssetFinalVideo},
 	AssetSubtitleSRT:       {AssetMixDraft, AssetFinalVideo},
 	AssetAccountBackground: {AssetMixDraft, AssetFinalVideo},
 	AssetMixDraft:          {AssetFinalVideo},

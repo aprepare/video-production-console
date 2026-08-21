@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"video-production-console/internal/domain"
+	"video-production-console/internal/spokenlines"
 )
 
 // 视频号描述只用这组热门话题，落盘时也会把模型自造的标签换掉。
@@ -28,21 +31,31 @@ type remixDraft struct {
 	CTA              string   `json:"cta"`
 }
 
-func parseRemixDraft(raw string) remixDraft {
+func parseRemixDraft(raw string) (remixDraft, error) {
 	text := strings.TrimSpace(stripCodeFence(raw))
 	if text == "" {
-		return remixDraft{}
+		return remixDraft{}, nil
 	}
-	if start := strings.Index(text, "{"); start >= 0 {
-		if end := strings.LastIndex(text, "}"); end > start {
-			var draft remixDraft
-			if json.Unmarshal([]byte(text[start:end+1]), &draft) == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
-				draft.ContinuousScript = strings.TrimSpace(draft.ContinuousScript)
-				return draft
+	if !strings.HasPrefix(text, "{") {
+		return remixDraft{ContinuousScript: text}, nil
+	}
+	const maxTrailingClosingBraces = 2
+	candidate := text
+	for removed := 0; removed <= maxTrailingClosingBraces; removed++ {
+		var draft remixDraft
+		if err := json.Unmarshal([]byte(candidate), &draft); err == nil {
+			draft.ContinuousScript = strings.TrimSpace(draft.ContinuousScript)
+			if draft.ContinuousScript == "" {
+				return remixDraft{}, fmt.Errorf("structured remix response is missing continuous_script")
 			}
+			return draft, nil
 		}
+		if removed == maxTrailingClosingBraces || !strings.HasSuffix(candidate, "}") {
+			break
+		}
+		candidate = strings.TrimSpace(strings.TrimSuffix(candidate, "}"))
 	}
-	return remixDraft{ContinuousScript: text}
+	return remixDraft{}, fmt.Errorf("model returned malformed structured remix response")
 }
 
 func stripCodeFence(raw string) string {
@@ -62,8 +75,11 @@ func isAskModeRefusal(text string) bool {
 	return strings.Contains(text, "Ask 模式") && (strings.Contains(text, "不能") || strings.Contains(text, "无法"))
 }
 
-func writeRemixDeliverable(outputDir, taskID, action, modelText string) error {
-	draft := parseRemixDraft(modelText)
+func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings []string, checkNote string) error {
+	draft, err := parseRemixDraft(modelText)
+	if err != nil {
+		return err
+	}
 	script := strings.TrimSpace(draft.ContinuousScript)
 	if script == "" || utf8.RuneCountInString(script) < 40 {
 		return fmt.Errorf("model returned no usable remix script")
@@ -106,14 +122,24 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string) error {
 		return path
 	}
 	sum := sha256.Sum256(scriptBytes)
+	summary := "二创连续文案已生成。"
+	if note := strings.TrimSpace(checkNote); note != "" {
+		summary += note
+	} else if len(warnings) > 0 {
+		summary += fmt.Sprintf("自检发现 %d 处与原文重合未修复，见警告。", len(warnings))
+	}
+	warningList := make([]any, 0, len(warnings))
+	for _, warning := range warnings {
+		warningList = append(warningList, warning)
+	}
 	envelope := map[string]any{
 		"schema_version": "2.0",
 		"task_id":        taskID,
 		"action":         action,
 		"status":         "completed",
-		"summary":        "二创连续文案已生成。",
+		"summary":        summary,
 		"questions":      []any{},
-		"warnings":       []any{},
+		"warnings":       warningList,
 		"artifacts": []map[string]string{
 			{"type": "viral_analysis", "path": abs("viral_analysis.json"), "description": "Viral mechanism analysis"},
 			{"type": "structure_design", "path": abs("structure_design.json"), "description": "Remix structure design"},
@@ -125,6 +151,85 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string) error {
 				"type": "continuous_script", "path": abs("continuous_script.txt"), "storage_kind": "file",
 				"filename": "continuous_script.txt", "mime": "text/plain; charset=utf-8",
 				"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
+			},
+		},
+	}
+	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
+}
+
+func writeSpokenDeliverable(outputDir, taskID, modelText string) error {
+	formatted, err := spokenlines.Format(modelText)
+	if err != nil {
+		return err
+	}
+	if isAskModeRefusal(formatted) {
+		return fmt.Errorf("%s", truncate(formatted, 240))
+	}
+	scriptPath := filepath.Join(outputDir, "spoken_script.txt")
+	scriptBytes := []byte(formatted)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(scriptPath, scriptBytes, 0o644); err != nil {
+		return err
+	}
+	abs, _ := filepath.Abs(scriptPath)
+	sum := sha256.Sum256(scriptBytes)
+	envelope := map[string]any{
+		"schema_version": "2.0",
+		"task_id":        taskID,
+		"action":         string(domain.ActionRemixSpokenLines),
+		"status":         "completed",
+		"summary":        "口播稿已生成。",
+		"questions":      []any{},
+		"warnings":       []any{},
+		"artifacts":      []any{},
+		"asset_outputs": []map[string]any{
+			{
+				"type": "spoken_script", "path": abs, "storage_kind": "file",
+				"filename": "spoken_script.txt", "mime": "text/plain; charset=utf-8",
+				"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
+			},
+		},
+	}
+	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
+}
+
+func writeKeywordsDeliverable(outputDir, taskID, modelText string, lines []string) error {
+	if isAskModeRefusal(modelText) {
+		return fmt.Errorf("%s", truncate(modelText, 240))
+	}
+	doc, err := spokenlines.BuildKeywordDoc(modelText, lines)
+	if err != nil {
+		return err
+	}
+	payload, err := spokenlines.MarshalKeywordDoc(doc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return err
+	}
+	keywordsPath := filepath.Join(outputDir, "caption_keywords.json")
+	if err := os.WriteFile(keywordsPath, payload, 0o644); err != nil {
+		return err
+	}
+	abs, _ := filepath.Abs(keywordsPath)
+	sum := sha256.Sum256(payload)
+	envelope := map[string]any{
+		"schema_version": "2.0",
+		"task_id":        taskID,
+		"action":         string(domain.ActionCaptionKeywords),
+		"status":         "completed",
+		"summary":        "字幕关键词已标注。",
+		"questions":      []any{},
+		"warnings":       []any{},
+		"artifacts":      []any{},
+		"asset_outputs": []map[string]any{
+			{
+				"type": "caption_keywords", "path": abs, "storage_kind": "file",
+				"filename": "caption_keywords.json", "mime": "application/json; charset=utf-8",
+				"size": int64(len(payload)), "sha256": hex.EncodeToString(sum[:]),
 			},
 		},
 	}
@@ -146,7 +251,7 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	}
 	topics := pickHotTopics(draft.Topics, script)
 	for i, description := range descriptions {
-		descriptions[i] = withHotTopics(description, topics)
+		descriptions[i] = withHotTopics(clipDescriptionBody(description), topics)
 	}
 	cta := strings.TrimSpace(draft.CTA)
 	if cta == "" {
@@ -242,6 +347,26 @@ func pickHotTopics(given []string, seed string) []string {
 		add(hotPublishingTopics[(start+i)%len(hotPublishingTopics)])
 	}
 	return out
+}
+
+// clipDescriptionBody keeps at most two sentences so the 视频描述 stays a
+// short hook instead of a re-pasted script paragraph. Trailing hashtags the
+// model already appended are dropped along with anything past the second
+// sentence; withHotTopics re-appends the canonical topic run.
+func clipDescriptionBody(text string) string {
+	body := strings.TrimSpace(trailingHashtagRun.ReplaceAllString(strings.TrimSpace(text), ""))
+	runes := []rune(body)
+	sentences := 0
+	for i, r := range runes {
+		switch r {
+		case '。', '！', '？', '!', '?', '；', ';':
+			sentences++
+			if sentences == 2 {
+				return strings.TrimSpace(string(runes[:i+1]))
+			}
+		}
+	}
+	return body
 }
 
 func withHotTopics(text string, topics []string) string {

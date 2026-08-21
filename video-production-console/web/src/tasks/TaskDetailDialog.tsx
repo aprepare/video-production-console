@@ -16,6 +16,7 @@ import {
   taskModelLabel,
   taskPhaseStateLabels,
   taskQuestions,
+  taskResultWarnings,
   taskTimeline,
   taskTimingPhases,
   taskTitle,
@@ -38,6 +39,10 @@ type TaskDetailDialogProps = {
   onRemakeMontage?: (task: Task) => void;
   onOpenDirectory: (assetID: string) => void;
   onAnswer: (task: Task, answer: string) => void;
+  // Multi-model fan-out: adopt this task's script as the project's current
+  // continuous script (registers a new version, downstream assets re-run).
+  onAdoptScript?: (task: Task) => void;
+  currentScriptVersionID?: string;
 };
 
 export function TaskDetailDialog({
@@ -56,11 +61,14 @@ export function TaskDetailDialog({
   onRemakeMontage,
   onOpenDirectory,
   onAnswer,
+  onAdoptScript,
+  currentScriptVersionID,
 }: TaskDetailDialogProps) {
   const montagePhase = task.montage ? derivedMontagePhase(task) : "";
   const elapsed = taskElapsedMS(task, timingNow);
   const questions = taskQuestions(task);
   const timeline = taskTimeline(task);
+  const resultWarnings = taskResultWarnings(task);
 
   return (
     <div className="modal-backdrop">
@@ -226,7 +234,7 @@ export function TaskDetailDialog({
                 className={`task-message ${item.role}`}
                 key={item.id || `${item.role}-${item.created_at}-${index}`}
               >
-                <b>{item.role === "user" ? "你" : "Codex"}</b>
+                <b>{item.role === "user" ? "你" : "模型"}</b>
                 <p>{taskMessageContent(item.content)}</p>
               </div>
             ))}
@@ -256,13 +264,48 @@ export function TaskDetailDialog({
           <section className="task-result-summary">
             <h3>完成结果</h3>
             <p>{task.result_summary}</p>
+            {resultWarnings.length ? (
+              <ul className="task-result-warnings">
+                {resultWarnings.map((warning, index) => (
+                  <li key={`${task.id}-result-warning-${index}`}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
             {task.completion_phase ? <small>结果阶段：{task.completion_phase}</small> : null}
           </section>
         )}
+        {task.continuous_script ? (
+          <details className="task-script-view" open>
+            <summary>本任务生成的文案（{taskModelLabel(task) || "默认模型"}）</summary>
+            <div className="task-script-view__actions">
+              <button
+                type="button"
+                className="task-script-view__copy"
+                onClick={() => void navigator.clipboard?.writeText(task.continuous_script || "")}
+              >
+                复制全文
+              </button>
+              {onAdoptScript ? (
+                currentScriptVersionID && task.continuous_script_version_id === currentScriptVersionID ? (
+                  <span className="task-script-view__current">当前采用中</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="task-script-view__adopt"
+                    onClick={() => onAdoptScript(task)}
+                  >
+                    采用此稿为当前文案
+                  </button>
+                )
+              ) : null}
+            </div>
+            <pre>{task.continuous_script}</pre>
+          </details>
+        ) : null}
         {task.error_message && <p className="warning">{task.error_message}</p>}
         {questions.length > 0 && (
           <section className="task-question">
-            <strong>Codex 正在问：</strong>
+            <strong>任务正在问：</strong>
             {questions.map((question, index) => (
               <p key={`${task.id}-modal-question-${index}`}>{question}</p>
             ))}
@@ -273,13 +316,13 @@ export function TaskDetailDialog({
                 if (answerInput.trim()) onAnswer(task, answerInput.trim());
               }}
             >
-              <label htmlFor="task-answer-input">回答 Codex</label>
+              <label htmlFor="task-answer-input">回答任务</label>
               <textarea
                 id="task-answer-input"
                 rows={3}
                 value={answerInput}
                 onChange={(event) => onAnswerInputChange(event.target.value)}
-                placeholder="在这里回答，Codex 会从当前任务继续"
+                placeholder="在这里回答，任务会继续执行"
               />
               <button disabled={!answerInput.trim()}>发送回答</button>
             </form>

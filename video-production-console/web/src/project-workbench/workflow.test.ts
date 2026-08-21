@@ -100,7 +100,8 @@ describe("production workflow view model", () => {
 
   test("derives script, assets, mixing, and review from formal current assets", () => {
     expect(deriveProductionStage(detail())).toBe("script");
-    expect(deriveProductionStage(detail("script", { continuous_script: "ready" }))).toBe("assets");
+    expect(deriveProductionStage(detail("script", { continuous_script: "ready" }))).toBe("script");
+    expect(deriveProductionStage(detail("script", { continuous_script: "ready", spoken_script: "ready" }))).toBe("assets");
     expect(
       deriveProductionStage(
         detail(
@@ -133,6 +134,7 @@ describe("production workflow view model", () => {
       deriveProductionStage(
         detail("mixing", {
           continuous_script: "ready",
+          spoken_script: "ready",
           narration: "failed",
           subtitle_srt: "ready",
           mix_draft: "stale",
@@ -148,12 +150,15 @@ describe("production workflow view model", () => {
     expect(missingProductionInputs(detail())).toEqual(["continuous_script"]);
     expect(
       missingProductionInputs(detail("script", { continuous_script: "ready" }, undefined, "stale")),
+    ).toEqual(["spoken_script"]);
+    expect(
+      missingProductionInputs(detail("script", { continuous_script: "ready", spoken_script: "ready" }, undefined, "stale")),
     ).toEqual(["narration", "subtitle_srt", "account_background"]);
     expect(
       missingProductionInputs(
         detail(
           "assets",
-          { continuous_script: "ready", narration: "ready", subtitle_srt: "ready" },
+          { continuous_script: "ready", spoken_script: "ready", narration: "ready", subtitle_srt: "ready" },
           undefined,
           "ready",
         ),
@@ -167,7 +172,7 @@ describe("production workflow view model", () => {
       missingProductionInputs(
         detail(
           "assets",
-          { continuous_script: "ready", narration: "stale", subtitle_srt: "stale" },
+          { continuous_script: "ready", spoken_script: "ready", narration: "stale", subtitle_srt: "stale" },
           undefined,
           "stale",
           ["narration", "account_background"],
@@ -240,6 +245,11 @@ describe("production workflow view model", () => {
       disabled: true,
     });
     expect(nextPrimaryAction(detail("script", { continuous_script: "ready" }))).toMatchObject({
+      id: "start-spoken-lines",
+      label: "生成口播稿",
+      disabled: false,
+    });
+    expect(nextPrimaryAction(detail("script", { continuous_script: "ready", spoken_script: "ready" }))).toMatchObject({
       id: "prepare-assets",
       disabled: false,
     });
@@ -268,6 +278,7 @@ describe("production workflow view model", () => {
   test("allows remaking a montage after a registered draft exists", () => {
     const readyInputs = {
       continuous_script: "ready" as const,
+      spoken_script: "ready" as const,
       narration: "ready" as const,
       subtitle_srt: "ready" as const,
       mix_draft: "ready" as const,
@@ -275,6 +286,7 @@ describe("production workflow view model", () => {
     expect(canRemakeMontage(detail("review", readyInputs, undefined, "ready"))).toBe(true);
     expect(canRemakeMontage(detail("mixing", {
       continuous_script: "ready",
+      spoken_script: "ready",
       narration: "ready",
       subtitle_srt: "ready",
     }, undefined, "ready"))).toBe(false);

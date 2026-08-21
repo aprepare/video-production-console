@@ -101,46 +101,49 @@ func normalizeMediaItem(item *mediaItem) error {
 }
 
 func isLandscapeItem(item mediaItem) bool {
-	raw := strings.TrimSpace(item.Category)
-	key := strings.ToLower(strings.ReplaceAll(raw, " ", "_"))
-	switch key {
-	case "nature_landscape", "scenery", "landscape", "nature",
-		"weather_water_fire", "weather", "space_cosmos", "space",
-		"city_traffic", "city", "urban", "skyline", "architecture",
-		"finance_business", "finance", "business", "office":
-		return true
-	}
-	for _, token := range []string{"风景", "景观", "城市", "车流", "天际线", "财经", "金融"} {
-		if strings.Contains(raw, token) {
-			return true
-		}
-	}
-	path := strings.ToLower(filepath.ToSlash(item.RelativePath + " " + item.AbsPath))
-	for _, token := range []string{
-		"nature_landscape", "/scenery/", "/landscape/",
-		"weather_water_fire", "space_cosmos",
-		"city_traffic", "/city/", "/urban/",
-		"finance_business", "/finance/",
-		"风景", "景观", "城市", "车流", "天际线", "财经", "金融",
-	} {
-		if strings.Contains(path, token) {
-			return true
-		}
-	}
-	for _, tag := range item.Tags {
-		tag = strings.TrimSpace(tag)
-		lower := strings.ToLower(tag)
-		switch lower {
-		case "landscape", "scenery", "city", "traffic", "skyline", "finance", "business":
+	return isNatureLandscapeItem(item)
+	/*
+		raw := strings.TrimSpace(item.Category)
+		key := strings.ToLower(strings.ReplaceAll(raw, " ", "_"))
+		switch key {
+		case "nature_landscape", "scenery", "landscape", "nature",
+			"weather_water_fire", "weather", "space_cosmos", "space",
+			"city_traffic", "city", "urban", "skyline", "architecture",
+			"finance_business", "finance", "business", "office":
 			return true
 		}
 		for _, token := range []string{"风景", "景观", "城市", "车流", "天际线", "财经", "金融"} {
-			if strings.Contains(tag, token) {
+			if strings.Contains(raw, token) {
 				return true
 			}
 		}
-	}
-	return false
+		path := strings.ToLower(filepath.ToSlash(item.RelativePath + " " + item.AbsPath))
+		for _, token := range []string{
+			"nature_landscape", "/scenery/", "/landscape/",
+			"weather_water_fire", "space_cosmos",
+			"city_traffic", "/city/", "/urban/",
+			"finance_business", "/finance/",
+			"风景", "景观", "城市", "车流", "天际线", "财经", "金融",
+		} {
+			if strings.Contains(path, token) {
+				return true
+			}
+		}
+		for _, tag := range item.Tags {
+			tag = strings.TrimSpace(tag)
+			lower := strings.ToLower(tag)
+			switch lower {
+			case "landscape", "scenery", "city", "traffic", "skyline", "finance", "business":
+				return true
+			}
+			for _, token := range []string{"风景", "景观", "城市", "车流", "天际线", "财经", "金融"} {
+				if strings.Contains(tag, token) {
+					return true
+				}
+			}
+		}
+		return false
+	*/
 }
 
 func filterLandscapeCandidates(candidates []rankedCandidate) []rankedCandidate {

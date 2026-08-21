@@ -181,7 +181,7 @@ func NewService(repo Repository, protector security.Protector, optionValues ...O
 }
 
 func (s *Service) InitializeBootSettings(ctx context.Context, boot BootSettings) error {
-	if boot.DataRoot == "" || boot.CodexBinaryPath == "" {
+	if boot.DataRoot == "" {
 		return ErrNotConfigured
 	}
 	if boot.ListenAddr != "" {
@@ -287,15 +287,19 @@ func (s *Service) ResolveTaskModel(ctx context.Context, override taskmodel.Selec
 		return taskmodel.Selection{}, err
 	}
 	model := strings.TrimSpace(runtime.CodexDefaultModel)
-	if override.Kind == taskmodel.KindRemix {
+	switch override.Kind {
+	case taskmodel.KindRemix:
 		model = firstNonEmpty(runtime.RemixModel, runtime.CodexDefaultModel)
+	case taskmodel.KindSpokenLines:
+		// 口播稿 has its own model setting; empty falls back to the remix model.
+		model = firstNonEmpty(runtime.SpokenLinesModel, runtime.RemixModel, runtime.CodexDefaultModel)
 	}
 	defaults := taskmodel.Selection{
 		Model:           model,
 		ReasoningEffort: runtime.CodexDefaultReasoningEffort,
 		Kind:            override.Kind,
 	}
-	if override.Kind == taskmodel.KindRemix {
+	if override.Kind == taskmodel.KindRemix || override.Kind == taskmodel.KindSpokenLines {
 		defaults.ReasoningEffort = strings.TrimSpace(runtime.RemixReasoningEffort)
 	}
 	return taskmodel.Resolve(defaults, override)
@@ -345,8 +349,15 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.RemixBaseURL = configured.RemixBaseURL
 	s.active.RemixModel = configured.RemixModel
 	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
+	s.active.RemixCheckModel = configured.RemixCheckModel
+	s.active.SpokenLinesModel = configured.SpokenLinesModel
+	s.active.ModelOptions = configured.ModelOptions
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
 	s.active.ImageStream = configured.ImageStream
+	// Montage style and the BGM library directory only affect future task
+	// manifests, so they hot-apply without a restart.
+	s.active.MontageStyle = configured.MontageStyle
+	s.active.BGMDir = configured.BGMDir
 	copyVoiceHotSettings(s.active, configured)
 }
 
@@ -484,8 +495,16 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	if view.Public.DataRoot == "" || view.Public.CodexBinaryPath == "" || !filepath.IsAbs(view.Public.DataRoot) || !filepath.IsAbs(view.Public.CodexBinaryPath) {
+	if view.Public.DataRoot == "" || !filepath.IsAbs(view.Public.DataRoot) {
 		return Runtime{}, ErrNotConfigured
+	}
+	if view.Public.CodexBinaryPath != "" && !filepath.IsAbs(view.Public.CodexBinaryPath) {
+		view.Public.CodexBinaryPath = ""
+	}
+	if clearMissingOptionalBinaries(&view.Public) {
+		if _, persistErr := s.repo.UpdatePublic(ctx, publicValues(view.Public)); persistErr != nil {
+			return Runtime{}, persistErr
+		}
 	}
 	if err := validatePublic(view.Public); err != nil {
 		return Runtime{}, err
@@ -493,11 +512,11 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 	runtime := Runtime{PublicSettings: view.Public, SecretVersions: make(map[string]int64, len(secretKeys))}
 	for _, key := range secretKeys {
 		value, version, configured, err := s.secretValue(ctx, key)
-		if !configured && err == nil {
+		// An undecryptable secret (for example DPAPI material from another
+		// machine) is treated as unconfigured so the console still boots;
+		// the user re-enters the key. Nothing of the ciphertext is echoed.
+		if err != nil || !configured {
 			continue
-		}
-		if err != nil {
-			return Runtime{}, err
 		}
 		switch key {
 		case SecretGrokAPIKey:
@@ -545,6 +564,8 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
 	configured.MaxImageConcurrency, active.MaxImageConcurrency = 0, 0
 	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0
+	configured.MontageStyle, active.MontageStyle = domain.MontageStyle{}, domain.MontageStyle{}
+	configured.BGMDir, active.BGMDir = "", ""
 	clearVoiceHotSettings(&configured)
 	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
@@ -598,7 +619,90 @@ func validateSecretUpdate(key, value string) error {
 func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
 	value.RemixModel = strings.TrimSpace(value.RemixModel)
 	value.RemixReasoningEffort = strings.ToLower(strings.TrimSpace(value.RemixReasoningEffort))
+	value.RemixCheckModel = strings.TrimSpace(value.RemixCheckModel)
+	value.SpokenLinesModel = strings.TrimSpace(value.SpokenLinesModel)
+	value.ModelOptions = normalizeModelOptions(value.ModelOptions)
+	value.BGMDir = strings.TrimSpace(value.BGMDir)
+	value.MontageStyle = sanitizeMontageStyle(value.MontageStyle)
 	return value
+}
+
+func sanitizeMontageStyle(style domain.MontageStyle) domain.MontageStyle {
+	style.CaptionColor = strings.ToUpper(strings.TrimSpace(style.CaptionColor))
+	style.KeywordColor = strings.ToUpper(strings.TrimSpace(style.KeywordColor))
+	style.TitleColor = strings.ToUpper(strings.TrimSpace(style.TitleColor))
+	style.SubtitleColor = strings.ToUpper(strings.TrimSpace(style.SubtitleColor))
+	style.CaptionPosition = strings.ToLower(strings.TrimSpace(style.CaptionPosition))
+	style.CaptionFont = strings.TrimSpace(style.CaptionFont)
+	style.BGMID = strings.TrimSpace(style.BGMID)
+	return style.Normalized()
+}
+
+var styleColorPattern = regexp.MustCompile(`^#[0-9A-F]{6}$`)
+
+// montageCaptionFonts is the pyJianYingDraft FontType allowlist offered in the
+// UI; an arbitrary name would fail inside the Python skill.
+var montageCaptionFonts = map[string]bool{
+	"新青年体": true, "俪金黑": true, "大字报": true, "抖音美好体": true,
+	"汉仪英雄体": true, "站酷酷黑体": true, "宋体": true, "圆体": true,
+	"毛笔行楷": true, "台北黑体_Bold": true,
+}
+
+func validateMontageStyle(style domain.MontageStyle) error {
+	sizes := []struct {
+		name  string
+		value float64
+	}{
+		{"caption_size", style.CaptionSize}, {"plain_size", style.PlainSize},
+		{"keyword_size", style.KeywordSize}, {"title_size", style.TitleSize},
+		{"subtitle_size", style.SubtitleSize},
+	}
+	for _, size := range sizes {
+		if size.value < 5 || size.value > 60 {
+			return invalid("montage_style")
+		}
+	}
+	for _, color := range []string{style.CaptionColor, style.KeywordColor, style.TitleColor, style.SubtitleColor} {
+		if !styleColorPattern.MatchString(color) {
+			return invalid("montage_style")
+		}
+	}
+	switch style.CaptionPosition {
+	case "middle", "bottom", "custom":
+	default:
+		return invalid("montage_style")
+	}
+	for _, y := range []float64{style.CaptionY, style.TitleY, style.SubtitleY} {
+		if y < -1 || y > 1 {
+			return invalid("montage_style")
+		}
+	}
+	if !montageCaptionFonts[style.CaptionFont] {
+		return invalid("montage_style")
+	}
+	if style.BGMVolume <= 0 || style.BGMVolume > 1 {
+		return invalid("montage_style")
+	}
+	if len(style.BGMID) > 128 {
+		return invalid("montage_style")
+	}
+	return nil
+}
+
+// normalizeModelOptions keeps the newline-separated model list tidy:
+// trimmed lines, no empties, no duplicates.
+func normalizeModelOptions(raw string) string {
+	seen := map[string]bool{}
+	var options []string
+	for _, line := range strings.Split(raw, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		options = append(options, name)
+	}
+	return strings.Join(options, "\n")
 }
 
 func validatePublic(value domain.PublicSettings) error {
@@ -644,6 +748,15 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	if len(value.RemixModel) > 256 {
 		return invalid("remix_model")
+	}
+	if len(value.RemixCheckModel) > 256 {
+		return invalid("remix_check_model")
+	}
+	if len(value.SpokenLinesModel) > 256 {
+		return invalid("spoken_lines_model")
+	}
+	if len(value.ModelOptions) > 4096 {
+		return invalid("model_options")
 	}
 	if value.RemixReasoningEffort != "" {
 		normalizedRemixEffort, err := taskmodel.Normalize(taskmodel.Selection{Model: taskmodel.DefaultModel, ReasoningEffort: value.RemixReasoningEffort})
@@ -761,11 +874,7 @@ func validatePublic(value domain.PublicSettings) error {
 		if binary.value == "" {
 			continue
 		}
-		if err := validateCanonicalAbsolutePath(binary.value); err != nil {
-			return invalid(binary.name)
-		}
-		info, err := os.Stat(binary.value)
-		if err != nil || !info.Mode().IsRegular() {
+		if !optionalMediaBinaryUsable(binary.value) {
 			return invalid(binary.name)
 		}
 	}
@@ -808,10 +917,42 @@ func validatePublic(value domain.PublicSettings) error {
 			return invalid("codex_workspace_roots")
 		}
 	}
+	if value.BGMDir != "" {
+		if err := validateCanonicalAbsolutePath(value.BGMDir); err != nil {
+			return invalid("bgm_dir")
+		}
+	}
+	if err := validateMontageStyle(value.MontageStyle.Normalized()); err != nil {
+		return err
+	}
 	return nil
 }
 
 func invalid(field string) error { return fmt.Errorf("%w: %s", ErrInvalidSettings, field) }
+
+func clearMissingOptionalBinaries(value *domain.PublicSettings) bool {
+	repaired := false
+	if !optionalMediaBinaryUsable(value.FFmpegPath) {
+		value.FFmpegPath = ""
+		repaired = true
+	}
+	if !optionalMediaBinaryUsable(value.FFprobePath) {
+		value.FFprobePath = ""
+		repaired = true
+	}
+	return repaired
+}
+
+func optionalMediaBinaryUsable(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return true
+	}
+	if err := validateCanonicalAbsolutePath(path); err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
 
 func validateListenAddr(value string) error {
 	if value == "" || value != strings.TrimSpace(value) || strings.Contains(value, "://") {
@@ -946,6 +1087,9 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"grok_base_url": value.GrokBaseURL, "grok_model": value.GrokModel,
 		"remix_base_url": value.RemixBaseURL, "remix_model": value.RemixModel,
 		"remix_reasoning_effort": value.RemixReasoningEffort,
+		"remix_check_model":      value.RemixCheckModel,
+		"spoken_lines_model":     value.SpokenLinesModel,
+		"model_options":          value.ModelOptions,
 		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
 		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
@@ -981,7 +1125,25 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"pexels_api_base_url":            value.PexelsAPIBaseURL,
 		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
 		"max_external_results_per_query": strconv.Itoa(value.MaxExternalResultsPerQuery),
+		"bgm_dir":                        value.BGMDir,
+		"montage_style":                  encodeMontageStyle(value.MontageStyle),
 	}
+}
+
+func encodeMontageStyle(style domain.MontageStyle) string {
+	encoded, err := json.Marshal(style.Normalized())
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func montageStyleFromValue(raw string) domain.MontageStyle {
+	var style domain.MontageStyle
+	if trimmed := strings.TrimSpace(raw); trimmed != "" {
+		_ = json.Unmarshal([]byte(trimmed), &style)
+	}
+	return style.Normalized()
 }
 
 func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
@@ -1186,6 +1348,9 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		GrokBaseURL: values["grok_base_url"], GrokModel: values["grok_model"],
 		RemixBaseURL: values["remix_base_url"], RemixModel: strings.TrimSpace(values["remix_model"]),
 		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
+		RemixCheckModel:      strings.TrimSpace(values["remix_check_model"]),
+		SpokenLinesModel:     strings.TrimSpace(values["spoken_lines_model"]),
+		ModelOptions:         normalizeModelOptions(values["model_options"]),
 		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
 		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
@@ -1219,6 +1384,8 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		EmbeddingBaseURL: values["embedding_base_url"], EmbeddingModel: strings.TrimSpace(values["embedding_model"]),
 		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
 		MaxExternalResultsPerQuery: externalResults,
+		BGMDir:                     strings.TrimSpace(values["bgm_dir"]),
+		MontageStyle:               montageStyleFromValue(values["montage_style"]),
 	}
 }
 

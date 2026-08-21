@@ -65,6 +65,10 @@ export type Task = WorkbenchProjectTask & {
   timing_summary?: TaskTimingSummary;
   timing_runs?: TaskPhaseRun[];
   publishing_package?: PublishingPackage;
+  // Remix result endpoint returns the script this task registered, so parallel
+  // multi-model drafts stay comparable even after a later version became current.
+  continuous_script?: string;
+  continuous_script_version_id?: string;
 };
 
 export type ProjectDetail = Omit<WorkbenchProjectDetail, "project" | "topic_context"> & {
@@ -85,6 +89,9 @@ export type PublicSettings = {
   remix_base_url: string;
   remix_model: string;
   remix_reasoning_effort: ReasoningEffort | "";
+  remix_check_model: string;
+  spoken_lines_model: string;
+  model_options: string;
   codex_task_project_root: string;
   image_base_url: string;
   image_model: string;
@@ -130,6 +137,43 @@ export type PublicSettings = {
   pexels_api_base_url: string;
   pixabay_api_base_url: string;
   max_external_results_per_query: number;
+  bgm_dir?: string;
+  montage_style?: MontageStyle;
+};
+
+export type MontageStyle = {
+  caption_size?: number;
+  caption_color?: string;
+  caption_position?: string;
+  caption_y?: number;
+  caption_font?: string;
+  plain_size?: number;
+  keyword_size?: number;
+  keyword_color?: string;
+  title_hidden?: boolean;
+  title_size?: number;
+  title_color?: string;
+  title_y?: number;
+  subtitle_hidden?: boolean;
+  subtitle_size?: number;
+  subtitle_color?: string;
+  subtitle_y?: number;
+  bgm_id?: string;
+  bgm_volume?: number;
+};
+
+export type BgmTrack = {
+  id: string;
+  name: string;
+  duration_s: number;
+  usable_head_s: number;
+  climax_start_s: number;
+  climax_duration_s: number;
+};
+
+export type BgmLibrary = {
+  dir: string;
+  tracks: BgmTrack[];
 };
 
 export type Settings = {
@@ -156,7 +200,7 @@ export type ImageProject = {
   custom_style: string;
   concurrency: number;
   status: "draft" | "generating" | "ready" | "partial" | "failed";
-  run_mode?: "manual" | "quick";
+  run_mode?: "manual" | "quick" | "video";
   run_phase?: ImageRunPhase;
   run_status?: ImageRunStatus;
   phase_error?: string;
@@ -167,11 +211,62 @@ export type ImageProject = {
   text_model?: string;
   reasoning_effort?: ReasoningEffort | "";
   image_model?: string;
+  output_mode?: ImageOutputMode;
+  output_mode_locked_at?: string;
+  account_id?: string;
+  template_version?: string;
+  template_fingerprint?: string;
   publishing_candidates?: PublishingCandidate[];
   selected_position?: number;
   created_at: string;
   updated_at: string;
 };
+
+export type ImageOutputMode = "image_slideshow" | "image_to_video";
+export type ImageVideoJobStatus = "pending" | "running" | "succeeded" | "failed" | "canceled";
+export type ImageVideoJobItem = {
+  id: string;
+  image_project_item_id: string;
+  ordinal: number;
+  retry_round: number;
+  attempt: number;
+  max_attempts: number;
+  status: string;
+  timeline_duration_us: number;
+  requested_duration_seconds?: 6 | 10 | 15;
+  actual_duration_us?: number;
+  error_code?: string;
+  error_message?: string;
+};
+export type ImageVideoAttempt = {
+  id: string;
+  job_item_id: string;
+  retry_round: number;
+  attempt: number;
+  status: string;
+  error_code?: string;
+  error_message?: string;
+};
+export type ImageVideoJob = {
+  id: string;
+  project_id: string;
+  account_id: string;
+  template_version: string;
+  output_mode: ImageOutputMode;
+  status: ImageVideoJobStatus;
+  model: string;
+  resolution: string;
+  phase: string;
+  draft_status?: string;
+  registration_status?: string;
+  retry_round: number;
+  concurrency: number;
+  version: number;
+  error_code?: string;
+  error_message?: string;
+  draft_name?: string;
+};
+export type ImageVideoJobDetail = { job: ImageVideoJob; items: ImageVideoJobItem[]; attempts: ImageVideoAttempt[] };
 
 export type QuickImageProjectRequest = {
   script: string;
@@ -184,6 +279,7 @@ export type QuickImageProjectRequest = {
   reasoning_effort: ReasoningEffort | "";
   image_model: string;
   image_attempts: number;
+  output_mode?: ImageOutputMode;
 };
 
 export type QuickImageProjectResponse = {
@@ -208,7 +304,7 @@ export type ImageProjectItem = {
   updated_at?: string;
 };
 
-export type ImageProjectDetail = { project: ImageProject; items: ImageProjectItem[]; publishing_candidates?: PublishingCandidate[]; selected_position?: number; publishing?: { current?: PublishingCandidate; all?: PublishingCandidate[] } };
+export type ImageProjectDetail = { project: ImageProject & { image_video_job_id?: string; image_video_job?: ImageVideoJobDetail }; items: ImageProjectItem[]; publishing_candidates?: PublishingCandidate[]; selected_position?: number; publishing?: { current?: PublishingCandidate; all?: PublishingCandidate[] } };
 
 export type IdeaMessage = {
   id: string;
