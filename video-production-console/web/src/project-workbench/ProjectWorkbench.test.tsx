@@ -137,7 +137,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
   expect(currentStep?.textContent).toContain("正在制作");
-  expect(screen.getByLabelText("3 个资产已就绪，共 6 个")).toBeTruthy();
+  expect(screen.getByLabelText("3 个资产已就绪，共 7 个")).toBeTruthy();
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();
   expect(container.querySelector(".project-asset--invalid")).toBeTruthy();
@@ -151,6 +151,7 @@ test("shows every project-scoped production asset with state, meaning, and acces
   expect(screen.getByText("配音")).toBeTruthy();
   expect(screen.getByText("SRT 字幕")).toBeTruthy();
   expect(screen.getByText("口播稿")).toBeTruthy();
+  expect(screen.getByText("字幕关键词")).toBeTruthy();
   expect(screen.getByText("剪映草稿")).toBeTruthy();
   expect(screen.queryByText("成片")).toBeNull();
   expect(screen.getAllByText("存在").length).toBeGreaterThan(0);

@@ -15,7 +15,7 @@ import type { ComponentType } from "react";
 import { useEffect, useRef } from "react";
 import type { ProjectAsset, ProjectDetail, RegisteredMontageAsset } from "./types";
 
-type AssetType = "continuous_script" | "narration" | "spoken_script" | "subtitle_srt" | "mix_draft";
+type AssetType = "continuous_script" | "narration" | "spoken_script" | "caption_keywords" | "subtitle_srt" | "mix_draft";
 export type ProjectAssetUploadType = "narration" | "subtitle_srt" | "account_background";
 export type AssetUploadRequest = { type: ProjectAssetUploadType; token: number } | null;
 
@@ -56,6 +56,13 @@ const assetDefinitions: Array<{
     description: "按一句一行切好的口播正文，配音字幕按这些行切。",
     accept: ".txt,text/plain",
     icon: List,
+  },
+  {
+    type: "caption_keywords",
+    label: "字幕关键词",
+    description: "按口播行标注的警示词（红）和数字（金），混剪字幕会放大这些词。",
+    accept: ".json,application/json",
+    icon: WandSparkles,
   },
   {
     type: "mix_draft",
@@ -161,7 +168,8 @@ export function ProjectAssets({
           const asset = detail.assets[definition.type];
           const generating = (narrationGenerating
             && (definition.type === "narration" || definition.type === "subtitle_srt"))
-            || (spokenGenerating && definition.type === "spoken_script");
+            || (spokenGenerating && definition.type === "spoken_script")
+            || (captionKeywordsLive && definition.type === "caption_keywords");
           const state = assetState(asset, generating);
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";
@@ -263,6 +271,19 @@ export function ProjectAssets({
                   >
                     <WandSparkles size={15} aria-hidden="true" />
                     {captionKeywordsLive ? "正在标注…" : "重标关键词"}
+                  </button>
+                ) : null}
+                {definition.type === "caption_keywords" && onStartCaptionKeywords && spokenScriptReady ? (
+                  <button
+                    type="button"
+                    onClick={onStartCaptionKeywords}
+                    disabled={captionKeywordsLive || spokenGenerating}
+                    aria-busy={captionKeywordsLive}
+                    title="按当前口播稿重新标注字幕关键词，完成后重做混剪即可生效"
+                    aria-label={captionKeywordsLive ? "正在标注字幕关键词" : asset ? "重标关键词" : "标注关键词"}
+                  >
+                    <WandSparkles size={15} aria-hidden="true" />
+                    {captionKeywordsLive ? "正在标注…" : asset ? "重标关键词" : "标注关键词"}
                   </button>
                 ) : null}
                 {definition.type === "narration" && onGenerateNarration ? (
