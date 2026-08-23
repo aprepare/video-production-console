@@ -198,7 +198,22 @@ test("disables narration generation with a stated reason while the spoken script
   expect(generate.getAttribute("aria-label")).toContain("口播稿");
   fireEvent.click(generate);
   expect(props.onGenerateNarration).not.toHaveBeenCalled();
+  expect(props.onStartSpokenLines).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "生成口播稿" }));
   expect(props.onStartSpokenLines).toHaveBeenCalledOnce();
+});
+
+test("does not auto-start spoken lines after a remix script is ready", () => {
+  const detail = fixture();
+  delete detail.assets.spoken_script;
+  delete detail.assets.narration;
+  delete detail.assets.mix_draft;
+  detail.project.stage = "script";
+  detail.missing_assets = ["spoken_script"];
+  const props = renderWorkbench(detail);
+
+  expect(screen.getByRole("button", { name: "生成口播稿" })).toBeTruthy();
+  expect(props.onStartSpokenLines).not.toHaveBeenCalled();
 });
 
 test("disables narration generation with a stated reason while the continuous script is missing", () => {

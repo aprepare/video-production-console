@@ -180,7 +180,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const importOpenButtonRef = useRef<HTMLButtonElement>(null);
   const sourceDialogRef = useRef<HTMLElement>(null);
   const importDialogRef = useRef<HTMLElement>(null);
-  const spokenAutoKey = useRef("");
   const keywordAutoKey = useRef("");
   const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
@@ -214,24 +213,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     setImportScript("");
     setImportDialogOpen(false);
     setCopiedKey("");
-    spokenAutoKey.current = "";
     keywordAutoKey.current = "";
   }, [detail.project.id]);
 
-  useEffect(() => {
-    if (!props.onStartSpokenLines) return;
-    if (action?.id !== "start-spoken-lines" || action.disabled) return;
-    if (spokenLinesLive || props.pendingActions.length > 0) return;
-    // While parallel multi-model remixes are still running, a later completion
-    // would immediately stale this 口播稿; wait until every remix has finished
-    // and the operator's chosen script is current.
-    if (sourceRemixLive) return;
-    const versionKey = detail.assets.continuous_script?.id;
-    if (!versionKey || spokenAutoKey.current === versionKey) return;
-    spokenAutoKey.current = versionKey;
-    props.onStartSpokenLines();
-  }, [action, spokenLinesLive, sourceRemixLive, props.pendingActions, props.onStartSpokenLines, detail.assets.continuous_script?.id]);
-
+  // 二创出稿后停在「生成口播稿」，等操作员确认文案再点主按钮。
   // 口播稿就绪后自动标注字幕关键词。这是可选增强：失败或缺席时混剪
   // 回落到本地词表，所以不占主按钮，也不阻塞配音。
   const captionKeywordsLive = props.tasks.some((task) =>
