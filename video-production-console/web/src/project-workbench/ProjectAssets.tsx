@@ -260,19 +260,6 @@ export function ProjectAssets({
                     {spokenGenerating ? "正在生成…" : "重做口播稿"}
                   </button>
                 ) : null}
-                {definition.type === "spoken_script" && onStartCaptionKeywords && spokenScriptReady ? (
-                  <button
-                    type="button"
-                    onClick={onStartCaptionKeywords}
-                    disabled={captionKeywordsLive || spokenGenerating}
-                    aria-busy={captionKeywordsLive}
-                    title="按当前口播稿重新标注字幕关键词，完成后重做混剪即可生效"
-                    aria-label={captionKeywordsLive ? "正在标注字幕关键词" : "重标关键词"}
-                  >
-                    <WandSparkles size={15} aria-hidden="true" />
-                    {captionKeywordsLive ? "正在标注…" : "重标关键词"}
-                  </button>
-                ) : null}
                 {definition.type === "caption_keywords" && onStartCaptionKeywords && spokenScriptReady ? (
                   <button
                     type="button"

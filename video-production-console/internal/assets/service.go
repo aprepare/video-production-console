@@ -29,6 +29,7 @@ import (
 	"golang.org/x/image/webp"
 
 	"video-production-console/internal/domain"
+	"video-production-console/internal/spokenlines"
 )
 
 const MaxBackgroundSize int64 = 20 << 20
@@ -377,6 +378,16 @@ func validateProjectFile(path string, assetType domain.AssetType, ext string) (s
 			return "", nil
 		}
 		return "application/json", nil
+	}
+	if assetType == domain.AssetCaptionKeywords {
+		payload, readErr := io.ReadAll(io.LimitReader(file, MaxTextAssetSize+1))
+		if readErr != nil || int64(len(payload)) > MaxTextAssetSize {
+			return "", nil
+		}
+		if _, err := spokenlines.ParseKeywordDoc(payload); err != nil {
+			return "", nil
+		}
+		return "application/json; charset=utf-8", nil
 	}
 	if assetType == domain.AssetSourceScript || assetType == domain.AssetTopicCard || assetType == domain.AssetContinuousScript || assetType == domain.AssetSpokenScript || assetType == domain.AssetSubtitleSRT || assetType == domain.AssetSubtitle {
 		reader := bufio.NewReader(file)

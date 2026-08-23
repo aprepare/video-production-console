@@ -743,6 +743,25 @@ func encodeSizedPNG(t *testing.T, width, height int) []byte {
 	return buffer.Bytes()
 }
 
+func TestSaveProjectAssetAcceptsCaptionKeywordsJSON(t *testing.T) {
+	svc := NewService(t.TempDir())
+	payload := `{"schema_version":1,"lines":[{"line":"整整2万亿","keywords":[{"text":"2万亿","kind":"number"},{"text":"整整","kind":"warning"}]}]}`
+	saved, err := svc.SaveProjectAsset(uuid.NewString(), domain.AssetCaptionKeywords, "caption_keywords.json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("SaveProjectAsset caption keywords: %v", err)
+	}
+	if saved.MIMEType != "application/json; charset=utf-8" {
+		t.Fatalf("MIME = %q, want application/json; charset=utf-8", saved.MIMEType)
+	}
+}
+
+func TestSaveProjectAssetRejectsInvalidCaptionKeywordsJSON(t *testing.T) {
+	_, err := NewService(t.TempDir()).SaveProjectAsset(uuid.NewString(), domain.AssetCaptionKeywords, "caption_keywords.json", strings.NewReader(`{"schema_version":1,"lines":[{"line":"整整2万亿","keywords":[{"text":"不存在","kind":"warning"}]}]}`))
+	if !errors.Is(err, ErrInvalidProjectAsset) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestSaveProjectAssetAcceptsWordTimingJSON(t *testing.T) {
 	svc := NewService(t.TempDir())
 	saved, err := svc.SaveProjectAsset(uuid.NewString(), domain.AssetWordTiming, "narration.word_timing.json", strings.NewReader(`{"schema_version":1,"script":"hello","provider":"test","words":[{"text":"hello","start_time":0,"end_time":1,"confidence":0.9}],"script_hash":"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","hash":"vendor-hash","duration":1}`))

@@ -36,6 +36,7 @@ type ProjectActionsOptions = {
   selectedAccountID: string;
   onProjectCreated: () => void;
   onContinuousScriptSaved: (content: string) => void;
+  onCaptionKeywordsSaved?: (content: string) => void;
   onRemixReviewStarted: () => void;
   onProjectDeleted: () => void;
 };
@@ -53,6 +54,7 @@ export function useProjectActions({
   selectedAccountID,
   onProjectCreated,
   onContinuousScriptSaved,
+  onCaptionKeywordsSaved,
   onRemixReviewStarted,
   onProjectDeleted,
 }: ProjectActionsOptions) {
@@ -126,6 +128,22 @@ export function useProjectActions({
         new File([input.content], "continuous-script.txt", { type: "text/plain" }),
       );
       const response = await api(`/api/projects/${input.projectID}/assets/continuous_script`, {
+        method: "POST",
+        body,
+      });
+      return response.ok;
+    },
+    onSuccess: (ok, input) => (ok ? refreshProject(input.projectID) : undefined),
+  });
+
+  const saveCaptionKeywordsMutation = useMutation({
+    mutationFn: async (input: { projectID: string; content: string }) => {
+      const body = new FormData();
+      body.set(
+        "file",
+        new File([input.content], "caption_keywords.json", { type: "application/json" }),
+      );
+      const response = await api(`/api/projects/${input.projectID}/assets/caption_keywords`, {
         method: "POST",
         body,
       });
@@ -427,6 +445,28 @@ export function useProjectActions({
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("连续文案保存失败，请检查网络连接后重试。");
+    } finally {
+      unlockAction(lockKey);
+    }
+  };
+
+  const saveCaptionKeywords = async (content: string) => {
+    if (!selected) return;
+    const projectID = selected.id;
+    const lockKey = lockAction(projectID, "save-caption-keywords");
+    if (!lockKey) return;
+    try {
+      const saved = await saveCaptionKeywordsMutation.mutateAsync({ projectID, content });
+      if (!saved) {
+        if (selectedIDRef.current === projectID) setMessage("字幕关键词保存失败，请检查词是否都在对应口播行里。");
+        return;
+      }
+      if (selectedIDRef.current !== projectID) return;
+      onCaptionKeywordsSaved?.(content);
+      setMessage("字幕关键词已保存。已有混剪草稿会标成失效，确认后重做混剪即可生效。");
+    } catch (error) {
+      if (!isAbortError(error) && selectedIDRef.current === projectID)
+        setMessage("字幕关键词保存失败，请检查网络连接后重试。");
     } finally {
       unlockAction(lockKey);
     }
@@ -812,6 +852,7 @@ export function useProjectActions({
     startImageVideoTask,
     publishProject,
     saveContinuousScript,
+    saveCaptionKeywords,
     importContinuousScript,
     adoptContinuousScript,
     startSpokenLinesTask,

@@ -366,6 +366,12 @@ function App() {
       );
       setPreviewDraft(content);
     },
+    onCaptionKeywordsSaved: (content) => {
+      setPreview((current) =>
+        current?.asset.type === "caption_keywords" ? { ...current, text: content } : current,
+      );
+      setPreviewDraft(content);
+    },
     onRemixReviewStarted: () => setReviseOpen(false),
     onProjectDeleted: () => closeProject(),
   });
@@ -1090,9 +1096,15 @@ function App() {
           preview={preview}
           draft={previewDraft}
           onDraftChange={setPreviewDraft}
-          saving={selectedPendingActions.includes("save-continuous-script")}
+          saving={selectedPendingActions.includes("save-continuous-script") || selectedPendingActions.includes("save-caption-keywords")}
           onClose={() => setPreview(null)}
-          onSave={(content) => void projectActions.saveContinuousScript(content)}
+          onSave={(content) => {
+            if (preview.asset.type === "caption_keywords") {
+              void projectActions.saveCaptionKeywords(content);
+              return;
+            }
+            void projectActions.saveContinuousScript(content);
+          }}
           onRevise={() => {
             setPreview(null);
             openReviseDialog();

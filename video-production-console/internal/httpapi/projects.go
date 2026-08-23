@@ -967,6 +967,7 @@ func uploadableType(t domain.AssetType) bool {
 	case domain.AssetSourceScript,
 		domain.AssetContinuousScript,
 		domain.AssetSpokenScript,
+		domain.AssetCaptionKeywords,
 		domain.AssetNarration,
 		domain.AssetSubtitleSRT,
 		domain.AssetMixDraft,
