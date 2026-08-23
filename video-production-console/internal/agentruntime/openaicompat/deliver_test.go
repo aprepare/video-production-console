@@ -117,6 +117,25 @@ func TestWriteSpokenDeliverablePassesValidator(t *testing.T) {
 	}
 }
 
+func TestWriteSpokenDeliverableStripsEOSMarker(t *testing.T) {
+	outputDir := t.TempDir()
+	raw := "后面的政策节奏\n和钱的去向\n咱们接着盯 <|eos|>"
+	if err := writeSpokenDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "spoken_script.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "咱们接着盯") {
+		t.Fatalf("spoken script missing last line: %q", text)
+	}
+	if strings.Contains(strings.ToLower(text), "eos") || strings.Contains(text, "<|") {
+		t.Fatalf("end marker leaked into spoken_script.txt: %q", text)
+	}
+}
+
 func TestWriteKeywordsDeliverablePassesValidator(t *testing.T) {
 	outputDir := t.TempDir()
 	lines := []string{"全国法拍房挂牌", "已经堆到40万套"}

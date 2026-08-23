@@ -390,6 +390,22 @@ func TestComposeFromSpokenLinesKeepsLLMCuts(t *testing.T) {
 	}
 }
 
+func TestComposeFromSpokenLinesStripsEOSMarker(t *testing.T) {
+	script := "咱们接着盯"
+	lines := []string{"咱们接着盯 <|eos|>"}
+	words := []Word{{Text: "咱们接着盯", StartTime: 0, EndTime: 1}}
+	captions, report, err := ComposeFromSpokenLines(script, lines, words, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captions) != 1 || captions[0].Text != "咱们接着盯" {
+		t.Fatalf("captions=%#v report=%#v", captions, report)
+	}
+	if strings.Contains(strings.ToLower(captions[0].Text), "eos") {
+		t.Fatalf("end marker leaked into SRT text: %q", captions[0].Text)
+	}
+}
+
 func TestComposeFromSpokenLinesAlignsDigitizedNumbers(t *testing.T) {
 	// 口播稿 digitizes numbers (八月 → 8月) but the TTS reads the continuous
 	// script verbatim; alignment must treat the two spellings as equal.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"video-production-console/internal/spokenlines"
 )
 
 // ComposeFromSpokenLines times the LLM 口播稿 lines against vendor word
@@ -15,7 +17,7 @@ func ComposeFromSpokenLines(script string, lines []string, words []Word, opts Op
 	}
 	cleaned := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(spokenlines.StripSpecialTokens(line))
 		if line == "" {
 			continue
 		}

@@ -5,7 +5,7 @@ package spokenlines
 // 20-character line or a Chinese year.
 const SystemPrompt = `你是财经视频号口播切句助手。只根据连续文案切出口播稿，不要改写观点、不要补内容、不要解释、不要调用工具、不要读写文件。
 
-只返回口播稿正文，不要 Markdown，不要 JSON。
+只返回口播稿正文，不要 Markdown，不要 JSON，不要输出 <|eos|>、</s>、<|endoftext|> 这类模型结束标记。
 
 ### 核心格式规则
 1. **一句一行**：每一行必须是一个完整、自然的语义单元（能独立停顿的口语句子），不要把两句独立的话硬凑到一行。

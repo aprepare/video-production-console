@@ -21,16 +21,17 @@ var protectedPhrases = []string{
 // each line ending with a trailing space before the newline.
 func Format(raw string) (string, error) {
 	text := strings.TrimSpace(stripCodeFence(raw))
+	text = StripSpecialTokens(text)
 	if text == "" {
 		return "", fmt.Errorf("spoken lines are empty")
 	}
 	if script, ok := extractSpokenJSON(text); ok {
-		text = script
+		text = StripSpecialTokens(script)
 	}
 	text = digitize(text)
 	var lines []string
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(StripSpecialTokens(line))
 		if line == "" {
 			continue
 		}

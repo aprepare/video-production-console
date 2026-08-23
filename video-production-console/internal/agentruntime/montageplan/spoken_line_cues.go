@@ -27,7 +27,7 @@ const (
 // what splitSpokenLine does through its clause machinery. A decimal point
 // between digits (0.05%) is part of the number and stays on screen.
 func spokenDisplayRunes(text string) []rune {
-	src := []rune(strings.TrimSpace(text))
+	src := []rune(strings.TrimSpace(spokenlines.StripSpecialTokens(text)))
 	out := make([]rune, 0, len(src))
 	for i, r := range src {
 		if (unicode.IsSpace(r) || isSpokenBreakRune(r)) && !isDecimalPoint(src, i) {

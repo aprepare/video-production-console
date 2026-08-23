@@ -208,3 +208,38 @@ func TestFormatExtractsJSONAndRejectsEmpty(t *testing.T) {
 		t.Fatal("expected empty error")
 	}
 }
+
+func TestStripSpecialTokensRemovesModelEndMarkers(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"咱们接着盯 <|eos|>", "咱们接着盯"},
+		{"我在课里等你 <|eos|>", "我在课里等你"},
+		{"第一句</s>", "第一句"},
+		{"<|endoftext|>", ""},
+		{"[EOS]结尾", "结尾"},
+		{"正常一句", "正常一句"},
+	}
+	for _, test := range tests {
+		if got := StripSpecialTokens(test.in); got != test.want {
+			t.Fatalf("StripSpecialTokens(%q)=%q, want %q", test.in, got, test.want)
+		}
+	}
+}
+
+func TestFormatStripsTrailingEOSFromSpokenSheet(t *testing.T) {
+	got, err := Format("后面的政策节奏\n和钱的去向\n咱们接着盯 <|eos|>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := Lines(got)
+	if len(lines) == 0 {
+		t.Fatal("empty lines")
+	}
+	last := lines[len(lines)-1]
+	if last != "咱们接着盯" {
+		t.Fatalf("last line=%q, want 咱们接着盯", last)
+	}
+	joined := strings.Join(lines, "")
+	if strings.Contains(strings.ToLower(joined), "eos") || strings.Contains(joined, "<|") {
+		t.Fatalf("end marker leaked into 口播稿: %v", lines)
+	}
+}

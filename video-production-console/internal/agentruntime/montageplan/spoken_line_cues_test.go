@@ -34,6 +34,19 @@ func TestLineLevelSRTDetection(t *testing.T) {
 	}
 }
 
+func TestSpokenDisplayRunesStripsEOSMarker(t *testing.T) {
+	got := string(spokenDisplayRunes("咱们接着盯 <|eos|>"))
+	if got != "咱们接着盯" {
+		t.Fatalf("spokenDisplayRunes leaked end marker: %q", got)
+	}
+	items, _ := spokenCaptionsFromLineCues([]TimedSentence{
+		{StartMS: 0, EndMS: 1500, Text: "咱们接着盯 <|eos|>"},
+	}, 2000, nil)
+	if len(items) != 1 || items[0].Text != "咱们接着盯" {
+		t.Fatalf("on-screen caption leaked end marker: %#v", items)
+	}
+}
+
 func TestSpokenCaptionsFromLineCuesKeepsLineBoundaries(t *testing.T) {
 	cues := []TimedSentence{
 		{StartMS: 0, EndMS: 1500, Text: "全国法拍房挂牌，"},
