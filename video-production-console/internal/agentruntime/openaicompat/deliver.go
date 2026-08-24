@@ -39,9 +39,22 @@ func parseRemixDraft(raw string) (remixDraft, error) {
 	if draft, ok := decodeRemixDraft(text); ok {
 		return draft, nil
 	}
+	if recovered, ok := recoverRemixDraftFromBrokenJSON(text); ok {
+		return recovered, nil
+	}
+	if repaired := repairUnescapedJSONQuotes(text); repaired != text {
+		if draft, ok := decodeRemixDraft(repaired); ok {
+			return draft, nil
+		}
+	}
 	if extracted := extractJSONObject(text); extracted != "" && extracted != text {
 		if draft, ok := decodeRemixDraft(extracted); ok {
 			return draft, nil
+		}
+		if repaired := repairUnescapedJSONQuotes(extracted); repaired != extracted {
+			if draft, ok := decodeRemixDraft(repaired); ok {
+				return draft, nil
+			}
 		}
 	}
 	if strings.Contains(text, "{") {
@@ -112,6 +125,182 @@ func extractJSONObject(text string) string {
 		}
 	}
 	return strings.TrimSpace(text[start:])
+}
+
+// repairUnescapedJSONQuotes 修模型把正文里的中文引号写成 "接财" 这种未转义双引号。
+func repairUnescapedJSONQuotes(text string) string {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	b.WriteString(text[:start])
+	inString := false
+	escape := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if !inString {
+			b.WriteByte(ch)
+			if ch == '"' {
+				inString = true
+				escape = false
+			}
+			continue
+		}
+		if escape {
+			b.WriteByte(ch)
+			escape = false
+			continue
+		}
+		if ch == '\\' {
+			b.WriteByte(ch)
+			escape = true
+			continue
+		}
+		if ch != '"' {
+			b.WriteByte(ch)
+			continue
+		}
+		if looksLikeJSONCloser(text, i+1) {
+			b.WriteByte(ch)
+			inString = false
+			continue
+		}
+		if looksLikeLiteralQuote(text, i) {
+			b.WriteString(`\"`)
+			continue
+		}
+		b.WriteByte(ch)
+		inString = false
+	}
+	return b.String()
+}
+
+func looksLikeJSONCloser(text string, i int) bool {
+	for i < len(text) {
+		switch text[i] {
+		case ' ', '\n', '\r', '	':
+			i++
+		case ',', '}', ']':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeLiteralQuote(text string, i int) bool {
+	if i+1 >= len(text) {
+		return false
+	}
+	next := text[i+1]
+	if next == ' ' || next == '\n' || next == '\r' || next == '\t' || next == ',' || next == '}' || next == ']' || next == ':' {
+		return false
+	}
+	closeAt := strings.IndexByte(text[i+1:], '"')
+	if closeAt < 0 {
+		return false
+	}
+	closeAt += i + 1
+	inner := text[i+1 : closeAt]
+	if inner == "" || strings.ContainsAny(inner, "\n{}[]") {
+		return false
+	}
+	return !looksLikeJSONCloser(text, closeAt+1)
+}
+
+func recoverRemixDraftFromBrokenJSON(text string) (remixDraft, bool) {
+	script, ok := extractBrokenJSONStringField(text, "continuous_script")
+	if !ok {
+		script, ok = extractBrokenJSONStringField(text, "continuousScript")
+	}
+	if !ok {
+		script, ok = extractBrokenJSONStringField(text, "script")
+	}
+	script = strings.TrimSpace(script)
+	if !ok || utf8.RuneCountInString(script) < 40 {
+		return remixDraft{}, false
+	}
+	return remixDraft{
+		ContinuousScript: script,
+		Titles:           extractBrokenJSONStringArray(text, "titles"),
+		ShortTitles:      extractBrokenJSONStringArray(text, "short_titles"),
+		Descriptions:     extractBrokenJSONStringArray(text, "descriptions"),
+		Topics:           extractBrokenJSONStringArray(text, "topics"),
+	}, true
+}
+
+func extractBrokenJSONStringField(text, key string) (string, bool) {
+	needle := `"` + key + `"`
+	start := strings.Index(text, needle)
+	if start < 0 {
+		return "", false
+	}
+	rest := text[start+len(needle):]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return "", false
+	}
+	rest = strings.TrimSpace(rest[colon+1:])
+	if !strings.HasPrefix(rest, `"`) {
+		return "", false
+	}
+	body := rest[1:]
+	end := -1
+	for _, marker := range []string{
+		"\",\n  \"titles\"",
+		"\",\n  \"short_titles\"",
+		"\",\n  \"descriptions\"",
+		"\",\n  \"topics\"",
+		"\",\n  \"cta\"",
+		`","titles"`,
+		`","short_titles"`,
+		`","descriptions"`,
+		`","topics"`,
+		`","cta"`,
+	} {
+		if idx := strings.LastIndex(body, marker); idx >= 0 && (end < 0 || idx < end) {
+			end = idx
+		}
+	}
+	if end < 0 {
+		return "", false
+	}
+	return unescapeJSONString(body[:end]), true
+}
+
+func extractBrokenJSONStringArray(text, key string) []string {
+	needle := `"` + key + `"`
+	start := strings.Index(text, needle)
+	if start < 0 {
+		return nil
+	}
+	rest := text[start+len(needle):]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return nil
+	}
+	rest = strings.TrimSpace(rest[colon+1:])
+	if !strings.HasPrefix(rest, "[") {
+		return nil
+	}
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		return nil
+	}
+	raw := "[" + rest[1:end] + "]"
+	var values []string
+	if json.Unmarshal([]byte(raw), &values) == nil {
+		return values
+	}
+	return nil
+}
+
+func unescapeJSONString(value string) string {
+	replacer := strings.NewReplacer(`\n`, "\n", `\r`, "\r", `	`, "	", `\"`, `"`, `\\`, `\`)
+	return replacer.Replace(value)
 }
 
 func mapString(raw, key string) string {

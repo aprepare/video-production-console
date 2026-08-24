@@ -51,6 +51,31 @@ func TestParseRemixDraftExtractsJSONFromProse(t *testing.T) {
 	}
 }
 
+func TestParseRemixDraftRepairsUnescapedQuotesInScript(t *testing.T) {
+	raw := "```json\n{\n  \"continuous_script\": \"评论区打出\"接财\"，我会把方向说透。两个月老百姓存款少了整整2万亿，点开主页橱窗看《财富觉醒方法论》。\",\n  \"titles\": [\"2万亿去哪了\"],\n  \"short_titles\": [\"2万亿去哪了\"],\n  \"descriptions\": [\"两个月少了2万亿\"],\n  \"topics\": [\"#经济\"],\n  \"cta\": \"\"\n}\n```"
+	draft, err := parseRemixDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(draft.ContinuousScript, "接财") {
+		t.Fatalf("script=%q", draft.ContinuousScript)
+	}
+}
+
+func TestParseRemixDraftRepairsFailedTaskRaw(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "unescaped_quotes_model_raw.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := parseRemixDraft(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(draft.ContinuousScript, "接财") || !strings.Contains(draft.ContinuousScript, "财富觉醒方法论") {
+		t.Fatalf("script=%q", draft.ContinuousScript[:80])
+	}
+}
+
 func TestPublishingFallbacksDoNotHardcodeFixedPlot(t *testing.T) {
 	titles := titleFallbacks("法拍房快堆到四十万套。普通人还在观望。")
 	shorts := shortTitleFallbacks("法拍房快堆到四十万套。")
