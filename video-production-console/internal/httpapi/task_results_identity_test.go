@@ -192,3 +192,67 @@ func TestRemixReviewResultIncludesPublishingPackage(t *testing.T) {
 		t.Fatalf("publishing_package=%s", res.Body.String())
 	}
 }
+
+func TestFailedRemixResultIncludesCapturedScript(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, false)
+	taskID := uuid.NewString()
+	outputDir := filepath.Join(db.root, "projects", projectID, "tasks", taskID, "output")
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "三年定存利率从2.6%直接砍到1.25%。这不是吓你。去我主页橱窗找《财富觉醒方法论》。"
+	if err := os.WriteFile(filepath.Join(outputDir, "continuous_script.txt"), []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "model_raw.txt"), []byte(`{"continuous_script":"三年定存利率从2.6%直接砍到1.25%。"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "remix_run.json"), []byte(`{"events":[{"event":"quality_failed"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(db.root, "projects", projectID, "tasks", taskID, "task_manifest.json")
+	data, err := json.Marshal(map[string]any{"task_id": taskID, "action": "remix.standard", "output_dir": outputDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := domain.SkillSnapshot{
+		ID: uuid.NewString(), Name: "finance-viral-remix", Path: filepath.Join(db.root, "SKILL.md"),
+		SHA256: strings.Repeat("a", 64), ModifiedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+	}
+	if err := store.NewSkillRepository(db.db).Save(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.CodexTask{
+		ID: taskID, ProjectID: &projectID, AccountID: accountID, Type: "remix",
+		SkillName: "finance-viral-remix", Action: domain.ActionRemixStandard,
+		Status: domain.TaskQueued, CreatedAt: time.Now().UTC(),
+	}
+	tasks := store.NewTaskRepository(db.db)
+	if _, err := tasks.EnsurePreparedTask(context.Background(), task, snapshot.ID, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.CompleteWithResult(context.Background(), task.ID, store.TaskResultWrite{Status: domain.TaskFailed, Summary: "quality failed", ErrorCode: "result_failed", ErrorMessage: "quality failed"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+task.ID+"/result", nil)
+	req.SetPathValue("id", task.ID)
+	res := httptest.NewRecorder()
+	NewTaskResultsHandler(tasks).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		ContinuousScript string          `json:"continuous_script"`
+		ModelRaw         string          `json:"model_raw"`
+		RemixRun         json.RawMessage `json:"remix_run"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.ContinuousScript, "三年定存利率") || !strings.Contains(body.ModelRaw, "continuous_script") || !strings.Contains(string(body.RemixRun), "quality_failed") {
+		t.Fatalf("failed remix capture missing: %s", res.Body.String())
+	}
+}

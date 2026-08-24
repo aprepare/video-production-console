@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"video-production-console/internal/domain"
@@ -338,11 +339,83 @@ func isAskModeRefusal(text string) bool {
 	return strings.Contains(text, "Ask 模式") && (strings.Contains(text, "不能") || strings.Contains(text, "无法"))
 }
 
+func remixAbs(outputDir, name string) string {
+	path, _ := filepath.Abs(filepath.Join(outputDir, name))
+	return path
+}
+
+func remixDeliverableArtifacts(outputDir string, abs func(string) string) []map[string]string {
+	if abs == nil {
+		abs = func(name string) string { return remixAbs(outputDir, name) }
+	}
+	items := []struct{ name, typ, desc string }{
+		{"viral_analysis.json", "viral_analysis", "Viral mechanism analysis"},
+		{"structure_design.json", "structure_design", "Remix structure design"},
+		{"publishing_package.json", "publishing_package", "Publishing titles, descriptions, topics, and CTA"},
+		{"self_check.json", "self_check", "Editorial and contract self-check"},
+		{"remix_run.json", "remix_run", "Remix model run log"},
+		{"model_raw.txt", "model_raw", "Raw model remix response"},
+	}
+	out := make([]map[string]string, 0, len(items))
+	for _, item := range items {
+		if _, err := os.Stat(filepath.Join(outputDir, item.name)); err != nil {
+			continue
+		}
+		out = append(out, map[string]string{"type": item.typ, "path": abs(item.name), "description": item.desc})
+	}
+	return out
+}
+
+func appendRemixRunLog(outputDir string, event map[string]any) {
+	if strings.TrimSpace(outputDir) == "" || event == nil {
+		return
+	}
+	_ = os.MkdirAll(outputDir, 0o755)
+	path := filepath.Join(outputDir, "remix_run.json")
+	var log struct {
+		Events []map[string]any `json:"events"`
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &log)
+	}
+	if event["at"] == nil {
+		event["at"] = time.Now().Format(time.RFC3339)
+	}
+	log.Events = append(log.Events, event)
+	_ = writeJSONFile(path, log)
+}
+
+func captureRemixModelReply(outputDir, model, style, raw string) {
+	if strings.TrimSpace(outputDir) == "" {
+		return
+	}
+	_ = os.MkdirAll(outputDir, 0o755)
+	_ = os.WriteFile(filepath.Join(outputDir, "model_raw.txt"), []byte(raw), 0o644)
+	script := ""
+	if draft, err := parseRemixDraft(raw); err == nil {
+		script = strings.TrimSpace(draft.ContinuousScript)
+	}
+	if script != "" {
+		_ = os.WriteFile(filepath.Join(outputDir, "continuous_script.txt"), []byte(script), 0o644)
+	}
+	appendRemixRunLog(outputDir, map[string]any{
+		"event":        "model_reply",
+		"model":        model,
+		"prompt_style": style,
+		"raw_bytes":    len(raw),
+		"script_runes": utf8.RuneCountInString(script),
+		"parse_ok":     script != "",
+	})
+}
+
 func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings []string, checkNote string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return err
 	}
-	_ = os.WriteFile(filepath.Join(outputDir, "model_raw.txt"), []byte(modelText), 0o644)
+	rawPath := filepath.Join(outputDir, "model_raw.txt")
+	if _, err := os.Stat(rawPath); err != nil {
+		_ = os.WriteFile(rawPath, []byte(modelText), 0o644)
+	}
 	draft, err := parseRemixDraft(modelText)
 	if err != nil {
 		return err
@@ -407,12 +480,7 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 		"summary":        summary,
 		"questions":      []any{},
 		"warnings":       warningList,
-		"artifacts": []map[string]string{
-			{"type": "viral_analysis", "path": abs("viral_analysis.json"), "description": "Viral mechanism analysis"},
-			{"type": "structure_design", "path": abs("structure_design.json"), "description": "Remix structure design"},
-			{"type": "publishing_package", "path": abs("publishing_package.json"), "description": "Publishing titles, descriptions, topics, and CTA"},
-			{"type": "self_check", "path": abs("self_check.json"), "description": "Editorial and contract self-check"},
-		},
+		"artifacts": remixDeliverableArtifacts(outputDir, abs),
 		"asset_outputs": []map[string]any{
 			{
 				"type": "continuous_script", "path": abs("continuous_script.txt"), "storage_kind": "file",

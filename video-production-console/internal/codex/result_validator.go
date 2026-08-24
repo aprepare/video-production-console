@@ -592,12 +592,19 @@ func validateAssetMetadata(asset AssetOutput, path, root string) error {
 var allowedArtifactTypes = map[domain.TaskAction]map[string]bool{
 	domain.ActionTopicBrainstorm: {"topic_candidates": true},
 	domain.ActionTopicCommit:     {"topic_card": true}, domain.ActionTopicDeepen: {"topic_card": true},
-	domain.ActionRemixStandard:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
-	domain.ActionRemixEnhanced:  {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
-	domain.ActionRemixFromTopic: {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionRemixStandard:  remixArtifactTypes(),
+	domain.ActionRemixEnhanced:  remixArtifactTypes(),
+	domain.ActionRemixFromTopic: remixArtifactTypes(),
 	domain.ActionRemixSpokenLines: {},
-	domain.ActionRemixReview:    {"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true},
+	domain.ActionRemixReview:    remixArtifactTypes(),
 	domain.ActionMontagePlan:    montagePlanArtifactTypes(), domain.ActionMontageExecute: montageExecuteArtifactTypes(),
+}
+
+func remixArtifactTypes() map[string]bool {
+	return map[string]bool{
+		"viral_analysis": true, "structure_design": true, "publishing_package": true, "self_check": true,
+		"remix_run": true, "model_raw": true,
+	}
 }
 
 func montagePlanArtifactTypes() map[string]bool {

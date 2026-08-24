@@ -262,6 +262,66 @@ func TestRunWritesFilesWhenModelReturnsPlainScript(t *testing.T) {
 	if !strings.Contains(string(got), "第三次换锚") {
 		t.Fatalf("script=%s", got)
 	}
+	if _, err := os.Stat(filepath.Join(outputDir, "model_raw.txt")); err != nil {
+		t.Fatalf("model_raw.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "remix_run.json")); err != nil {
+		t.Fatalf("remix_run.json: %v", err)
+	}
+}
+
+func TestRunKeepsModelRawWhenQualityFails(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	sourcePath := filepath.Join(root, "source.txt")
+	source := "问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？"
+	_ = os.WriteFile(sourcePath, []byte(source), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "11111111-1111-1111-1111-111111111111", "action": "remix.standard", "output_dir": outputDir,
+		"inputs": []any{map[string]any{"type": "source_script", "path": sourcePath}},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	last := filepath.Join(root, "last.json")
+	script := "两个月，整整20500亿，从全国老百姓的存折上悄无声息地蒸发了。这笔钱没流进楼市，没被股市收走，连近两年涨势最猛的黄金都没接住它——那它究竟去了哪儿？答案只有两个字：到期。华泰测算逼近50到77万亿。这种搬家只出现过三次。98年、08年、15年。现在是第四次。去我主页橱窗找《财富觉醒方法论》。"
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	if err := Run(Options{
+		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
+		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
+		Client: &textClient{content: payload},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "model_raw.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "50到77") {
+		t.Fatalf("failed task must keep model raw: %s", got)
+	}
+	logRaw, err := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logRaw), "quality_failed") {
+		t.Fatalf("run log=%s", logRaw)
+	}
+	scriptGot, err := os.ReadFile(filepath.Join(outputDir, "continuous_script.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(scriptGot), "究竟去了哪儿") {
+		t.Fatalf("failed task must keep parsed script: %s", scriptGot)
+	}
+	env, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(env), `"failed"`) || !strings.Contains(string(env), "model_raw") || !strings.Contains(string(env), "remix_run") {
+		t.Fatalf("failed envelope must keep capture artifacts: %s", env)
+	}
 }
 
 func TestRunWritesSpokenScriptFromContinuousInput(t *testing.T) {

@@ -159,15 +159,26 @@ func Run(opts Options) error {
 		Messages:        []Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
 	})
 	if err != nil {
+		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "model_error", "model": model, "prompt_style": style, "error": err.Error()})
 		return writeFailure(outPath, manifestPath, err)
 	}
 	if len(resp.Choices) == 0 {
+		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "empty_choices", "model": model, "prompt_style": style})
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
-	content, checkWarnings, checkNote, err := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
+	rawReply := resp.Choices[0].Message.Content
+	captureRemixModelReply(manifest.OutputDir, model, style, rawReply)
+	content, checkWarnings, checkNote, err := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
 	if err != nil {
+		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "quality_failed", "error": err.Error(), "note": checkNote, "warnings": checkWarnings})
+		if strings.TrimSpace(content) != "" && content != rawReply {
+			if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
+				_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
+			}
+		}
 		return writeFailure(outPath, manifestPath, err)
 	}
+	appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "quality_passed", "note": checkNote, "warnings": checkWarnings})
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
@@ -518,7 +529,14 @@ func normalizePaths(probe map[string]any) {
 }
 
 func writeFailure(outPath, manifestPath string, cause error) error {
-	taskID, action := identityFromManifest(manifestPath)
+	taskID, action, outputDir := identityFromManifest(manifestPath)
+	if strings.TrimSpace(outputDir) != "" {
+		appendRemixRunLog(outputDir, map[string]any{"event": "failed", "error": cause.Error()})
+	}
+	artifacts := remixDeliverableArtifacts(outputDir, nil)
+	if artifacts == nil {
+		artifacts = []map[string]string{}
+	}
 	envelope := map[string]any{
 		"schema_version": "2.0",
 		"task_id":        taskID,
@@ -526,7 +544,7 @@ func writeFailure(outPath, manifestPath string, cause error) error {
 		"status":         "failed",
 		"summary":        cause.Error(),
 		"questions":      []any{},
-		"artifacts":      []any{},
+		"artifacts":      artifacts,
 		"asset_outputs":  []any{},
 		"warnings":       []any{},
 	}
@@ -543,18 +561,18 @@ func writeFailure(outPath, manifestPath string, cause error) error {
 	return nil
 }
 
-func identityFromManifest(path string) (taskID, action string) {
+func identityFromManifest(path string) (taskID, action, outputDir string) {
 	action = "remix.standard"
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", action
+		return "", action, ""
 	}
 	var manifest manifestLite
 	if json.Unmarshal(stripBOM(raw), &manifest) != nil {
-		return "", action
+		return "", action, ""
 	}
 	if manifest.Action != "" {
 		action = manifest.Action
 	}
-	return manifest.TaskID, action
+	return manifest.TaskID, action, strings.TrimSpace(manifest.OutputDir)
 }

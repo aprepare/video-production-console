@@ -65,6 +65,19 @@ func (h *taskResultsHandler) result(w http.ResponseWriter, r *http.Request) {
 		if script, versionID, scriptErr := h.continuousScript(r, task.ID); scriptErr == nil && script != "" {
 			view["continuous_script"] = script
 			view["continuous_script_version_id"] = versionID
+		} else if raw, rawPath, rawErr := h.remixCapture(r, task.ID); rawErr == nil {
+			if script := strings.TrimSpace(raw["continuous_script"]); script != "" {
+				view["continuous_script"] = script
+			}
+			if modelRaw := strings.TrimSpace(raw["model_raw"]); modelRaw != "" {
+				view["model_raw"] = modelRaw
+			}
+			if runLog := strings.TrimSpace(raw["remix_run"]); runLog != "" && json.Valid([]byte(runLog)) {
+				view["remix_run"] = json.RawMessage(runLog)
+			}
+			if rawPath != "" {
+				view["remix_capture_path"] = rawPath
+			}
 		}
 	}
 	writeJSON(w, 200, view)
@@ -90,6 +103,60 @@ func (h *taskResultsHandler) continuousScript(r *http.Request, taskID string) (s
 		return "", "", err
 	}
 	return strings.TrimSpace(string(data)), versionID, nil
+}
+
+func (h *taskResultsHandler) remixCapture(r *http.Request, taskID string) (map[string]string, string, error) {
+	outputDir, err := h.remixOutputDir(r, taskID)
+	if err != nil {
+		return nil, "", err
+	}
+	out := map[string]string{}
+	read := func(name string) {
+		path := filepath.Join(outputDir, name)
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 {
+			return
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return
+		}
+		out[strings.TrimSuffix(name, filepath.Ext(name))] = string(data)
+	}
+	read("continuous_script.txt")
+	read("model_raw.txt")
+	read("remix_run.json")
+	if len(out) == 0 {
+		return nil, "", errors.New("remix capture unavailable")
+	}
+	return out, outputDir, nil
+}
+
+func (h *taskResultsHandler) remixOutputDir(r *http.Request, taskID string) (string, error) {
+	_, manifestPath, err := h.repo.PreparedManifest(r.Context(), taskID)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(manifestPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("manifest unavailable")
+	}
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+	_ = file.Close()
+	if readErr != nil || len(data) > 1024*1024 {
+		return "", errors.New("manifest unread")
+	}
+	var manifest struct {
+		OutputDir string `json:"output_dir"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || strings.TrimSpace(manifest.OutputDir) == "" {
+		return "", errors.New("output_dir missing")
+	}
+	return strings.TrimSpace(manifest.OutputDir), nil
 }
 
 type publishingPackageView = publishing.Package
