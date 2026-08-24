@@ -58,7 +58,7 @@ func TestSettingsSchemaDescribesRemixModelSettings(t *testing.T) {
 	definitions := schema["$defs"].(map[string]any)
 	public := definitions["publicSettings"].(map[string]any)
 	properties := public["properties"].(map[string]any)
-	remixKeys := []string{"remix_base_url", "remix_model", "remix_reasoning_effort", "copy_base_url"}
+	remixKeys := []string{"remix_base_url", "remix_model", "remix_reasoning_effort", "remix_prompt_style", "copy_base_url"}
 	for _, key := range remixKeys {
 		if properties[key] == nil {
 			t.Fatalf("%s missing from public settings schema", key)

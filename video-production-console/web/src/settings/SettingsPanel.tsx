@@ -14,6 +14,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   remix_base_url: "二创服务地址",
   remix_model: "二创模型",
   remix_reasoning_effort: "二创思考强度",
+  remix_prompt_style: "二创提示词",
   copy_base_url: "口播copy接口",
   image_base_url: "生图服务地址",
   image_text_base_url: "图文文本模型地址",
@@ -335,6 +336,21 @@ export function SettingsPanel({
                   emptyLabel="跟随二创模型"
                   onChange={(spoken_lines_model) => onDraftChange({ ...draft, spoken_lines_model })}
                 />
+              </Field>
+              <Field label="二创提示词">
+                <select
+                  aria-label="二创提示词"
+                  value={draft.remix_prompt_style || "rewrite"}
+                  onChange={(event) =>
+                    onDraftChange({
+                      ...draft,
+                      remix_prompt_style: event.target.value as PublicSettings["remix_prompt_style"],
+                    })
+                  }
+                >
+                  <option value="rewrite">旧 rewrite 长提示词（不打 copy 接口）</option>
+                  <option value="copy">口播copy整理（先打 hooks/scripts）</option>
+                </select>
               </Field>
               <Field label="二创思考强度">
                 <select

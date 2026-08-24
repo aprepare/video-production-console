@@ -674,6 +674,27 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 }
 
+func TestTaskManifestPreparerUsesCopyStyleFromSettings(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2, RemixPromptStyle: "copy"}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.RemixPromptStyle != "copy" {
+		t.Fatalf("settings copy style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+}
+
 func TestTaskManifestPreparerRejectsRemovedWashStyle(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, true)
 	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}

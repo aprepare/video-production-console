@@ -26,6 +26,7 @@ const draft: PublicSettings = {
   remix_reasoning_effort: "",
   remix_check_model: "",
   spoken_lines_model: "",
+  remix_prompt_style: "",
   copy_base_url: "",
   model_options: "",
   codex_task_project_root: "",
@@ -181,6 +182,10 @@ test("remix model fields are editable independently", () => {
     target: { value: "gpt-5.6-sol" },
   });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
+  fireEvent.change(screen.getByRole("combobox", { name: "二创提示词" }), {
+    target: { value: "copy" },
+  });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_prompt_style: "copy" });
   fireEvent.change(screen.getByRole("combobox", { name: "二创思考强度" }), {
     target: { value: "high" },
   });

@@ -195,7 +195,11 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 	if remixActionOmitsGrok(task.Action) {
 		settings.GrokBaseURL = ""
 		settings.GrokModel = ""
-		style, err := normalizeRemixPromptStyle(req.RemixPromptStyle)
+		requested := strings.TrimSpace(req.RemixPromptStyle)
+		if requested == "" {
+			requested = runtime.RemixPromptStyle
+		}
+		style, err := normalizeRemixPromptStyle(requested)
 		if err != nil {
 			return err
 		}
@@ -648,7 +652,9 @@ func normalizeRemixPromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "rewrite":
 		return "rewrite", nil
+	case "copy":
+		return "copy", nil
 	default:
-		return "", fmt.Errorf("remix_prompt_style must be rewrite")
+		return "", fmt.Errorf("remix_prompt_style must be rewrite or copy")
 	}
 }

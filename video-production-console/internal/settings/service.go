@@ -353,6 +353,7 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
 	s.active.RemixCheckModel = configured.RemixCheckModel
 	s.active.SpokenLinesModel = configured.SpokenLinesModel
+	s.active.RemixPromptStyle = configured.RemixPromptStyle
 	s.active.CopyBaseURL = configured.CopyBaseURL
 	s.active.ModelOptions = configured.ModelOptions
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
@@ -626,10 +627,22 @@ func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
 	value.RemixReasoningEffort = strings.ToLower(strings.TrimSpace(value.RemixReasoningEffort))
 	value.RemixCheckModel = strings.TrimSpace(value.RemixCheckModel)
 	value.SpokenLinesModel = strings.TrimSpace(value.SpokenLinesModel)
+	value.RemixPromptStyle = normalizeRemixPromptStyleSetting(value.RemixPromptStyle)
 	value.ModelOptions = normalizeModelOptions(value.ModelOptions)
 	value.BGMDir = strings.TrimSpace(value.BGMDir)
 	value.MontageStyle = sanitizeMontageStyle(value.MontageStyle)
 	return value
+}
+
+func normalizeRemixPromptStyleSetting(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "copy":
+		return "copy"
+	case "rewrite":
+		return "rewrite"
+	default:
+		return ""
+	}
 }
 
 func sanitizeMontageStyle(style domain.MontageStyle) domain.MontageStyle {
@@ -764,6 +777,11 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	if len(value.SpokenLinesModel) > 256 {
 		return invalid("spoken_lines_model")
+	}
+	switch value.RemixPromptStyle {
+	case "", "rewrite", "copy":
+	default:
+		return invalid("remix_prompt_style")
 	}
 	if len(value.ModelOptions) > 4096 {
 		return invalid("model_options")
@@ -1099,6 +1117,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"remix_reasoning_effort": value.RemixReasoningEffort,
 		"remix_check_model":      value.RemixCheckModel,
 		"spoken_lines_model":     value.SpokenLinesModel,
+		"remix_prompt_style":     value.RemixPromptStyle,
 		"copy_base_url":          value.CopyBaseURL,
 		"model_options":          value.ModelOptions,
 		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
@@ -1361,6 +1380,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
 		RemixCheckModel:      strings.TrimSpace(values["remix_check_model"]),
 		SpokenLinesModel:     strings.TrimSpace(values["spoken_lines_model"]),
+		RemixPromptStyle:     normalizeRemixPromptStyleSetting(values["remix_prompt_style"]),
 		CopyBaseURL:          strings.TrimSpace(values["copy_base_url"]),
 		ModelOptions:         normalizeModelOptions(values["model_options"]),
 		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,

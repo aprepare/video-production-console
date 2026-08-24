@@ -49,6 +49,7 @@ type manifestLite struct {
 
 const (
 	PromptStyleRewrite = "rewrite"
+	PromptStyleCopy    = "copy"
 
 	// RewritePromptStamp 是 rewrite 系统提示词的版本标注。
 	// 来源：独立「文案进化台」试写法拍房 / 存款蒸发 / 换锚后的 2026-08-19 中老年定稿；
@@ -60,10 +61,10 @@ const (
 	// 2026-08-24：课名一律《财富觉醒方法论》，禁止带年份；卖课钩子只收口一次。
 	// 2026-08-24 切口定稿：六件套出场顺序可换、开场切口必须换、钩子 2～3 句、
 	// 收口最多四句、示范原句进失败标准、截止日只认具体日、拿掉 machine 字段。
-	// 2026-08-24 口播copy整理：先并行打 hooks/scripts，再用指定模型整理成稿。
+	// 2026-08-24 口播copy整理：可选。remix_prompt_style=copy 时先并行打 hooks/scripts，再用指定模型整理成稿。
 	// 2026-08-24 换词换说法：钩子类型留下，开场切口必须换，中段顺序打乱。
 	// 2026-08-24 禁写 50–77 万亿定存到期区间，禁止同一流水线换皮。
-	// 旧 rewrite 长提示词不再发给写稿模型。只作仓库标注，不发给模型。
+	// 默认 remix_prompt_style=rewrite，发给写稿模型的是旧 rewrite 长提示词，不打口播copy接口。
 	RewritePromptStamp = "口播copy换说法 2026-08-24"
 )
 
@@ -71,8 +72,10 @@ func NormalizePromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", PromptStyleRewrite:
 		return PromptStyleRewrite, nil
+	case PromptStyleCopy:
+		return PromptStyleCopy, nil
 	default:
-		return "", fmt.Errorf("remix_prompt_style must be rewrite")
+		return "", fmt.Errorf("remix_prompt_style must be rewrite or copy")
 	}
 }
 
@@ -124,19 +127,26 @@ func Run(opts Options) error {
 	if action == string(domain.ActionRemixSpokenLines) {
 		return runSpokenLines(opts, manifest, source, outPath)
 	}
-	if _, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle); err != nil {
-		return writeFailure(outPath, manifestPath, err)
-	}
-	copyClient := opts.CopyClient
-	if copyClient == nil {
-		copyClient = &HTTPCopyClient{BaseURL: strings.TrimSpace(opts.CopyBaseURL), APIKey: strings.TrimSpace(opts.CopyAPIKey)}
-	}
-	hooks, scripts, err := fetchCopyMaterials(copyClient, source)
+	style, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle)
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	system := buildAssemblePrompt()
-	user := buildAssembleUser(manifest, source, hooks, scripts)
+	var system, user string
+	if style == PromptStyleCopy {
+		copyClient := opts.CopyClient
+		if copyClient == nil {
+			copyClient = &HTTPCopyClient{BaseURL: strings.TrimSpace(opts.CopyBaseURL), APIKey: strings.TrimSpace(opts.CopyAPIKey)}
+		}
+		hooks, scripts, err := fetchCopyMaterials(copyClient, source)
+		if err != nil {
+			return writeFailure(outPath, manifestPath, err)
+		}
+		system = buildAssemblePrompt()
+		user = buildAssembleUser(manifest, source, hooks, scripts)
+	} else {
+		system = buildWriterPrompt()
+		user = buildWriterUser(manifest, source)
+	}
 
 	client := opts.Client
 	if client == nil {

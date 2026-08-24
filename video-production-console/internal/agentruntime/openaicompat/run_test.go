@@ -89,6 +89,10 @@ func TestNormalizePromptStyle(t *testing.T) {
 	if err != nil || got != PromptStyleRewrite {
 		t.Fatalf("empty=%q err=%v", got, err)
 	}
+	got, err = NormalizePromptStyle("copy")
+	if err != nil || got != PromptStyleCopy {
+		t.Fatalf("copy=%q err=%v", got, err)
+	}
 	if _, err := NormalizePromptStyle("wash"); err == nil {
 		t.Fatal("wash style has been removed and must be rejected")
 	}
@@ -116,6 +120,7 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "output-last-message.json")
 
+	copyStub := &stubCopyClient{hooks: "钩子A", scripts: "脚本B"}
 	client := &textClient{content: remixJSON}
 	if err := Run(Options{
 		ManifestPath:      manifestPath,
@@ -125,15 +130,18 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 		BaseURL:           "http://example.invalid/v1",
 		APIKey:            "test-key",
 		Client:            client,
-		CopyClient:        &stubCopyClient{hooks: "钩子A", scripts: "脚本B"},
+		CopyClient:        copyStub,
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !client.streamed {
 		t.Fatalf("remix request must stream and omit tools")
 	}
-	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[1].Content, "钩子A") || !strings.Contains(client.last.Messages[1].Content, "脚本B") {
-		t.Fatalf("assemble user missing copy materials: %#v", client.last.Messages)
+	if len(copyStub.calls) != 0 {
+		t.Fatalf("default rewrite must not call copy: %#v", copyStub.calls)
+	}
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "先锁爆款机器") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
+		t.Fatalf("default rewrite must use writer prompt: %#v", client.last.Messages)
 	}
 	body, err := os.ReadFile(last)
 	if err != nil {
@@ -185,6 +193,45 @@ func TestRunRejectsRemovedWashStyle(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"failed"`) || !strings.Contains(string(body), "remix_prompt_style") {
 		t.Fatalf("wash manifests must be rejected, envelope=%s", body)
+	}
+}
+
+func TestRunCopyStyleUsesAssemblePrompt(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	_ = os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("# skill"), 0o644)
+	sourcePath := filepath.Join(root, "source.txt")
+	_ = os.WriteFile(sourcePath, []byte("又一批人要发财了。人民币要第三次换锚。"), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "task-copy-1", "action": "remix.standard", "skill": "finance-viral-remix",
+		"output_dir":          outputDir,
+		"inputs":              []any{map[string]any{"type": "source_script", "role": "primary_source", "path": sourcePath}},
+		"non_secret_settings": map[string]any{"remix_prompt_style": "copy"},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	copyStub := &stubCopyClient{hooks: "钩子A", scripts: "脚本B"}
+	client := &textClient{content: remixJSON}
+	last := filepath.Join(root, "last.json")
+	if err := Run(Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: last,
+		Model:             "test-model",
+		BaseURL:           "http://example.invalid/v1",
+		APIKey:            "test-key",
+		Client:            client,
+		CopyClient:        copyStub,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(copyStub.calls) != 2 {
+		t.Fatalf("copy style must call hooks and scripts: %#v", copyStub.calls)
+	}
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "低于 40%") || !strings.Contains(client.last.Messages[1].Content, "钩子A") || !strings.Contains(client.last.Messages[1].Content, "脚本B") {
+		t.Fatalf("copy style must use assemble prompt: %#v", client.last.Messages)
 	}
 }
 

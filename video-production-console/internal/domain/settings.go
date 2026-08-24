@@ -19,6 +19,7 @@ type PublicSettings struct {
 	RemixReasoningEffort        string       `json:"remix_reasoning_effort"`
 	RemixCheckModel             string       `json:"remix_check_model"`
 	SpokenLinesModel            string       `json:"spoken_lines_model"`
+	RemixPromptStyle            string       `json:"remix_prompt_style"`
 	CopyBaseURL                 string       `json:"copy_base_url"`
 	ModelOptions                string       `json:"model_options"`
 	ImageBaseURL                string       `json:"image_base_url"`

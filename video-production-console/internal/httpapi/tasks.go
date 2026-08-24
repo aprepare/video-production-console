@@ -206,12 +206,14 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 	p := pid
 	manifestRequest := in.TaskManifestRequest
 	if remixActionOmitsGrok(action) {
-		style, err := normalizeRemixPromptStyle(manifestRequest.RemixPromptStyle)
-		if err != nil {
-			writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite.")
-			return
+		if strings.TrimSpace(manifestRequest.RemixPromptStyle) != "" {
+			style, err := normalizeRemixPromptStyle(manifestRequest.RemixPromptStyle)
+			if err != nil {
+				writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite or copy.")
+				return
+			}
+			manifestRequest.RemixPromptStyle = style
 		}
-		manifestRequest.RemixPromptStyle = style
 	}
 	if action == domain.ActionRemixReview {
 		notes := strings.TrimSpace(manifestRequest.RevisionNotes)

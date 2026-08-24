@@ -91,6 +91,7 @@ export type PublicSettings = {
   remix_reasoning_effort: ReasoningEffort | "";
   remix_check_model: string;
   spoken_lines_model: string;
+  remix_prompt_style: "rewrite" | "copy" | "";
   copy_base_url: string;
   model_options: string;
   codex_task_project_root: string;
