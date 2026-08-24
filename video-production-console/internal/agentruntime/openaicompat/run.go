@@ -61,8 +61,9 @@ const (
 	// 2026-08-24 切口定稿：六件套出场顺序可换、开场切口必须换、钩子 2～3 句、
 	// 收口最多四句、示范原句进失败标准、截止日只认具体日、拿掉 machine 字段。
 	// 2026-08-24 口播copy整理：先并行打 hooks/scripts，再用指定模型整理成稿。
+	// 2026-08-24 换词换说法：对标文结构不动，禁止顺着分镜原句念。
 	// 旧 rewrite 长提示词不再发给写稿模型。只作仓库标注，不发给模型。
-	RewritePromptStamp = "口播copy整理 2026-08-24"
+	RewritePromptStamp = "口播copy换说法 2026-08-24"
 )
 
 func NormalizePromptStyle(value string) (string, error) {
@@ -412,10 +413,12 @@ func buildWriterUser(manifest manifestLite, source string) string {
 
 func buildAssemblePrompt() string {
 	var b strings.Builder
-	b.WriteString("你是财经视频号口播整理员。只整理，不要调用工具，不要解释过程。\n")
-	b.WriteString("上游已经给出钩子候选和分镜脚本。你的任务是把它们收成一篇能念的连续口播，并配发布外壳。\n")
-	b.WriteString("钩子候选里选一条最冲的开场，不要自己另起一套更软的损失。分镜脚本只取口播句子，丢掉镜头、括号、音效、时间轴标记。\n")
-	b.WriteString("课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
+	b.WriteString("你是财经视频号口播二创员。只写口播，不要调用工具，不要解释过程。\n")
+	b.WriteString("对标文的结构必须留下：钩子类型、论证顺序、数字、未揭晓的答案、收口位置。换的是词和说法，不是题，也不是段落顺序。\n")
+	b.WriteString("钩子候选只用来锁开场力度和损失类型，不要整段贴进去。分镜脚本只当段落提纲：取信息点，丢掉镜头、括号、音效、时间轴，更不要把分镜里的口播原句念出来。\n")
+	b.WriteString("每一句都要换词换说法。数字、机构名、年份原词保留，周围的句子必须重说。连续 12 个字和原文或分镜一字不差即失败。\n")
+	b.WriteString("禁止照搬金句、比喻和专属口头禅，例如后背发凉、无声迁徙、舔瓶盖、集体叛逃、当燃料、财富警觉这类现成表达，必须换成新的说法。\n")
+	b.WriteString("开场切口必须和原稿第一句不同，钩子类型不许换成更软的损失。课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
 	b.WriteString("cta 必须空字符串。发布外壳不要写课名、橱窗、几块钱。\n")
 	b.WriteString(writerJSONContract())
 	return b.String()
@@ -423,7 +426,7 @@ func buildAssemblePrompt() string {
 
 func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) string {
 	var b strings.Builder
-	b.WriteString("把下面材料整理成一篇连续口播。优先用钩子候选里最冲的那条开场，正文按分镜脚本的口播句子往下走，不要照搬镜头说明。\n")
+	b.WriteString("按对标文的结构写一篇全新口播：先锁钩子类型和段落顺序，再逐句换词换说法。不要顺着分镜原句往下念，也不要同义改写原文第一句。\n")
 	b.WriteString("标题和短标题必须跟这篇新口播走。\n")
 	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
 		b.WriteString("修改要求：\n")

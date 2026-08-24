@@ -144,14 +144,20 @@ func buildOverlapRepairPrompt(fragments []string) string {
 func repairSourceOverlap(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string) {
 	_ = model
 	checkModel = strings.TrimSpace(checkModel)
-	if checkModel == "" {
-		return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。"
-	}
 	draft, err := parseRemixDraft(content)
 	if err != nil || strings.TrimSpace(draft.ContinuousScript) == "" {
+		if checkModel == "" {
+			return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。"
+		}
 		return content, nil, "质检未执行：草稿无法解析。"
 	}
 	fragments := overlapFragments(source, draft.ContinuousScript)
+	if checkModel == "" {
+		if len(fragments) == 0 {
+			return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。"
+		}
+		return content, overlapWarnings(fragments), fmt.Sprintf("质检未启用（质检模型留空）。自检发现 %d 处与原文重合，见警告。", len(fragments))
+	}
 	if len(fragments) == 0 {
 		return content, nil, fmt.Sprintf("质检通过（%s）：未发现与原文重合的片段。", checkModel)
 	}

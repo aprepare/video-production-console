@@ -9,23 +9,23 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "口播copy整理 2026-08-24" {
+	if RewritePromptStamp != "口播copy换说法 2026-08-24" {
 		t.Fatalf("stamp=%q", RewritePromptStamp)
 	}
 }
 
 func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
 	system := buildAssemblePrompt()
-	for _, want := range []string{"钩子候选", "分镜脚本", "财富觉醒方法论", "cta 必须空字符串"} {
+	for _, want := range []string{"钩子候选", "分镜脚本", "财富觉醒方法论", "cta 必须空字符串", "换词换说法", "不要把分镜里的口播原句念出来"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
 		}
 	}
-	if strings.Contains(system, "钩子类型不许换") {
-		t.Fatal("assemble prompt must not reuse the old rewrite prompt")
+	if strings.Contains(system, "只整理") || strings.Contains(system, "按分镜脚本的口播句子往下走") {
+		t.Fatal("assemble prompt must not reuse the stitch-together prompt")
 	}
 	user := buildAssembleUser(manifestLite{}, "原文", "钩子A", "脚本B")
-	if !strings.Contains(user, "# 钩子候选") || !strings.Contains(user, "钩子A") || !strings.Contains(user, "脚本B") || !strings.Contains(user, "原文") {
+	if !strings.Contains(user, "# 钩子候选") || !strings.Contains(user, "钩子A") || !strings.Contains(user, "脚本B") || !strings.Contains(user, "原文") || !strings.Contains(user, "换词换说法") {
 		t.Fatalf("user=%q", user)
 	}
 }

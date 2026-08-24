@@ -126,11 +126,14 @@ func TestRepairSourceOverlapIsDisabledWithoutCheckModel(t *testing.T) {
 	if len(client.requests) != 0 {
 		t.Fatal("质检模型留空时不得发出任何质检请求")
 	}
-	if content != overlapCopiedDraft || warnings != nil {
-		t.Fatalf("质检关闭时交付原始输出: warnings=%v", warnings)
+	if content != overlapCopiedDraft {
+		t.Fatalf("质检关闭时仍交付原始输出")
 	}
-	if !strings.Contains(note, "质检未启用") {
-		t.Fatalf("质检关闭也要在结论里说明: %q", note)
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "与原文重合未修复") {
+		t.Fatalf("质检关闭也要把重合写成警告: %v", warnings)
+	}
+	if !strings.Contains(note, "质检未启用") || !strings.Contains(note, "与原文重合") {
+		t.Fatalf("质检关闭也要在结论里说明重合: %q", note)
 	}
 }
 
