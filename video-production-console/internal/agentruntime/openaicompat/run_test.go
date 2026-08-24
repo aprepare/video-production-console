@@ -9,7 +9,7 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "文案进化台 2026-08-21 爆款回流定稿" {
+	if RewritePromptStamp != "文案进化台 2026-08-24 课名收口定稿" {
 		t.Fatalf("stamp=%q", RewritePromptStamp)
 	}
 }
@@ -28,6 +28,8 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		"中老年听得懂",
 		"关键数字必须原词留下",
 		"第N个难题",
+		"卖课钩子只在全文最末",
+		"禁止带年份",
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)

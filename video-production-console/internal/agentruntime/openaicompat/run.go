@@ -18,8 +18,8 @@ type Options struct {
 	OutputLastMessage string
 	Model             string
 	ReasoningEffort   string
-	// CheckModel runs the post-draft overlap self-check; empty disables the
-	// check so the writer model's output is delivered as-is.
+	// CheckModel runs the post-draft quality check (overlap, course name,
+	// opening/ending, CTA). Empty disables the model pass; local fixes still run.
 	CheckModel string
 	BaseURL    string
 	APIKey            string
@@ -54,8 +54,9 @@ const (
 	// 2026-08-21 爆款回流：复盘账号 5 篇爆款（转发率最高 5.6% 的是「紧急提醒＋具体
 	// 日期」开头）后增补【截止日通知感】开头形态与【互动引导】软规则（转发走家庭
 	// 责任、评论留许愿口，禁止喊口令式硬引导）。
+	// 2026-08-24：课名一律《财富觉醒方法论》，禁止带年份；卖课钩子只收口一次。
 	// 只作仓库标注，不发给模型。
-	RewritePromptStamp = "文案进化台 2026-08-21 爆款回流定稿"
+	RewritePromptStamp = "文案进化台 2026-08-24 课名收口定稿"
 )
 
 func NormalizePromptStyle(value string) (string, error) {
@@ -142,7 +143,7 @@ func Run(opts Options) error {
 	if len(resp.Choices) == 0 {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
-	content, checkWarnings, checkNote := repairSourceOverlap(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
+	content, checkWarnings, checkNote := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
@@ -321,7 +322,8 @@ func buildWriterPrompt(skillMD string) string {
 	b.WriteString("\n【硬性保留】\n")
 	b.WriteString("- 不换题，不降温，不补圆原文故意不说完的答案，不收成家庭理财课\n")
 	b.WriteString("- 篇幅跟原文走：正文字数控制在原文的 0.8～1.2 倍。不许缩成摘要，也不许注水拉长\n")
-	b.WriteString("- 课程名固定《财富觉醒方法论》，入口主页橱窗；原文另有课名时跟原文\n")
+	b.WriteString("- 课程名固定写成《财富觉醒方法论》，入口主页橱窗。禁止带年份、禁止写成「2026财富觉醒方法论」或「叫2026财富觉醒方法论」。原文课名即使带年份，口播也必须改成《财富觉醒方法论》\n")
+	b.WriteString("- 卖课钩子只在全文最末收口一次：点开主页橱窗看《财富觉醒方法论》说一遍就停。禁止开头、中段、结尾各讲一遍；禁止同一段里把课名、五块钱、橱窗再重复一遍\n")
 	b.WriteString("- 关键数字必须原词留下（套数、日均、比例、年限、单价、金额、城数）。禁止改成「很多」「心惊的数」「差不多」这类形容词或约数\n")
 	b.WriteString("- 数字原词不等于整句照搬：带数字的数据句同样必须换说法重讲，只有数字本身一个不动。原稿写「2001年外汇储备2100多亿美元，到2014年最猛的时候3.99万亿」，新稿就得换成类似「外汇储备从2001年的2100多亿美元，一路堆到2014年顶点的3.99万亿」的新句子。数据句原样照搬按留原句判失败\n")
 	b.WriteString("- 例子必须自洽：本金乘利率要对上利息\n")
@@ -362,6 +364,8 @@ func buildWriterPrompt(skillMD string) string {
 	b.WriteString("- 听起来像换了一篇更温和的家庭理财文\n")
 	b.WriteString("- 正文比原文短了两成以上，或明显注水变长\n")
 	b.WriteString("- 出现「快转发」「评论扣1」「接接接」这类喊口令式互动引导，或编造了原文里没有的截止日期\n")
+	b.WriteString("- 课程名带了年份，或写成「2026财富觉醒方法论」\n")
+	b.WriteString("- 卖课钩子在全文出现两次及以上，或收口段把课名、橱窗、五块钱重复两遍\n")
 	b.WriteString("\n按四十五到六十五岁口播来写。少用书面词。句子短，像当面说话。写成能念的连续口播，不要讲解员作文。\n")
 	b.WriteString(writerJSONContract())
 	b.WriteString("rewrite 还必须带 machine：对象，含 hook / unanswered / proof / gap / emotion / cta 六句（锁机器）。控制台落盘仍以 continuous_script 为准。\n")
@@ -376,7 +380,7 @@ func writerJSONContract() string {
 	return "只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。\n" +
 		"continuous_script 必须是完整连续口播正文。\n" +
 		"titles、short_titles、descriptions 必须从这篇口播长出来，讲的是同一件事。禁止拿别的成稿标题来凑数，也不要用提示词里没有出现在原文里的情节做标题。\n" +
-		"titles 8到12条。short_titles 恰好5条、每条最多15个字、不要#。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。三条描述末尾都带这同一组标签，topics 也只用这组，不要自造其他#。cta 一句催促上车。\n"
+		"titles 8到12条。short_titles 恰好5条、每条最多15个字、不要#。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。三条描述末尾都带这同一组标签，topics 也只用这组，不要自造其他#。cta 必须留空字符串。发布文案不要写课程名、主页橱窗、上车、推广期、几块钱。口播正文仍可按硬性保留收口到课程，但 titles / short_titles / descriptions / cta 一律不写推广。\n"
 }
 
 func buildWriterUser(manifest manifestLite, source string) string {

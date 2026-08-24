@@ -133,3 +133,45 @@ func TestRepairSourceOverlapIsDisabledWithoutCheckModel(t *testing.T) {
 		t.Fatalf("质检关闭也要在结论里说明: %q", note)
 	}
 }
+
+func TestStripCourseYearAndCollapseDuplicateMentions(t *testing.T) {
+	script := "两个月少了2万亿。第三，花2秒钟打开主页橱窗里的《2026财富觉醒方法论》。虽然才五块钱。主页橱窗里的《2026财富觉醒方法论》已经放好。"
+	got, notes := applyLocalCopyFixes(script)
+	if strings.Contains(got, "2026财富") {
+		t.Fatalf("课名年份必须去掉: %s", got)
+	}
+	if strings.Count(got, canonicalCourse) != 1 {
+		t.Fatalf("卖课只留一次, got=%s notes=%v", got, notes)
+	}
+	if !containsString(notes, "课名去掉年份") || !containsString(notes, "删掉重复的卖课收口") {
+		t.Fatalf("notes=%v", notes)
+	}
+	issues := inspectCopyIssues(got)
+	for _, issue := range issues {
+		if strings.Contains(issue, "两次") || strings.Contains(issue, "年份") {
+			t.Fatalf("本地改完不应再报课名/重复: %v", issues)
+		}
+	}
+}
+
+func TestRepairRemixDraftSavesLocalCourseFixesWithoutModel(t *testing.T) {
+	raw := `{"continuous_script":"两个月少了2万亿，钱去了哪儿？不是买房。第三，打开主页橱窗里的《2026财富觉醒方法论》。虽然才五块钱。主页橱窗里的《2026财富觉醒方法论》已经放好。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	client := &sequenceClient{}
+	content, _, note := repairRemixDraft(client, "writer", "", "", "system", "user", "source", raw)
+	if len(client.requests) != 0 {
+		t.Fatalf("本地能改时不应打模型: %d", len(client.requests))
+	}
+	draft, err := parseRemixDraft(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(draft.ContinuousScript, "2026财富") {
+		t.Fatalf("必须直接改稿保存: %s", draft.ContinuousScript)
+	}
+	if strings.Count(draft.ContinuousScript, canonicalCourse) != 1 {
+		t.Fatalf("重复收口必须删掉: %s", draft.ContinuousScript)
+	}
+	if !strings.Contains(note, "本地已改") {
+		t.Fatalf("note=%q", note)
+	}
+}
