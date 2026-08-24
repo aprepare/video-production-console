@@ -23,6 +23,10 @@ const (
 	overlapMaxFragments = 10
 	// overlapWarningRunes 是警告里展示片段的最大长度。
 	overlapWarningRunes = 40
+	// overlapCoverageWindow 用 8 个内容字的滑动窗口估字面重合。
+	overlapCoverageWindow = 8
+	// overlapCoverageMax 是交付上限。超过就返工，仍超则任务失败。
+	overlapCoverageMax = 0.40
 )
 
 // overlapAllowedPhrases 是允许在每篇稿子里原样出现的固定要素：课程名、入口
@@ -125,44 +129,75 @@ func overlapWarnings(fragments []string) []string {
 	return warnings
 }
 
+func overlapCoverage(source, draft string) float64 {
+	src := overlapContentRunes(source, '\x01')
+	dst := overlapContentRunes(draft, '\x02')
+	if len(src) < overlapCoverageWindow || len(dst) < overlapCoverageWindow {
+		return 0
+	}
+	seeds := make(map[string]struct{}, len(src))
+	for i := 0; i+overlapCoverageWindow <= len(src); i++ {
+		seeds[string(src[i:i+overlapCoverageWindow])] = struct{}{}
+	}
+	hit := 0
+	total := len(dst) - overlapCoverageWindow + 1
+	for i := 0; i+overlapCoverageWindow <= len(dst); i++ {
+		if _, ok := seeds[string(dst[i:i+overlapCoverageWindow])]; ok {
+			hit++
+		}
+	}
+	return float64(hit) / float64(total)
+}
+
+func overlapCoveragePercent(source, draft string) int {
+	return int(overlapCoverage(source, draft)*100 + 0.5)
+}
+
 // buildOverlapRepairPrompt 是自检返工的第二轮用户消息：把照搬片段当证据列给
 // 模型，只许重说这些句子。
 func buildOverlapRepairPrompt(fragments []string) string {
 	var b strings.Builder
-	b.WriteString("自检发现下面这些片段和同行原文一字不差（比对时已去掉标点）。只把含这些片段的句子换成新说法，句子里的数字原词保留，其余所有内容一个字都不要改，按上一条回复相同的 JSON 结构返回完整结果：\n")
+	b.WriteString("自检发现成稿和同行原文字面重合过高，必须压到 40% 以下。按对标结构逐句换词换说法，数字、机构名、年份原词保留，连续 8 个字不要和原文一样。只把该换的句子换掉，按上一条回复相同的 JSON 结构返回完整结果：\n")
 	for i, fragment := range fragments {
 		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, fragment))
 	}
 	return b.String()
 }
 
-// repairSourceOverlap 在交付前做一轮自检返工：新稿照搬原文时，把证据发回同
-// 一会话让模型只重写那些句子。返工失败或改得更差就保留首稿；两版残留的重合
-// 都会变成任务警告。质检只在配置了质检模型时运行：留空表示关闭质检，写稿
-// 模型的原始输出原样交付。第三个返回值是一句质检结论，会进入任务结果摘要，
-// 让操作者看到质检用了哪个模型、发现几处、返工是否成功。
-func repairSourceOverlap(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string) {
-	_ = model
+// repairSourceOverlap 在交付前做一轮字面重合闸门。8 字窗口覆盖超过 40%
+// 必须返工；写稿模型先改一稿，配置了质检模型再交给质检模型。仍超 40% 则任务失败。
+func repairSourceOverlap(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string, error) {
 	checkModel = strings.TrimSpace(checkModel)
 	draft, err := parseRemixDraft(content)
 	if err != nil || strings.TrimSpace(draft.ContinuousScript) == "" {
 		if checkModel == "" {
-			return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。"
+			return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。", nil
 		}
-		return content, nil, "质检未执行：草稿无法解析。"
+		return content, nil, "质检未执行：草稿无法解析。", nil
 	}
+	coverage := overlapCoverage(source, draft.ContinuousScript)
+	percent := overlapCoveragePercent(source, draft.ContinuousScript)
 	fragments := overlapFragments(source, draft.ContinuousScript)
-	if checkModel == "" {
-		if len(fragments) == 0 {
-			return content, nil, "质检未启用（质检模型留空），交付写稿模型原始输出。"
+	if coverage <= overlapCoverageMax {
+		if checkModel == "" {
+			if len(fragments) == 0 {
+				return content, nil, fmt.Sprintf("字面重合 %d%%，低于 40%%。质检未启用（质检模型留空）。", percent), nil
+			}
+			return content, overlapWarnings(fragments), fmt.Sprintf("字面重合 %d%%，低于 40%%。质检未启用。仍有 %d 处长句重合，见警告。", percent, len(fragments)), nil
 		}
-		return content, overlapWarnings(fragments), fmt.Sprintf("质检未启用（质检模型留空）。自检发现 %d 处与原文重合，见警告。", len(fragments))
+		if len(fragments) == 0 {
+			return content, nil, fmt.Sprintf("质检通过（%s）：字面重合 %d%%，未发现长句照搬。", checkModel, percent), nil
+		}
 	}
-	if len(fragments) == 0 {
-		return content, nil, fmt.Sprintf("质检通过（%s）：未发现与原文重合的片段。", checkModel)
+	repairModel := strings.TrimSpace(model)
+	if checkModel != "" {
+		repairModel = checkModel
+	}
+	if repairModel == "" {
+		return content, overlapWarnings(fragments), fmt.Sprintf("字面重合 %d%%，超过 40%%。", percent), fmt.Errorf("字面重合 %d%%，超过 40%%，必须换词换说法后再交", percent)
 	}
 	resp, err := client.Chat(ChatRequest{
-		Model:           checkModel,
+		Model:           repairModel,
 		ReasoningEffort: effort,
 		Stream:          true,
 		Messages: []Message{
@@ -174,25 +209,29 @@ func repairSourceOverlap(client ChatClient, model, checkModel, effort, system, u
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return content, overlapWarnings(fragments),
-			fmt.Sprintf("质检（%s）：发现 %d 处与原文重合，返工请求失败，保留首稿，见警告。", checkModel, len(fragments))
+			fmt.Sprintf("字面重合 %d%%，返工请求失败。", percent),
+			fmt.Errorf("字面重合 %d%%，超过 40%%，返工失败", percent)
 	}
 	retry := resp.Choices[0].Message.Content
 	retryDraft, err := parseRemixDraft(retry)
 	if err != nil || utf8.RuneCountInString(strings.TrimSpace(retryDraft.ContinuousScript)) < 40 {
 		return content, overlapWarnings(fragments),
-			fmt.Sprintf("质检（%s）：发现 %d 处与原文重合，返工结果无效，保留首稿，见警告。", checkModel, len(fragments))
+			fmt.Sprintf("字面重合 %d%%，返工结果无效。", percent),
+			fmt.Errorf("字面重合 %d%%，超过 40%%，返工结果无效", percent)
 	}
+	retryCoverage := overlapCoverage(source, retryDraft.ContinuousScript)
+	retryPercent := overlapCoveragePercent(source, retryDraft.ContinuousScript)
 	retryFragments := overlapFragments(source, retryDraft.ContinuousScript)
-	if overlapRuneTotal(retryFragments) < overlapRuneTotal(fragments) {
-		if len(retryFragments) == 0 {
-			return retry, nil,
-				fmt.Sprintf("质检（%s）：发现 %d 处与原文重合，已全部改写。", checkModel, len(fragments))
+	if retryCoverage <= overlapCoverageMax {
+		note := fmt.Sprintf("字面重合从 %d%% 降到 %d%%。", percent, retryPercent)
+		if checkModel != "" {
+			note = fmt.Sprintf("质检（%s）：%s", checkModel, note)
 		}
-		return retry, overlapWarnings(retryFragments),
-			fmt.Sprintf("质检（%s）：发现 %d 处与原文重合，改写后剩余 %d 处，见警告。", checkModel, len(fragments), len(retryFragments))
+		return retry, overlapWarnings(retryFragments), note, nil
 	}
-	return content, overlapWarnings(fragments),
-		fmt.Sprintf("质检（%s）：发现 %d 处与原文重合，返工未见改善，保留首稿，见警告。", checkModel, len(fragments))
+	return retry, overlapWarnings(retryFragments),
+		fmt.Sprintf("字面重合仍为 %d%%，超过 40%%。", retryPercent),
+		fmt.Errorf("字面重合 %d%%，超过 40%%，换说法后仍未压到 40%% 以下", retryPercent)
 }
 
 const canonicalCourse = "财富觉醒方法论"
@@ -365,11 +404,14 @@ func appendCheckNote(note string, extra string) string {
 
 // repairRemixDraft 先做原文重合质检，再查课名、开头、结尾和卖课钩子。
 // 能本地改的直接改稿保存；改不干净的再交给质检模型返工。
-func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string) {
-	content, warnings, note := repairSourceOverlap(client, model, checkModel, effort, system, user, source, content)
-	draft, err := parseRemixDraft(content)
-	if err != nil || strings.TrimSpace(draft.ContinuousScript) == "" {
-		return content, warnings, note
+func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string, error) {
+	content, warnings, note, err := repairSourceOverlap(client, model, checkModel, effort, system, user, source, content)
+	if err != nil {
+		return content, warnings, note, err
+	}
+	draft, parseErr := parseRemixDraft(content)
+	if parseErr != nil || strings.TrimSpace(draft.ContinuousScript) == "" {
+		return content, warnings, note, nil
 	}
 	raw := content
 	raw, yearStripped := stripCourseYear(raw)
@@ -383,12 +425,12 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 		note = appendCheckNote(note, "本地已改："+strings.Join(localNotes, "；")+"。")
 	}
 	if len(issues) == 0 {
-		return content, warnings, note
+		return content, warnings, note, nil
 	}
 	if strings.TrimSpace(checkModel) == "" {
-		return content, warnings, appendCheckNote(note, "仍待人工看："+strings.Join(issues, "；")+"。")
+		return content, warnings, appendCheckNote(note, "仍待人工看："+strings.Join(issues, "；")+"。"), nil
 	}
-	resp, err := client.Chat(ChatRequest{
+	resp, chatErr := client.Chat(ChatRequest{
 		Model:           checkModel,
 		ReasoningEffort: effort,
 		Stream:          true,
@@ -399,14 +441,14 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 			{Role: "user", Content: buildCopyRepairPrompt(issues)},
 		},
 	})
-	if err != nil || len(resp.Choices) == 0 {
-		return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工失败，已保存本地修改。", checkModel))
+	if chatErr != nil || len(resp.Choices) == 0 {
+		return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工失败，已保存本地修改。", checkModel)), nil
 	}
 	retry := resp.Choices[0].Message.Content
 	retry, _ = stripCourseYear(retry)
-	retryDraft, err := parseRemixDraft(retry)
-	if err != nil || utf8.RuneCountInString(strings.TrimSpace(retryDraft.ContinuousScript)) < 40 {
-		return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工结果无效，已保存本地修改。", checkModel))
+	retryDraft, parseErr := parseRemixDraft(retry)
+	if parseErr != nil || utf8.RuneCountInString(strings.TrimSpace(retryDraft.ContinuousScript)) < 40 {
+		return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工结果无效，已保存本地修改。", checkModel)), nil
 	}
 	retryScript, moreLocal := applyLocalCopyFixes(retryDraft.ContinuousScript)
 	retry = replaceDraftScript(retry, retryScript)
@@ -415,9 +457,9 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 		note = appendCheckNote(note, "返工后再改："+strings.Join(moreLocal, "；")+"。")
 	}
 	if len(retryIssues) <= len(issues) {
-		return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）已按课名/开头/结尾改稿保存。", checkModel))
+		return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）已按课名/开头/结尾改稿保存。", checkModel)), nil
 	}
-	return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工未见改善，保留本地修改。", checkModel))
+	return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工未见改善，保留本地修改。", checkModel)), nil
 }
 
 func containsString(items []string, want string) bool {

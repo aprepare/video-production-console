@@ -48,6 +48,12 @@ const overlapCopiedDraft = `{"continuous_script":"回头看第一回。那年入
 
 const overlapFixedDraft = `{"continuous_script":"回头看第一回。那年入了世贸，厂里每收一美元货款，银行柜台就按八块多的价换给你人民币，钱就这样进了外贸老板的口袋，流水线工人只分到零头。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":"现在上车还来得及。"}`
 
+const overlapHighCopySource = "问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？这不是假设，这是刚刚发生的白纸黑字写在央行月度报表上的实时数据。两个月2万亿蒸发，这是近十年来最大规模的无声迁徙。"
+
+const overlapHighCopyDraft = `{"continuous_script":"问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？这不是假设，这是刚刚发生的白纸黑字写在央行月度报表上的实时数据。两个月2万亿蒸发，这是近十年来最大规模的无声迁徙。点开主页橱窗看《财富觉醒方法论》。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+
+const overlapHighCopyFixed = `{"continuous_script":"存折上一下子少了2万亿，不是买房，不是进股市，连黄金都没接住。央行刚公布的月报把这件事写死了。两个月里这笔钱蒸发掉，近十年没见过这么大的搬家。点开主页橱窗看《财富觉醒方法论》。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+
 type sequenceClient struct {
 	responses []string
 	requests  []ChatRequest
@@ -64,7 +70,10 @@ func (c *sequenceClient) Chat(req ChatRequest) (ChatResponse, error) {
 
 func TestRepairSourceOverlapRewritesCopiedSentences(t *testing.T) {
 	client := &sequenceClient{responses: []string{overlapFixedDraft}}
-	content, warnings, note := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapSourceText, overlapCopiedDraft)
+	content, warnings, note, err := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapSourceText, overlapCopiedDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(client.requests) != 1 {
 		t.Fatalf("返工必须只追加一轮请求, got %d", len(client.requests))
 	}
@@ -75,7 +84,7 @@ func TestRepairSourceOverlapRewritesCopiedSentences(t *testing.T) {
 	if len(repair.Messages) != 4 || repair.Messages[3].Role != "user" {
 		t.Fatalf("返工请求必须带完整会话: %#v", repair.Messages)
 	}
-	if !strings.Contains(repair.Messages[3].Content, "一字不差") || !strings.Contains(repair.Messages[3].Content, "央行就对应印8块多人民币") {
+	if !strings.Contains(repair.Messages[3].Content, "40%") || !strings.Contains(repair.Messages[3].Content, "央行就对应印8块多人民币") {
 		t.Fatalf("返工消息必须列出照搬证据: %q", repair.Messages[3].Content)
 	}
 	if content != overlapFixedDraft {
@@ -84,16 +93,16 @@ func TestRepairSourceOverlapRewritesCopiedSentences(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("修复后不应有警告: %v", warnings)
 	}
-	if !strings.Contains(note, "check-model") || !strings.Contains(note, "已全部改写") {
+	if !strings.Contains(note, "check-model") || !strings.Contains(note, "降到") {
 		t.Fatalf("质检结论必须写明模型和返工结果: %q", note)
 	}
 }
 
-func TestRepairSourceOverlapKeepsOriginalWhenRetryStillCopies(t *testing.T) {
-	client := &sequenceClient{responses: []string{overlapCopiedDraft}}
-	content, warnings, note := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapSourceText, overlapCopiedDraft)
-	if content != overlapCopiedDraft {
-		t.Fatal("返工无改善时保留首稿")
+func TestRepairSourceOverlapFailsWhenRetryStillCopies(t *testing.T) {
+	client := &sequenceClient{responses: []string{overlapHighCopyDraft}}
+	_, warnings, note, err := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapHighCopySource, overlapHighCopyDraft)
+	if err == nil || !strings.Contains(err.Error(), "40%") {
+		t.Fatalf("超过 40%% 必须失败: %v", err)
 	}
 	if len(client.requests) != 1 || client.requests[0].Model != "check-model" {
 		t.Fatalf("返工必须用配置的质检模型: %#v", client.requests)
@@ -101,14 +110,17 @@ func TestRepairSourceOverlapKeepsOriginalWhenRetryStillCopies(t *testing.T) {
 	if len(warnings) == 0 || !strings.Contains(warnings[0], "与原文重合未修复") {
 		t.Fatalf("残留重合必须写成警告: %v", warnings)
 	}
-	if !strings.Contains(note, "check-model") || !strings.Contains(note, "保留首稿") {
-		t.Fatalf("质检结论必须说明保留首稿: %q", note)
+	if !strings.Contains(note, "超过 40%") {
+		t.Fatalf("质检结论必须说明仍超标: %q", note)
 	}
 }
 
 func TestRepairSourceOverlapSkipsCleanDrafts(t *testing.T) {
 	client := &sequenceClient{responses: []string{overlapFixedDraft}}
-	content, warnings, note := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapSourceText, overlapFixedDraft)
+	content, warnings, note, err := repairSourceOverlap(client, "test-model", "check-model", "", "system", "user", overlapSourceText, overlapFixedDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(client.requests) != 0 {
 		t.Fatal("干净稿子不应触发返工请求")
 	}
@@ -120,20 +132,20 @@ func TestRepairSourceOverlapSkipsCleanDrafts(t *testing.T) {
 	}
 }
 
-func TestRepairSourceOverlapIsDisabledWithoutCheckModel(t *testing.T) {
-	client := &sequenceClient{responses: []string{overlapFixedDraft}}
-	content, warnings, note := repairSourceOverlap(client, "test-model", "", "", "system", "user", overlapSourceText, overlapCopiedDraft)
-	if len(client.requests) != 0 {
-		t.Fatal("质检模型留空时不得发出任何质检请求")
+func TestRepairSourceOverlapUsesWriterWhenCheckModelEmpty(t *testing.T) {
+	client := &sequenceClient{responses: []string{overlapHighCopyFixed}}
+	content, _, note, err := repairSourceOverlap(client, "writer-model", "", "", "system", "user", overlapHighCopySource, overlapHighCopyDraft)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if content != overlapCopiedDraft {
-		t.Fatalf("质检关闭时仍交付原始输出")
+	if len(client.requests) != 1 || client.requests[0].Model != "writer-model" {
+		t.Fatalf("质检留空时必须用写稿模型返工: %#v", client.requests)
 	}
-	if len(warnings) == 0 || !strings.Contains(warnings[0], "与原文重合未修复") {
-		t.Fatalf("质检关闭也要把重合写成警告: %v", warnings)
+	if content != overlapHighCopyFixed {
+		t.Fatal("必须采用返工后的稿子")
 	}
-	if !strings.Contains(note, "质检未启用") || !strings.Contains(note, "与原文重合") {
-		t.Fatalf("质检关闭也要在结论里说明重合: %q", note)
+	if !strings.Contains(note, "降到") {
+		t.Fatalf("note=%q", note)
 	}
 }
 
@@ -160,7 +172,10 @@ func TestStripCourseYearAndCollapseDuplicateMentions(t *testing.T) {
 func TestRepairRemixDraftSavesLocalCourseFixesWithoutModel(t *testing.T) {
 	raw := `{"continuous_script":"两个月少了2万亿，钱去了哪儿？不是买房。第三，打开主页橱窗里的《2026财富觉醒方法论》。虽然才五块钱。主页橱窗里的《2026财富觉醒方法论》已经放好。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
 	client := &sequenceClient{}
-	content, _, note := repairRemixDraft(client, "writer", "", "", "system", "user", "source", raw)
+	content, _, note, err := repairRemixDraft(client, "writer", "", "", "system", "user", "source", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(client.requests) != 0 {
 		t.Fatalf("本地能改时不应打模型: %d", len(client.requests))
 	}

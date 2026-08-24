@@ -153,7 +153,10 @@ func Run(opts Options) error {
 	if len(resp.Choices) == 0 {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
-	content, checkWarnings, checkNote := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
+	content, checkWarnings, checkNote, err := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, resp.Choices[0].Message.Content)
+	if err != nil {
+		return writeFailure(outPath, manifestPath, err)
+	}
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
@@ -416,7 +419,7 @@ func buildAssemblePrompt() string {
 	b.WriteString("你是财经视频号口播二创员。只写口播，不要调用工具，不要解释过程。\n")
 	b.WriteString("对标文的结构必须留下：钩子类型、论证顺序、数字、未揭晓的答案、收口位置。换的是词和说法，不是题，也不是段落顺序。\n")
 	b.WriteString("钩子候选只用来锁开场力度和损失类型，不要整段贴进去。分镜脚本只当段落提纲：取信息点，丢掉镜头、括号、音效、时间轴，更不要把分镜里的口播原句念出来。\n")
-	b.WriteString("每一句都要换词换说法。数字、机构名、年份原词保留，周围的句子必须重说。连续 12 个字和原文或分镜一字不差即失败。\n")
+	b.WriteString("每一句都要换词换说法。数字、机构名、年份原词保留，周围的句子必须重说。连续 8 个字和原文一样就计入字面重合，整篇必须低于 40%。\n")
 	b.WriteString("禁止照搬金句、比喻和专属口头禅，例如后背发凉、无声迁徙、舔瓶盖、集体叛逃、当燃料、财富警觉这类现成表达，必须换成新的说法。\n")
 	b.WriteString("开场切口必须和原稿第一句不同，钩子类型不许换成更软的损失。课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
 	b.WriteString("cta 必须空字符串。发布外壳不要写课名、橱窗、几块钱。\n")
