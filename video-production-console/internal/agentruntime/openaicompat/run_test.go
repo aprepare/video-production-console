@@ -9,7 +9,7 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "文案进化台 2026-08-24 切口收口定稿" {
+	if RewritePromptStamp != "文案进化台 2026-08-24 钩子类型定稿" {
 		t.Fatalf("stamp=%q", RewritePromptStamp)
 	}
 }
@@ -23,6 +23,9 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		"本金乘利率",
 		"出场顺序可以换",
 		"开场切口必须换",
+		"钩子类型不许换",
+		"前 3 句内",
+		"纯解释句、纯共情句",
 		"#干货分享",
 		"3到4个",
 		"必须从这篇口播长出来",
@@ -48,7 +51,7 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		t.Fatalf("stale prompt clause still present")
 	}
 	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套")
-	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "开场切口必须和原稿第一句不同") || strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
+	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "开场切口必须和原稿第一句不同") || !strings.Contains(user, "钩子类型必须跟原稿第一句同类") || strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
 	}
 }
