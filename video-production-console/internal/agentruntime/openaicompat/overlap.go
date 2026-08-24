@@ -381,12 +381,6 @@ func inspectCopyIssues(script, source string) []string {
 	if hasSameOpeningCut(script, source) {
 		issues = append(issues, "开场切口和原稿同类：不要再问2万亿去了哪儿，也不要用不是买房不是炒股黄金没接住这套切入口")
 	}
-	if hasSamePipeline(script) {
-		issues = append(issues, "中段还是钱去哪→到期→三次历史→课这条流水线，必须打乱出场顺序")
-	}
-	if hasSoftEmpathy(script) {
-		issues = append(issues, "删掉这不是吓你、存款少也有资格这类过软共情，损失场景和悬念必须留下")
-	}
 	return issues
 }
 
@@ -426,40 +420,8 @@ func hasSameOpeningCut(script, source string) bool {
 	return overlapCoverage(srcHead, head) >= 0.40
 }
 
-func hasSamePipeline(script string) bool {
-	expire := strings.Index(script, "到期")
-	three := strings.Index(script, "三次")
-	fourth := strings.Index(script, "第四次")
-	course := strings.Index(script, canonicalCourse)
-	if expire < 0 || three < 0 || course < 0 {
-		return false
-	}
-	if expire < three && three < course {
-		if fourth >= 0 && three < fourth && fourth < course {
-			return true
-		}
-		if strings.Contains(script, "98") && strings.Contains(script, "08") && strings.Contains(script, "15") {
-			return true
-		}
-	}
-	return false
-}
-
-func hasSoftEmpathy(script string) bool {
-	needles := []string{
-		"这不是我在这里吓你", "这不是吓你", "这不是我编的", "这不是有人在编故事",
-		"不要觉得手头存款少", "存款少就没资格", "只有几万或者十几万", "就算你现在只有几万",
-	}
-	for _, needle := range needles {
-		if strings.Contains(script, needle) {
-			return true
-		}
-	}
-	return false
-}
-
 func hardCopyIssue(issue string) bool {
-	return strings.Contains(issue, "50到77") || strings.Contains(issue, "开场切口") || strings.Contains(issue, "流水线") || strings.Contains(issue, "过软")
+	return strings.Contains(issue, "50到77") || strings.Contains(issue, "开场切口")
 }
 
 func replaceDraftScript(raw, script string) string {
@@ -481,7 +443,7 @@ func replaceDraftScript(raw, script string) string {
 
 func buildCopyRepairPrompt(issues []string) string {
 	var b strings.Builder
-	b.WriteString("质检发现成稿开头、中段顺序、禁写项或卖课收口不合格。按下面几条直接改 continuous_script 后保存，数字和未揭晓的答案原词保留，按上一条回复相同的 JSON 结构返回完整结果：\n")
+	b.WriteString("质检发现成稿开头、禁写项或卖课收口不合格。按下面几条直接改 continuous_script 后保存，数字和未揭晓的答案原词保留，按上一条回复相同的 JSON 结构返回完整结果：\n")
 	for i, issue := range issues {
 		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue))
 	}
@@ -532,7 +494,7 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 	if strings.TrimSpace(checkModel) == "" {
 		for _, issue := range issues {
 			if hardCopyIssue(issue) {
-				return content, warnings, appendCheckNote(note, "仍待改："+strings.Join(issues, "；")+"。"), fmt.Errorf("二创切口/流水线/禁写项未过：%s", strings.Join(issues, "；"))
+				return content, warnings, appendCheckNote(note, "仍待改："+strings.Join(issues, "；")+"。"), fmt.Errorf("二创禁写项未过：%s", strings.Join(issues, "；"))
 			}
 		}
 		return content, warnings, appendCheckNote(note, "仍待人工看："+strings.Join(issues, "；")+"。"), nil
@@ -568,7 +530,7 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 	}
 	for _, issue := range retryIssues {
 		if hardCopyIssue(issue) {
-			return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）切口/流水线仍未过：%s", checkModel, strings.Join(retryIssues, "；"))), fmt.Errorf("二创切口/流水线/禁写项未过：%s", strings.Join(retryIssues, "；"))
+			return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）禁写项仍未过：%s", checkModel, strings.Join(retryIssues, "；"))), fmt.Errorf("二创禁写项未过：%s", strings.Join(retryIssues, "；"))
 		}
 	}
 	if len(retryIssues) <= len(issues) {

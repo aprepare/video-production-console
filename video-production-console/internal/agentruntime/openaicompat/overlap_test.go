@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -204,8 +205,8 @@ func TestInspectCopyIssuesRejectsSameOpeningAndDepositRange(t *testing.T) {
 	if !containsIssue(issues, "50到77") {
 		t.Fatalf("必须抓住定存区间: %v", issues)
 	}
-	if !containsIssue(issues, "流水线") {
-		t.Fatalf("必须抓住同一流水线: %v", issues)
+	if containsIssue(issues, "流水线") || containsIssue(issues, "过软") {
+		t.Fatalf("流水线和过软共情不再当硬闸: %v", issues)
 	}
 	got, notes := applyLocalCopyFixes(script)
 	if strings.Contains(got, "50到77") || !containsString(notes, "去掉50到77万亿定存区间") {
@@ -214,9 +215,28 @@ func TestInspectCopyIssuesRejectsSameOpeningAndDepositRange(t *testing.T) {
 	client := &sequenceClient{}
 	raw := `{"continuous_script":"` + script + `","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
 	_, _, _, err := repairRemixDraft(client, "writer", "", "", "system", "user", source, raw)
-	if err == nil || !strings.Contains(err.Error(), "切口") {
-		t.Fatalf("同一切口必须让任务失败: %v", err)
+	if !strings.Contains(err.Error(), "切口") && !strings.Contains(err.Error(), "50到77") {
+		t.Fatalf("同一切口或定存区间必须让任务失败: %v", err)
 	}
+}
+
+func TestInspectCopyIssuesAllowsSamePipelineAndSoftEmpathy(t *testing.T) {
+	source := "三年定存利率从2.6%砍到1.25%。四月份居民存款少了近2万亿。"
+	script := "三年定存利率从2.6%直接砍到1.25%，一年期只剩0.95%。这不是吓你。答案只有两个字：到期。这种搬家只出现过三次。98年、08年、15年。现在是第四次。不要觉得手头存款少就没资格。去我主页橱窗找《财富觉醒方法论》。"
+	issues := inspectCopyIssues(script, source)
+	if containsIssue(issues, "流水线") || containsIssue(issues, "过软") {
+		t.Fatalf("同一流水线和过软共情必须放行: %v", issues)
+	}
+	client := &sequenceClient{}
+	raw := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	if _, _, _, err := repairRemixDraft(client, "writer", "", "", "system", "user", source, raw); err != nil {
+		t.Fatalf("按对标顺序写、留下共情句不应失败: %v", err)
+	}
+}
+
+func mustJSONString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func containsIssue(issues []string, needle string) bool {
