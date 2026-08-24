@@ -32,12 +32,22 @@ func TestWriteRemixDeliverableRejectsMalformedStructuredResponseWithoutFiles(t *
 	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), raw, nil, ""); err == nil {
 		t.Fatal("expected malformed structured response to fail")
 	}
-	entries, err := os.ReadDir(outputDir)
+	if _, err := os.Stat(filepath.Join(outputDir, "model_raw.txt")); err != nil {
+		t.Fatalf("malformed response must keep model_raw.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "continuous_script.txt")); err == nil {
+		t.Fatal("malformed response must not write continuous_script.txt")
+	}
+}
+
+func TestParseRemixDraftExtractsJSONFromProse(t *testing.T) {
+	raw := "好的，这是整理后的口播：\n```json\n{\"continuous_script\":\"两个月，老百姓存在银行里的钱少了整整2万亿。不是买房，不是炒股，那它到底变成了什么？点开主页橱窗看《财富觉醒方法论》。\",\"titles\":[\"2万亿去哪了\"],\"short_titles\":[\"2万亿去哪了\"],\"descriptions\":[\"两个月少了2万亿\"],\"topics\":[\"#经济\"],\"cta\":\"\"}\n```\n"
+	draft, err := parseRemixDraft(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("malformed response wrote %d files", len(entries))
+	if !strings.Contains(draft.ContinuousScript, "2万亿") {
+		t.Fatalf("script=%q", draft.ContinuousScript)
 	}
 }
 

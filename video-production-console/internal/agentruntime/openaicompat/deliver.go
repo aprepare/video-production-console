@@ -36,26 +36,100 @@ func parseRemixDraft(raw string) (remixDraft, error) {
 	if text == "" {
 		return remixDraft{}, nil
 	}
-	if !strings.HasPrefix(text, "{") {
-		return remixDraft{ContinuousScript: text}, nil
+	if draft, ok := decodeRemixDraft(text); ok {
+		return draft, nil
 	}
-	const maxTrailingClosingBraces = 2
-	candidate := text
+	if extracted := extractJSONObject(text); extracted != "" && extracted != text {
+		if draft, ok := decodeRemixDraft(extracted); ok {
+			return draft, nil
+		}
+	}
+	if strings.Contains(text, "{") {
+		return remixDraft{}, fmt.Errorf("model returned malformed structured remix response")
+	}
+	return remixDraft{ContinuousScript: text}, nil
+}
+
+func decodeRemixDraft(text string) (remixDraft, bool) {
+	candidate := strings.TrimSpace(text)
+	const maxTrailingClosingBraces = 4
 	for removed := 0; removed <= maxTrailingClosingBraces; removed++ {
 		var draft remixDraft
 		if err := json.Unmarshal([]byte(candidate), &draft); err == nil {
-			draft.ContinuousScript = strings.TrimSpace(draft.ContinuousScript)
+			draft.ContinuousScript = strings.TrimSpace(firstNonEmpty(
+				draft.ContinuousScript,
+				mapString(candidate, "continuous_script"),
+				mapString(candidate, "continuousScript"),
+				mapString(candidate, "script"),
+			))
 			if draft.ContinuousScript == "" {
-				return remixDraft{}, fmt.Errorf("structured remix response is missing continuous_script")
+				return remixDraft{}, false
 			}
-			return draft, nil
+			return draft, true
 		}
 		if removed == maxTrailingClosingBraces || !strings.HasSuffix(candidate, "}") {
 			break
 		}
 		candidate = strings.TrimSpace(strings.TrimSuffix(candidate, "}"))
 	}
-	return remixDraft{}, fmt.Errorf("model returned malformed structured remix response")
+	return remixDraft{}, false
+}
+
+func extractJSONObject(text string) string {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escape := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(text[start : i+1])
+			}
+		}
+	}
+	return strings.TrimSpace(text[start:])
+}
+
+func mapString(raw, key string) string {
+	var payload map[string]any
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func stripCodeFence(raw string) string {
@@ -76,6 +150,10 @@ func isAskModeRefusal(text string) bool {
 }
 
 func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings []string, checkNote string) error {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return err
+	}
+	_ = os.WriteFile(filepath.Join(outputDir, "model_raw.txt"), []byte(modelText), 0o644)
 	draft, err := parseRemixDraft(modelText)
 	if err != nil {
 		return err
@@ -253,10 +331,7 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	for i, description := range descriptions {
 		descriptions[i] = withHotTopics(clipDescriptionBody(description), topics)
 	}
-	cta := strings.TrimSpace(draft.CTA)
-	if cta == "" {
-		cta = "关掉干扰，现在就去主页橱窗看《财富觉醒方法论》。"
-	}
+	cta := ""
 	top := []map[string]any{}
 	for i := 0; i < 3 && i < len(titles); i++ {
 		top = append(top, map[string]any{"rank": i + 1, "title": titles[i], "reason": "保留原稿钩子与未解问题。"})
