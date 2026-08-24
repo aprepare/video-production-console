@@ -533,10 +533,6 @@ func writeFailure(outPath, manifestPath string, cause error) error {
 	if strings.TrimSpace(outputDir) != "" {
 		appendRemixRunLog(outputDir, map[string]any{"event": "failed", "error": cause.Error()})
 	}
-	artifacts := remixDeliverableArtifacts(outputDir, nil)
-	if artifacts == nil {
-		artifacts = []map[string]string{}
-	}
 	envelope := map[string]any{
 		"schema_version": "2.0",
 		"task_id":        taskID,
@@ -544,7 +540,7 @@ func writeFailure(outPath, manifestPath string, cause error) error {
 		"status":         "failed",
 		"summary":        cause.Error(),
 		"questions":      []any{},
-		"artifacts":      artifacts,
+		"artifacts":      failureArtifacts(action, outputDir),
 		"asset_outputs":  []any{},
 		"warnings":       []any{},
 	}
@@ -559,6 +555,19 @@ func writeFailure(outPath, manifestPath string, cause error) error {
 		return fmt.Errorf("%v; also failed to write envelope: %w", cause, err)
 	}
 	return nil
+}
+
+func failureArtifacts(action, outputDir string) []map[string]string {
+	switch strings.TrimSpace(action) {
+	case string(domain.ActionRemixStandard), string(domain.ActionRemixEnhanced), string(domain.ActionRemixFromTopic), string(domain.ActionRemixReview):
+		artifacts := remixDeliverableArtifacts(outputDir, nil)
+		if artifacts == nil {
+			return []map[string]string{}
+		}
+		return artifacts
+	default:
+		return []map[string]string{}
+	}
 }
 
 func identityFromManifest(path string) (taskID, action, outputDir string) {

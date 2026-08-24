@@ -2,10 +2,14 @@ package openaicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"video-production-console/internal/codex"
+	"video-production-console/internal/domain"
 )
 
 func TestRewritePromptStamp(t *testing.T) {
@@ -321,6 +325,39 @@ func TestRunKeepsModelRawWhenQualityFails(t *testing.T) {
 	}
 	if !strings.Contains(string(env), `"failed"`) || !strings.Contains(string(env), "model_raw") || !strings.Contains(string(env), "remix_run") {
 		t.Fatalf("failed envelope must keep capture artifacts: %s", env)
+	}
+}
+
+func TestWriteFailureCaptionKeywordsOmitsRemixArtifacts(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "output")
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "11111111-1111-1111-1111-111111111111"
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": taskID, "action": "remix.caption_keywords", "output_dir": outputDir,
+	})
+	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	last := filepath.Join(root, "last.json")
+	if err := writeFailure(last, manifestPath, fmt.Errorf("chat completions status 400: model_not_found")); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(env), "remix_run") || strings.Contains(string(env), "model_raw") {
+		t.Fatalf("caption_keywords failure must not advertise remix artifacts: %s", env)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "remix_run.json")); err != nil {
+		t.Fatalf("local remix_run.json still written: %v", err)
+	}
+	if _, err := codex.ValidateResultEnvelopeJSON(env, taskID, domain.ActionCaptionKeywords, outputDir); err != nil {
+		t.Fatalf("failed caption_keywords envelope must validate: %v body=%s", err, env)
 	}
 }
 
