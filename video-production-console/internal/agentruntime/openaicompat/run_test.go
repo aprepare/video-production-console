@@ -16,7 +16,7 @@ func TestRewritePromptStamp(t *testing.T) {
 
 func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
 	system := buildAssemblePrompt()
-	for _, want := range []string{"钩子候选", "分镜脚本", "财富觉醒方法论", "cta 必须空字符串", "换词换说法", "不要把分镜里的口播原句念出来", "低于 40%"} {
+	for _, want := range []string{"钩子候选", "分镜脚本", "财富觉醒方法论", "cta 必须空字符串", "换词换说法", "不要把分镜里的口播原句念出来", "低于 40%", "50到77万亿", "开场切口必须和原稿前 80 字不同"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
 		}

@@ -161,7 +161,7 @@ func TestStripCourseYearAndCollapseDuplicateMentions(t *testing.T) {
 	if !containsString(notes, "课名去掉年份") || !containsString(notes, "删掉重复的卖课收口") {
 		t.Fatalf("notes=%v", notes)
 	}
-	issues := inspectCopyIssues(got)
+	issues := inspectCopyIssues(got, "")
 	for _, issue := range issues {
 		if strings.Contains(issue, "两次") || strings.Contains(issue, "年份") {
 			t.Fatalf("本地改完不应再报课名/重复: %v", issues)
@@ -192,4 +192,38 @@ func TestRepairRemixDraftSavesLocalCourseFixesWithoutModel(t *testing.T) {
 	if !strings.Contains(note, "本地已改") {
 		t.Fatalf("note=%q", note)
 	}
+}
+
+func TestInspectCopyIssuesRejectsSameOpeningAndDepositRange(t *testing.T) {
+	source := "问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？"
+	script := "两个月，整整20500亿，从全国老百姓的存折上悄无声息地蒸发了。这笔钱没流进楼市，没被股市收走，连近两年涨势最猛的黄金都没接住它——那它究竟去了哪儿？答案只有两个字：到期。华泰测算逼近50到77万亿。这种搬家只出现过三次。98年、08年、15年。现在是第四次。去我主页橱窗找《财富觉醒方法论》。"
+	issues := inspectCopyIssues(script, source)
+	if !containsIssue(issues, "开场切口") {
+		t.Fatalf("必须抓住同一切口: %v", issues)
+	}
+	if !containsIssue(issues, "50到77") {
+		t.Fatalf("必须抓住定存区间: %v", issues)
+	}
+	if !containsIssue(issues, "流水线") {
+		t.Fatalf("必须抓住同一流水线: %v", issues)
+	}
+	got, notes := applyLocalCopyFixes(script)
+	if strings.Contains(got, "50到77") || !containsString(notes, "去掉50到77万亿定存区间") {
+		t.Fatalf("本地必须去掉定存区间: %s notes=%v", got, notes)
+	}
+	client := &sequenceClient{}
+	raw := `{"continuous_script":"` + script + `","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	_, _, _, err := repairRemixDraft(client, "writer", "", "", "system", "user", source, raw)
+	if err == nil || !strings.Contains(err.Error(), "切口") {
+		t.Fatalf("同一切口必须让任务失败: %v", err)
+	}
+}
+
+func containsIssue(issues []string, needle string) bool {
+	for _, issue := range issues {
+		if strings.Contains(issue, needle) {
+			return true
+		}
+	}
+	return false
 }

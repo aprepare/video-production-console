@@ -319,7 +319,7 @@ func collapseDuplicateCourseMentions(script string) (string, bool) {
 }
 
 func applyLocalCopyFixes(script string) (string, []string) {
-	notes := make([]string, 0, 2)
+	notes := make([]string, 0, 3)
 	script, stripped := stripCourseYear(script)
 	if stripped {
 		notes = append(notes, "课名去掉年份")
@@ -328,11 +328,29 @@ func applyLocalCopyFixes(script string) (string, []string) {
 	if collapsed {
 		notes = append(notes, "删掉重复的卖课收口")
 	}
+	script, droppedRange := stripForbiddenDepositRange(script)
+	if droppedRange {
+		notes = append(notes, "去掉50到77万亿定存区间")
+	}
 	return script, notes
 }
 
-func inspectCopyIssues(script string) []string {
-	issues := make([]string, 0, 4)
+func stripForbiddenDepositRange(script string) (string, bool) {
+	orig := script
+	replacements := []string{
+		"50万亿到77万亿", "50 万亿到 77 万亿", "50到77万亿", "50 到 77 万亿",
+		"50至77万亿", "50–77万亿", "50—77万亿", "50-77万亿",
+		"50到75万亿", "50–75万亿", "50-75万亿", "50至75万亿",
+		"五十到七十七万亿", "五十万亿到七十七万亿",
+	}
+	for _, phrase := range replacements {
+		script = strings.ReplaceAll(script, phrase, "一大批到期资金")
+	}
+	return script, script != orig
+}
+
+func inspectCopyIssues(script, source string) []string {
+	issues := make([]string, 0, 6)
 	if strings.Contains(script, "2026财富觉醒") {
 		issues = append(issues, "课程名带了年份，必须改成《财富觉醒方法论》")
 	}
@@ -357,7 +375,91 @@ func inspectCopyIssues(script string) []string {
 			issues = append(issues, "开头钩子过长或不够具体，前几句必须落到观众自家的钱")
 		}
 	}
+	if hasForbiddenDepositRange(script) {
+		issues = append(issues, "不要写50到77万亿或50到75万亿定存到期，改成到期规模很大、分批出来")
+	}
+	if hasSameOpeningCut(script, source) {
+		issues = append(issues, "开场切口和原稿同类：不要再问2万亿去了哪儿，也不要用不是买房不是炒股黄金没接住这套切入口")
+	}
+	if hasSamePipeline(script) {
+		issues = append(issues, "中段还是钱去哪→到期→三次历史→课这条流水线，必须打乱出场顺序")
+	}
+	if hasSoftEmpathy(script) {
+		issues = append(issues, "删掉这不是吓你、存款少也有资格这类过软共情，损失场景和悬念必须留下")
+	}
 	return issues
+}
+
+func hasForbiddenDepositRange(script string) bool {
+	needles := []string{
+		"50到77", "50 到 77", "50万亿到77", "50至77", "50–77", "50-77", "50—77",
+		"50到75", "50–75", "50-75", "五十到七十七", "五十万亿到七十七",
+	}
+	for _, needle := range needles {
+		if strings.Contains(script, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func openingHead(text string, n int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > n {
+		runes = runes[:n]
+	}
+	return string(runes)
+}
+
+func hasSameOpeningCut(script, source string) bool {
+	head := openingHead(script, 80)
+	hasGone := strings.Contains(head, "去了哪儿") || strings.Contains(head, "去了哪里") || strings.Contains(head, "究竟去了") || strings.Contains(head, "到底去了") || strings.Contains(head, "到底变成了什么")
+	hasNotHouseStockGold := (strings.Contains(head, "房") || strings.Contains(head, "楼")) && (strings.Contains(head, "股") || strings.Contains(head, "股市")) && strings.Contains(head, "黄金")
+	has2yi := strings.Contains(head, "2万亿") || strings.Contains(head, "两万亿") || strings.Contains(head, "20500")
+	if hasGone && hasNotHouseStockGold && has2yi {
+		return true
+	}
+	if strings.TrimSpace(source) == "" {
+		return false
+	}
+	srcHead := openingHead(source, 80)
+	return overlapCoverage(srcHead, head) >= 0.40
+}
+
+func hasSamePipeline(script string) bool {
+	expire := strings.Index(script, "到期")
+	three := strings.Index(script, "三次")
+	fourth := strings.Index(script, "第四次")
+	course := strings.Index(script, canonicalCourse)
+	if expire < 0 || three < 0 || course < 0 {
+		return false
+	}
+	if expire < three && three < course {
+		if fourth >= 0 && three < fourth && fourth < course {
+			return true
+		}
+		if strings.Contains(script, "98") && strings.Contains(script, "08") && strings.Contains(script, "15") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSoftEmpathy(script string) bool {
+	needles := []string{
+		"这不是我在这里吓你", "这不是吓你", "这不是我编的", "这不是有人在编故事",
+		"不要觉得手头存款少", "存款少就没资格", "只有几万或者十几万", "就算你现在只有几万",
+	}
+	for _, needle := range needles {
+		if strings.Contains(script, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func hardCopyIssue(issue string) bool {
+	return strings.Contains(issue, "50到77") || strings.Contains(issue, "开场切口") || strings.Contains(issue, "流水线") || strings.Contains(issue, "过软")
 }
 
 func replaceDraftScript(raw, script string) string {
@@ -379,7 +481,7 @@ func replaceDraftScript(raw, script string) string {
 
 func buildCopyRepairPrompt(issues []string) string {
 	var b strings.Builder
-	b.WriteString("质检发现成稿开头、结尾或卖课收口不合格。按下面几条直接改 continuous_script 后保存，其余论证、数字、未揭晓的答案一个字都不要改，按上一条回复相同的 JSON 结构返回完整结果：\n")
+	b.WriteString("质检发现成稿开头、中段顺序、禁写项或卖课收口不合格。按下面几条直接改 continuous_script 后保存，数字和未揭晓的答案原词保留，按上一条回复相同的 JSON 结构返回完整结果：\n")
 	for i, issue := range issues {
 		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue))
 	}
@@ -420,7 +522,7 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 		localNotes = append([]string{"课名去掉年份"}, localNotes...)
 	}
 	content = replaceDraftScript(raw, script)
-	issues := inspectCopyIssues(script)
+	issues := inspectCopyIssues(script, source)
 	if len(localNotes) > 0 {
 		note = appendCheckNote(note, "本地已改："+strings.Join(localNotes, "；")+"。")
 	}
@@ -428,6 +530,11 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 		return content, warnings, note, nil
 	}
 	if strings.TrimSpace(checkModel) == "" {
+		for _, issue := range issues {
+			if hardCopyIssue(issue) {
+				return content, warnings, appendCheckNote(note, "仍待改："+strings.Join(issues, "；")+"。"), fmt.Errorf("二创切口/流水线/禁写项未过：%s", strings.Join(issues, "；"))
+			}
+		}
 		return content, warnings, appendCheckNote(note, "仍待人工看："+strings.Join(issues, "；")+"。"), nil
 	}
 	resp, chatErr := client.Chat(ChatRequest{
@@ -452,9 +559,17 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 	}
 	retryScript, moreLocal := applyLocalCopyFixes(retryDraft.ContinuousScript)
 	retry = replaceDraftScript(retry, retryScript)
-	retryIssues := inspectCopyIssues(retryScript)
+	retryIssues := inspectCopyIssues(retryScript, source)
 	if len(moreLocal) > 0 {
 		note = appendCheckNote(note, "返工后再改："+strings.Join(moreLocal, "；")+"。")
+	}
+	if len(retryIssues) == 0 {
+		return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）已按课名/开头/结尾改稿保存。", checkModel)), nil
+	}
+	for _, issue := range retryIssues {
+		if hardCopyIssue(issue) {
+			return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）切口/流水线仍未过：%s", checkModel, strings.Join(retryIssues, "；"))), fmt.Errorf("二创切口/流水线/禁写项未过：%s", strings.Join(retryIssues, "；"))
+		}
 	}
 	if len(retryIssues) <= len(issues) {
 		return retry, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）已按课名/开头/结尾改稿保存。", checkModel)), nil

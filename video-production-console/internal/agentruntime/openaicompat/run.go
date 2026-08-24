@@ -61,7 +61,8 @@ const (
 	// 2026-08-24 切口定稿：六件套出场顺序可换、开场切口必须换、钩子 2～3 句、
 	// 收口最多四句、示范原句进失败标准、截止日只认具体日、拿掉 machine 字段。
 	// 2026-08-24 口播copy整理：先并行打 hooks/scripts，再用指定模型整理成稿。
-	// 2026-08-24 换词换说法：对标文结构不动，禁止顺着分镜原句念。
+	// 2026-08-24 换词换说法：钩子类型留下，开场切口必须换，中段顺序打乱。
+	// 2026-08-24 禁写 50–77 万亿定存到期区间，禁止同一流水线换皮。
 	// 旧 rewrite 长提示词不再发给写稿模型。只作仓库标注，不发给模型。
 	RewritePromptStamp = "口播copy换说法 2026-08-24"
 )
@@ -417,11 +418,15 @@ func buildWriterUser(manifest manifestLite, source string) string {
 func buildAssemblePrompt() string {
 	var b strings.Builder
 	b.WriteString("你是财经视频号口播二创员。只写口播，不要调用工具，不要解释过程。\n")
-	b.WriteString("对标文的结构必须留下：钩子类型、论证顺序、数字、未揭晓的答案、收口位置。换的是词和说法，不是题，也不是段落顺序。\n")
+	b.WriteString("对标文留下题材、钩子类型、关键数字、未揭晓的答案、课名收口。换词换说法。中段出场顺序必须打乱，禁止沿同一条流水线换皮。\n")
 	b.WriteString("钩子候选只用来锁开场力度和损失类型，不要整段贴进去。分镜脚本只当段落提纲：取信息点，丢掉镜头、括号、音效、时间轴，更不要把分镜里的口播原句念出来。\n")
-	b.WriteString("每一句都要换词换说法。数字、机构名、年份原词保留，周围的句子必须重说。连续 8 个字和原文一样就计入字面重合，整篇必须低于 40%。\n")
+	b.WriteString("每一句都要换词换说法。机构名、具体利率、单月少了多少这些数字原词保留，周围的句子必须重说。连续 8 个字和原文一样就计入字面重合，整篇必须低于 40%。\n")
 	b.WriteString("禁止照搬金句、比喻和专属口头禅，例如后背发凉、无声迁徙、舔瓶盖、集体叛逃、当燃料、财富警觉这类现成表达，必须换成新的说法。\n")
-	b.WriteString("开场切口必须和原稿第一句不同，钩子类型不许换成更软的损失。课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
+	b.WriteString("开场切口必须和原稿前 80 字不同。禁止再问「2万亿/20500亿去了哪儿」，也禁止「不是买房不是炒股黄金没接住，那钱去哪了」这套切入口。钩子类型不许换成更软的损失。\n")
+	b.WriteString("中段把到期、利率腰斩、三次搬家史、第四次窗口拆开重排。禁止沿「钱去哪→到期→50到77万亿→三次历史→课」换皮。\n")
+	b.WriteString("禁止写「50到77万亿」「50万亿到77万亿」「50–75万亿定存到期」这类到期总盘估算。可以说到期规模很大、分批出来，不要报这个区间。\n")
+	b.WriteString("禁止「这不是吓你」「存款少也有资格」这类过软共情。损失场景、悬念、适度焦虑必须留下。\n")
+	b.WriteString("课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
 	b.WriteString("cta 必须空字符串。发布外壳不要写课名、橱窗、几块钱。\n")
 	b.WriteString(writerJSONContract())
 	return b.String()
@@ -429,7 +434,7 @@ func buildAssemblePrompt() string {
 
 func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) string {
 	var b strings.Builder
-	b.WriteString("按对标文的结构写一篇全新口播：先锁钩子类型和段落顺序，再逐句换词换说法。不要顺着分镜原句往下念，也不要同义改写原文第一句。\n")
+	b.WriteString("按对标文写一篇全新口播：锁钩子类型，换开场切口，打乱中段出场顺序，再逐句换词换说法。不要顺着分镜原句往下念，也不要同义改写原文第一句。\n")
 	b.WriteString("标题和短标题必须跟这篇新口播走。\n")
 	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
 		b.WriteString("修改要求：\n")
