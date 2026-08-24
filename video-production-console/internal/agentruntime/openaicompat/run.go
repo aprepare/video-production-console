@@ -22,10 +22,13 @@ type Options struct {
 	// opening/ending, CTA). Empty disables the model pass; local fixes still run.
 	CheckModel string
 	BaseURL    string
-	APIKey            string
-	MaxSteps          int
-	PythonBinary      string
-	Client            ChatClient
+	APIKey     string
+	CopyBaseURL string
+	CopyAPIKey  string
+	MaxSteps     int
+	PythonBinary string
+	Client       ChatClient
+	CopyClient   CopyClient
 }
 
 type manifestLite struct {
@@ -57,10 +60,9 @@ const (
 	// 2026-08-24：课名一律《财富觉醒方法论》，禁止带年份；卖课钩子只收口一次。
 	// 2026-08-24 切口定稿：六件套出场顺序可换、开场切口必须换、钩子 2～3 句、
 	// 收口最多四句、示范原句进失败标准、截止日只认具体日、拿掉 machine 字段。
-	// 2026-08-24 钩子类型：切口只换现场和用词，不许把钩子改成更小的损失；
-	// 未揭晓必须进前 3 句；禁止纯解释句、纯共情句开场。
-	// 只作仓库标注，不发给模型。
-	RewritePromptStamp = "文案进化台 2026-08-24 钩子类型定稿"
+	// 2026-08-24 口播copy整理：先并行打 hooks/scripts，再用指定模型整理成稿。
+	// 旧 rewrite 长提示词不再发给写稿模型。只作仓库标注，不发给模型。
+	RewritePromptStamp = "口播copy整理 2026-08-24"
 )
 
 func NormalizePromptStyle(value string) (string, error) {
@@ -123,8 +125,16 @@ func Run(opts Options) error {
 	if _, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	system := buildWriterPrompt()
-	user := buildWriterUser(manifest, source)
+	copyClient := opts.CopyClient
+	if copyClient == nil {
+		copyClient = &HTTPCopyClient{BaseURL: strings.TrimSpace(opts.CopyBaseURL), APIKey: strings.TrimSpace(opts.CopyAPIKey)}
+	}
+	hooks, scripts, err := fetchCopyMaterials(copyClient, source)
+	if err != nil {
+		return writeFailure(outPath, manifestPath, err)
+	}
+	system := buildAssemblePrompt()
+	user := buildAssembleUser(manifest, source, hooks, scripts)
 
 	client := opts.Client
 	if client == nil {
@@ -396,6 +406,35 @@ func buildWriterUser(manifest manifestLite, source string) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n# 同行原文\n")
+	b.WriteString(source)
+	return b.String()
+}
+
+func buildAssemblePrompt() string {
+	var b strings.Builder
+	b.WriteString("你是财经视频号口播整理员。只整理，不要调用工具，不要解释过程。\n")
+	b.WriteString("上游已经给出钩子候选和分镜脚本。你的任务是把它们收成一篇能念的连续口播，并配发布外壳。\n")
+	b.WriteString("钩子候选里选一条最冲的开场，不要自己另起一套更软的损失。分镜脚本只取口播句子，丢掉镜头、括号、音效、时间轴标记。\n")
+	b.WriteString("课程名固定写成《财富觉醒方法论》，禁止带年份。全文课名一次、主页橱窗一次。卖课只在最末最多四句。\n")
+	b.WriteString("cta 必须空字符串。发布外壳不要写课名、橱窗、几块钱。\n")
+	b.WriteString(writerJSONContract())
+	return b.String()
+}
+
+func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) string {
+	var b strings.Builder
+	b.WriteString("把下面材料整理成一篇连续口播。优先用钩子候选里最冲的那条开场，正文按分镜脚本的口播句子往下走，不要照搬镜头说明。\n")
+	b.WriteString("标题和短标题必须跟这篇新口播走。\n")
+	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
+		b.WriteString("修改要求：\n")
+		b.WriteString(notes)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n# 钩子候选\n")
+	b.WriteString(strings.TrimSpace(hooks))
+	b.WriteString("\n\n# 分镜脚本\n")
+	b.WriteString(strings.TrimSpace(scripts))
+	b.WriteString("\n\n# 同行原文（只作核对，不当逐句模板）\n")
 	b.WriteString(source)
 	return b.String()
 }

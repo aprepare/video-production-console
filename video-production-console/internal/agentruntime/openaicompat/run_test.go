@@ -9,8 +9,24 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "文案进化台 2026-08-24 钩子类型定稿" {
+	if RewritePromptStamp != "口播copy整理 2026-08-24" {
 		t.Fatalf("stamp=%q", RewritePromptStamp)
+	}
+}
+
+func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
+	system := buildAssemblePrompt()
+	for _, want := range []string{"钩子候选", "分镜脚本", "财富觉醒方法论", "cta 必须空字符串"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system missing %q", want)
+		}
+	}
+	if strings.Contains(system, "钩子类型不许换") {
+		t.Fatal("assemble prompt must not reuse the old rewrite prompt")
+	}
+	user := buildAssembleUser(manifestLite{}, "原文", "钩子A", "脚本B")
+	if !strings.Contains(user, "# 钩子候选") || !strings.Contains(user, "钩子A") || !strings.Contains(user, "脚本B") || !strings.Contains(user, "原文") {
+		t.Fatalf("user=%q", user)
 	}
 }
 
@@ -109,11 +125,15 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 		BaseURL:           "http://example.invalid/v1",
 		APIKey:            "test-key",
 		Client:            client,
+		CopyClient:        &stubCopyClient{hooks: "钩子A", scripts: "脚本B"},
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !client.streamed {
-		t.Fatal("remix request must stream and omit tools")
+		t.Fatalf("remix request must stream and omit tools")
+	}
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[1].Content, "钩子A") || !strings.Contains(client.last.Messages[1].Content, "脚本B") {
+		t.Fatalf("assemble user missing copy materials: %#v", client.last.Messages)
 	}
 	body, err := os.ReadFile(last)
 	if err != nil {
@@ -186,7 +206,8 @@ func TestRunWritesFilesWhenModelReturnsPlainScript(t *testing.T) {
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
 		BaseURL: "http://example.invalid/v1", APIKey: "k",
-		Client: &textClient{content: script},
+		Client:     &textClient{content: script},
+		CopyClient: &stubCopyClient{hooks: "钩子A", scripts: "脚本B"},
 	}); err != nil {
 		t.Fatal(err)
 	}

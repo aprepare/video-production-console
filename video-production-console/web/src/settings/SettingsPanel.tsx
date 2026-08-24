@@ -14,6 +14,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   remix_base_url: "二创服务地址",
   remix_model: "二创模型",
   remix_reasoning_effort: "二创思考强度",
+  copy_base_url: "口播copy接口",
   image_base_url: "生图服务地址",
   image_text_base_url: "图文文本模型地址",
   codex_binary_path: "Codex 程序路径",
@@ -36,6 +37,7 @@ const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
 type SecretDraft = {
   grok_api_key: string;
   remix_api_key: string;
+  copy_api_key: string;
   pexels_api_key: string;
   volc_speech_api_key: string;
   aurastd_tts_api_key: string;
@@ -362,6 +364,27 @@ export function SettingsPanel({
                   placeholder="留空保持不变"
                   onChange={(event) =>
                     onSecretDraftChange({ ...secretDraft, remix_api_key: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label="口播copy接口">
+                <input
+                  value={draft.copy_base_url || ""}
+                  placeholder="http://127.0.0.1:8866"
+                  onChange={setText("copy_base_url")}
+                />
+              </Field>
+              <Field label="口播copy密钥">
+                <small>
+                  {settings?.secrets.copy_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="口播copy密钥"
+                  value={secretDraft.copy_api_key}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, copy_api_key: event.target.value })
                   }
                 />
               </Field>

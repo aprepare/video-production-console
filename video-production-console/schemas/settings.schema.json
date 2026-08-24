@@ -87,6 +87,11 @@
           "enum": ["", "low", "medium", "high", "xhigh", "max", "ultra"]
         },
         "remix_check_model": { "type": "string", "maxLength": 256 },
+        "copy_base_url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:$|https?://[^/#\\s]+(?:/[^#]*)?)$"
+        },
         "model_options": { "type": "string", "maxLength": 4096 },
         "image_base_url": {
           "type": "string",
@@ -257,6 +262,7 @@
             "remix_model",
             "remix_reasoning_effort",
             "remix_check_model",
+            "copy_base_url",
             "model_options",
             "image_base_url",
             "image_model",
@@ -313,6 +319,7 @@
       "properties": {
         "grok_api_key": { "type": "string", "maxLength": 16384 },
         "remix_api_key": { "type": "string", "maxLength": 16384 },
+        "copy_api_key": { "type": "string", "maxLength": 16384 },
         "pexels_api_key": { "type": "string", "maxLength": 16384 },
         "volc_speech_api_key": { "type": "string", "maxLength": 16384 },
         "aurastd_tts_api_key": { "type": "string", "maxLength": 16384 },
@@ -345,10 +352,11 @@
     "secretView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["grok_api_key", "remix_api_key", "pexels_api_key", "volc_speech_api_key", "aurastd_tts_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"],
+      "required": ["grok_api_key", "remix_api_key", "copy_api_key", "pexels_api_key", "volc_speech_api_key", "aurastd_tts_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"],
       "properties": {
         "grok_api_key": { "$ref": "#/$defs/secretStatus" },
         "remix_api_key": { "$ref": "#/$defs/secretStatus" },
+        "copy_api_key": { "$ref": "#/$defs/secretStatus" },
         "pexels_api_key": { "$ref": "#/$defs/secretStatus" },
         "volc_speech_api_key": { "$ref": "#/$defs/secretStatus" },
         "aurastd_tts_api_key": { "$ref": "#/$defs/secretStatus" },

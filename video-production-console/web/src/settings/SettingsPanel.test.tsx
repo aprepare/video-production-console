@@ -26,6 +26,7 @@ const draft: PublicSettings = {
   remix_reasoning_effort: "",
   remix_check_model: "",
   spoken_lines_model: "",
+  copy_base_url: "",
   model_options: "",
   codex_task_project_root: "",
   image_base_url: "http://images.example.test/v1",
@@ -77,6 +78,7 @@ const draft: PublicSettings = {
 const emptySecretDraft = {
   grok_api_key: "",
   remix_api_key: "",
+  copy_api_key: "",
   pexels_api_key: "",
   volc_speech_api_key: "",
   aurastd_tts_api_key: "",
@@ -93,6 +95,7 @@ const settings: Settings = {
   secrets: {
     grok_api_key: { configured: false, masked: "" },
     remix_api_key: { configured: false, masked: "" },
+    copy_api_key: { configured: false, masked: "" },
     pexels_api_key: { configured: false, masked: "" },
     volc_speech_api_key: { configured: true, masked: "********" },
     aurastd_tts_api_key: { configured: false, masked: "" },

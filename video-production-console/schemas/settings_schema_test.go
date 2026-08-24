@@ -22,7 +22,7 @@ func TestSettingsSchemaParsesAndCapsSecretInputs(t *testing.T) {
 	}
 	secretInput := definitions["secretInput"].(map[string]any)
 	properties := secretInput["properties"].(map[string]any)
-	secretKeys := []string{"grok_api_key", "remix_api_key", "pexels_api_key", "volc_speech_api_key", "aurastd_tts_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"}
+	secretKeys := []string{"grok_api_key", "remix_api_key", "copy_api_key", "pexels_api_key", "volc_speech_api_key", "aurastd_tts_api_key", "image_api_key", "image_text_api_key", "vision_api_key", "embedding_api_key", "pixabay_api_key"}
 	for _, key := range secretKeys {
 		property, ok := properties[key].(map[string]any)
 		if !ok || property["maxLength"] != float64(16<<10) {
@@ -58,7 +58,7 @@ func TestSettingsSchemaDescribesRemixModelSettings(t *testing.T) {
 	definitions := schema["$defs"].(map[string]any)
 	public := definitions["publicSettings"].(map[string]any)
 	properties := public["properties"].(map[string]any)
-	remixKeys := []string{"remix_base_url", "remix_model", "remix_reasoning_effort"}
+	remixKeys := []string{"remix_base_url", "remix_model", "remix_reasoning_effort", "copy_base_url"}
 	for _, key := range remixKeys {
 		if properties[key] == nil {
 			t.Fatalf("%s missing from public settings schema", key)

@@ -30,6 +30,7 @@ import (
 const (
 	SecretGrokAPIKey       = "grok_api_key"
 	SecretRemixAPIKey      = "remix_api_key"
+	SecretCopyAPIKey       = "copy_api_key"
 	SecretPexelsAPIKey     = "pexels_api_key"
 	SecretVolcSpeechAPIKey = "volc_speech_api_key"
 	SecretAuraSTDTTsAPIKey = "aurastd_tts_api_key"
@@ -73,7 +74,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -138,6 +139,7 @@ type Runtime struct {
 	domain.PublicSettings
 	GrokAPIKey       string           `json:"-"`
 	RemixAPIKey      string           `json:"-"`
+	CopyAPIKey       string           `json:"-"`
 	PexelsAPIKey     string           `json:"-"`
 	VolcSpeechAPIKey string           `json:"-"`
 	AuraSTDTTsAPIKey string           `json:"-"`
@@ -351,6 +353,7 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.RemixReasoningEffort = configured.RemixReasoningEffort
 	s.active.RemixCheckModel = configured.RemixCheckModel
 	s.active.SpokenLinesModel = configured.SpokenLinesModel
+	s.active.CopyBaseURL = configured.CopyBaseURL
 	s.active.ModelOptions = configured.ModelOptions
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
 	s.active.ImageStream = configured.ImageStream
@@ -523,6 +526,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.GrokAPIKey = value
 		case SecretRemixAPIKey:
 			runtime.RemixAPIKey = value
+		case SecretCopyAPIKey:
+			runtime.CopyAPIKey = value
 		case SecretPexelsAPIKey:
 			runtime.PexelsAPIKey = value
 		case SecretVolcSpeechAPIKey:
@@ -744,6 +749,11 @@ func validatePublic(value domain.PublicSettings) error {
 	if value.RemixBaseURL != "" {
 		if err := validateHTTPURL(value.RemixBaseURL); err != nil {
 			return invalid("remix_base_url")
+		}
+	}
+	if value.CopyBaseURL != "" {
+		if err := validateHTTPURL(value.CopyBaseURL); err != nil {
+			return invalid("copy_base_url")
 		}
 	}
 	if len(value.RemixModel) > 256 {
@@ -1089,6 +1099,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"remix_reasoning_effort": value.RemixReasoningEffort,
 		"remix_check_model":      value.RemixCheckModel,
 		"spoken_lines_model":     value.SpokenLinesModel,
+		"copy_base_url":          value.CopyBaseURL,
 		"model_options":          value.ModelOptions,
 		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
@@ -1350,6 +1361,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		RemixReasoningEffort: strings.ToLower(strings.TrimSpace(values["remix_reasoning_effort"])),
 		RemixCheckModel:      strings.TrimSpace(values["remix_check_model"]),
 		SpokenLinesModel:     strings.TrimSpace(values["spoken_lines_model"]),
+		CopyBaseURL:          strings.TrimSpace(values["copy_base_url"]),
 		ModelOptions:         normalizeModelOptions(values["model_options"]),
 		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),

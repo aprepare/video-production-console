@@ -998,6 +998,7 @@ func TestTaskCommandConfigStripsGrokSecretsForMontage(t *testing.T) {
 func TestLoadCodexSecretEnvironmentReadsOnlyExplicitAllowlist(t *testing.T) {
 	wantLookups := []string{
 		"GROK_SEARCH_BASE_URL", "GROK_SEARCH_MODEL", "GROK_SEARCH_API_KEY", "PEXELS_API_KEY",
+		"COPY_API_BASE_URL", "COPY_API_KEY",
 	}
 	values := map[string]string{
 		"GROK_SEARCH_BASE_URL": "https://search.invalid",

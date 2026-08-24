@@ -50,6 +50,8 @@ var codexSecretEnvironmentKeys = []string{
 	"GROK_SEARCH_MODEL",
 	"GROK_SEARCH_API_KEY",
 	"PEXELS_API_KEY",
+	"COPY_API_BASE_URL",
+	"COPY_API_KEY",
 }
 
 // lookPathPi resolves the local Pi coding-agent binary. Tests may stub it.
@@ -647,6 +649,8 @@ func runOpenAICompatCommand(args []string) error {
 		}
 	}
 	baseURL, apiKey := agentruntime.OpenAIConfigFromEnv()
+	copyBaseURL := strings.TrimSpace(os.Getenv("COPY_API_BASE_URL"))
+	copyAPIKey := strings.TrimSpace(os.Getenv("COPY_API_KEY"))
 	return openaicompat.Run(openaicompat.Options{
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
@@ -656,6 +660,8 @@ func runOpenAICompatCommand(args []string) error {
 		CheckModel:        checkModel,
 		BaseURL:           baseURL,
 		APIKey:            apiKey,
+		CopyBaseURL:       copyBaseURL,
+		CopyAPIKey:        copyAPIKey,
 	})
 }
 
@@ -1156,6 +1162,12 @@ func runtimeSecretEnvironment(runtime consoleSettings.Runtime, lookup func(strin
 	}
 	if runtime.RemixCheckModel != "" {
 		environment["REMIX_CHECK_MODEL"] = runtime.RemixCheckModel
+	}
+	if runtime.CopyAPIKey != "" {
+		environment["COPY_API_KEY"] = runtime.CopyAPIKey
+	}
+	if runtime.CopyBaseURL != "" {
+		environment["COPY_API_BASE_URL"] = runtime.CopyBaseURL
 	}
 	if runtime.PexelsAPIKey != "" {
 		environment["PEXELS_API_KEY"] = runtime.PexelsAPIKey

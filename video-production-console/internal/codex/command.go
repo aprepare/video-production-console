@@ -18,7 +18,7 @@ import (
 
 var (
 	systemEnvironmentKeys = []string{"COMSPEC", "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR"}
-	secretEnvironmentKeys = []string{"GROK_SEARCH_API_KEY", "GROK_SEARCH_BASE_URL", "GROK_SEARCH_MODEL", "PEXELS_API_KEY"}
+	secretEnvironmentKeys = []string{"GROK_SEARCH_API_KEY", "GROK_SEARCH_BASE_URL", "GROK_SEARCH_MODEL", "PEXELS_API_KEY", "COPY_API_BASE_URL", "COPY_API_KEY"}
 	validSessionID        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 )
 

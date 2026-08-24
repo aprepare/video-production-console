@@ -26,6 +26,7 @@ var publicFieldLabels = map[string]string{
 	"remix_reasoning_effort":         "二创思考强度",
 	"remix_check_model":              "质检模型",
 	"spoken_lines_model":             "口播稿模型",
+	"copy_base_url":                  "口播copy接口",
 	"model_options":                  "可选模型列表",
 	"image_base_url":                 "生图服务地址",
 	"image_model":                    "生图模型",
