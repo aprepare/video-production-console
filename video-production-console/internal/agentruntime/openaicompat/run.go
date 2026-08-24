@@ -73,7 +73,6 @@ func NormalizePromptStyle(value string) (string, error) {
 // on trycloudflare 120s cutoffs, so this path never sends tools.
 func Run(opts Options) error {
 	manifestPath := strings.TrimSpace(opts.ManifestPath)
-	skillRoot := strings.TrimSpace(opts.SkillRoot)
 	outPath := strings.TrimSpace(opts.OutputLastMessage)
 	if manifestPath == "" || outPath == "" {
 		return fmt.Errorf("manifest and output-last-message are required")
@@ -117,14 +116,10 @@ func Run(opts Options) error {
 	if action == string(domain.ActionRemixSpokenLines) {
 		return runSpokenLines(opts, manifest, source, outPath)
 	}
-	var skillMD []byte
-	if skillRoot != "" {
-		skillMD, _ = os.ReadFile(filepath.Join(skillRoot, "SKILL.md"))
-	}
 	if _, err := NormalizePromptStyle(manifest.NonSecretSettings.RemixPromptStyle); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
-	system := buildWriterPrompt(string(skillMD))
+	system := buildWriterPrompt()
 	user := buildWriterUser(manifest, source)
 
 	client := opts.Client
@@ -306,7 +301,7 @@ func runCaptionKeywords(opts Options, manifest manifestLite, outPath string) err
 //
 // 落盘 JSON 仍走 writerJSONContract（标题/描述/话题/cta）。
 // 模型可额外返回 machine；parseRemixDraft 忽略未知字段，控制台仍以 continuous_script 为准。
-func buildWriterPrompt(skillMD string) string {
+func buildWriterPrompt() string {
 	var b strings.Builder
 	b.WriteString("你是财经视频号二创写手。只写文案，不要调用工具，不要读写文件，不要解释过程。\n")
 	b.WriteString("\n【先锁爆款机器】\n")
@@ -369,10 +364,6 @@ func buildWriterPrompt(skillMD string) string {
 	b.WriteString("\n按四十五到六十五岁口播来写。少用书面词。句子短，像当面说话。写成能念的连续口播，不要讲解员作文。\n")
 	b.WriteString(writerJSONContract())
 	b.WriteString("rewrite 还必须带 machine：对象，含 hook / unanswered / proof / gap / emotion / cta 六句（锁机器）。控制台落盘仍以 continuous_script 为准。\n")
-	if excerpt := skillExcerpt(skillMD); excerpt != "" {
-		b.WriteString("\n# 补充约束\n")
-		b.WriteString(excerpt)
-	}
 	return b.String()
 }
 
@@ -397,18 +388,6 @@ func buildWriterUser(manifest manifestLite, source string) string {
 	b.WriteString("\n# 同行原文\n")
 	b.WriteString(source)
 	return b.String()
-}
-
-func skillExcerpt(skillMD string) string {
-	text := strings.TrimSpace(skillMD)
-	if text == "" {
-		return ""
-	}
-	const max = 1800
-	if len([]rune(text)) <= max {
-		return text
-	}
-	return string([]rune(text)[:max]) + "…"
 }
 
 func stripBOM(raw []byte) []byte {

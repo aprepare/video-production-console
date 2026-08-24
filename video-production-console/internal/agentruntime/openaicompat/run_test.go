@@ -15,7 +15,7 @@ func TestRewritePromptStamp(t *testing.T) {
 }
 
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
-	system := buildWriterPrompt("# skill")
+	system := buildWriterPrompt()
 	for _, want := range []string{
 		"禁止逐段同义改写",
 		"机器以原文为准",
@@ -46,19 +46,14 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	}
 }
 
-func TestWriterPromptSkillExcerptDoesNotReinjectFixedPlot(t *testing.T) {
-	skillPath := filepath.Join(os.Getenv("USERPROFILE"), ".codex", "skills", "finance-viral-remix", "SKILL.md")
-	raw, err := os.ReadFile(skillPath)
-	if err != nil {
-		t.Skip(err)
+func TestWriterPromptOmitsSkillExcerpt(t *testing.T) {
+	system := buildWriterPrompt()
+	if strings.Contains(system, "# 补充约束") {
+		t.Fatalf("openai writer prompt must not append SKILL.md excerpt")
 	}
-	system := buildWriterPrompt(string(raw))
-	if !strings.Contains(system, "# 补充约束") {
-		t.Fatalf("expected skill excerpt in system prompt")
-	}
-	for _, forbid := range []string{"第三次换锚", "一百七十万亿", "第三个锚", "方便面被外卖抢走", "河的上游", "先发财换锚"} {
+	for _, forbid := range []string{"console mode", "task_manifest.json", "baokuan_search_materials", "result envelope", "选题卡"} {
 		if strings.Contains(system, forbid) {
-			t.Fatalf("skill excerpt reintroduced plot %q", forbid)
+			t.Fatalf("writer prompt still carries skill-ops text %q", forbid)
 		}
 	}
 }
