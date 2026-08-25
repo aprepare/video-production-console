@@ -16,7 +16,6 @@ import (
 	"video-production-console/internal/spokenlines"
 )
 
-// 视频号描述只用这组热门话题，落盘时也会把模型自造的标签换掉。
 var hotPublishingTopics = []string{
 	"#经济", "#思维认知", "#认知", "#宏观趋势", "#思维", "#干货分享", "#认知觉醒",
 }
@@ -128,7 +127,6 @@ func extractJSONObject(text string) string {
 	return strings.TrimSpace(text[start:])
 }
 
-// repairUnescapedJSONQuotes 修模型把正文里的中文引号写成 "接财" 这种未转义双引号。
 func repairUnescapedJSONQuotes(text string) string {
 	start := strings.Index(text, "{")
 	if start < 0 {
@@ -251,24 +249,15 @@ func extractBrokenJSONStringField(text, key string) (string, bool) {
 	body := rest[1:]
 	end := -1
 	for _, marker := range []string{
-		"\",\n  \"titles\"",
-		"\",\n  \"short_titles\"",
-		"\",\n  \"descriptions\"",
-		"\",\n  \"topics\"",
-		"\",\n  \"cta\"",
-		`","titles"`,
-		`","short_titles"`,
-		`","descriptions"`,
-		`","topics"`,
-		`","cta"`,
+		"\",\n  \"titles\"", "\",\n  \"short_titles\"", "\",\n  \"descriptions\"",
+		"\",\n  \"topics\"", "\",\n  \"cta\"",
+		`","titles"`, `","short_titles"`, `","descriptions"`, `","topics"`, `","cta"`,
 	} {
 		if idx := strings.LastIndex(body, marker); idx >= 0 && (end < 0 || idx < end) {
 			end = idx
 		}
 	}
 	if end < 0 {
-		// 流在 continuous_script 字符串中间被掐断：后面没有 titles 等字段，
-		// 把已写出的正文捞出来，避免 HTTP 200 却整篇作废。
 		script := strings.TrimSpace(unescapeJSONString(body))
 		if utf8.RuneCountInString(script) < 40 {
 			return "", false
@@ -306,8 +295,7 @@ func extractBrokenJSONStringArray(text, key string) []string {
 }
 
 func unescapeJSONString(value string) string {
-	replacer := strings.NewReplacer(`\n`, "\n", `\r`, "\r", `	`, "	", `\"`, `"`, `\\`, `\`)
-	return replacer.Replace(value)
+	return strings.NewReplacer(`\n`, "\n", `\r`, "\r", `\t`, "\t", `\"`, `"`, `\\`, `\`).Replace(value)
 }
 
 func mapString(raw, key string) string {
@@ -337,8 +325,7 @@ func stripCodeFence(raw string) string {
 	if nl := strings.Index(text, "\n"); nl >= 0 {
 		text = text[nl+1:]
 	}
-	text = strings.TrimSuffix(text, "```")
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(strings.TrimSuffix(text, "```"))
 }
 
 func isAskModeRefusal(text string) bool {
@@ -361,6 +348,8 @@ func remixDeliverableArtifacts(outputDir string, abs func(string) string) []map[
 		{"self_check.json", "self_check", "Editorial and contract self-check"},
 		{"remix_run.json", "remix_run", "Remix model run log"},
 		{"model_raw.txt", "model_raw", "Raw model remix response"},
+		{"prompt_system.txt", "prompt_system", "Writer system prompt sent to the model"},
+		{"prompt_user.txt", "prompt_user", "Writer user prompt sent to the model"},
 	}
 	out := make([]map[string]string, 0, len(items))
 	for _, item := range items {
@@ -391,7 +380,7 @@ func appendRemixRunLog(outputDir string, event map[string]any) {
 	_ = writeJSONFile(path, log)
 }
 
-func captureRemixModelReply(outputDir, model, style, raw string) {
+func captureRemixModelReply(outputDir, model, style, stamp, raw string) {
 	if strings.TrimSpace(outputDir) == "" {
 		return
 	}
@@ -404,13 +393,12 @@ func captureRemixModelReply(outputDir, model, style, raw string) {
 	if script != "" {
 		_ = os.WriteFile(filepath.Join(outputDir, "continuous_script.txt"), []byte(script), 0o644)
 	}
+	if strings.TrimSpace(stamp) == "" {
+		stamp = promptStamp(style)
+	}
 	appendRemixRunLog(outputDir, map[string]any{
-		"event":        "model_reply",
-		"model":        model,
-		"prompt_style": style,
-		"raw_bytes":    len(raw),
-		"script_runes": utf8.RuneCountInString(script),
-		"parse_ok":     script != "",
+		"event": "model_reply", "model": model, "prompt_style": style, "prompt_stamp": stamp,
+		"raw_bytes": len(raw), "script_runes": utf8.RuneCountInString(script), "parse_ok": script != "",
 	})
 }
 
@@ -442,9 +430,8 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 	}
 	if err := writeJSONFile(filepath.Join(outputDir, "structure_design.json"), map[string]any{
 		"locked_topic": "同一条爆款机器换说法，不换题",
-		"kept":         []string{"开场钩子", "历史证明", "故意不说完的答案", "上车催促"},
-		"changed":      []string{"换说法", "可加料"},
-		"topic_drift":  false,
+		"kept": []string{"开场钩子", "历史证明", "故意不说完的答案", "上车催促"},
+		"changed": []string{"换说法", "可加料"}, "topic_drift": false,
 	}); err != nil {
 		return err
 	}
@@ -454,7 +441,7 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 	if err := writeJSONFile(filepath.Join(outputDir, "self_check.json"), map[string]any{
 		"action": action, "wire_action": "standard", "input_roles": []string{"primary_source"},
 		"generated": []string{"continuous_script.txt", "viral_analysis.json", "structure_design.json", "publishing_package.json", "self_check.json"},
-		"checks":    []string{"console wrote files; model only supplied copy"},
+		"checks": []string{"console wrote files; model only supplied copy"},
 	}); err != nil {
 		return err
 	}
@@ -479,21 +466,14 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 		warningList = append(warningList, warning)
 	}
 	envelope := map[string]any{
-		"schema_version": "2.0",
-		"task_id":        taskID,
-		"action":         action,
-		"status":         "completed",
-		"summary":        summary,
-		"questions":      []any{},
-		"warnings":       warningList,
+		"schema_version": "2.0", "task_id": taskID, "action": action, "status": "completed",
+		"summary": summary, "questions": []any{}, "warnings": warningList,
 		"artifacts": remixDeliverableArtifacts(outputDir, abs),
-		"asset_outputs": []map[string]any{
-			{
-				"type": "continuous_script", "path": abs("continuous_script.txt"), "storage_kind": "file",
-				"filename": "continuous_script.txt", "mime": "text/plain; charset=utf-8",
-				"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
-			},
-		},
+		"asset_outputs": []map[string]any{{
+			"type": "continuous_script", "path": abs("continuous_script.txt"), "storage_kind": "file",
+			"filename": "continuous_script.txt", "mime": "text/plain; charset=utf-8",
+			"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
+		}},
 	}
 	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
 }
@@ -517,21 +497,13 @@ func writeSpokenDeliverable(outputDir, taskID, modelText string) error {
 	abs, _ := filepath.Abs(scriptPath)
 	sum := sha256.Sum256(scriptBytes)
 	envelope := map[string]any{
-		"schema_version": "2.0",
-		"task_id":        taskID,
-		"action":         string(domain.ActionRemixSpokenLines),
-		"status":         "completed",
-		"summary":        "口播稿已生成。",
-		"questions":      []any{},
-		"warnings":       []any{},
-		"artifacts":      []any{},
-		"asset_outputs": []map[string]any{
-			{
-				"type": "spoken_script", "path": abs, "storage_kind": "file",
-				"filename": "spoken_script.txt", "mime": "text/plain; charset=utf-8",
-				"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
-			},
-		},
+		"schema_version": "2.0", "task_id": taskID, "action": string(domain.ActionRemixSpokenLines),
+		"status": "completed", "summary": "口播稿已生成。", "questions": []any{}, "warnings": []any{}, "artifacts": []any{},
+		"asset_outputs": []map[string]any{{
+			"type": "spoken_script", "path": abs, "storage_kind": "file",
+			"filename": "spoken_script.txt", "mime": "text/plain; charset=utf-8",
+			"size": int64(len(scriptBytes)), "sha256": hex.EncodeToString(sum[:]),
+		}},
 	}
 	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
 }
@@ -558,21 +530,13 @@ func writeKeywordsDeliverable(outputDir, taskID, modelText string, lines []strin
 	abs, _ := filepath.Abs(keywordsPath)
 	sum := sha256.Sum256(payload)
 	envelope := map[string]any{
-		"schema_version": "2.0",
-		"task_id":        taskID,
-		"action":         string(domain.ActionCaptionKeywords),
-		"status":         "completed",
-		"summary":        "字幕关键词已标注。",
-		"questions":      []any{},
-		"warnings":       []any{},
-		"artifacts":      []any{},
-		"asset_outputs": []map[string]any{
-			{
-				"type": "caption_keywords", "path": abs, "storage_kind": "file",
-				"filename": "caption_keywords.json", "mime": "application/json; charset=utf-8",
-				"size": int64(len(payload)), "sha256": hex.EncodeToString(sum[:]),
-			},
-		},
+		"schema_version": "2.0", "task_id": taskID, "action": string(domain.ActionCaptionKeywords),
+		"status": "completed", "summary": "字幕关键词已标注。", "questions": []any{}, "warnings": []any{}, "artifacts": []any{},
+		"asset_outputs": []map[string]any{{
+			"type": "caption_keywords", "path": abs, "storage_kind": "file",
+			"filename": "caption_keywords.json", "mime": "application/json; charset=utf-8",
+			"size": int64(len(payload)), "sha256": hex.EncodeToString(sum[:]),
+		}},
 	}
 	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
 }
@@ -594,7 +558,6 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	for i, description := range descriptions {
 		descriptions[i] = withHotTopics(clipDescriptionBody(description), topics)
 	}
-	cta := ""
 	top := []map[string]any{}
 	for i := 0; i < 3 && i < len(titles); i++ {
 		top = append(top, map[string]any{"rank": i + 1, "title": titles[i], "reason": "保留原稿钩子与未解问题。"})
@@ -602,7 +565,7 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	return map[string]any{
 		"titles": titles, "top_titles": top, "short_titles": short,
 		"descriptions": descriptions, "description": descriptions[0],
-		"topics": topics, "cta": cta,
+		"topics": topics, "cta": "",
 	}
 }
 
@@ -614,22 +577,13 @@ func titleFallbacks(script string) []string {
 	if utf8.RuneCountInString(seed) < 8 {
 		seed = "窗口不会等人，先看懂再上车"
 	}
-	return []string{
-		seed,
-		seed + "窗口不会等人",
-		"看懂的人先上车，观望的人后知道",
-		"答案先留着，窗口不会一直开着",
-		"真正拉开差距的是先看懂方向",
-		"别只盯工资，先看钱往哪走",
-		"新一轮机会开始，普通人还有没有窗口",
-		"现在补判断力，比事后后悔便宜",
-	}
+	return []string{seed, seed + "窗口不会等人", "看懂的人先上车，观望的人后知道", "答案先留着，窗口不会一直开着",
+		"真正拉开差距的是先看懂方向", "别只盯工资，先看钱往哪走", "新一轮机会开始，普通人还有没有窗口", "现在补判断力，比事后后悔便宜"}
 }
 
 func shortTitleFallbacks(script string) []string {
 	seed := clipRunes(firstSentence(script), 6, 16)
-	out := []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}
-	return uniqueFilled(nil, out, 5, 5)
+	return uniqueFilled(nil, []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}, 5, 5)
 }
 
 func descriptionFallbacks(script string) []string {
@@ -637,11 +591,7 @@ func descriptionFallbacks(script string) []string {
 	if lead == "" {
 		lead = "看懂方向的人先拿位置，观望的人最后才知道规则变了。"
 	}
-	return []string{
-		lead,
-		"看懂资金上游的人先拿位置，观望的人最后才知道规则变了。",
-		"答案先留着，窗口不会一直开着，现在就去补齐判断力。",
-	}
+	return []string{lead, "看懂资金上游的人先拿位置，观望的人最后才知道规则变了。", "答案先留着，窗口不会一直开着，现在就去补齐判断力。"}
 }
 
 func normalizeHashtag(raw string) string {
@@ -687,10 +637,6 @@ func pickHotTopics(given []string, seed string) []string {
 	return out
 }
 
-// clipDescriptionBody keeps at most two sentences so the 视频描述 stays a
-// short hook instead of a re-pasted script paragraph. Trailing hashtags the
-// model already appended are dropped along with anything past the second
-// sentence; withHotTopics re-appends the canonical topic run.
 func clipDescriptionBody(text string) string {
 	body := strings.TrimSpace(trailingHashtagRun.ReplaceAllString(strings.TrimSpace(text), ""))
 	runes := []rune(body)
