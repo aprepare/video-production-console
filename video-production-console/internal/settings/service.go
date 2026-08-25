@@ -640,6 +640,8 @@ func normalizeRemixPromptStyleSetting(value string) string {
 		return "copy"
 	case "rewrite":
 		return "rewrite"
+	case "rewrite_sharp":
+		return "rewrite_sharp"
 	default:
 		return ""
 	}
@@ -779,7 +781,7 @@ func validatePublic(value domain.PublicSettings) error {
 		return invalid("spoken_lines_model")
 	}
 	switch value.RemixPromptStyle {
-	case "", "rewrite", "copy":
+	case "", "rewrite", "rewrite_sharp", "copy":
 	default:
 		return invalid("remix_prompt_style")
 	}

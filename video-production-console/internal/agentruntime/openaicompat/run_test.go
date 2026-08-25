@@ -13,8 +13,14 @@ import (
 )
 
 func TestRewritePromptStamp(t *testing.T) {
-	if RewritePromptStamp != "口播copy换说法 2026-08-24" {
-		t.Fatalf("stamp=%q", RewritePromptStamp)
+	if RewritePromptStamp != RewritePromptStampStable {
+		t.Fatalf("stamp=%q want %q", RewritePromptStamp, RewritePromptStampStable)
+	}
+	if RewritePromptStampStable != "语感回流 2026-08-24" {
+		t.Fatalf("stable stamp=%q", RewritePromptStampStable)
+	}
+	if RewritePromptStampSharp != "锋利优先 2026-08-24" {
+		t.Fatalf("sharp stamp=%q", RewritePromptStampSharp)
 	}
 }
 
@@ -35,16 +41,14 @@ func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
 }
 
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
-	system := buildWriterPrompt()
+	system := buildWriterPrompt(PromptStyleRewrite)
 	for _, want := range []string{
 		"禁止逐段同义改写",
 		"机器以原文为准",
 		"财富觉醒方法论",
 		"本金乘利率",
-		"出场顺序可以换",
 		"开场切口必须换",
-		"钩子类型不许换",
-		"前 3 句内",
+		"前 3 句",
 		"纯解释句、纯共情句",
 		"#干货分享",
 		"3到4个",
@@ -56,7 +60,8 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		"禁止带年份",
 		"最多四句",
 		"前 2～3 句",
-		"示范原句",
+		"语感指纹",
+		"正向验收",
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
@@ -70,14 +75,34 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	if strings.Contains(system, "rewrite 还必须带 machine") || strings.Contains(system, "原稿的推进顺序不能倒") {
 		t.Fatalf("stale prompt clause still present")
 	}
-	user := buildWriterUser(manifestLite{}, "法拍房快堆到四十万套")
-	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先从原文锁机器") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "开场切口必须和原稿第一句不同") || !strings.Contains(user, "钩子类型必须跟原稿第一句同类") || strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
+	user := buildWriterUser(PromptStyleRewrite, manifestLite{}, "法拍房快堆到四十万套")
+	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先抽语感指纹") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "开场切口必须和原稿第一句不同") || !strings.Contains(user, "留人机制必须跟原稿第一句同类") || strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
 	}
 }
 
+func TestWriterPromptSharpEmphasizesImpact(t *testing.T) {
+	system := buildWriterPrompt(PromptStyleRewriteSharp)
+	for _, want := range []string{
+		"锋利指纹",
+		"第一目标不是「合规」",
+		"听起来还是同一条爆款",
+		"财富觉醒方法论",
+		"开场切口必须换",
+		"禁止编造日期",
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("sharp system missing %q", want)
+		}
+	}
+	user := buildWriterUser(PromptStyleRewriteSharp, manifestLite{}, "法拍房快堆到四十万套")
+	if !strings.Contains(user, "先抓锋利指纹") || !strings.Contains(user, "禁止写软") {
+		t.Fatalf("sharp user=%q", user)
+	}
+}
+
 func TestWriterPromptOmitsSkillExcerpt(t *testing.T) {
-	system := buildWriterPrompt()
+	system := buildWriterPrompt(PromptStyleRewrite)
 	if strings.Contains(system, "# 补充约束") {
 		t.Fatalf("openai writer prompt must not append SKILL.md excerpt")
 	}
@@ -92,6 +117,14 @@ func TestNormalizePromptStyle(t *testing.T) {
 	got, err := NormalizePromptStyle("")
 	if err != nil || got != PromptStyleRewrite {
 		t.Fatalf("empty=%q err=%v", got, err)
+	}
+	got, err = NormalizePromptStyle("rewrite")
+	if err != nil || got != PromptStyleRewrite {
+		t.Fatalf("rewrite=%q err=%v", got, err)
+	}
+	got, err = NormalizePromptStyle("rewrite_sharp")
+	if err != nil || got != PromptStyleRewriteSharp {
+		t.Fatalf("rewrite_sharp=%q err=%v", got, err)
 	}
 	got, err = NormalizePromptStyle("copy")
 	if err != nil || got != PromptStyleCopy {
@@ -144,8 +177,8 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	if len(copyStub.calls) != 0 {
 		t.Fatalf("default rewrite must not call copy: %#v", copyStub.calls)
 	}
-	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "先锁爆款机器") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
-		t.Fatalf("default rewrite must use writer prompt: %#v", client.last.Messages)
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "语感指纹") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
+		t.Fatalf("default rewrite must use stable writer prompt: %#v", client.last.Messages)
 	}
 	body, err := os.ReadFile(last)
 	if err != nil {
@@ -159,6 +192,41 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outputDir, "result.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunSharpStyleUsesSharpPrompt(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	_ = os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("# skill"), 0o644)
+	sourcePath := filepath.Join(root, "source.txt")
+	_ = os.WriteFile(sourcePath, []byte("又一批人要发财了。人民币要第三次换锚。"), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "task-sharp-1", "action": "remix.standard", "skill": "finance-viral-remix",
+		"output_dir":          outputDir,
+		"inputs":              []any{map[string]any{"type": "source_script", "role": "primary_source", "path": sourcePath}},
+		"non_secret_settings": map[string]any{"remix_prompt_style": "rewrite_sharp"},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	client := &textClient{content: remixJSON}
+	last := filepath.Join(root, "last.json")
+	if err := Run(Options{
+		ManifestPath:      manifestPath,
+		SkillRoot:         skillRoot,
+		OutputLastMessage: last,
+		Model:             "test-model",
+		BaseURL:           "http://example.invalid/v1",
+		APIKey:            "test-key",
+		Client:            client,
+		CopyClient:        &stubCopyClient{},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "锋利指纹") || !strings.Contains(client.last.Messages[1].Content, "先抓锋利指纹") {
+		t.Fatalf("rewrite_sharp must use sharp writer prompt: %#v", client.last.Messages)
 	}
 }
 

@@ -348,7 +348,8 @@ export function SettingsPanel({
                     })
                   }
                 >
-                  <option value="rewrite">旧 rewrite 长提示词（不打 copy 接口）</option>
+                  <option value="rewrite">语感回流（稳妥默认，不打 copy）</option>
+                  <option value="rewrite_sharp">锋利优先（冲击力优先）</option>
                   <option value="copy">口播copy整理（先打 hooks/scripts）</option>
                 </select>
               </Field>
