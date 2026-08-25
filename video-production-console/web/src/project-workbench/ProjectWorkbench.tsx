@@ -906,8 +906,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           task={currentTask}
           remixTasks={[...props.tasks]
             .filter((task) => task.action === "remix.standard")
-            .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
-            .slice(0, 4)}
+            .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))}
           currentScriptVersionID={detail.assets.continuous_script?.id || ""}
           onOpenTask={props.onOpenTask}
         />

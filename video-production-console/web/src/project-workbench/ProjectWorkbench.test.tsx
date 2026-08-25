@@ -1014,6 +1014,43 @@ test("shows side-by-side remix drafts so a second model is visible without zoomi
   expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "remix-claude" }));
 });
 
+test("shows every remix model card instead of only the latest four", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  delete detail.assets.spoken_script;
+  delete detail.assets.narration;
+  delete detail.assets.mix_draft;
+  const models = [
+    "gpt-5.6-sol",
+    "claude-opus-4-6-thinking",
+    "grok-4.6-fast",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-opus-4-6",
+  ];
+  const remixTasks = models.map((model, index) => ({
+    ...task,
+    id: `remix-${index}`,
+    type: "remix",
+    skill_name: "remix-standard",
+    action: "remix.standard",
+    status: "completed",
+    model,
+    continuous_script: `${model} 成稿正文足够长，用来确认卡片没有被截掉。`,
+    continuous_script_version_id: index === 2 ? "continuous_script-asset" : `other-${index}`,
+    created_at: `2026-08-23T05:0${index}:00Z`,
+    messages: [],
+  }));
+  const props = workbenchProps(detail);
+  props.tasks = remixTasks;
+  render(<ProjectWorkbench {...props} />);
+  const compare = screen.getByLabelText("文案任务对比");
+  for (const model of models) {
+    expect(compare.textContent).toContain(model);
+  }
+  expect(compare.querySelectorAll(".remix-compare__card")).toHaveLength(models.length);
+});
+
 test("defines vertical mobile production, root action bar visibility, safe area, and 44px touch targets", () => {
   const css = readFileSync(resolve(process.cwd(), "src/project-workbench/project-workbench.css"), "utf8");
   const mobileStart = css.indexOf("@media (max-width: 759px)");

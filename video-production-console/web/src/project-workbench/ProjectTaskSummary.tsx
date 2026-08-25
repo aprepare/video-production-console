@@ -30,17 +30,27 @@ function taskLabel(task: ProjectTask) {
   return task.skill_name || "生产任务";
 }
 
+function scriptPreview(text: string, limit = 280) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit)}…`;
+}
+
 type ProjectTaskSummaryProps = {
   task?: ProjectTask;
   remixTasks?: ProjectTask[];
+  currentScriptVersionID?: string;
   onOpenTask: (task: ProjectTask) => void;
 };
 
-export function ProjectTaskSummary({ task, remixTasks = [], onOpenTask }: ProjectTaskSummaryProps) {
+export function ProjectTaskSummary({
+  task,
+  remixTasks = [],
+  currentScriptVersionID = "",
+  onOpenTask,
+}: ProjectTaskSummaryProps) {
   const assistantMessages = task?.messages?.filter((message) => message.role === "assistant") || [];
   const latestAssistant = assistantMessages[assistantMessages.length - 1];
-  // Only worth a list when several models produced (or are producing) drafts
-  // for comparison; the single-task case is already the card above.
   const showRemixList = remixTasks.length > 1;
 
   return (
@@ -54,11 +64,44 @@ export function ProjectTaskSummary({ task, remixTasks = [], onOpenTask }: Projec
           <div className="workbench-section-heading workbench-section-heading--task">
             <div>
               <span>CURRENT TASK</span>
-              <h2>当前任务</h2>
+              <h2>{showRemixList ? "各模型文案" : "当前任务"}</h2>
             </div>
           </div>
 
-          {task ? (
+          {showRemixList ? (
+            <div className="remix-compare" aria-label="文案任务对比">
+              <p className="remix-compare__hint">点卡片看全文或采用。模型多于两份时，右侧栏往下滚动即可看到全部。</p>
+              <div className="remix-compare__grid">
+                {remixTasks.map((remixTask) => {
+                  const current = Boolean(
+                    currentScriptVersionID
+                    && remixTask.continuous_script_version_id === currentScriptVersionID,
+                  );
+                  const preview = scriptPreview(remixTask.continuous_script || remixTask.result_summary || "");
+                  return (
+                    <button
+                      type="button"
+                      key={remixTask.id}
+                      className={`remix-compare__card${current ? " is-current" : ""}`}
+                      onClick={() => onOpenTask(remixTask)}
+                    >
+                      <span className="remix-compare__meta">
+                        <strong>{taskModelLabel(remixTask) || "默认模型"}</strong>
+                        <span className={`task-summary-status task-summary-status--${statusTone(remixTask.status)}`}>
+                          <span aria-hidden="true" />
+                          {statusLabels[remixTask.status] || remixTask.status}
+                        </span>
+                      </span>
+                      {current ? <span className="remix-compare__badge">当前采用</span> : null}
+                      <p className="remix-compare__preview">
+                        {preview || "文案还在生成，点开看进度。"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : task ? (
             <div className="task-summary-thread">
               <button type="button" className="task-summary-card" onClick={() => onOpenTask(task)}>
                 <span className="task-summary-card__title">
@@ -81,25 +124,6 @@ export function ProjectTaskSummary({ task, remixTasks = [], onOpenTask }: Projec
                 <div className="task-summary-question">
                   <span>需要确认</span>
                   <p>{latestAssistant.content}</p>
-                </div>
-              ) : null}
-              {showRemixList ? (
-                <div className="remix-task-list" aria-label="文案任务对比">
-                  <span className="remix-task-list__title">各模型文案（点开任务可看全文）</span>
-                  {remixTasks.map((remixTask) => (
-                    <button
-                      type="button"
-                      key={remixTask.id}
-                      className="remix-task-list__item"
-                      onClick={() => onOpenTask(remixTask)}
-                    >
-                      <strong>{taskModelLabel(remixTask) || "默认模型"}</strong>
-                      <span className={`task-summary-status task-summary-status--${statusTone(remixTask.status)}`}>
-                        <span aria-hidden="true" />
-                        {statusLabels[remixTask.status] || remixTask.status}
-                      </span>
-                    </button>
-                  ))}
                 </div>
               ) : null}
               <details className="technical-history">
