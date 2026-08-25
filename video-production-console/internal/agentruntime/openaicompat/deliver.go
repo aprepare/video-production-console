@@ -348,8 +348,6 @@ func remixDeliverableArtifacts(outputDir string, abs func(string) string) []map[
 		{"self_check.json", "self_check", "Editorial and contract self-check"},
 		{"remix_run.json", "remix_run", "Remix model run log"},
 		{"model_raw.txt", "model_raw", "Raw model remix response"},
-		{"prompt_system.txt", "prompt_system", "Writer system prompt sent to the model"},
-		{"prompt_user.txt", "prompt_user", "Writer user prompt sent to the model"},
 	}
 	out := make([]map[string]string, 0, len(items))
 	for _, item := range items {

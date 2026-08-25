@@ -96,6 +96,8 @@ export type ProjectTask = {
   }>;
   montage?: MontageResult;
   publishing_package?: PublishingPackage;
+  continuous_script?: string;
+  continuous_script_version_id?: string;
 };
 
 export type ActiveWorkflow = {

@@ -23,6 +23,12 @@ describe("application routes", () => {
       view: "image-video",
       projectID,
     });
+    expect(parseLocation("/remix-lab")).toEqual({ view: "remix-lab" });
+    expect(parseLocation("/remix-lab/")).toEqual({ view: "remix-lab" });
+    expect(parseLocation(`/remix-lab/${projectID}`)).toEqual({
+      view: "remix-lab",
+      experimentID: projectID,
+    });
   });
 
   test("rejects malformed and extra route segments", () => {
@@ -34,6 +40,8 @@ describe("application routes", () => {
       `/image-projects/${projectID}/extra`,
       "/image-videos/not-a-uuid",
       `/image-videos/${projectID}/extra`,
+      "/remix-lab/not-a-uuid",
+      `/remix-lab/${projectID}/extra`,
     ]) {
       expect(parseLocation(pathname)).toEqual({ view: "not-found" });
     }

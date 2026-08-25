@@ -18,6 +18,7 @@ import { parseLocation } from "./project-workbench/routes";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
+import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { ConsoleHome } from "./shell/ConsoleHome";
 import {
   IMAGE_PROJECTS_HREF,
@@ -561,6 +562,7 @@ function App() {
       || route.view === "image-project"
       || route.view === "image-videos"
       || route.view === "image-video"
+      || route.view === "remix-lab"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -977,6 +979,12 @@ function App() {
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate(SCENIC_BOARD_HREF)}>返回风景混剪</button>
         </main>
+      ) : route.view === "remix-lab" ? (
+        <RemixLabPage
+          api={api}
+          experimentID={"experimentID" in route ? route.experimentID : undefined}
+          onNavigate={navigate}
+        />
       ) : imageRoute ? (
         <>
           <header>
@@ -1063,6 +1071,7 @@ function App() {
           theme={theme}
           onThemeChange={setTheme}
           onOpenImageProjects={() => navigate(IMAGE_PROJECTS_HREF)}
+          onOpenRemixLab={() => navigate("/remix-lab")}
           modeTitle={montageKindLabel(montageKind)}
           runtime={runtime}
           onOpenSettings={() => void settingsPanel.openDialog()}

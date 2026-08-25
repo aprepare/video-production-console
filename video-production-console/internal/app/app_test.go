@@ -473,3 +473,39 @@ func TestProjectRemixAndPublishRoutesAcceptAuthenticatedCSRFRequest(t *testing.T
 		}
 	}
 }
+
+func TestRemixLabFailStaleOnStartup(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	now := time.Now().UTC()
+	expID := uuid.NewString()
+	slotID := uuid.NewString()
+	runID := uuid.NewString()
+	repo := store.NewRemixLabRepository(database)
+	if err := repo.CreateExperiment(context.Background(), store.RemixLabExperimentRecord{
+		ID: expID, Title: "stale", SourceText: "s", PromptStamp: "stamp", Status: "running", CreatedAt: now, UpdatedAt: now,
+	}, []store.RemixLabSlotRecord{{ID: slotID, ExperimentID: expID, Model: "m", RunCount: 1}}, []store.RemixLabRunRecord{
+		{ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: 1, Status: "running"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := consoleSettings.NewService(store.NewSettingsRepository(database), nil, consoleSettings.Options{})
+	_ = New(Options{DB: database, Config: config.Config{DataRoot: t.TempDir()}, Settings: settings})
+
+	got, err := repo.GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "failed" || got.ErrorMessage != "控制台已重启" {
+		t.Fatalf("run=%+v", got)
+	}
+	exp, _, _, err := repo.GetExperiment(context.Background(), expID)
+	if err != nil || exp.Status != "failed" {
+		t.Fatalf("exp=%+v err=%v", exp, err)
+	}
+}

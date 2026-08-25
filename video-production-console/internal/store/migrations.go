@@ -1177,6 +1177,47 @@ BEGIN SELECT RAISE(ABORT, 'asset item scope does not match existing versions'); 
 
 DROP TABLE asset_versions_caption_backup;
 DROP TABLE asset_items_caption_backup;`,
+	`CREATE TABLE remix_lab_experiments (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source_text TEXT NOT NULL,
+    prompt_stamp TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX remix_lab_experiments_created_idx ON remix_lab_experiments(created_at DESC, id);
+
+CREATE TABLE remix_lab_slots (
+    id TEXT PRIMARY KEY,
+    experiment_id TEXT NOT NULL REFERENCES remix_lab_experiments(id) ON DELETE CASCADE,
+    sort_index INTEGER NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL,
+    reasoning_effort TEXT NOT NULL DEFAULT '',
+    run_count INTEGER NOT NULL CHECK (run_count BETWEEN 1 AND 3),
+    api_key_ciphertext TEXT NOT NULL DEFAULT '',
+    UNIQUE (experiment_id, sort_index)
+);
+
+CREATE TABLE remix_lab_runs (
+    id TEXT PRIMARY KEY,
+    experiment_id TEXT NOT NULL REFERENCES remix_lab_experiments(id) ON DELETE CASCADE,
+    slot_id TEXT NOT NULL REFERENCES remix_lab_slots(id) ON DELETE CASCADE,
+    run_index INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+    continuous_script TEXT NOT NULL DEFAULT '',
+    titles_json TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    comment TEXT NOT NULL DEFAULT '',
+    output_dir TEXT NOT NULL DEFAULT '',
+    adopted_project_id TEXT NOT NULL DEFAULT '',
+    started_at DATETIME,
+    finished_at DATETIME,
+    UNIQUE (slot_id, run_index)
+);
+CREATE INDEX remix_lab_runs_experiment_idx ON remix_lab_runs(experiment_id, slot_id, run_index);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

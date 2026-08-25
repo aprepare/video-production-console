@@ -15,6 +15,15 @@ func TestLineLevelSRTDetection(t *testing.T) {
 	if !lineLevelSRT(lineCues) {
 		t.Fatal("口播稿行级SRT必须被识别为line-level")
 	}
+	digitHeavy := []TimedSentence{
+		{StartMS: 0, EndMS: 1800, Text: "从1.45%直接降到0.95%"},
+		{StartMS: 1800, EndMS: 3200, Text: "2023年存10万三年定期"},
+		{StartMS: 3200, EndMS: 4700, Text: "手里10万、50万、100万的家庭"},
+		{StartMS: 4700, EndMS: 6100, Text: "这条路到2008年走到了头"},
+	}
+	if !lineLevelSRT(digitHeavy) {
+		t.Fatal("数字不占口播预算的行级SRT必须仍走一对一上屏，不能整条粘合重切")
+	}
 	wordCues := []TimedSentence{
 		{StartMS: 0, EndMS: 300, Text: "全"}, {StartMS: 300, EndMS: 600, Text: "国"},
 		{StartMS: 600, EndMS: 900, Text: "法"}, {StartMS: 900, EndMS: 1200, Text: "拍"},

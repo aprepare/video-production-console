@@ -16,10 +16,10 @@ func TestRewritePromptStamp(t *testing.T) {
 	if RewritePromptStamp != RewritePromptStampStable {
 		t.Fatalf("stamp=%q want %q", RewritePromptStamp, RewritePromptStampStable)
 	}
-	if RewritePromptStampStable != "语感回流 2026-08-24" {
+	if RewritePromptStampStable != "语感回流 2026-08-25 批注回流2" {
 		t.Fatalf("stable stamp=%q", RewritePromptStampStable)
 	}
-	if RewritePromptStampSharp != "锋利优先 2026-08-24" {
+	if RewritePromptStampSharp != "锋利优先 2026-08-25" {
 		t.Fatalf("sharp stamp=%q", RewritePromptStampSharp)
 	}
 }
@@ -43,40 +43,67 @@ func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	system := buildWriterPrompt(PromptStyleRewrite)
 	for _, want := range []string{
-		"禁止逐段同义改写",
-		"机器以原文为准",
+		"成功标准",
+		"前 3 句与原稿同一件事",
+		"力度不输原稿第一句的狠法",
+		"第一句就砸事",
+		"第一句不许铺现场",
+		"宁可冲",
+		"允许贴着原文开场金句",
+		"禁止为了换说法把最狠那一拳",
+		"故意不说完的答案继续藏着",
+		"只有两万亿这种整量级才改口播说法",
+		"两万亿",
+		"2.05万亿",
+		"0.95%",
+		"950块",
+		"百分之零点九五",
+		"禁止写成理财课",
+		"狠和懂打架，选狠",
+		"整篇重写",
 		"财富觉醒方法论",
 		"本金乘利率",
-		"开场切口必须换",
-		"前 3 句",
-		"纯解释句、纯共情句",
+		"改本金",
+		"坏开头",
+		"好开头",
+		"禁止逐段同义改写",
 		"#干货分享",
 		"3到4个",
 		"必须从这篇口播长出来",
-		"中老年听得懂",
-		"关键数字必须原词留下",
-		"第N个难题",
-		"卖课钩子只在全文最末",
+		"再补两三句",
 		"禁止带年份",
-		"最多四句",
-		"前 2～3 句",
-		"语感指纹",
-		"正向验收",
+		"禁止「就这些」",
+		"就说到这儿",
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system missing %q", want)
 		}
 	}
-	for _, forbid := range []string{"第三次换锚", "一百七十万亿", "第三个锚故意不说完", "方便面被外卖抢走", "河的上游"} {
+	for _, forbid := range []string{
+		"语感指纹",
+		"40 字内",
+		"谁的钱、出了什么事",
+		"锚点",
+		"换锚",
+		"2万亿",
+		"50到77万亿",
+		"第N个难题",
+		"中老年听得懂",
+		"前 2～3 句",
+		"第三次换锚",
+		"一百七十万亿",
+		"第三个锚故意不说完",
+		"方便面被外卖抢走",
+		"河的上游",
+		"rewrite 还必须带 machine",
+		"原稿的推进顺序不能倒",
+	} {
 		if strings.Contains(system, forbid) {
-			t.Fatalf("rewrite prompt must not hardcode plot %q", forbid)
+			t.Fatalf("rewrite prompt must not contain %q", forbid)
 		}
 	}
-	if strings.Contains(system, "rewrite 还必须带 machine") || strings.Contains(system, "原稿的推进顺序不能倒") {
-		t.Fatalf("stale prompt clause still present")
-	}
 	user := buildWriterUser(PromptStyleRewrite, manifestLite{}, "法拍房快堆到四十万套")
-	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "先抽语感指纹") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "开场切口必须和原稿第一句不同") || !strings.Contains(user, "留人机制必须跟原稿第一句同类") || strings.Contains(user, "五十岁以上") || strings.Contains(user, "只换说法和加料，不换题") {
+	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "第一句必须够狠") || !strings.Contains(user, "贴着原文开场金句") || !strings.Contains(user, "法拍房快堆到四十万套") || strings.Contains(user, "先抽语感指纹") || strings.Contains(user, "四十岁") || strings.Contains(user, "只换说法和加料，不换题") {
 		t.Fatalf("user=%q", user)
 	}
 }
@@ -177,7 +204,7 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	if len(copyStub.calls) != 0 {
 		t.Fatalf("default rewrite must not call copy: %#v", copyStub.calls)
 	}
-	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "语感指纹") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "成功标准") || !strings.Contains(client.last.Messages[0].Content, "狠和懂打架，选狠") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
 		t.Fatalf("default rewrite must use stable writer prompt: %#v", client.last.Messages)
 	}
 	body, err := os.ReadFile(last)
@@ -307,6 +334,89 @@ func TestRunCopyStyleUsesAssemblePrompt(t *testing.T) {
 	}
 }
 
+func TestRunCopyStillRunsQualityGate(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	sourcePath := filepath.Join(root, "source.txt")
+	source := "问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？"
+	_ = os.WriteFile(sourcePath, []byte(source), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "11111111-1111-1111-1111-111111111111", "action": "remix.standard", "output_dir": outputDir,
+		"inputs":              []any{map[string]any{"type": "source_script", "path": sourcePath}},
+		"non_secret_settings": map[string]any{"remix_prompt_style": "copy"},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	last := filepath.Join(root, "last.json")
+	script := source + "点开主页橱窗看《财富觉醒方法论》。"
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	if err := Run(Options{
+		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
+		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
+		Client:     &textClient{content: payload},
+		CopyClient: &stubCopyClient{hooks: "钩子A", scripts: "脚本B"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logRaw, err := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logRaw), "quality_failed") {
+		t.Fatalf("copy style must still run overlap QC, log=%s", logRaw)
+	}
+	env, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(env), `"failed"`) {
+		t.Fatalf("copy high-overlap draft must fail QC: %s", env)
+	}
+}
+
+func TestRunSharpStillRunsQualityGate(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skill")
+	_ = os.MkdirAll(skillRoot, 0o755)
+	sourcePath := filepath.Join(root, "source.txt")
+	source := "问一个让你后背发凉的问题，如果全国老百姓存在银行里的钱突然少了整整2万亿，而且不是买了房，不是炒个股，连最火的黄金都没接住这笔钱，那它到底变成了什么？"
+	_ = os.WriteFile(sourcePath, []byte(source), 0o644)
+	outputDir := filepath.Join(root, "output")
+	manifestPath := filepath.Join(root, "task_manifest.json")
+	raw, _ := json.Marshal(map[string]any{
+		"task_id": "11111111-1111-1111-1111-111111111111", "action": "remix.standard", "output_dir": outputDir,
+		"inputs":              []any{map[string]any{"type": "source_script", "path": sourcePath}},
+		"non_secret_settings": map[string]any{"remix_prompt_style": "rewrite_sharp"},
+	})
+	_ = os.WriteFile(manifestPath, raw, 0o644)
+	last := filepath.Join(root, "last.json")
+	script := source + "点开主页橱窗看《财富觉醒方法论》。"
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	if err := Run(Options{
+		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
+		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
+		Client: &textClient{content: payload},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logRaw, err := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logRaw), "quality_failed") {
+		t.Fatalf("rewrite_sharp must still run overlap QC, log=%s", logRaw)
+	}
+	env, err := os.ReadFile(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(env), `"failed"`) {
+		t.Fatalf("rewrite_sharp high-overlap draft must fail QC: %s", env)
+	}
+}
+
 func TestRunWritesFilesWhenModelReturnsPlainScript(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
@@ -342,7 +452,7 @@ func TestRunWritesFilesWhenModelReturnsPlainScript(t *testing.T) {
 	}
 }
 
-func TestRunKeepsModelRawWhenQualityFails(t *testing.T) {
+func TestRunRewriteSkipsQualityGate(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
@@ -359,40 +469,37 @@ func TestRunKeepsModelRawWhenQualityFails(t *testing.T) {
 	last := filepath.Join(root, "last.json")
 	script := "两个月，整整20500亿，从全国老百姓的存折上悄无声息地蒸发了。这笔钱没流进楼市，没被股市收走，连近两年涨势最猛的黄金都没接住它——那它究竟去了哪儿？答案只有两个字：到期。华泰测算逼近50到77万亿。这种搬家只出现过三次。98年、08年、15年。现在是第四次。去我主页橱窗找《财富觉醒方法论》。"
 	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	client := &textClient{content: payload}
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
-		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
-		Client: &textClient{content: payload},
+		BaseURL: "http://example.invalid/v1", APIKey: "test-key", CheckModel: "check-model",
+		Client: client,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(outputDir, "model_raw.txt"))
+	if len(client.last.Messages) != 2 {
+		t.Fatalf("rewrite must not append a quality-repair turn: %#v", client.last.Messages)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "continuous_script.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "50到77") {
-		t.Fatalf("failed task must keep model raw: %s", got)
+	if !strings.Contains(string(got), "50到77万亿") || !strings.Contains(string(got), "究竟去了哪儿") {
+		t.Fatalf("rewrite must deliver the raw script without local QC edits: %s", got)
 	}
 	logRaw, err := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logRaw), "quality_failed") {
+	if !strings.Contains(string(logRaw), "quality_skipped") || strings.Contains(string(logRaw), "quality_failed") {
 		t.Fatalf("run log=%s", logRaw)
-	}
-	scriptGot, err := os.ReadFile(filepath.Join(outputDir, "continuous_script.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(scriptGot), "究竟去了哪儿") {
-		t.Fatalf("failed task must keep parsed script: %s", scriptGot)
 	}
 	env, err := os.ReadFile(last)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(env), `"failed"`) || !strings.Contains(string(env), "model_raw") || !strings.Contains(string(env), "remix_run") {
-		t.Fatalf("failed envelope must keep capture artifacts: %s", env)
+	if !strings.Contains(string(env), `"completed"`) {
+		t.Fatalf("rewrite envelope must complete without QC: %s", env)
 	}
 }
 

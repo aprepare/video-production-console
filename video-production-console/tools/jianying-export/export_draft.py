@@ -52,7 +52,14 @@ def fail(window, message, tag):
 
 
 def open_draft(name):
-    home = find_window("HomeWindow", timeout=5)
+    editor = find_window("MainWindow", timeout=2)
+    if editor is not None:
+        log("编辑器已打开，先关掉回到首页再按草稿名打开。")
+        editor.SetActive()
+        time.sleep(0.4)
+        auto.SendKeys("{Ctrl}w", waitTime=0.4)
+        time.sleep(1.5)
+    home = find_window("HomeWindow", timeout=8)
     if home is None:
         fail(None, "剪映首页窗口不存在（请先打开剪映并停在首页）", "no_home")
     home.SetActive()
@@ -143,11 +150,7 @@ def main():
     args = parser.parse_args()
 
     auto.SetGlobalSearchTimeout(3)
-    editor = find_window("MainWindow", timeout=2)
-    if editor is not None:
-        log("编辑器已打开，直接在当前草稿上导出。")
-    else:
-        editor = open_draft(args.draft_name)
+    editor = open_draft(args.draft_name)
 
     start_export(editor)
     result = wait_export(args.draft_name, args.export_dir, args.timeout_min)

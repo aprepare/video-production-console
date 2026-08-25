@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.44.0
 	golang.org/x/image v0.44.0
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
 	modernc.org/sqlite v1.55.0
 )

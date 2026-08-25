@@ -13,6 +13,12 @@ import (
 
 func TestWriteRemixDeliverablePassesValidator(t *testing.T) {
 	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outputDir, "prompt_system.txt"), []byte("system"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "prompt_user.txt"), []byte("user"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	script := "又一批人要发财了，人民币第三次换锚已经开始。前两波是美元外贸和土地房子，旧锚死了，利率下来，一百七十万亿存款在找出路。第三个锚先不说完，现在就上车。"
 	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), script, []string{"自检：该句与原文重合未修复「示例片段」"}, "质检（test-model）：发现 1 处与原文重合，返工未见改善，保留首稿，见警告。"); err != nil {
 		t.Fatal(err)

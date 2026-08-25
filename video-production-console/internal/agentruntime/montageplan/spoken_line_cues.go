@@ -12,12 +12,12 @@ import (
 // gold spokenKeywordStyle. Both keys live in montage-style-policy.v2.json.
 const spokenWarningStyle = "spoken_warning_v1"
 
-// Line-level SRT detection. 口播稿 lines carry at most 9 content runes plus a
-// couple of kept symbols (% and book quotes); word-level SRT cues average one
-// or two runes. Anything longer than maxLineCueRunes means the SRT was cut by
-// the old sentence composer and must go through the gluing pipeline instead.
+// Line-level SRT detection. 口播稿 lines carry at most 9 content runes (Han +
+// letters); Arabic digits, %, and book quotes are free, so a display line like
+// "从1.45%直接降到0.95%" is still 8 content runes. Word-level SRT cues average
+// one or two runes. A cue whose content-rune budget exceeds MaxContentRunes
+// is an old sentence-composer cut and must go through the gluing pipeline.
 const (
-	maxLineCueRunes    = 12
 	minAvgLineCueRunes = 3.0
 	lineCueSnapGapUS   = 400_000
 	lineCueMinPieceUS  = 50_000
@@ -47,11 +47,17 @@ func lineLevelSRT(cues []TimedSentence) bool {
 	total := 0
 	counted := 0
 	for _, cue := range cues {
-		n := len(spokenDisplayRunes(cue.Text))
-		if n == 0 {
+		display := spokenDisplayRunes(cue.Text)
+		if len(display) == 0 {
 			continue
 		}
-		if n > maxLineCueRunes {
+		// Count Han/letters only, matching the 口播稿 9-character budget.
+		// Digits must not trip the whole SRT onto the glue+rewrap path.
+		n := spokenlines.ContentCount(string(display))
+		if n == 0 {
+			n = len(display)
+		}
+		if n > spokenlines.MaxContentRunes {
 			return false
 		}
 		total += n

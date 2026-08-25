@@ -18,8 +18,8 @@ type Options struct {
 	OutputLastMessage string
 	Model             string
 	ReasoningEffort   string
-	// CheckModel runs the post-draft quality check (overlap, course name,
-	// opening/ending, CTA). Empty disables the model pass; local fixes still run.
+	// CheckModel is ignored on rewrite. copy / rewrite_sharp still use it
+	// for the post-draft quality check and repair pass.
 	CheckModel  string
 	BaseURL     string
 	APIKey      string
@@ -52,14 +52,18 @@ const (
 	PromptStyleRewriteSharp = "rewrite_sharp"
 	PromptStyleCopy         = "copy"
 
-	// RewritePromptStamp 是默认 rewrite（语感回流 A）系统提示词的版本标注。
-	// 写稿正文已迁到 prompts_writer.go：
-	//   rewrite       = A 语感回流（默认，听感验收优先 + 语感指纹）
+	// RewritePromptStamp 是默认 rewrite 系统提示词的版本标注。
+	// 默认 rewrite：短成功标准、无开场禁词死刑、无后台质检。
+	// 实际 stamp 文案在 prompts_writer.go。
+	//   rewrite       = 短成功标准、无开场禁词死刑、无后台质检
 	//   rewrite_sharp = B 锋利优先（冲击力第一、禁令压缩）
 	//   copy          = 口播copy整理（先打 hooks/scripts）
-	// 2026-08-25 v2：正向听感验收前置，失败清单后置；B 再抬冲击力。
 	RewritePromptStamp = RewritePromptStampStable
 )
+
+func skipRemixQuality(style string) bool {
+	return style == PromptStyleRewrite
+}
 
 func NormalizePromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -185,23 +189,36 @@ func Run(opts Options) error {
 	}
 	rawReply := resp.Choices[0].Message.Content
 	captureRemixModelReply(manifest.OutputDir, model, style, stamp, rawReply)
-	content, checkWarnings, checkNote, err := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
-	if err != nil {
+	var (
+		content       = rawReply
+		checkWarnings []string
+		checkNote     string
+	)
+	if skipRemixQuality(style) {
+		checkNote = "rewrite 路径已关闭质检，交付写稿模型原始输出。"
 		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
-			"error": err.Error(), "note": checkNote, "warnings": checkWarnings,
+			"event": "quality_skipped", "prompt_style": style, "prompt_stamp": stamp, "note": checkNote,
 		})
-		if strings.TrimSpace(content) != "" && content != rawReply {
-			if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
-				_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
+	} else {
+		var repairErr error
+		content, checkWarnings, checkNote, repairErr = repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
+		if repairErr != nil {
+			appendRemixRunLog(manifest.OutputDir, map[string]any{
+				"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
+				"error": repairErr.Error(), "note": checkNote, "warnings": checkWarnings,
+			})
+			if strings.TrimSpace(content) != "" && content != rawReply {
+				if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
+					_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
+				}
 			}
+			return writeFailure(outPath, manifestPath, repairErr)
 		}
-		return writeFailure(outPath, manifestPath, err)
+		appendRemixRunLog(manifest.OutputDir, map[string]any{
+			"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
+			"note": checkNote, "warnings": checkWarnings,
+		})
 	}
-	appendRemixRunLog(manifest.OutputDir, map[string]any{
-		"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
-		"note": checkNote, "warnings": checkWarnings,
-	})
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}

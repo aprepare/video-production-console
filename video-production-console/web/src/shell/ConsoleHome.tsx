@@ -21,6 +21,7 @@ type ConsoleHomeProps = {
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   onOpenImageProjects: () => void;
+  onOpenRemixLab: () => void;
   modeTitle: string;
   runtime: RuntimeState | null | undefined;
   onOpenSettings: () => void;
@@ -54,6 +55,7 @@ export function ConsoleHome({
   theme,
   onThemeChange,
   onOpenImageProjects,
+  onOpenRemixLab,
   modeTitle,
   runtime,
   onOpenSettings,
@@ -148,6 +150,9 @@ export function ConsoleHome({
               {runtime.Queued > 0 ? ` · 排队 ${runtime.Queued}` : ""}
             </span>
           )}
+          <button type="button" className="header-button" onClick={onOpenRemixLab}>
+            进化台
+          </button>
           <button className="header-button" onClick={onOpenSettings}>
             设置
           </button>

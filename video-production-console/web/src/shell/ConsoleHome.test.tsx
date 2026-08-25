@@ -22,6 +22,7 @@ function renderHome(
     theme: "light" as const,
     onThemeChange: vi.fn(),
     onOpenImageProjects: vi.fn(),
+    onOpenRemixLab: vi.fn(),
     modeTitle: "风景混剪",
     runtime: null,
     onOpenSettings: vi.fn(),
@@ -87,4 +88,10 @@ test("leaving batch mode opens a project again", () => {
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   fireEvent.click(screen.getByText("空闲项目"));
   expect(props.onOpenProject).toHaveBeenCalledWith(projects[0]);
+});
+
+test("header 进化台 button opens the remix lab", () => {
+  const { props } = renderHome();
+  fireEvent.click(screen.getByRole("button", { name: "进化台" }));
+  expect(props.onOpenRemixLab).toHaveBeenCalledOnce();
 });

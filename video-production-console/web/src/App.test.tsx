@@ -124,6 +124,68 @@ test("shielded image-video URLs redirect to the scenic board", async () => {
   expect(screen.queryByRole("button", { name: "进入电影混剪" })).toBeNull();
 });
 
+test("remix-lab path stays on the evolution lab page", async () => {
+  window.history.replaceState({}, "", "/remix-lab");
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/remix-lab/defaults") {
+        return json({
+          remix_base_url: "",
+          remix_model: "",
+          remix_reasoning_effort: "",
+          remix_api_key_configured: false,
+          presets: [],
+        });
+      }
+      if (path === "/api/remix-lab/experiments") return json([]);
+      if (path === "/api/projects") return json([]);
+    }),
+  );
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "进化台", level: 1 })).toBeTruthy();
+  expect(window.location.pathname).toBe("/remix-lab");
+  expect(screen.queryByRole("heading", { name: "404" })).toBeNull();
+});
+
+test("remix-lab experiment path is not rewritten to projects", async () => {
+  const remixExperimentID = "123e4567-e89b-12d3-a456-426614174000";
+  window.history.replaceState({}, "", `/remix-lab/${remixExperimentID}`);
+  vi.stubGlobal(
+    "fetch",
+    baseFetch((path) => {
+      if (path === "/api/remix-lab/defaults") {
+        return json({
+          remix_base_url: "",
+          remix_model: "",
+          remix_reasoning_effort: "",
+          remix_api_key_configured: false,
+          presets: [],
+        });
+      }
+      if (path === "/api/remix-lab/experiments") return json([]);
+      if (path === `/api/remix-lab/experiments/${remixExperimentID}`) {
+        return json({
+          id: remixExperimentID,
+          title: "详情实验",
+          source_text: "原文",
+          prompt_stamp: "stamp",
+          status: "completed",
+          created_at: "2026-08-25T00:00:00Z",
+          updated_at: "2026-08-25T00:00:00Z",
+          slots: [],
+          runs: [],
+        });
+      }
+      if (path === "/api/projects") return json([]);
+    }),
+  );
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "进化台", level: 1 })).toBeTruthy();
+  expect(window.location.pathname).toBe(`/remix-lab/${remixExperimentID}`);
+  expect(screen.queryByRole("heading", { name: "404" })).toBeNull();
+});
+
 test("the scenic home board loads montage accounts and projects", async () => {
   const requests: string[] = [];
   window.history.replaceState({}, "", "/");
@@ -135,9 +197,11 @@ test("the scenic home board loads montage accounts and projects", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "风景混剪", level: 1 })).toBeTruthy();
-  expect(requests).toContain("/api/auth/me");
-  expect(requests).toContain("/api/accounts");
-  expect(requests).toContain("/api/projects");
+  await waitFor(() => {
+    expect(requests).toContain("/api/auth/me");
+    expect(requests).toContain("/api/accounts");
+    expect(requests).toContain("/api/projects");
+  });
 });
 
 test("the image project route does not load montage accounts, projects, or runtime", async () => {

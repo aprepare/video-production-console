@@ -438,6 +438,8 @@ summary:focus-visible,
   background: var(--ds-surface);
 }
 
+/* Remix lab styles live in web/src/remix-lab/remix-lab.css */
+
 /* ==========================================================================
    Account navigation and main content layout
    ========================================================================== */

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -21,11 +22,31 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
+	"video-production-console/internal/remixlab"
+	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
 )
+
+type remixLabRuntimeAdapter struct {
+	inner *consoleSettings.Service
+}
+
+func (a remixLabRuntimeAdapter) Runtime(ctx context.Context) (remixlab.RuntimeView, error) {
+	rt, err := a.inner.Runtime(ctx)
+	if err != nil {
+		return remixlab.RuntimeView{}, err
+	}
+	return remixlab.RuntimeView{
+		RemixBaseURL:         rt.RemixBaseURL,
+		RemixModel:           rt.RemixModel,
+		RemixReasoningEffort: rt.RemixReasoningEffort,
+		RemixAPIKey:          rt.RemixAPIKey,
+		DataRoot:             rt.DataRoot,
+	}, nil
+}
 
 // Options provides dependencies and settings used by the application.
 type Options struct {
@@ -146,6 +167,22 @@ func New(options Options) *App {
 		ideasHandler := httpapi.NewIdeasHandler(options.DB, options.Scheduler, options.TaskPreparer, models)
 		mux.Handle("/api/ideas", ideasHandler)
 		mux.Handle("/api/ideas/", ideasHandler)
+		if options.Settings != nil {
+			projectRepo := store.NewProjectRepository(options.DB)
+			remixLabSvc := remixlab.NewService(
+				store.NewRemixLabRepository(options.DB),
+				remixLabRuntimeAdapter{inner: options.Settings},
+				security.NewSecretProtector(),
+				options.Config.DataRoot,
+				nil,
+				assetService,
+				projectRepo,
+			)
+			if err := remixLabSvc.FailStale(context.Background()); err != nil {
+				slog.Error("remix lab stale runs", "error", err)
+			}
+			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo))
+		}
 
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {

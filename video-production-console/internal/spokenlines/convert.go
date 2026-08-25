@@ -346,7 +346,7 @@ func itoa(n int) string {
 }
 
 func isContentRune(r rune) bool {
-	if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+	if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) || unicode.IsDigit(r) {
 		return false
 	}
 	switch r {
@@ -355,7 +355,14 @@ func isContentRune(r rune) bool {
 		'“', '”', '‘', '’', '～', '%', '％':
 		return false
 	}
-	return unicode.Is(unicode.Han, r) || unicode.IsDigit(r) || unicode.IsLetter(r)
+	return unicode.Is(unicode.Han, r) || unicode.IsLetter(r)
+}
+
+// ContentCount is the 9-character budget used by 口播稿 lines. Digits are
+// free so "30年前摆个爆米花摊" stays one line; punctuation and % are also free.
+// Han and letters count.
+func ContentCount(s string) int {
+	return contentCount(s)
 }
 
 func contentCount(s string) int {
