@@ -74,6 +74,17 @@ func NormalizePromptStyle(value string) (string, error) {
 	}
 }
 
+// captureWriterPrompts persists the exact system/user messages sent to the model
+// so operators can inspect and iterate prompts from the task detail UI.
+func captureWriterPrompts(outputDir, system, user string) {
+	if strings.TrimSpace(outputDir) == "" {
+		return
+	}
+	_ = os.MkdirAll(outputDir, 0o755)
+	_ = os.WriteFile(filepath.Join(outputDir, "prompt_system.txt"), []byte(system), 0o644)
+	_ = os.WriteFile(filepath.Join(outputDir, "prompt_user.txt"), []byte(user), 0o644)
+}
+
 // Run asks the model for remix copy only, then the console writes result files.
 // Cursor Ask-mode endpoints refuse tools; long non-streaming tool loops also die
 // on trycloudflare 120s cutoffs, so this path never sends tools.
@@ -143,6 +154,7 @@ func Run(opts Options) error {
 		system = buildWriterPrompt(style)
 		user = buildWriterUser(style, manifest, source)
 	}
+	captureWriterPrompts(manifest.OutputDir, system, user)
 
 	client := opts.Client
 	if client == nil {
@@ -231,13 +243,16 @@ func runSpokenLines(opts Options, manifest manifestLite, source, outPath string)
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
+	system := spokenlines.SystemPrompt
+	user := spokenlines.UserPrompt(source)
+	captureWriterPrompts(manifest.OutputDir, system, user)
 	resp, err := client.Chat(ChatRequest{
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
 		Stream:          true,
 		Messages: []Message{
-			{Role: "system", Content: spokenlines.SystemPrompt},
-			{Role: "user", Content: spokenlines.UserPrompt(source)},
+			{Role: "system", Content: system},
+			{Role: "user", Content: user},
 		},
 	})
 	if err != nil {
@@ -293,13 +308,16 @@ func runCaptionKeywords(opts Options, manifest manifestLite, outPath string) err
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
+	system := spokenlines.KeywordSystemPrompt
+	user := spokenlines.KeywordUserPrompt(lines)
+	captureWriterPrompts(manifest.OutputDir, system, user)
 	resp, err := client.Chat(ChatRequest{
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
 		Stream:          true,
 		Messages: []Message{
-			{Role: "system", Content: spokenlines.KeywordSystemPrompt},
-			{Role: "user", Content: spokenlines.KeywordUserPrompt(lines)},
+			{Role: "system", Content: system},
+			{Role: "user", Content: user},
 		},
 	})
 	if err != nil {
