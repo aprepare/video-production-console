@@ -1,6 +1,6 @@
 import { ModelMultiSelect, ModelSelect } from "./ModelSelect";
 import type { ReasoningEffort, TaskModelDefaults, TaskModelOverride, TaskModelPurpose } from "./taskModel";
-import { inheritedTaskEffort, inheritedTaskModel, reasoningEfforts } from "./taskModel";
+import { inheritedTaskEffort, inheritedTaskModel, normalizeScriptCount, reasoningEfforts } from "./taskModel";
 
 export function TaskModelFields({
   value,
@@ -24,11 +24,12 @@ export function TaskModelFields({
   const actualEffort = value.reasoningEffort || inheritedEffort;
   const emptyEffortLabel = purpose === "remix" ? `跟随设置（${inheritedEffort}）` : "继承默认强度";
   const selectedModels = value.models || [];
+  const scriptCount = normalizeScriptCount(value.scriptCount);
   return (
     <details className="task-model-fields">
       <summary>
         {multiModel
-          ? "模型（可多选，同时生成多份文案）"
+          ? "模型与文案数量（可多选，同时生成多份）"
           : hideReasoningEffort
             ? "模型（可选）"
             : "模型与推理强度（可选）"}
@@ -51,6 +52,27 @@ export function TaskModelFields({
             />
           </label>
         )}
+        {multiModel ? (
+          <label>
+            每模型文案数量
+            <select
+              aria-label={`${labelPrefix}每模型文案数量`}
+              value={scriptCount}
+              onChange={(event) =>
+                onChange({
+                  ...value,
+                  scriptCount: normalizeScriptCount(Number(event.target.value)),
+                })
+              }
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n} 篇
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {hideReasoningEffort ? null : (
           <label>
             推理强度
@@ -77,10 +99,12 @@ export function TaskModelFields({
       <p>
         实际将使用：
         {multiModel && selectedModels.length
-          ? `${selectedModels.join("、")} · ${actualEffort}`
-          : hideReasoningEffort
-            ? actualModel
-            : `${actualModel} · ${actualEffort}`}
+          ? `${selectedModels.join("、")} × ${scriptCount} 篇 · ${actualEffort}`
+          : multiModel && scriptCount > 1
+            ? `${actualModel} × ${scriptCount} 篇 · ${actualEffort}`
+            : hideReasoningEffort
+              ? actualModel
+              : `${actualModel} · ${actualEffort}`}
       </p>
     </details>
   );
