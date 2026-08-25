@@ -267,7 +267,13 @@ func extractBrokenJSONStringField(text, key string) (string, bool) {
 		}
 	}
 	if end < 0 {
-		return "", false
+		// 流在 continuous_script 字符串中间被掐断：后面没有 titles 等字段，
+		// 把已写出的正文捞出来，避免 HTTP 200 却整篇作废。
+		script := strings.TrimSpace(unescapeJSONString(body))
+		if utf8.RuneCountInString(script) < 40 {
+			return "", false
+		}
+		return script, true
 	}
 	return unescapeJSONString(body[:end]), true
 }

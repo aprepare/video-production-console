@@ -28,7 +28,7 @@ func TestWriteRemixDeliverablePassesValidator(t *testing.T) {
 
 func TestWriteRemixDeliverableRejectsMalformedStructuredResponseWithoutFiles(t *testing.T) {
 	outputDir := t.TempDir()
-	raw := `{"continuous_script":"正文来了正文来了正文来了正文来了正文来了" trailing}`
+	raw := `{"oops": true, "not_a_script": "太短"}`
 	if err := writeRemixDeliverable(outputDir, "11111111-1111-1111-1111-111111111111", string(domain.ActionRemixStandard), raw, nil, ""); err == nil {
 		t.Fatal("expected malformed structured response to fail")
 	}
@@ -37,6 +37,20 @@ func TestWriteRemixDeliverableRejectsMalformedStructuredResponseWithoutFiles(t *
 	}
 	if _, err := os.Stat(filepath.Join(outputDir, "continuous_script.txt")); err == nil {
 		t.Fatal("malformed response must not write continuous_script.txt")
+	}
+}
+
+func TestParseRemixDraftRecoversTruncatedContinuousScript(t *testing.T) {
+	raw := `{"continuous_script":"两个月，2.05万亿，从银行账户里没了。不是大家取出来花掉了，是被一步一步赶出来的。这些钱正拐进一条大多数人到现在都没看见的道，你把时间轴拉长看，`
+	draft, err := parseRemixDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(draft.ContinuousScript, "2.05万亿") || !strings.Contains(draft.ContinuousScript, "时间轴拉长看") {
+		t.Fatalf("script=%q", draft.ContinuousScript)
+	}
+	if strings.Contains(draft.ContinuousScript, `"continuous_script"`) {
+		t.Fatalf("recovered script still looks like JSON: %q", draft.ContinuousScript)
 	}
 }
 
