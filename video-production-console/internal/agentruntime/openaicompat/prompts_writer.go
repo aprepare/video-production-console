@@ -25,10 +25,26 @@ func promptStamp(style string) string {
 
 // buildWriterPrompt 按 style 返回写稿系统提示。空串与 rewrite 走稳妥版。
 func buildWriterPrompt(style string) string {
+	if style == PromptStyleWash {
+		return buildWashPrompt()
+	}
 	if style == PromptStyleRewriteSharp {
 		return buildWriterPromptSharp()
 	}
 	return buildWriterPromptStable()
+}
+
+func buildWashPrompt() string {
+	var b strings.Builder
+	b.WriteString("你是财经视频号洗稿写手。只写文案，不要调用工具，不要读写文件，不要解释过程。\n")
+	b.WriteString("按洗稿来，不要另写一篇。机器、顺序、数字、历史例子、比喻、课名和上车结构都以原文为准，必须还在。\n")
+	b.WriteString("只做这些事：切成适合口播的短段、改成更顺口的标点、轻微换词、修好明显错字。\n")
+	b.WriteString("不要换题，不要补圆原文故意不说完的答案，不要改成家庭理财课，不要新编一套机制，不要把金句和例子换成另一套。\n")
+	b.WriteString("课名跟原文走；原文没有课名时用《财富觉醒方法论》，入口主页橱窗。\n")
+	b.WriteString("关键数字保留，本金乘利率要对上利息。按四十五到六十五岁口播来写。\n")
+	b.WriteString("原稿的推进顺序不能倒。\n")
+	b.WriteString(writerJSONContract())
+	return b.String()
 }
 
 func buildWriterUser(style string, manifest manifestLite, source string) string {

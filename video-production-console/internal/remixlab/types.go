@@ -109,3 +109,10 @@ type Service struct {
 	// putPresetJSON optionally overrides preset persistence (tests / seam).
 	putPresetJSON func(ctx context.Context, raw string) error
 }
+
+func (s *Service) DataRoot() string {
+	if s == nil {
+		return ""
+	}
+	return s.dataRoot
+}

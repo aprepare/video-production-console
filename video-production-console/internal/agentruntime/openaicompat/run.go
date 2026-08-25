@@ -51,6 +51,7 @@ const (
 	PromptStyleRewrite      = "rewrite"
 	PromptStyleRewriteSharp = "rewrite_sharp"
 	PromptStyleCopy         = "copy"
+	PromptStyleWash         = "wash"
 
 	// RewritePromptStamp 是默认 rewrite 系统提示词的版本标注。
 	// 默认 rewrite：短成功标准、无开场禁词死刑、无后台质检。
