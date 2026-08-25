@@ -20,15 +20,15 @@ type Options struct {
 	ReasoningEffort   string
 	// CheckModel runs the post-draft quality check (overlap, course name,
 	// opening/ending, CTA). Empty disables the model pass; local fixes still run.
-	CheckModel string
-	BaseURL    string
-	APIKey     string
+	CheckModel  string
+	BaseURL     string
+	APIKey      string
 	CopyBaseURL string
 	CopyAPIKey  string
-	MaxSteps     int
+	MaxSteps    int
 	PythonBinary string
-	Client       ChatClient
-	CopyClient   CopyClient
+	Client      ChatClient
+	CopyClient  CopyClient
 }
 
 type manifestLite struct {
@@ -54,10 +54,10 @@ const (
 
 	// RewritePromptStamp 是默认 rewrite（语感回流 A）系统提示词的版本标注。
 	// 写稿正文已迁到 prompts_writer.go：
-	//   rewrite       = A 语感回流（默认，含语感指纹 + 正向验收）
-	//   rewrite_sharp = B 锋利优先（更少禁令、冲击力优先）
+	//   rewrite       = A 语感回流（默认，听感验收优先 + 语感指纹）
+	//   rewrite_sharp = B 锋利优先（冲击力第一、禁令压缩）
 	//   copy          = 口播copy整理（先打 hooks/scripts）
-	// 2026-08-24 A/B 分版：补语感指纹与正向验收；B 版压缩禁令、抬高锋利目标。
+	// 2026-08-25 v2：正向听感验收前置，失败清单后置；B 再抬冲击力。
 	RewritePromptStamp = RewritePromptStampStable
 )
 
@@ -137,6 +137,7 @@ func Run(opts Options) error {
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
+	stamp := promptStamp(style)
 	var system, user string
 	if style == PromptStyleCopy {
 		copyClient := opts.CopyClient
@@ -155,6 +156,10 @@ func Run(opts Options) error {
 		user = buildWriterUser(style, manifest, source)
 	}
 	captureWriterPrompts(manifest.OutputDir, system, user)
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "prompt_selected", "prompt_style": style, "prompt_stamp": stamp,
+		"system_bytes": len(system), "user_bytes": len(user),
+	})
 
 	client := opts.Client
 	if client == nil {
@@ -167,18 +172,25 @@ func Run(opts Options) error {
 		Messages:        []Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
 	})
 	if err != nil {
-		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "model_error", "model": model, "prompt_style": style, "error": err.Error()})
+		appendRemixRunLog(manifest.OutputDir, map[string]any{
+			"event": "model_error", "model": model, "prompt_style": style, "prompt_stamp": stamp, "error": err.Error(),
+		})
 		return writeFailure(outPath, manifestPath, err)
 	}
 	if len(resp.Choices) == 0 {
-		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "empty_choices", "model": model, "prompt_style": style})
+		appendRemixRunLog(manifest.OutputDir, map[string]any{
+			"event": "empty_choices", "model": model, "prompt_style": style, "prompt_stamp": stamp,
+		})
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
 	rawReply := resp.Choices[0].Message.Content
-	captureRemixModelReply(manifest.OutputDir, model, style, rawReply)
+	captureRemixModelReply(manifest.OutputDir, model, style, stamp, rawReply)
 	content, checkWarnings, checkNote, err := repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
 	if err != nil {
-		appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "quality_failed", "error": err.Error(), "note": checkNote, "warnings": checkWarnings})
+		appendRemixRunLog(manifest.OutputDir, map[string]any{
+			"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
+			"error": err.Error(), "note": checkNote, "warnings": checkWarnings,
+		})
 		if strings.TrimSpace(content) != "" && content != rawReply {
 			if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
 				_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
@@ -186,7 +198,10 @@ func Run(opts Options) error {
 		}
 		return writeFailure(outPath, manifestPath, err)
 	}
-	appendRemixRunLog(manifest.OutputDir, map[string]any{"event": "quality_passed", "note": checkNote, "warnings": checkWarnings})
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
+		"note": checkNote, "warnings": checkWarnings,
+	})
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
