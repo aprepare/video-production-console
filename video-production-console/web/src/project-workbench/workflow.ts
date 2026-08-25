@@ -1,5 +1,11 @@
 import type { ActiveWorkflow, PrimaryAction, ProductionStage, ProjectDetail } from "./types";
 
+const liveTaskStatuses = ["queued", "running", "awaiting_input", "waiting_input", "resuming"] as const;
+
+export function isLiveTaskStatus(status: string) {
+  return (liveTaskStatuses as readonly string[]).includes(status);
+}
+
 export const productionStages: ReadonlyArray<{ id: ProductionStage; label: string }> = [
   { id: "script", label: "文案" },
   { id: "assets", label: "素材" },
@@ -76,6 +82,15 @@ export function montageInputsReady(detail: ProjectDetail): boolean {
 export function canRemakeMontage(detail: ProjectDetail): boolean {
   if (!montageInputsReady(detail)) return false;
   return isReady(detail, "mix_draft") || deriveProductionStage(detail) === "published";
+}
+
+// 文案已定稿、剪映草稿还没出来时，才允许一键跑口播→配音→混剪。
+// 已有 ready 草稿不再自动重做，避免覆盖人工改过的剪映工程。
+export function canOneClickProduce(detail: ProjectDetail): boolean {
+  if (detail.project.stage === "published") return false;
+  if (!isReady(detail, "continuous_script")) return false;
+  if (isReady(detail, "mix_draft")) return false;
+  return true;
 }
 
 export function nextPrimaryAction(detail: ProjectDetail): PrimaryAction | null {

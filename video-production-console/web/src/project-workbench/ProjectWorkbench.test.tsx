@@ -86,6 +86,7 @@ function workbenchProps(detail = fixture()): ProjectWorkbenchProps {
     onImportContinuousScript: vi.fn(),
     onReviseContinuousScript: vi.fn(),
     onStartSpokenLines: vi.fn(),
+    onStartCaptionKeywords: vi.fn(),
     onGenerateNarration: vi.fn(),
     taskModel: { model: "", reasoningEffort: "" },
     onTaskModelChange: vi.fn(),
@@ -215,6 +216,71 @@ test("does not auto-start spoken lines after a remix script is ready", () => {
 
   expect(screen.getByRole("button", { name: "生成口播稿" })).toBeTruthy();
   expect(props.onStartSpokenLines).not.toHaveBeenCalled();
+});
+
+test("one-click produce starts spoken lines then narration then mix after the script is confirmed", () => {
+  const detail = fixture();
+  delete detail.assets.spoken_script;
+  delete detail.assets.narration;
+  delete detail.assets.subtitle_srt;
+  delete detail.assets.mix_draft;
+  detail.project.stage = "script";
+  detail.missing_assets = ["spoken_script"];
+  const first = workbenchProps(detail);
+  first.tasks = [];
+  const { rerender } = render(<ProjectWorkbench {...first} />);
+
+  expect(first.onStartSpokenLines).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "一键生成到剪映草稿" }));
+  expect(first.onStartSpokenLines).toHaveBeenCalledOnce();
+  expect(first.onGenerateNarration).not.toHaveBeenCalled();
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  const afterSpoken = fixture();
+  delete afterSpoken.assets.narration;
+  delete afterSpoken.assets.subtitle_srt;
+  delete afterSpoken.assets.mix_draft;
+  afterSpoken.assets.caption_keywords = asset("caption_keywords");
+  afterSpoken.project.stage = "assets";
+  afterSpoken.missing_assets = ["narration", "subtitle_srt"];
+  const second = workbenchProps(afterSpoken);
+  second.tasks = [];
+  second.onStartSpokenLines = first.onStartSpokenLines;
+  second.onGenerateNarration = first.onGenerateNarration;
+  second.onMix = first.onMix;
+  second.onStartCaptionKeywords = first.onStartCaptionKeywords;
+  rerender(<ProjectWorkbench {...second} />);
+  expect(first.onGenerateNarration).toHaveBeenCalledOnce();
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  const afterNarration = fixture();
+  delete afterNarration.assets.mix_draft;
+  afterNarration.assets.narration = asset("narration");
+  afterNarration.assets.subtitle_srt = asset("subtitle_srt");
+  afterNarration.assets.caption_keywords = asset("caption_keywords");
+  afterNarration.project.stage = "mixing";
+  afterNarration.missing_assets = ["mix_draft"];
+  const third = workbenchProps(afterNarration);
+  third.tasks = [];
+  third.onStartSpokenLines = first.onStartSpokenLines;
+  third.onGenerateNarration = first.onGenerateNarration;
+  third.onMix = first.onMix;
+  third.onStartCaptionKeywords = first.onStartCaptionKeywords;
+  rerender(<ProjectWorkbench {...third} />);
+  expect(first.onMix).toHaveBeenCalledOnce();
+});
+
+test("hides one-click produce after a mix draft is ready", () => {
+  const detail = fixture();
+  detail.assets.continuous_script = asset("continuous_script");
+  detail.assets.spoken_script = asset("spoken_script");
+  detail.assets.narration = asset("narration");
+  detail.assets.subtitle_srt = asset("subtitle_srt");
+  detail.assets.mix_draft = asset("mix_draft");
+  detail.project.stage = "review";
+  detail.missing_assets = [];
+  renderWorkbench(detail);
+  expect(screen.queryByRole("button", { name: "一键生成到剪映草稿" })).toBeNull();
 });
 
 test("disables narration generation with a stated reason while the continuous script is missing", () => {
@@ -902,6 +968,50 @@ test("shows this plan's QC summary and hides it when absent", () => {
   expect(card.textContent).toContain("1 个");
   expect(card.textContent).toContain("quota_below_min: movie");
   expect(card.textContent).not.toMatch(/catalog/i);
+});
+
+test("shows side-by-side remix drafts so a second model is visible without zooming", () => {
+  const detail = fixture();
+  detail.project.stage = "script";
+  delete detail.assets.spoken_script;
+  delete detail.assets.narration;
+  delete detail.assets.mix_draft;
+  const grok: ProjectTask = {
+    ...task,
+    id: "remix-grok",
+    type: "remix",
+    skill_name: "remix-standard",
+    action: "remix.standard",
+    status: "completed",
+    model: "grok-4.6-fast",
+    reasoning_effort: "xhigh",
+    continuous_script: "你还在柜台排队，柜台那边已经把钱往外搬了。",
+    continuous_script_version_id: "continuous_script-asset",
+    created_at: "2026-08-23T05:00:00Z",
+    messages: [],
+  };
+  const claude: ProjectTask = {
+    ...grok,
+    id: "remix-claude",
+    model: "claude-sonnet-4-6",
+    continuous_script: "现在钱还在卡里的，先把这件事听完。这场迁移已经开始。",
+    continuous_script_version_id: "other-version",
+    created_at: "2026-08-23T05:01:00Z",
+  };
+  const props = workbenchProps(detail);
+  props.tasks = [grok, claude];
+  const onOpen = vi.fn();
+  props.onOpenTask = onOpen;
+  render(<ProjectWorkbench {...props} />);
+
+  expect(screen.getByRole("heading", { name: "各模型文案" })).toBeTruthy();
+  expect(screen.getByText("grok-4.6-fast")).toBeTruthy();
+  expect(screen.getByText("claude-sonnet-4-6")).toBeTruthy();
+  expect(screen.getByText("当前采用")).toBeTruthy();
+  expect(screen.getByText(/你还在柜台排队/)).toBeTruthy();
+  expect(screen.getByText(/现在钱还在卡里的/)).toBeTruthy();
+  fireEvent.click(screen.getByText(/现在钱还在卡里的/));
+  expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "remix-claude" }));
 });
 
 test("defines vertical mobile production, root action bar visibility, safe area, and 44px touch targets", () => {

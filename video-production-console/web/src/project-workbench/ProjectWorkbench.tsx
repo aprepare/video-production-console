@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { TaskModelFields } from "../TaskModelFields";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { MontagePlanQC, ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
-import { canRemakeMontage, deriveProductionStage, missingProductionInputs, nextPrimaryAction } from "./workflow";
+import { canOneClickProduce, canRemakeMontage, deriveProductionStage, isLiveTaskStatus, missingProductionInputs, montageInputsReady, nextPrimaryAction } from "./workflow";
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
 import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets";
@@ -136,7 +136,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       : "重做混剪";
   const spokenLinesLive = props.tasks.some((task) =>
     task.action === "remix.spoken_lines"
-    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+    && isLiveTaskStatus(task.status));
   const displayAction = action?.id === "start-mixing"
     ? { ...action, label: mixLabel }
     : action?.id === "start-spoken-lines" && spokenLinesLive
@@ -164,10 +164,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
   const publishingPackage = publishingTask?.publishing_package || detail.publishing_package;
   const description = publishingPackage?.description || publishingPackage?.descriptions?.[0] || "";
-  const descriptionForCopy = [description, publishingPackage?.cta || ""]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("\n\n");
+  const descriptionForCopy = description.trim();
   const shortTitles = publishingPackage?.short_titles || [];
   const primaryShortTitle = shortTitles[0] || "";
   const showPublishingCopy = shouldShowPublishingCopy(stage, Boolean(publishingPackage));
@@ -181,13 +178,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const sourceDialogRef = useRef<HTMLElement>(null);
   const importDialogRef = useRef<HTMLElement>(null);
   const keywordAutoKey = useRef("");
+  const oneClickSpokenKey = useRef("");
+  const oneClickKeywordKey = useRef("");
+  const oneClickNarrationKey = useRef("");
+  const oneClickMontageKey = useRef("");
+  const oneClickArmedAt = useRef(0);
+  const [oneClickArmed, setOneClickArmed] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
   const projectPending = props.pendingActions.length > 0;
   const sourceReady = detail.assets.source_script?.state === "ready";
   const sourceAssetID = sourceReady ? detail.assets.source_script?.id : "";
   const sourceRemixLive = props.tasks.some((task) =>
     task.action === "remix.standard"
-    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+    && isLiveTaskStatus(task.status));
   const sourceRemixPending = props.pendingActions.includes("source-remix") || sourceRemixLive;
   const importScriptPending = props.pendingActions.includes("save-continuous-script");
   const showTaskModel = Boolean(
@@ -195,7 +198,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   );
   const montageLive = props.tasks.some((task) =>
     task.action === "montage.execute"
-    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+    && isLiveTaskStatus(task.status));
   const remakeReady = canRemakeMontage(detail) && !montageLive && !props.pendingActions.includes("montage");
   const remakeMontage = Boolean(mixKind === "scenic" && props.onRemakeMontage && remakeReady);
   const remakeMovieMontage = Boolean(mixKind === "movie" && props.onRemakeMovieMontage && remakeReady);
@@ -214,15 +217,22 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     setImportDialogOpen(false);
     setCopiedKey("");
     keywordAutoKey.current = "";
+    oneClickSpokenKey.current = "";
+    oneClickKeywordKey.current = "";
+    oneClickNarrationKey.current = "";
+    oneClickMontageKey.current = "";
+    oneClickArmedAt.current = 0;
+    setOneClickArmed(false);
   }, [detail.project.id]);
 
-  // 二创出稿后停在「生成口播稿」，等操作员确认文案再点主按钮。
+  // 二创出稿后停在「生成口播稿」，等操作员确认文案再点主按钮或「一键生成」。
   // 口播稿就绪后自动标注字幕关键词。这是可选增强：失败或缺席时混剪
   // 回落到本地词表，所以不占主按钮，也不阻塞配音。
   const captionKeywordsLive = props.tasks.some((task) =>
     task.action === "remix.caption_keywords"
-    && ["queued", "running", "awaiting_input", "waiting_input", "resuming"].includes(task.status));
+    && isLiveTaskStatus(task.status));
   useEffect(() => {
+    if (oneClickArmed) return;
     if (!props.onStartCaptionKeywords) return;
     if (detail.assets.spoken_script?.state !== "ready") return;
     if (detail.assets.caption_keywords?.state === "ready") return;
@@ -231,7 +241,104 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (!versionKey || keywordAutoKey.current === versionKey) return;
     keywordAutoKey.current = versionKey;
     props.onStartCaptionKeywords();
-  }, [captionKeywordsLive, props.onStartCaptionKeywords, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
+  }, [oneClickArmed, captionKeywordsLive, props.onStartCaptionKeywords, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
+
+  const narrationGenerating = props.pendingActions.includes("generate-narration");
+  const oneClickBusy = projectPending || spokenLinesLive || montageLive || narrationGenerating || sourceRemixLive;
+
+  const startCurrentMix = () => {
+    if (mixKind === "movie") props.onMovieMix?.();
+    else if (mixKind === "image-video") props.onImageVideoMix?.();
+    else props.onMix();
+  };
+
+  const failedSinceArm = (action: string) => props.tasks.some((task) =>
+    ["failed", "canceled", "interrupted_on_restart"].includes(task.status)
+    && task.action === action
+    && Date.parse(task.created_at) >= oneClickArmedAt.current - 5000);
+
+  // 文案确定后一点：口播稿 → 先打字幕关键词（失败不挡）→ 配音字幕 → 混剪到剪映草稿。
+  // 已有 ready 草稿不会重做。某步失败就停，按钮恢复，再点一次会重试。
+  useEffect(() => {
+    if (!oneClickArmed) return;
+    if (detail.assets.mix_draft?.state === "ready" || !canOneClickProduce(detail)) {
+      setOneClickArmed(false);
+      return;
+    }
+    if (oneClickBusy) return;
+
+    const scriptID = detail.assets.continuous_script?.id || "";
+    const spokenReady = detail.assets.spoken_script?.state === "ready";
+    const spokenID = detail.assets.spoken_script?.id || "";
+    const keywordsReady = detail.assets.caption_keywords?.state === "ready";
+    const narrationReady = detail.assets.narration?.state === "ready";
+    const srtReady = detail.assets.subtitle_srt?.state === "ready";
+
+    if (!spokenReady) {
+      if (!props.onStartSpokenLines || !scriptID) return;
+      if (oneClickSpokenKey.current === scriptID) {
+        if (failedSinceArm("remix.spoken_lines")) setOneClickArmed(false);
+        return;
+      }
+      oneClickSpokenKey.current = scriptID;
+      props.onStartSpokenLines();
+      return;
+    }
+
+    if (!keywordsReady && !captionKeywordsLive && props.onStartCaptionKeywords && spokenID && oneClickKeywordKey.current !== spokenID) {
+      oneClickKeywordKey.current = spokenID;
+      props.onStartCaptionKeywords();
+      return;
+    }
+
+    if (!narrationReady || !srtReady) {
+      if (!props.onGenerateNarration || !spokenID) return;
+      if (oneClickNarrationKey.current === spokenID) {
+        if (!narrationGenerating) setOneClickArmed(false);
+        return;
+      }
+      oneClickNarrationKey.current = spokenID;
+      props.onGenerateNarration();
+      return;
+    }
+
+    if (!montageInputsReady(detail)) {
+      setOneClickArmed(false);
+      return;
+    }
+    const mixKey = `${detail.assets.narration?.id || ""}:${detail.assets.subtitle_srt?.id || ""}`;
+    if (oneClickMontageKey.current === mixKey) {
+      if (failedSinceArm("montage.execute")) setOneClickArmed(false);
+      return;
+    }
+    oneClickMontageKey.current = mixKey;
+    startCurrentMix();
+  }, [
+    oneClickArmed,
+    oneClickBusy,
+    captionKeywordsLive,
+    narrationGenerating,
+    detail,
+    mixKind,
+    props.tasks,
+    props.onStartSpokenLines,
+    props.onStartCaptionKeywords,
+    props.onGenerateNarration,
+    props.onMix,
+    props.onMovieMix,
+    props.onImageVideoMix,
+  ]);
+
+  const oneClickAvailable = canOneClickProduce(detail);
+  const armOneClickProduce = () => {
+    if (!oneClickAvailable || oneClickBusy) return;
+    oneClickSpokenKey.current = "";
+    oneClickKeywordKey.current = "";
+    oneClickNarrationKey.current = "";
+    oneClickMontageKey.current = "";
+    oneClickArmedAt.current = Date.now();
+    setOneClickArmed(true);
+  };
 
   useEffect(() => {
     if (!copiedKey) return;
@@ -353,9 +460,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       props.onStartSpokenLines?.();
     }
     else if (action.id === "start-mixing") {
-      if (mixKind === "movie") props.onMovieMix?.();
-      else if (mixKind === "image-video") props.onImageVideoMix?.();
-      else props.onMix();
+      startCurrentMix();
     }
     else if (action.id === "publish") props.onPublish();
     else {
@@ -623,6 +728,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           {displayAction ? (
             <>
               {primaryActionButton("desktop-primary-action")}
+              {oneClickAvailable ? (
+                <button
+                  type="button"
+                  className="remake-montage-action"
+                  onClick={armOneClickProduce}
+                  disabled={oneClickBusy || oneClickArmed}
+                  aria-busy={oneClickArmed || oneClickBusy}
+                  title="确认当前连续文案后，自动生成口播稿、配音字幕并做到剪映草稿。已有剪映草稿不会重做。"
+                  aria-label={oneClickArmed ? "正在一键生成到剪映草稿" : "一键生成到剪映草稿"}
+                >
+                  {oneClickArmed ? "正在一键生成到剪映草稿" : "一键生成到剪映草稿"}
+                </button>
+              ) : null}
               {remakeCurrent && onRemakeCurrent ? (
                 <button
                   type="button"
@@ -790,6 +908,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
             .filter((task) => task.action === "remix.standard")
             .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
             .slice(0, 4)}
+          currentScriptVersionID={detail.assets.continuous_script?.id || ""}
           onOpenTask={props.onOpenTask}
         />
       </div>

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { ProjectDetail } from "./types";
 import {
+  canOneClickProduce,
   canRemakeMontage,
   deriveProductionStage,
   missingProductionInputs,
@@ -304,5 +305,20 @@ describe("production workflow view model", () => {
         detail("review", { mix_draft: "ready", final_video: "failed" }),
       ),
     ).toMatchObject({ id: "publish" });
+  });
+
+  test("allows one-click produce only after the script is ready and before a mix draft exists", () => {
+    expect(canOneClickProduce(detail())).toBe(false);
+    expect(canOneClickProduce(detail("script", { source_script: "ready" }))).toBe(false);
+    expect(canOneClickProduce(detail("script", { continuous_script: "ready" }))).toBe(true);
+    expect(canOneClickProduce(detail("script", { continuous_script: "ready", spoken_script: "ready" }))).toBe(true);
+    expect(canOneClickProduce(detail("mixing", {
+      continuous_script: "ready",
+      spoken_script: "ready",
+      narration: "ready",
+      subtitle_srt: "ready",
+    }, undefined, "ready"))).toBe(true);
+    expect(canOneClickProduce(detail("review", { continuous_script: "ready", mix_draft: "ready" }))).toBe(false);
+    expect(canOneClickProduce(detail("published", { continuous_script: "ready" }))).toBe(false);
   });
 });
