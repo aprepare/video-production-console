@@ -270,6 +270,67 @@ test("one-click produce starts spoken lines then narration then mix after the sc
   expect(first.onMix).toHaveBeenCalledOnce();
 });
 
+test("one-click starts caption keywords before narration so the project lock does not drop the chain", () => {
+  const detail = fixture();
+  delete detail.assets.caption_keywords;
+  delete detail.assets.narration;
+  delete detail.assets.subtitle_srt;
+  delete detail.assets.mix_draft;
+  detail.project.stage = "assets";
+  detail.missing_assets = ["narration", "subtitle_srt"];
+  const first = workbenchProps(detail);
+  first.tasks = [];
+  const { rerender } = render(<ProjectWorkbench {...first} />);
+  fireEvent.click(screen.getByRole("button", { name: "一键生成到剪映草稿" }));
+  expect(first.onStartCaptionKeywords).toHaveBeenCalledOnce();
+  expect(first.onGenerateNarration).not.toHaveBeenCalled();
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  const keywordsRunning = fixture();
+  delete keywordsRunning.assets.caption_keywords;
+  delete keywordsRunning.assets.narration;
+  delete keywordsRunning.assets.subtitle_srt;
+  delete keywordsRunning.assets.mix_draft;
+  keywordsRunning.project.stage = "assets";
+  keywordsRunning.missing_assets = ["narration", "subtitle_srt"];
+  const second = workbenchProps(keywordsRunning);
+  second.onStartCaptionKeywords = first.onStartCaptionKeywords;
+  second.onGenerateNarration = first.onGenerateNarration;
+  second.onMix = first.onMix;
+  second.tasks = [{
+    ...task,
+    id: "kw-running",
+    type: "remix",
+    skill_name: "remix-caption-keywords",
+    action: "remix.caption_keywords",
+    status: "running",
+    created_at: "2026-08-25T05:00:00Z",
+    messages: [],
+  }];
+  rerender(<ProjectWorkbench {...second} />);
+  expect(first.onGenerateNarration).not.toHaveBeenCalled();
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  const afterKeywords = fixture();
+  delete afterKeywords.assets.narration;
+  delete afterKeywords.assets.subtitle_srt;
+  delete afterKeywords.assets.mix_draft;
+  afterKeywords.assets.caption_keywords = asset("caption_keywords");
+  afterKeywords.project.stage = "assets";
+  afterKeywords.missing_assets = ["narration", "subtitle_srt"];
+  const third = workbenchProps(afterKeywords);
+  third.onStartCaptionKeywords = first.onStartCaptionKeywords;
+  third.onGenerateNarration = first.onGenerateNarration;
+  third.onMix = first.onMix;
+  third.tasks = [{
+    ...second.tasks[0],
+    status: "completed",
+  }];
+  rerender(<ProjectWorkbench {...third} />);
+  expect(first.onGenerateNarration).toHaveBeenCalledOnce();
+  expect(first.onMix).not.toHaveBeenCalled();
+});
+
 test("one-click waits for caption keywords before mixing so the draft gets annotations", () => {
   const detail = fixture();
   delete detail.assets.mix_draft;

@@ -226,8 +226,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   }, [detail.project.id]);
 
   // 二创出稿后停在「生成口播稿」，等操作员确认文案再点主按钮或「一键生成」。
-  // 口播稿就绪后自动标注字幕关键词。这是可选增强：失败或缺席时混剪
-  // 回落到本地词表，所以不占主按钮，也不阻塞配音。
+  // 口播稿就绪后自动标注字幕关键词。一键生成也走这条，共用启动标记，避免打两次占锁。
   const captionKeywordsLive = props.tasks.some((task) =>
     task.action === "remix.caption_keywords"
     && isLiveTaskStatus(task.status));
@@ -240,6 +239,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     const versionKey = detail.assets.spoken_script?.id;
     if (!versionKey || keywordAutoKey.current === versionKey) return;
     keywordAutoKey.current = versionKey;
+    oneClickKeywordKey.current = versionKey;
     props.onStartCaptionKeywords();
   }, [oneClickArmed, captionKeywordsLive, props.onStartCaptionKeywords, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
 
@@ -257,15 +257,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     && task.action === action
     && Date.parse(task.created_at) >= oneClickArmedAt.current - 5000);
 
-  // 文案确定后一点：口播稿 → 字幕关键词与配音并行 → 关键词落盘后再混剪到剪映草稿。
-  // 关键词失败才回落到本地词表。已有 ready 草稿不会重做。某步失败就停，按钮恢复，再点一次会重试。
+  // 文案确定后一点：口播稿 → 字幕关键词 → 配音字幕 → 混剪到剪映草稿。
+  // 关键词和配音不能并行：项目锁同时只允许一个动作。关键词失败才回落本地词表。
   useEffect(() => {
     if (!oneClickArmed) return;
     if (detail.assets.mix_draft?.state === "ready" || !canOneClickProduce(detail)) {
       setOneClickArmed(false);
       return;
     }
-    if (oneClickBusy) return;
 
     const scriptID = detail.assets.continuous_script?.id || "";
     const spokenReady = detail.assets.spoken_script?.state === "ready";
@@ -273,8 +272,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     const keywordsReady = detail.assets.caption_keywords?.state === "ready";
     const narrationReady = detail.assets.narration?.state === "ready";
     const srtReady = detail.assets.subtitle_srt?.state === "ready";
+    const keywordsFailed = failedSinceArm("remix.caption_keywords");
 
     if (!spokenReady) {
+      if (oneClickBusy) return;
       if (!props.onStartSpokenLines || !scriptID) return;
       if (oneClickSpokenKey.current === scriptID) {
         if (failedSinceArm("remix.spoken_lines")) setOneClickArmed(false);
@@ -285,16 +286,21 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       return;
     }
 
-    if (!keywordsReady && !captionKeywordsLive && props.onStartCaptionKeywords && spokenID && oneClickKeywordKey.current !== spokenID) {
+    if (!keywordsReady && !keywordsFailed) {
+      if (captionKeywordsLive || oneClickBusy) return;
+      if (!props.onStartCaptionKeywords || !spokenID) return;
+      if (oneClickKeywordKey.current === spokenID || keywordAutoKey.current === spokenID) return;
       oneClickKeywordKey.current = spokenID;
+      keywordAutoKey.current = spokenID;
       props.onStartCaptionKeywords();
-      // 配音可以并行；混剪必须等关键词落盘，否则草稿吃不到标注。
+      return;
     }
 
     if (!narrationReady || !srtReady) {
+      if (oneClickBusy) return;
       if (!props.onGenerateNarration || !spokenID) return;
       if (oneClickNarrationKey.current === spokenID) {
-        if (!narrationGenerating) setOneClickArmed(false);
+        setOneClickArmed(false);
         return;
       }
       oneClickNarrationKey.current = spokenID;
@@ -303,15 +309,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
 
     if (captionKeywordsLive) return;
-    if (!keywordsReady && props.onStartCaptionKeywords && spokenID) {
-      if (oneClickKeywordKey.current !== spokenID) {
-        oneClickKeywordKey.current = spokenID;
-        props.onStartCaptionKeywords();
-        return;
-      }
-      if (!failedSinceArm("remix.caption_keywords")) return;
-    }
-
     if (!montageInputsReady(detail)) {
       setOneClickArmed(false);
       return;
@@ -745,7 +742,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   onClick={armOneClickProduce}
                   disabled={oneClickBusy || oneClickArmed}
                   aria-busy={oneClickArmed || oneClickBusy}
-                  title="确认当前连续文案后，自动生成口播稿、配音字幕；字幕关键词落盘后再做到剪映草稿。已有 ready 的剪映草稿不会重做。"
+                  title="确认当前连续文案后，按口播稿 → 字幕关键词 → 配音字幕 → 剪映草稿自动往下跑。已有 ready 的剪映草稿不会重做。"
                   aria-label={oneClickArmed ? "正在一键生成到剪映草稿" : "一键生成到剪映草稿"}
                 >
                   {oneClickArmed ? "正在一键生成到剪映草稿" : "一键生成到剪映草稿"}
