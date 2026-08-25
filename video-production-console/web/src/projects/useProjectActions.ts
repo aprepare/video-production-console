@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { FormEvent, RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query/keys";
-import type { TaskModelOverride } from "../taskModel";
+import { normalizeScriptCount, type TaskModelOverride } from "../taskModel";
 import type { Asset, NarrationGeneration, Project, ProjectDetail } from "../types";
 import { unwrapImportedScript } from "./import-script";
 
@@ -226,11 +226,19 @@ export function useProjectActions({
         if (selectedIDRef.current !== projectID) return;
         sourceVersionID = asset.id;
       }
-      // Multi-model fan-out: every checked model gets its own remix task so
-      // the drafts can be compared. No checked model = one task with the
-      // single override (or the inherited default).
+      // Multi-model × multi-draft fan-out: every checked model runs
+      // scriptCount independent tasks so drafts can be compared. No checked
+      // model = one model override (or inherited default) × scriptCount.
+      // When scriptCount > 1, inject revision_notes for diversity.
       const fanOutModels = (taskModel.models || []).map((model) => model.trim()).filter(Boolean);
-      const modelRuns: string[] = fanOutModels.length ? fanOutModels : [taskModel.model.trim()];
+      const modelList: string[] = fanOutModels.length ? fanOutModels : [taskModel.model.trim()];
+      const scriptCount = normalizeScriptCount(taskModel.scriptCount);
+      const modelRuns: Array<{ model: string; index: number; total: number }> = [];
+      for (const model of modelList) {
+        for (let index = 1; index <= scriptCount; index++) {
+          modelRuns.push({ model, index, total: scriptCount });
+        }
+      }
       const baseBody = {
         account_id: project.account_id,
         type: "remix",
@@ -239,13 +247,18 @@ export function useProjectActions({
         source_version_id: sourceVersionID,
       };
       const results = await Promise.all(
-        modelRuns.map((model) =>
+        modelRuns.map(({ model, index, total }) =>
           startProjectTaskMutation.mutateAsync({
             projectID,
             body: {
               ...baseBody,
               ...(model ? { model } : {}),
               ...(taskModel.reasoningEffort ? { reasoning_effort: taskModel.reasoningEffort } : {}),
+              ...(total > 1
+                ? {
+                    revision_notes: `第${index}稿（共${total}稿）：换开场切口与现场说法，保持同一爆款机芯，与同模型其他稿明显不同。`,
+                  }
+                : {}),
             },
           }),
         ),
@@ -257,10 +270,10 @@ export function useProjectActions({
         await loadDetail(project);
         return;
       }
-      setTaskModel({ model: "", reasoningEffort: "", models: [] });
+      setTaskModel({ model: "", reasoningEffort: "", models: [], scriptCount: 1 });
       setMessage(
         modelRuns.length > 1
-          ? `同行原文已保存，已用 ${startedCount}/${modelRuns.length} 个模型启动二创任务，完成后可在任务记录里对比各模型文案。`
+          ? `同行原文已保存，已启动 ${startedCount}/${modelRuns.length} 路二创（模型×文案数），完成后可在任务记录里对比各稿。`
           : "同行原文已保存，正式二创任务已启动。完成后会自动出现在项目资产中。",
       );
     } catch (error) {
