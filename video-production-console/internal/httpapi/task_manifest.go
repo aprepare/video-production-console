@@ -652,9 +652,11 @@ func normalizeRemixPromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "rewrite":
 		return "rewrite", nil
+	case "rewrite_sharp":
+		return "rewrite_sharp", nil
 	case "copy":
 		return "copy", nil
 	default:
-		return "", fmt.Errorf("remix_prompt_style must be rewrite or copy")
+		return "", fmt.Errorf("remix_prompt_style must be rewrite, rewrite_sharp, or copy")
 	}
 }

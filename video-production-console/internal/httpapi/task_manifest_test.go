@@ -695,6 +695,43 @@ func TestTaskManifestPreparerUsesCopyStyleFromSettings(t *testing.T) {
 	}
 }
 
+func TestTaskManifestPreparerUsesRewriteSharpFromSettings(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2, RemixPromptStyle: "rewrite_sharp"}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.RemixPromptStyle != "rewrite_sharp" {
+		t.Fatalf("settings rewrite_sharp style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+}
+
+func TestCreateRemixTaskAcceptsRewriteSharp(t *testing.T) {
+	db, accountID, projectID, _ := setupManifestTask(t, true)
+	handler := NewTasksHandler(db.db, &manifestTestScheduler{}, nil, nil)
+	body := `{"account_id":"` + accountID + `","type":"remix","action":"remix.standard","prompt":"go","remix_prompt_style":"rewrite_sharp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/tasks", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted && res.Code != http.StatusCreated && res.Code != http.StatusOK {
+		t.Fatalf("rewrite_sharp must be accepted, status=%d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "invalid_remix_prompt_style") {
+		t.Fatalf("rewrite_sharp rejected: %s", res.Body.String())
+	}
+}
+
 func TestTaskManifestPreparerRejectsRemovedWashStyle(t *testing.T) {
 	db, accountID, projectID, root := setupManifestTask(t, true)
 	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}

@@ -209,7 +209,7 @@ func (h *taskAPI) create(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(manifestRequest.RemixPromptStyle) != "" {
 			style, err := normalizeRemixPromptStyle(manifestRequest.RemixPromptStyle)
 			if err != nil {
-				writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite or copy.")
+				writeError(w, 400, "invalid_remix_prompt_style", "remix_prompt_style must be rewrite, rewrite_sharp, or copy.")
 				return
 			}
 			manifestRequest.RemixPromptStyle = style
