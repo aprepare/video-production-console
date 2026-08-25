@@ -6,6 +6,9 @@ export type TaskModelOverride = {
   // Multi-model fan-out for 二创文案: one task per selected model. Empty or
   // absent means the single `model` override (or the inherited default) runs.
   models?: string[];
+  // How many independent drafts to request per selected model (default 1, max 5).
+  // e.g. models=[deepseek] × scriptCount=2 → two parallel tasks on deepseek.
+  scriptCount?: number;
 };
 
 export type TaskModelDefaults = {
@@ -39,6 +42,14 @@ export function inheritedTaskEffort(defaults: TaskModelDefaults | undefined, pur
     return defaults?.remix_reasoning_effort?.trim() || "不设置";
   }
   return defaults?.codex_default_reasoning_effort?.trim() || "默认强度";
+}
+
+/** Clamp 二创文案数量 to 1–5. */
+export function normalizeScriptCount(value?: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 5) return 5;
+  return n;
 }
 
 export const reasoningEfforts: ReasoningEffort[] = [
