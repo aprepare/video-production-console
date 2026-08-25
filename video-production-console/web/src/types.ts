@@ -69,6 +69,10 @@ export type Task = WorkbenchProjectTask & {
   // multi-model drafts stay comparable even after a later version became current.
   continuous_script?: string;
   continuous_script_version_id?: string;
+  // Full prompts sent to the model for this remix run (prompt_system.txt / prompt_user.txt).
+  prompt_system?: string;
+  prompt_user?: string;
+  model_raw?: string;
 };
 
 export type ProjectDetail = Omit<WorkbenchProjectDetail, "project" | "topic_context"> & {
