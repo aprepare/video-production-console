@@ -81,7 +81,8 @@ export function montageInputsReady(detail: ProjectDetail): boolean {
 
 export function canRemakeMontage(detail: ProjectDetail): boolean {
   if (!montageInputsReady(detail)) return false;
-  return isReady(detail, "mix_draft") || deriveProductionStage(detail) === "published";
+  const mixState = detail.assets?.mix_draft?.state;
+  return mixState === "ready" || mixState === "stale" || deriveProductionStage(detail) === "published";
 }
 
 // 文案已定稿、剪映草稿还没出来时，才允许一键跑口播→配音→混剪。

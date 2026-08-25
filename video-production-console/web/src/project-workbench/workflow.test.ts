@@ -285,6 +285,10 @@ describe("production workflow view model", () => {
       mix_draft: "ready" as const,
     };
     expect(canRemakeMontage(detail("review", readyInputs, undefined, "ready"))).toBe(true);
+    expect(canRemakeMontage(detail("review", {
+      ...readyInputs,
+      mix_draft: "stale",
+    }, undefined, "ready"))).toBe(true);
     expect(canRemakeMontage(detail("mixing", {
       continuous_script: "ready",
       spoken_script: "ready",

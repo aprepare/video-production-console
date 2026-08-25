@@ -270,6 +270,47 @@ test("one-click produce starts spoken lines then narration then mix after the sc
   expect(first.onMix).toHaveBeenCalledOnce();
 });
 
+test("one-click waits for caption keywords before mixing so the draft gets annotations", () => {
+  const detail = fixture();
+  delete detail.assets.mix_draft;
+  delete detail.assets.caption_keywords;
+  detail.assets.narration = asset("narration");
+  detail.assets.subtitle_srt = asset("subtitle_srt");
+  detail.project.stage = "mixing";
+  detail.missing_assets = ["mix_draft"];
+  const first = workbenchProps(detail);
+  first.tasks = [{
+    ...task,
+    id: "kw-running",
+    type: "remix",
+    skill_name: "remix-caption-keywords",
+    action: "remix.caption_keywords",
+    status: "running",
+    created_at: "2026-08-25T05:00:00Z",
+    messages: [],
+  }];
+  const { rerender } = render(<ProjectWorkbench {...first} />);
+  fireEvent.click(screen.getByRole("button", { name: "一键生成到剪映草稿" }));
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  const afterKeywords = fixture();
+  delete afterKeywords.assets.mix_draft;
+  afterKeywords.assets.narration = asset("narration");
+  afterKeywords.assets.subtitle_srt = asset("subtitle_srt");
+  afterKeywords.assets.caption_keywords = asset("caption_keywords");
+  afterKeywords.project.stage = "mixing";
+  afterKeywords.missing_assets = ["mix_draft"];
+  const second = workbenchProps(afterKeywords);
+  second.onMix = first.onMix;
+  second.onStartCaptionKeywords = first.onStartCaptionKeywords;
+  second.tasks = [{
+    ...first.tasks[0],
+    status: "completed",
+  }];
+  rerender(<ProjectWorkbench {...second} />);
+  expect(first.onMix).toHaveBeenCalledOnce();
+});
+
 test("hides one-click produce after a mix draft is ready", () => {
   const detail = fixture();
   detail.assets.continuous_script = asset("continuous_script");
