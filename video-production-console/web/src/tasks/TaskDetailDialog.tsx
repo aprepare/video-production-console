@@ -302,6 +302,23 @@ export function TaskDetailDialog({
             <pre>{task.continuous_script}</pre>
           </details>
         ) : null}
+        {(task.prompt_system || task.prompt_user) ? (
+          <details className="technical-diagnostics">
+            <summary>本次发送给模型的提示词</summary>
+            {task.prompt_system ? (
+              <>
+                <h4>System</h4>
+                <pre className="asset-text">{task.prompt_system}</pre>
+              </>
+            ) : null}
+            {task.prompt_user ? (
+              <>
+                <h4>User</h4>
+                <pre className="asset-text">{task.prompt_user}</pre>
+              </>
+            ) : null}
+          </details>
+        ) : null}
         {task.error_message && <p className="warning">{task.error_message}</p>}
         {questions.length > 0 && (
           <section className="task-question">
