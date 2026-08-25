@@ -62,18 +62,30 @@ func (h *taskResultsHandler) result(w http.ResponseWriter, r *http.Request) {
 		if publishing, publishingErr := h.publishingPackage(r, task.ID); publishingErr == nil && publishing != nil {
 			view["publishing_package"] = publishing
 		}
+		// Prefer the registered asset_versions continuous_script (stable across later runs).
 		if script, versionID, scriptErr := h.continuousScript(r, task.ID); scriptErr == nil && script != "" {
 			view["continuous_script"] = script
 			view["continuous_script_version_id"] = versionID
-		} else if raw, rawPath, rawErr := h.remixCapture(r, task.ID); rawErr == nil {
-			if script := strings.TrimSpace(raw["continuous_script"]); script != "" {
-				view["continuous_script"] = script
+		}
+		// Always merge remix capture so prompt_system / prompt_user / model_raw
+		// remain visible even when continuous_script came from asset_versions.
+		if raw, rawPath, rawErr := h.remixCapture(r, task.ID); rawErr == nil {
+			if _, has := view["continuous_script"]; !has {
+				if script := strings.TrimSpace(raw["continuous_script"]); script != "" {
+					view["continuous_script"] = script
+				}
 			}
 			if modelRaw := strings.TrimSpace(raw["model_raw"]); modelRaw != "" {
 				view["model_raw"] = modelRaw
 			}
 			if runLog := strings.TrimSpace(raw["remix_run"]); runLog != "" && json.Valid([]byte(runLog)) {
 				view["remix_run"] = json.RawMessage(runLog)
+			}
+			if promptSystem := strings.TrimSpace(raw["prompt_system"]); promptSystem != "" {
+				view["prompt_system"] = promptSystem
+			}
+			if promptUser := strings.TrimSpace(raw["prompt_user"]); promptUser != "" {
+				view["prompt_user"] = promptUser
 			}
 			if rawPath != "" {
 				view["remix_capture_path"] = rawPath
@@ -126,6 +138,8 @@ func (h *taskResultsHandler) remixCapture(r *http.Request, taskID string) (map[s
 	read("continuous_script.txt")
 	read("model_raw.txt")
 	read("remix_run.json")
+	read("prompt_system.txt")
+	read("prompt_user.txt")
 	if len(out) == 0 {
 		return nil, "", errors.New("remix capture unavailable")
 	}
@@ -306,7 +320,7 @@ func (h *taskResultsHandler) diagnostics(w http.ResponseWriter, r *http.Request)
 		writeError(w, 500, "task_diagnostics_failed", "Task diagnostics could not be read.")
 		return
 	}
-	out := make([]map[string]any, 0, limit)
+	out := make([]map[string]any, 0, len(events))
 	for _, event := range events {
 		if event.Sequence <= after {
 			continue
