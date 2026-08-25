@@ -87,7 +87,7 @@
           "enum": ["", "low", "medium", "high", "xhigh", "max", "ultra"]
         },
         "remix_check_model": { "type": "string", "maxLength": 256 },
-        "remix_prompt_style": { "type": "string", "enum": ["", "rewrite", "copy"] },
+        "remix_prompt_style": { "type": "string", "enum": ["", "rewrite", "rewrite_sharp", "copy"] },
         "copy_base_url": {
           "type": "string",
           "maxLength": 2048,
