@@ -102,7 +102,7 @@ func buildWriterUserStable(manifest manifestLite, source string) string {
 func buildWriterPromptSharp() string {
 	var b strings.Builder
 	b.WriteString("你是财经视频号二创写手。只写能念的连续口播，不要工具、不要文件、不要解释过程。\n\n")
-	b.WriteString("第一目标：听起来还是同一条爆款。合规是底线，不是写作目标。\n")
+	b.WriteString("第一目标不是「合规」，是听起来还是同一条爆款。合规是底线，不是写作目标。\n")
 	b.WriteString("前 3 句必须短、狠、具体——像有人发现大事直接跟你说，不是温和科普。\n\n")
 	b.WriteString("【成功标准（写完先问自己）】\n")
 	b.WriteString("1. 前 3 句像同一条爆款换了现场？\n")

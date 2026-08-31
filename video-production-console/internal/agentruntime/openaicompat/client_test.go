@@ -86,6 +86,35 @@ func TestChatRequestOmitsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestDecodeChatResponseReadsArrayContentAndReasoning(t *testing.T) {
+	arrayBody := []byte(`{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"{\"reply\":\"好\",\"proposals\":[]}"}]}}]}`)
+	got, err := decodeChatResponse(arrayBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Choices) != 1 || !strings.Contains(got.Choices[0].Message.Content, `"reply":"好"`) {
+		t.Fatalf("array content=%+v", got)
+	}
+
+	reasonBody := []byte(`{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"{\"reply\":\"想完了\",\"proposals\":[]}"}}]}`)
+	got, err = decodeChatResponse(reasonBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Choices[0].Message.Content, "想完了") {
+		t.Fatalf("reasoning fallback=%+v", got)
+	}
+
+	objectReason := []byte(`{"choices":[{"message":{"role":"assistant","content":null,"reasoning":{"summary":"{\"reply\":\"对象思考\",\"proposals\":[]}"}}}]}`)
+	got, err = decodeChatResponse(objectReason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Choices[0].Message.Content, "对象思考") {
+		t.Fatalf("reasoning object=%+v", got)
+	}
+}
+
 func TestChatRequestIncludesReasoningEffortWhenSet(t *testing.T) {
 	raw, err := json.Marshal(ChatRequest{
 		Model:           "gpt-5.6-sol",

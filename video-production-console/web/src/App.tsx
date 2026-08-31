@@ -19,12 +19,8 @@ import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
-import { ConsoleHome } from "./shell/ConsoleHome";
 import {
-  IMAGE_PROJECTS_HREF,
-  SCENIC_BOARD_HREF,
   isShieldedProductionPath,
-  montageKindLabel,
   visibleMontageKind,
 } from "./production-modes/catalog";
 import { useRuntimeQuery } from "./runtime/useRuntimeQuery";
@@ -67,7 +63,7 @@ function writeProjectLocation(
   mode: "push" | "replace",
   preserveQuery = false,
 ) {
-  const pathname = projectID ? `/projects/${projectID}` : "/projects";
+  const pathname = projectID ? `/projects/${projectID}` : "/";
   const params = new URLSearchParams(preserveQuery ? window.location.search : "");
   const kind = new URLSearchParams(window.location.search).get("mode");
   if (kind === "scenic") params.set("mode", kind);
@@ -105,16 +101,13 @@ function App() {
   const route = parseLocation(isShieldedProductionPath(rawPathname) ? "/projects" : rawPathname);
   const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
+  const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project";
   const montageRoute = route.view === "projects" || route.view === "project";
+  const routedProjectID = route.view === "project" ? route.projectID : undefined;
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
-  const [expandedStages, setExpandedStages] = useState<Set<Project["stage"]>>(
-    () => new Set(),
-  );
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
-  const [account, setAccount] = useState("");
-  const [newAccount, setNewAccount] = useState("");
-  const [accountBackground, setAccountBackground] = useState<File | null>(null);
+  const [account] = useState("");
   const [newProject, setNewProject] = useState("");
   const [message, setMessage] = useState("");
   const [selected, setSelected] = useState<Project | null>(null);
@@ -125,7 +118,6 @@ function App() {
   const [previewDraft, setPreviewDraft] = useState("");
   const [reviseOpen, setReviseOpen] = useState(false);
   const [reviseNotes, setReviseNotes] = useState("");
-  const [accountFormOpen, setAccountFormOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
@@ -145,14 +137,10 @@ function App() {
     if (!authenticated) return;
     const url = new URL(window.location.href);
     const pausedPath = isShieldedProductionPath(url.pathname);
-    const root = url.pathname === "/" || url.pathname === "";
     const mode = url.searchParams.get("mode");
     const pausedMode = mode === "movie" || mode === "image-video";
-    if (!pausedPath && !root && !pausedMode) return;
-    const params = new URLSearchParams(url.search);
-    params.set("mode", "scenic");
-    const pathname = pausedPath || root ? "/projects" : url.pathname;
-    navigate(`${pathname}?${params.toString()}`, "replace");
+    if (!pausedPath && !pausedMode) return;
+    navigate("/", "replace");
   }, [authenticated, navigate, urlRevision]);
   const handledURLRevisionRef = useRef(0);
   const selectedIDRef = useRef("");
@@ -189,7 +177,7 @@ function App() {
     [csrf],
   );
   const { accounts, projects, setProjects, loading, failed: consoleDataFailed } =
-    useConsoleData<Account, Project>(api, authenticated === true && montageRoute);
+    useConsoleData<Account, Project>(api, authenticated === true && remixShell);
   const { data: runtime = null } = useRuntimeQuery(
     api,
     authenticated === true && montageRoute,
@@ -205,7 +193,7 @@ function App() {
   );
   const settingsQuery = useQuery({
     queryKey: queryKeys.settings(),
-    enabled: authenticated === true && (montageRoute || imageRoute),
+    enabled: authenticated === true && (remixShell || imageRoute),
     queryFn: ({ signal }) => readSettings(signal),
   });
   const settings = settingsQuery.data ?? null;
@@ -408,6 +396,24 @@ function App() {
     );
   }, [detail, setProjects]);
 
+  // 导入或直接确认的连续文案（项目里没有同行原文）自动接着启动 spoken_lines 任务，
+  // 让「导入成品文案，接着往下走」说到做到；二创路径（有同行原文）仍停在人工确认，
+  // 由操作员点主按钮或一键生成。每个文案版本只自动启动一次。
+  const spokenAutoKeyRef = useRef("");
+  useEffect(() => {
+    if (!montageRoute || !selected || !detail) return;
+    if (detail.project.id !== selected.id) return;
+    if (detail.assets.source_script) return;
+    const continuous = detail.assets.continuous_script;
+    if (continuous?.state !== "ready") return;
+    if (detail.assets.spoken_script?.state === "ready") return;
+    if (tasks.some((task) => task.action === "remix.spoken_lines" && liveTaskStatuses.has(task.status))) return;
+    const key = `${detail.project.id}:${continuous.id}`;
+    if (spokenAutoKeyRef.current === key) return;
+    spokenAutoKeyRef.current = key;
+    void projectActions.startSpokenLinesTask();
+  }, [montageRoute, selected, detail, tasks, projectActions.startSpokenLinesTask]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -541,8 +547,8 @@ function App() {
     if (!authenticated || loading) return;
     const route = parseLocation(window.location.pathname);
     const taskID = new URL(window.location.href).searchParams.get("task") || "";
-    if (route.view === "projects") {
-      if (!["/", "/projects", "/projects/"].includes(window.location.pathname)) {
+    if (route.view === "projects" || (route.view === "remix-lab" && !("experimentID" in route))) {
+      if (route.view === "projects" && !["/", "/projects", "/projects/"].includes(window.location.pathname)) {
         writeProjectLocation("", "replace", Boolean(taskID));
       }
       if (
@@ -752,13 +758,6 @@ function App() {
     setAuthenticated(false);
     setCsrf("");
   };
-  const visible = useMemo(
-    () =>
-      account
-        ? projects.filter((project) => project.account_id === account)
-        : projects,
-    [projects, account],
-  );
   const openTask = (task: Task) => {
     taskOpenIDRef.current = task.id;
     setTaskOpen(task);
@@ -769,15 +768,6 @@ function App() {
     taskOpenIDRef.current = "";
     setTaskOpen(null);
     writeTaskQuery("", "replace");
-  };
-  const openProject = (project: Project) => {
-    if (
-      (selectedIDRef.current && selectedIDRef.current !== project.id) ||
-      (taskOpen && taskOpen.project_id !== project.id)
-    ) closeTask();
-    selectedIDRef.current = project.id;
-    setSelected(project);
-    writeProjectLocation(project.id, "push");
   };
   const closeProject = () => {
     closeTask();
@@ -798,26 +788,6 @@ function App() {
     window.addEventListener("keydown", returnToBoard);
     return () => window.removeEventListener("keydown", returnToBoard);
   }, [clearProjectSelection, preview, selected, settingsOpen, taskOpen]);
-  const createAccount = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!newAccount.trim() || !accountBackground) {
-      setMessage("请输入账号名称并选择固定背景图。");
-      return;
-    }
-    const body = new FormData();
-    body.set("name", newAccount.trim());
-    body.set("background", accountBackground);
-    const response = await api("/api/accounts", { method: "POST", body });
-    if (!response.ok) {
-      setMessage("账号创建失败，请检查名称和背景图。");
-      return;
-    }
-    setNewAccount("");
-    setAccountBackground(null);
-    setAccountFormOpen(false);
-    setMessage("账号已创建。");
-    await client.invalidateQueries({ queryKey: queryKeys.accounts() });
-  };
   const answerTask = async (task: Task, providedAnswer?: string) => {
     const questions = taskQuestions(task);
     const prompt = questions.length
@@ -960,7 +930,6 @@ function App() {
       />
     );
 
-  const modalLayerOpen = Boolean(preview || reviseOpen || settingsOpen || taskOpen);
   const isLoopbackBrowser = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname.toLowerCase(),
   );
@@ -977,14 +946,8 @@ function App() {
         <main className="notice" role="alert">
           <h1>404</h1>
           <p>页面不存在</p>
-          <button type="button" onClick={() => navigate(SCENIC_BOARD_HREF)}>返回风景混剪</button>
+          <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
-      ) : route.view === "remix-lab" ? (
-        <RemixLabPage
-          api={api}
-          experimentID={"experimentID" in route ? route.experimentID : undefined}
-          onNavigate={navigate}
-        />
       ) : imageRoute ? (
         <>
           <header>
@@ -1001,7 +964,7 @@ function App() {
                   <option value="dark">夜间</option>
                 </select>
               </label>
-              <button type="button" className="header-button" onClick={() => navigate(SCENIC_BOARD_HREF)}>风景混剪</button>
+              <button type="button" className="header-button" onClick={() => navigate("/")}>文案创作台</button>
               <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
               <button className="header-button" onClick={() => void logout()}>退出</button>
             </div>
@@ -1022,7 +985,19 @@ function App() {
             onAdvancedMode={() => navigate("/image-projects/advanced")}
           />
         </>
-      ) : selected && detail && detailReady ? (
+      ) : (
+        <RemixLabPage
+          api={api}
+          experimentID={route.view === "remix-lab" && "experimentID" in route ? route.experimentID : undefined}
+          onNavigate={navigate}
+          onOpenSettings={() => void settingsPanel.openDialog()}
+          onLogout={() => void logout()}
+          theme={theme}
+          onThemeChange={setTheme}
+          selectedProjectID={routedProjectID}
+          globalMontageStyle={settings?.public.montage_style}
+          projectView={
+            routedProjectID && selected && detail && detailReady && selected.id === routedProjectID ? (
         <ProjectWorkbench
           detail={detail as WorkbenchProjectDetail}
           tasks={tasks}
@@ -1033,7 +1008,7 @@ function App() {
           onBack={closeProject}
           onDelete={() => void projectActions.deleteProject()}
           mixKind={montageKind}
-          onMix={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
+          onMix={() => projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图生成混剪草稿。")}
           onRemakeMontage={() => void projectActions.startMontageTask("使用当前连续文案、配音、SRT 和固定背景图重新生成混剪草稿。", { remake: true })}
           onPublish={() => void projectActions.publishProject()}
           onUpload={(type, file) => void projectActions.uploadAsset(type, file)}
@@ -1041,12 +1016,14 @@ function App() {
           onImportContinuousScript={(content) => void projectActions.importContinuousScript(content)}
           loadSourceScriptContent={projectActions.loadSourceScriptContent}
           onReviseContinuousScript={openReviseDialog}
-          onStartSpokenLines={() => void projectActions.startSpokenLinesTask()}
-          onStartCaptionKeywords={() => void projectActions.startCaptionKeywordsTask()}
-          onGenerateNarration={() => void projectActions.generateNarration()}
+          onStartSpokenLines={() => projectActions.startSpokenLinesTask()}
+          onStartCaptionKeywords={() => projectActions.startCaptionKeywordsTask()}
+          captionKeywordsDisabled={settings?.public.montage_style?.keywords_hidden === true}
+          onGenerateNarration={() => projectActions.generateNarration()}
           taskModel={projectActions.taskModel}
           onTaskModelChange={(value) => projectActions.setTaskModel(value)}
           taskModelDefaults={settings?.public}
+          runtime={runtime ?? undefined}
           onReplaceBackground={(file) => void projectActions.replaceBackground(file)}
           onViewAsset={(asset) => void openAsset(asset)}
           onOpenTask={(task) => openTask(task as Task)}
@@ -1054,50 +1031,19 @@ function App() {
           onExportVideo={(assetID) => void exportRegisteredVideo(assetID)}
           videoExporting={videoExporting}
         />
-      ) : selected ? (
+      ) : routedProjectID ? (
         <main className="project-workbench project-workbench--loading">
           <button type="button" className="workbench-icon-button" onClick={closeProject} aria-label="返回项目看板">
             <ArrowLeft size={19} aria-hidden="true" />
           </button>
           <div className="empty">
-            <h1>{selected.title}</h1>
+            <h1>{selected?.title || "历史项目"}</h1>
             <p>{detailError || "正在读取当前项目…"}</p>
-            {detailError ? <button type="button" onClick={() => void loadDetail(selected)}>重试读取详情</button> : null}
+            {detailError && selected ? <button type="button" onClick={() => void loadDetail(selected)}>重试读取详情</button> : null}
           </div>
         </main>
-      ) : (
-        <ConsoleHome
-          hidden={modalLayerOpen}
-          theme={theme}
-          onThemeChange={setTheme}
-          onOpenImageProjects={() => navigate(IMAGE_PROJECTS_HREF)}
-          onOpenRemixLab={() => navigate("/remix-lab")}
-          modeTitle={montageKindLabel(montageKind)}
-          runtime={runtime}
-          onOpenSettings={() => void settingsPanel.openDialog()}
-          onLogout={() => void logout()}
-          accounts={accounts}
-          selectedAccountID={account}
-          onSelectAccount={setAccount}
-          accountFormOpen={accountFormOpen}
-          onToggleAccountForm={() => setAccountFormOpen((open) => !open)}
-          onCreateAccount={createAccount}
-          newAccountName={newAccount}
-          onNewAccountNameChange={setNewAccount}
-          accountBackgroundSelected={Boolean(accountBackground)}
-          onAccountBackgroundChange={setAccountBackground}
-          newProject={newProject}
-          onNewProjectChange={setNewProject}
-          onCreateProject={projectActions.createProject}
-          message={message}
-          onDismissMessage={() => setMessage("")}
-          loading={loading}
-          projects={visible}
-          expandedStages={expandedStages}
-          onExpandedStagesChange={setExpandedStages}
-          onOpenProject={openProject}
-          onDeleteProjects={(ids) => void projectActions.deleteProjects(ids)}
-          deletingProjects={projectActions.pendingActions.includes("board:batch-delete")}
+      ) : null
+          }
         />
       )}
       {preview && (

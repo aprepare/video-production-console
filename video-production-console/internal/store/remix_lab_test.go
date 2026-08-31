@@ -1,4 +1,4 @@
-﻿package store
+package store
 
 import (
 	"path/filepath"
@@ -37,6 +37,19 @@ func TestRemixLabRepositoryRoundTrip(t *testing.T) {
 	raw, err := repo.GetPresetJSON(t.Context())
 	if err != nil || raw != `{"slots":[]}` {
 		t.Fatalf("preset=%q err=%v", raw, err)
+	}
+	if err := repo.DeleteExperiment(t.Context(), exp.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := repo.GetExperiment(t.Context(), exp.ID); err != ErrRemixLabNotFound {
+		t.Fatalf("get after delete err=%v", err)
+	}
+	if err := repo.DeleteExperiment(t.Context(), exp.ID); err != ErrRemixLabNotFound {
+		t.Fatalf("second delete err=%v", err)
+	}
+	list, err = repo.ListExperiments(t.Context())
+	if err != nil || len(list) != 0 {
+		t.Fatalf("list after delete=%v err=%v", list, err)
 	}
 }
 

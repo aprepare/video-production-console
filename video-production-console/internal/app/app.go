@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,7 @@ import (
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/remixlab"
+	"video-production-console/internal/remixproducer"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
@@ -45,6 +47,9 @@ func (a remixLabRuntimeAdapter) Runtime(ctx context.Context) (remixlab.RuntimeVi
 		RemixReasoningEffort: rt.RemixReasoningEffort,
 		RemixAPIKey:          rt.RemixAPIKey,
 		DataRoot:             rt.DataRoot,
+		GrokBaseURL:          rt.GrokBaseURL,
+		GrokModel:            rt.GrokModel,
+		GrokAPIKey:           rt.GrokAPIKey,
 	}, nil
 }
 
@@ -80,16 +85,29 @@ type Options struct {
 	// Restart spawns a replacement console process and schedules a graceful
 	// shutdown of this one. Nil disables POST /api/system/restart.
 	Restart func() error
+	// InternalToken 是本进程服务间调用的旁路令牌（生产驱动器回环调用自身
+	// API 时携带 X-Internal-Token）。空则不启用旁路。
+	InternalToken string
 }
 
 // App is the HTTP application.
 type App struct {
 	handler http.Handler
 	close   func()
+	// resumeProductions 重启后续跑生产段（监听起来后调用）。
+	resumeProductions func()
+}
+
+// ResumeProductions 在 HTTP 监听就绪后调用：把重启前进行到一半的生产接着跑。
+func (a *App) ResumeProductions() {
+	if a.resumeProductions != nil {
+		a.resumeProductions()
+	}
 }
 
 // New constructs the application and its routes.
 func New(options Options) *App {
+	var resumeProductions func()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
@@ -181,6 +199,12 @@ func New(options Options) *App {
 			if err := remixLabSvc.FailStale(context.Background()); err != nil {
 				slog.Error("remix lab stale runs", "error", err)
 			}
+			// 生产驱动器：确认闸门放行后回环调用自身 API 串起混剪链路。
+			if options.InternalToken != "" {
+				producer := remixproducer.New(store.NewRemixLabRepository(options.DB), options.Config.ListenAddr, options.InternalToken)
+				remixLabSvc.SetProducer(producer)
+				resumeProductions = producer.ResumeAll
+			}
 			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo))
 		}
 
@@ -230,11 +254,12 @@ func New(options Options) *App {
 	})
 	mux.Handle("/", webui.Handler())
 	if options.AuthService == nil {
-		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser)}
+		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions}
 	}
 	authHandler := httpapi.NewAuthHandler(options.AuthService)
 	mux.Handle("/api/auth/", authHandler)
 	protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
+	internalToken := options.InternalToken
 	return &App{handler: logging.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Health and login must remain reachable before a browser has a session.
 		// The auth handler applies its own protection to all remaining auth routes.
@@ -242,8 +267,23 @@ func New(options Options) *App {
 			mux.ServeHTTP(w, r)
 			return
 		}
+		// 本进程服务间旁路：仅回环地址 + 每次启动随机生成的令牌，供生产
+		// 驱动器调用自身 API；不开放给外部请求。
+		if internalToken != "" && r.Header.Get("X-Internal-Token") == internalToken && isLoopbackRemote(r.RemoteAddr) {
+			mux.ServeHTTP(w, r)
+			return
+		}
 		protected.ServeHTTP(w, r)
-	})), close: closeImageVideo(options.ImageVideoCloser)}
+	})), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions}
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func closeImageVideo(closer interface{ Close() }) func() {

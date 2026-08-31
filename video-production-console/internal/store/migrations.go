@@ -1218,6 +1218,40 @@ CREATE TABLE remix_lab_runs (
     UNIQUE (slot_id, run_index)
 );
 CREATE INDEX remix_lab_runs_experiment_idx ON remix_lab_runs(experiment_id, slot_id, run_index);`,
+	`ALTER TABLE remix_lab_runs ADD COLUMN prompt_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE remix_lab_runs ADD COLUMN prompt_stamp TEXT NOT NULL DEFAULT '';
+ALTER TABLE remix_lab_runs ADD COLUMN prompt_name TEXT NOT NULL DEFAULT '';`,
+	// 账号级制作差异化配置（混剪样式、配音音色）；空字符串表示跟随全局设置。
+	`ALTER TABLE accounts ADD COLUMN overrides TEXT NOT NULL DEFAULT '';`,
+	// 实验室槽位的管线模式：'' = 单模型写手；'multi_agent' = 三路情报agent+写手。
+	`ALTER TABLE remix_lab_slots ADD COLUMN pipeline TEXT NOT NULL DEFAULT '';`,
+	// 文案创作台：run 携带完整发布包（可编辑）与审稿双版本产物。
+	// package_json = 当前定稿的写手 JSON；draft_v1_json = 写手初稿；review_json = 最近一轮审稿结论。
+	`ALTER TABLE remix_lab_runs ADD COLUMN package_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE remix_lab_runs ADD COLUMN draft_v1_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE remix_lab_runs ADD COLUMN review_json TEXT NOT NULL DEFAULT '';`,
+	// 工作流实验：开跑时把当时的工作流图快照存进实验，历史运行可追溯。
+	`ALTER TABLE remix_lab_experiments ADD COLUMN workflow_json TEXT NOT NULL DEFAULT '';`,
+	// 生产段（确认闸门→建项目→口播→配音→混剪）：实验记录开跑时选的账号和
+	// 全自动开关；每个 run 一行生产状态，驱动器按步推进、重启后续跑。
+	`ALTER TABLE remix_lab_experiments ADD COLUMN produce_account_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE remix_lab_experiments ADD COLUMN produce_auto INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE remix_lab_productions (
+    run_id TEXT PRIMARY KEY REFERENCES remix_lab_runs(id) ON DELETE CASCADE,
+    experiment_id TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT '',
+    auto INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('waiting_confirm', 'running', 'completed', 'failed')),
+    step TEXT NOT NULL,
+    project_id TEXT NOT NULL DEFAULT '',
+    spoken_task_id TEXT NOT NULL DEFAULT '',
+    caption_task_id TEXT NOT NULL DEFAULT '',
+    montage_task_id TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX remix_lab_productions_experiment_idx ON remix_lab_productions(experiment_id);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

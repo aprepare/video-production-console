@@ -20,15 +20,37 @@ type Options struct {
 	ReasoningEffort   string
 	// CheckModel is ignored on rewrite. copy / rewrite_sharp still use it
 	// for the post-draft quality check and repair pass.
-	CheckModel  string
-	BaseURL     string
-	APIKey      string
-	CopyBaseURL string
-	CopyAPIKey  string
-	MaxSteps    int
+	CheckModel   string
+	BaseURL      string
+	APIKey       string
+	CopyBaseURL  string
+	CopyAPIKey   string
+	MaxSteps     int
 	PythonBinary string
-	Client      ChatClient
-	CopyClient  CopyClient
+	Client       ChatClient
+	CopyClient   CopyClient
+	// Pipeline 为 PipelineMultiAgent 时，写手动笔前先跑三路并行情报agent
+	// （钩子指纹/事实核查/意象弹药），产出注入写手上下文。仅 rewrite 生效。
+	Pipeline string
+	// ReviewerEnabled 打开后，写手成稿通过机械自检即交给审稿agent终审：
+	// 只修违规处并留 draft_v1.json / review.json 双版本产物。仅 rewrite 生效。
+	ReviewerEnabled bool
+	// 各路agent系统提示词的覆盖文本；为空用内置默认。由创作台的
+	// 「Agent提示词」编辑器提供，让操作员不改代码就能调agent行为。
+	HookSystemPrompt         string
+	FactsSearchSystemPrompt  string
+	FactsOfflineSystemPrompt string
+	AmmoSystemPrompt         string
+	ReviewerSystemPrompt     string
+	// WorkflowJSON 非空时按工作流快照执行（节点图驱动情报agent与审稿），
+	// 优先于 Pipeline/ReviewerEnabled 的固定管线开关。仅 rewrite 生效。
+	WorkflowJSON string
+	// Search* 是事实核查agent用的联网搜索通道（OpenAI 兼容端点，如 Grok）。
+	// 未配置时事实agent降级为离线盘点，不编造新数据。
+	SearchBaseURL string
+	SearchAPIKey  string
+	SearchModel   string
+	SearchClient  ChatClient
 }
 
 type manifestLite struct {
@@ -42,8 +64,11 @@ type manifestLite struct {
 		Path string `json:"path"`
 	} `json:"inputs"`
 	NonSecretSettings struct {
-		RevisionNotes    string `json:"revision_notes"`
-		RemixPromptStyle string `json:"remix_prompt_style"`
+		RevisionNotes     string `json:"revision_notes"`
+		RemixPromptStyle  string `json:"remix_prompt_style"`
+		RemixSystemPrompt string `json:"remix_system_prompt"`
+		RemixUserPrompt   string `json:"remix_user_prompt"`
+		RemixPromptStamp  string `json:"remix_prompt_stamp"`
 	} `json:"non_secret_settings"`
 }
 
@@ -61,10 +86,6 @@ const (
 	//   copy          = 口播copy整理（先打 hooks/scripts）
 	RewritePromptStamp = RewritePromptStampStable
 )
-
-func skipRemixQuality(style string) bool {
-	return style == PromptStyleRewrite
-}
 
 func NormalizePromptStyle(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -143,8 +164,18 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, err)
 	}
 	stamp := promptStamp(style)
+	if override := strings.TrimSpace(manifest.NonSecretSettings.RemixPromptStamp); override != "" {
+		stamp = override
+	}
 	var system, user string
-	if style == PromptStyleCopy {
+	if override := strings.TrimSpace(manifest.NonSecretSettings.RemixSystemPrompt); override != "" {
+		system = override
+		if tmpl := strings.TrimSpace(manifest.NonSecretSettings.RemixUserPrompt); tmpl != "" {
+			user = renderWriterUserTemplate(tmpl, source, manifest.NonSecretSettings.RevisionNotes)
+		} else {
+			user = buildWriterUser(style, manifest, source)
+		}
+	} else if style == PromptStyleCopy {
 		copyClient := opts.CopyClient
 		if copyClient == nil {
 			copyClient = &HTTPCopyClient{BaseURL: strings.TrimSpace(opts.CopyBaseURL), APIKey: strings.TrimSpace(opts.CopyAPIKey)}
@@ -160,16 +191,30 @@ func Run(opts Options) error {
 		system = buildWriterPrompt(style)
 		user = buildWriterUser(style, manifest, source)
 	}
-	captureWriterPrompts(manifest.OutputDir, system, user)
-	appendRemixRunLog(manifest.OutputDir, map[string]any{
-		"event": "prompt_selected", "prompt_style": style, "prompt_stamp": stamp,
-		"system_bytes": len(system), "user_bytes": len(user),
-	})
-
 	client := opts.Client
 	if client == nil {
 		client = &HTTPChatClient{BaseURL: baseURL, APIKey: apiKey}
 	}
+	pipeline := strings.ToLower(strings.TrimSpace(opts.Pipeline))
+	spec, hasSpec := parseFlowSpec(opts.WorkflowJSON)
+	if style == PromptStyleRewrite {
+		if hasSpec {
+			// 工作流快照驱动：agent 节点按图分波并行，输出按连线注入写手。
+			if intel := runFlowAgents(client, opts, source, manifest.OutputDir, spec); intel != "" {
+				user = injectIntel(user, intel)
+			}
+		} else if pipeline == PipelineMultiAgent {
+			if intel := runIntelPhase(client, opts, source, manifest.OutputDir); intel != "" {
+				user = injectIntel(user, intel)
+			}
+		}
+	}
+	captureWriterPrompts(manifest.OutputDir, system, user)
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "prompt_selected", "prompt_style": style, "prompt_stamp": stamp,
+		"pipeline": pipeline, "system_bytes": len(system), "user_bytes": len(user),
+	})
+
 	resp, err := client.Chat(ChatRequest{
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
@@ -195,30 +240,75 @@ func Run(opts Options) error {
 		checkWarnings []string
 		checkNote     string
 	)
-	if skipRemixQuality(style) {
-		checkNote = "rewrite 路径已关闭质检，交付写稿模型原始输出。"
-		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "quality_skipped", "prompt_style": style, "prompt_stamp": stamp, "note": checkNote,
-		})
+	var repairErr error
+	if style == PromptStyleRewrite {
+		// rewrite（进化台采用的提示词走这条）：10 字连抄 + 篇幅自检，超标回传撞车片段返工。
+		// 工作流快照的机械自检节点可覆盖阈值。
+		limits := defaultSelfCheckLimits()
+		if hasSpec {
+			if node := spec.selfcheckNode(); node != nil {
+				limits = applyFlowSelfCheckLimits(limits, node.Config)
+			}
+		}
+		content, checkWarnings, checkNote, repairErr = selfCheckRemixRewrite(client, model, strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply, manifest.OutputDir, limits)
 	} else {
-		var repairErr error
 		content, checkWarnings, checkNote, repairErr = repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
-		if repairErr != nil {
-			appendRemixRunLog(manifest.OutputDir, map[string]any{
-				"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
-				"error": repairErr.Error(), "note": checkNote, "warnings": checkWarnings,
-			})
-			if strings.TrimSpace(content) != "" && content != rawReply {
-				if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
-					_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
+	}
+	if repairErr != nil {
+		appendRemixRunLog(manifest.OutputDir, map[string]any{
+			"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
+			"error": repairErr.Error(), "note": checkNote, "warnings": checkWarnings,
+		})
+		if strings.TrimSpace(content) != "" && content != rawReply {
+			if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
+				_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
+			}
+		}
+		return writeFailure(outPath, manifestPath, repairErr)
+	}
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
+		"note": checkNote, "warnings": checkWarnings,
+	})
+	if style == PromptStyleRewrite {
+		// 审稿agent首轮：机械自检过闸后终审规范清单，只修违规处。
+		// 工作流快照存在时由快照决定审稿节点有无与提示词；否则看固定开关。
+		// 审稿失败不拦交付，结论记在 review.json 供界面展示。
+		runReview := false
+		reviewerPrompt := opts.ReviewerSystemPrompt
+		reviewerModel := model
+		reviewerEffort := strings.TrimSpace(opts.ReasoningEffort)
+		if hasSpec {
+			if node := spec.reviewer(); node != nil {
+				runReview = true
+				if prompt := strings.TrimSpace(node.Config.SystemPrompt); prompt != "" {
+					reviewerPrompt = prompt
+				}
+				if m := strings.TrimSpace(node.Config.Model); m != "" {
+					reviewerModel = m
+				}
+				if e := strings.TrimSpace(node.Config.ReasoningEffort); e != "" {
+					reviewerEffort = e
 				}
 			}
-			return writeFailure(outPath, manifestPath, repairErr)
+		} else {
+			runReview = opts.ReviewerEnabled
 		}
-		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
-			"note": checkNote, "warnings": checkWarnings,
-		})
+		if runReview {
+			outcome := ReviewRemixDraft(ReviewOptions{
+				Client:          client,
+				Model:           reviewerModel,
+				ReasoningEffort: reviewerEffort,
+				SystemPrompt:    reviewerPrompt,
+				Source:          source,
+				DraftJSON:       content,
+				OutputDir:       manifest.OutputDir,
+				Round:           1,
+			})
+			if outcome.RevisedJSON != "" {
+				content = outcome.RevisedJSON
+			}
+		}
 	}
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
@@ -378,7 +468,7 @@ func writerJSONContract() string {
 	return "只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。\n" +
 		"continuous_script 必须是完整连续口播正文。\n" +
 		"titles、short_titles、descriptions 必须从这篇口播长出来，讲的是同一件事。禁止拿别的成稿标题来凑数，也不要用提示词里没有出现在原文里的情节做标题。\n" +
-		"titles 8到12条。short_titles 恰好5条、每条最多15个字、不要#。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。三条描述末尾都带这同一组标签，topics 也只用这组，不要自造其他#。cta 必须留空字符串。发布文案不要写课程名、主页橱窗、上车、推广期、几块钱。口播正文仍可按硬性保留收口到课程，但 titles / short_titles / descriptions / cta 一律不写推广。\n"
+		"titles 8到12条。short_titles 恰好3条、每条最多15个字、不要#：第1条当视频板面主标题、第2条当副标题、第3条备选。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。topics 4到5个带#的话题：第1个用大流量池标签（#财经 #经济 这类），其余贴这条视频的垂直内容（如 #楼市 #房贷 #家庭理财 #存钱），贴内容比蹭热门重要。三条描述末尾都带这同一组话题标签。cta 必须留空字符串。发布文案不要写课程名、主页橱窗、上车、推广期、几块钱。口播正文仍可按硬性保留收口到课程，但 titles / short_titles / descriptions / cta 一律不写推广。\n"
 }
 
 func buildAssemblePrompt() string {
@@ -413,6 +503,16 @@ func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) str
 	b.WriteString("\n\n# 同行原文（只作核对，不当逐句模板）\n")
 	b.WriteString(source)
 	return b.String()
+}
+
+func renderWriterUserTemplate(tmpl, source, notes string) string {
+	out := strings.ReplaceAll(tmpl, "{{SOURCE}}", source)
+	if strings.TrimSpace(notes) != "" {
+		out = strings.ReplaceAll(out, "{{NOTES}}", "修改要求：\n"+notes+"\n")
+	} else {
+		out = strings.ReplaceAll(out, "{{NOTES}}", "")
+	}
+	return out
 }
 
 func stripBOM(raw []byte) []byte {

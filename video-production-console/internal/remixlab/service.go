@@ -21,7 +21,9 @@ import (
 var (
 	ErrInvalidSource    = errors.New("source must be 1 to 20000 characters")
 	ErrInvalidSlots     = errors.New("slots must be 1 to 4")
+	ErrInvalidPrompts   = errors.New("prompt_ids must be 1 to 6 known prompts")
 	ErrInvalidRunCount  = errors.New("run_count must be 1 to 3")
+	ErrInvalidPipeline  = errors.New("pipeline must be empty, single, or multi_agent")
 	ErrMissingModel     = errors.New("model is required")
 	ErrMissingAPIKey    = errors.New("remix api key is not configured")
 	ErrInvalidComment   = errors.New("comment must be at most 2000 characters")
@@ -34,17 +36,19 @@ type presetFile struct {
 }
 
 type presetSlot struct {
-	BaseURL           string `json:"base_url"`
-	Model             string `json:"model"`
-	ReasoningEffort   string `json:"reasoning_effort"`
-	RunCount          int    `json:"run_count"`
-	APIKeyCiphertext  string `json:"api_key_ciphertext"`
+	BaseURL          string `json:"base_url"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	Pipeline         string `json:"pipeline,omitempty"`
+	RunCount         int    `json:"run_count"`
+	APIKeyCiphertext string `json:"api_key_ciphertext"`
 }
 
 type resolvedSlot struct {
 	BaseURL          string
 	Model            string
 	ReasoningEffort  string
+	Pipeline         string
 	RunCount         int
 	APIKeyCiphertext string
 	KeyConfigured    bool
@@ -138,6 +142,7 @@ func (s *Service) Defaults(ctx context.Context) (DefaultsView, error) {
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
+			Pipeline:         slot.Pipeline,
 			RunCount:         runCount,
 			APIKeyConfigured: strings.TrimSpace(slot.APIKeyCiphertext) != "",
 			PresetIndex:      i,
@@ -146,13 +151,52 @@ func (s *Service) Defaults(ctx context.Context) (DefaultsView, error) {
 	return view, nil
 }
 
+func (s *Service) resolvePromptIDs(ids []string) ([]PromptTemplate, error) {
+	if len(ids) == 0 {
+		ids = []string{"elder_stable"}
+	}
+	if len(ids) > 6 {
+		return nil, ErrInvalidPrompts
+	}
+	lib := Store{DataRoot: s.dataRoot}
+	out := make([]PromptTemplate, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		p, ok, err := lib.GetPrompt(id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrInvalidPrompts
+		}
+		seen[id] = true
+		out = append(out, p)
+	}
+	if len(out) < 1 {
+		return nil, ErrInvalidPrompts
+	}
+	return out, nil
+}
+
 func (s *Service) CreateExperiment(ctx context.Context, source string, slots []SlotInput) (Experiment, error) {
+	return s.CreateExperimentWithPrompts(ctx, source, slots, nil)
+}
+
+func (s *Service) CreateExperimentWithPrompts(ctx context.Context, source string, slots []SlotInput, promptIDs []string) (Experiment, error) {
 	n := utf8.RuneCountInString(source)
 	if n < 1 || n > 20000 {
 		return Experiment{}, ErrInvalidSource
 	}
 	if len(slots) < 1 || len(slots) > 4 {
 		return Experiment{}, ErrInvalidSlots
+	}
+	prompts, err := s.resolvePromptIDs(promptIDs)
+	if err != nil {
+		return Experiment{}, err
 	}
 
 	rt, err := s.runtime.Runtime(ctx)
@@ -177,7 +221,7 @@ func (s *Service) CreateExperiment(ctx context.Context, source string, slots []S
 	now := s.now()
 	expID := uuid.NewString()
 	title := experimentTitle(source, now)
-	stamp := openaicompat.RewritePromptStampStable
+	stamp := experimentStamp(prompts)
 
 	expRec := store.RemixLabExperimentRecord{
 		ID:          expID,
@@ -203,6 +247,7 @@ func (s *Service) CreateExperiment(ctx context.Context, source string, slots []S
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
+			Pipeline:         slot.Pipeline,
 			RunCount:         slot.RunCount,
 			APIKeyCiphertext: slot.APIKeyCiphertext,
 		})
@@ -214,25 +259,36 @@ func (s *Service) CreateExperiment(ctx context.Context, source string, slots []S
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
+			Pipeline:         slot.Pipeline,
 			RunCount:         slot.RunCount,
 			APIKeyConfigured: slot.KeyConfigured,
 		})
-		for runIndex := 1; runIndex <= slot.RunCount; runIndex++ {
-			runID := uuid.NewString()
-			runRecs = append(runRecs, store.RemixLabRunRecord{
-				ID:           runID,
-				ExperimentID: expID,
-				SlotID:       slotID,
-				RunIndex:     runIndex,
-				Status:       "queued",
-			})
-			runViews = append(runViews, RunView{
-				ID:           runID,
-				ExperimentID: expID,
-				SlotID:       slotID,
-				RunIndex:     runIndex,
-				Status:       "queued",
-			})
+		seq := 0
+		for _, prompt := range prompts {
+			for range slot.RunCount {
+				seq++
+				runID := uuid.NewString()
+				runRecs = append(runRecs, store.RemixLabRunRecord{
+					ID:           runID,
+					ExperimentID: expID,
+					SlotID:       slotID,
+					RunIndex:     seq,
+					Status:       "queued",
+					PromptID:     prompt.ID,
+					PromptStamp:  prompt.Stamp,
+					PromptName:   prompt.Name,
+				})
+				runViews = append(runViews, RunView{
+					ID:           runID,
+					ExperimentID: expID,
+					SlotID:       slotID,
+					RunIndex:     seq,
+					Status:       "queued",
+					PromptID:     prompt.ID,
+					PromptStamp:  prompt.Stamp,
+					PromptName:   prompt.Name,
+				})
+			}
 		}
 	}
 
@@ -258,6 +314,18 @@ func (s *Service) CreateExperiment(ctx context.Context, source string, slots []S
 	}, nil
 }
 
+// normalizePipeline 校验槽位管线取值："" 与 "single" 都归一为单模型。
+func normalizePipeline(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "single":
+		return "", nil
+	case openaicompat.PipelineMultiAgent:
+		return openaicompat.PipelineMultiAgent, nil
+	default:
+		return "", ErrInvalidPipeline
+	}
+}
+
 func (s *Service) resolveSlot(in SlotInput, rt RuntimeView, preset presetFile) (resolvedSlot, error) {
 	model := strings.TrimSpace(in.Model)
 	if model == "" {
@@ -275,11 +343,16 @@ func (s *Service) resolveSlot(in SlotInput, rt RuntimeView, preset presetFile) (
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(rt.RemixBaseURL)
 	}
+	pipeline, err := normalizePipeline(in.Pipeline)
+	if err != nil {
+		return resolvedSlot{}, err
+	}
 
 	out := resolvedSlot{
 		BaseURL:         baseURL,
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(in.ReasoningEffort),
+		Pipeline:        pipeline,
 		RunCount:        runCount,
 	}
 
@@ -313,6 +386,80 @@ func (s *Service) resolveSlot(in SlotInput, rt RuntimeView, preset presetFile) (
 	return out, nil
 }
 
+// SavePresets 把弹窗里的槽位草稿直接持久化为预设（点「完成」即保存），
+// 不要求配置 API Key——预设可以留空，跑实验时回落全局 remix key。
+func (s *Service) SavePresets(ctx context.Context, slots []SlotInput) (DefaultsView, error) {
+	if len(slots) < 1 || len(slots) > 4 {
+		return DefaultsView{}, ErrInvalidSlots
+	}
+	rt, err := s.runtime.Runtime(ctx)
+	if err != nil {
+		return DefaultsView{}, err
+	}
+	preset, err := s.loadPreset(ctx)
+	if err != nil {
+		return DefaultsView{}, err
+	}
+	resolved := make([]resolvedSlot, 0, len(slots))
+	for _, in := range slots {
+		slot, err := s.resolvePresetSlot(in, rt, preset)
+		if err != nil {
+			return DefaultsView{}, err
+		}
+		resolved = append(resolved, slot)
+	}
+	if err := s.savePreset(ctx, resolved); err != nil {
+		return DefaultsView{}, err
+	}
+	return s.Defaults(ctx)
+}
+
+// resolvePresetSlot 与 resolveSlot 的差别只有一处：不强制要有 API Key。
+func (s *Service) resolvePresetSlot(in SlotInput, rt RuntimeView, preset presetFile) (resolvedSlot, error) {
+	model := strings.TrimSpace(in.Model)
+	if model == "" {
+		return resolvedSlot{}, ErrMissingModel
+	}
+	runCount := in.RunCount
+	if runCount == 0 {
+		runCount = 1
+	}
+	if runCount < 1 || runCount > 3 {
+		return resolvedSlot{}, ErrInvalidRunCount
+	}
+	baseURL := strings.TrimSpace(in.BaseURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(rt.RemixBaseURL)
+	}
+	pipeline, err := normalizePipeline(in.Pipeline)
+	if err != nil {
+		return resolvedSlot{}, err
+	}
+	out := resolvedSlot{
+		BaseURL:         baseURL,
+		Model:           model,
+		ReasoningEffort: strings.TrimSpace(in.ReasoningEffort),
+		Pipeline:        pipeline,
+		RunCount:        runCount,
+	}
+	apiKey := strings.TrimSpace(in.APIKey)
+	switch {
+	case apiKey != "":
+		cipher, err := s.protector.Protect([]byte(apiKey))
+		if err != nil {
+			return resolvedSlot{}, err
+		}
+		out.APIKeyCiphertext = base64.StdEncoding.EncodeToString(cipher)
+	case in.PresetIndex != nil:
+		idx := *in.PresetIndex
+		if idx >= 0 && idx < len(preset.Slots) {
+			out.APIKeyCiphertext = preset.Slots[idx].APIKeyCiphertext
+		}
+	}
+	out.KeyConfigured = strings.TrimSpace(out.APIKeyCiphertext) != "" || strings.TrimSpace(rt.RemixAPIKey) != ""
+	return out, nil
+}
+
 func (s *Service) loadPreset(ctx context.Context) (presetFile, error) {
 	raw, err := s.repo.GetPresetJSON(ctx)
 	if err != nil {
@@ -338,6 +485,7 @@ func (s *Service) savePreset(ctx context.Context, slots []resolvedSlot) error {
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
+			Pipeline:         slot.Pipeline,
 			RunCount:         slot.RunCount,
 			APIKeyCiphertext: slot.APIKeyCiphertext,
 		})
@@ -350,6 +498,16 @@ func (s *Service) savePreset(ctx context.Context, slots []resolvedSlot) error {
 		return s.putPresetJSON(ctx, string(raw))
 	}
 	return s.repo.PutPresetJSON(ctx, string(raw))
+}
+
+func experimentStamp(prompts []PromptTemplate) string {
+	if len(prompts) == 1 && strings.TrimSpace(prompts[0].Stamp) != "" {
+		return prompts[0].Stamp
+	}
+	if len(prompts) > 1 {
+		return "交叉试验"
+	}
+	return openaicompat.RewritePromptStampStable
 }
 
 func experimentTitle(source string, now time.Time) string {

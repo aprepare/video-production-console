@@ -29,6 +29,11 @@ func Handler() http.Handler {
 			return
 		}
 		if _, err := fs.Stat(dist, path); err == nil {
+			// 构建产物文件名带内容哈希，可放心长缓存；换版本时
+			// index.html 引用的哈希会变，旧文件自然失效。
+			if strings.HasPrefix(path, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			assets.ServeHTTP(w, r)
 			return
 		}
@@ -44,6 +49,9 @@ func serveIndex(w http.ResponseWriter, dist fs.FS) {
 		http.Error(w, "web console unavailable", http.StatusInternalServerError)
 		return
 	}
+	// index.html 不带哈希：禁止浏览器启发式缓存，否则换版本后
+	// 用户会一直看到旧页面（嵌入文件没有修改时间，浏览器只能瞎猜）。
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(page)
 }

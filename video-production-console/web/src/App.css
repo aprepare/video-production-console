@@ -1523,6 +1523,23 @@ summary:focus-visible,
   line-height: 1.45;
 }
 
+.settings-remix-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--ds-border);
+  border-radius: 12px;
+  background: var(--paper-warm);
+}
+
+.settings-remix-prompt strong {
+  color: var(--ds-text);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
 .montage-style-preview {
   grid-column: 1 / -1;
 }

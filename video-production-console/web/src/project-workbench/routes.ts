@@ -13,7 +13,7 @@ export type AppLocation =
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseLocation(pathname: string): AppLocation {
-  if (pathname === "/") return { view: "projects" };
+  if (pathname === "/") return { view: "remix-lab" };
   if (pathname === "/image-projects" || pathname === "/image-projects/") {
     return { view: "image-projects" };
   }

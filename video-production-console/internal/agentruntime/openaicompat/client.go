@@ -51,6 +51,7 @@ type ChatRequest struct {
 	Tools           []ToolSpec `json:"tools,omitempty"`
 	Stream          bool       `json:"stream,omitempty"`
 	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
+	MaxTokens       int        `json:"max_tokens,omitempty"`
 }
 
 type ChatResponse struct {
@@ -91,7 +92,7 @@ func chatCompletionsURL(base string) (string, error) {
 }
 
 func http2Client() *http.Client {
-	return &http.Client{Timeout: 10 * time.Minute}
+	return &http.Client{Timeout: 15 * time.Minute}
 }
 
 func http1Client() *http.Client {
@@ -104,7 +105,7 @@ func http1Client() *http.Client {
 		cfg.NextProtos = []string{"http/1.1"}
 	}
 	transport.TLSClientConfig = cfg
-	return &http.Client{Timeout: 10 * time.Minute, Transport: transport}
+	return &http.Client{Timeout: 15 * time.Minute, Transport: transport}
 }
 
 func isHTTPProtocolError(err error) bool {
@@ -164,11 +165,100 @@ func (c *HTTPChatClient) do(httpClient *http.Client, req ChatRequest) (ChatRespo
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	var decoded ChatResponse
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	return decodeChatResponse(raw)
+}
+
+type wireChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Role             string          `json:"role"`
+			Content          json.RawMessage `json:"content"`
+			ReasoningContent json.RawMessage `json:"reasoning_content"`
+			Reasoning        json.RawMessage `json:"reasoning"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+func decodeChatResponse(raw []byte) (ChatResponse, error) {
+	trimmed := bytes.TrimSpace(bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}))
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		text, err := readSSEContent(bytes.NewReader(trimmed))
+		if err == nil && strings.TrimSpace(text) != "" {
+			return textResponse(text), nil
+		}
+	}
+	var wire wireChatResponse
+	if err := json.Unmarshal(trimmed, &wire); err != nil {
 		return ChatResponse{}, fmt.Errorf("decode chat response: %w", err)
 	}
-	return decoded, nil
+	for _, choice := range wire.Choices {
+		text := extractChatText(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.Reasoning)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		return textResponse(text), nil
+	}
+	if len(wire.Choices) == 0 {
+		return ChatResponse{}, nil
+	}
+	return textResponse(""), nil
+}
+
+func extractChatText(fields ...json.RawMessage) string {
+	for _, field := range fields {
+		if text := decodeContentField(field); strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func decodeContentField(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return text
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(trimmed, &parts); err == nil {
+		var texts, extras strings.Builder
+		for _, part := range parts {
+			if piece := stringField(part, "text"); piece != "" {
+				texts.WriteString(piece)
+				continue
+			}
+			if piece := stringField(part, "thinking", "reasoning", "content", "summary"); piece != "" {
+				extras.WriteString(piece)
+			}
+		}
+		if texts.Len() > 0 {
+			return texts.String()
+		}
+		return extras.String()
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(trimmed, &obj); err == nil {
+		return stringField(obj, "text", "content", "summary", "thinking", "reasoning")
+	}
+	return ""
+}
+
+func stringField(obj map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := obj[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			if strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func readSSEContent(r io.Reader) (string, error) {
@@ -191,10 +281,12 @@ func readSSEContent(r io.Reader) (string, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 				Message struct {
-					Content string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
 				} `json:"message"`
 			} `json:"choices"`
 		}
@@ -206,9 +298,13 @@ func readSSEContent(r io.Reader) (string, error) {
 		}
 		if delta := chunk.Choices[0].Delta.Content; delta != "" {
 			content.WriteString(delta)
+		} else if reason := chunk.Choices[0].Delta.ReasoningContent; reason != "" && content.Len() == 0 {
+			content.WriteString(reason)
 		}
 		if msg := chunk.Choices[0].Message.Content; msg != "" {
 			lastMessage = msg
+		} else if reason := chunk.Choices[0].Message.ReasoningContent; reason != "" {
+			lastMessage = reason
 		}
 	}
 	if err := scanner.Err(); err != nil {

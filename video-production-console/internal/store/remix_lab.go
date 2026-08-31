@@ -14,19 +14,30 @@ var ErrRemixLabNotFound = errors.New("remix lab record not found")
 
 type RemixLabExperimentRecord struct {
 	ID, Title, SourceText, PromptStamp, Status string
-	CreatedAt, UpdatedAt                       time.Time
+	// WorkflowJSON 非空 = 工作流实验：执行按该快照的节点图走。
+	WorkflowJSON string
+	// ProduceAccountID/ProduceAuto：开跑时选的生产账号与全自动开关。
+	ProduceAccountID     string
+	ProduceAuto          bool
+	CreatedAt, UpdatedAt time.Time
 }
 
 type RemixLabSlotRecord struct {
 	ID, ExperimentID, Label, BaseURL, Model, ReasoningEffort, APIKeyCiphertext string
-	SortIndex, RunCount                                                         int
+	// Pipeline 为空走单模型写手；"multi_agent" 先跑三路情报agent再写。
+	Pipeline            string
+	SortIndex, RunCount int
 }
 
 type RemixLabRunRecord struct {
 	ID, ExperimentID, SlotID, Status, ContinuousScript, TitlesJSON string
 	ErrorMessage, Comment, OutputDir, AdoptedProjectID             string
-	RunIndex                                                       int
-	StartedAt, FinishedAt                                          *time.Time
+	PromptID, PromptStamp, PromptName                              string
+	// PackageJSON 当前定稿的完整写手 JSON（含正文与发布字段，可被操作员编辑覆盖）；
+	// DraftV1JSON 写手初稿留档；ReviewJSON 最近一轮审稿结论。
+	PackageJSON, DraftV1JSON, ReviewJSON string
+	RunIndex                             int
+	StartedAt, FinishedAt                *time.Time
 }
 
 type RemixLabRepository struct {
@@ -45,17 +56,17 @@ func (r *RemixLabRepository) CreateExperiment(ctx context.Context, exp RemixLabE
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO remix_lab_experiments(id, title, source_text, prompt_stamp, status, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?)`,
-		exp.ID, exp.Title, exp.SourceText, exp.PromptStamp, exp.Status, exp.CreatedAt, exp.UpdatedAt,
+		INSERT INTO remix_lab_experiments(id, title, source_text, prompt_stamp, status, workflow_json, produce_account_id, produce_auto, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		exp.ID, exp.Title, exp.SourceText, exp.PromptStamp, exp.Status, exp.WorkflowJSON, exp.ProduceAccountID, exp.ProduceAuto, exp.CreatedAt, exp.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("insert remix lab experiment: %w", err)
 	}
 	for _, slot := range slots {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO remix_lab_slots(id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext)
-			VALUES(?,?,?,?,?,?,?,?,?)`,
-			slot.ID, slot.ExperimentID, slot.SortIndex, slot.Label, slot.BaseURL, slot.Model, slot.ReasoningEffort, slot.RunCount, slot.APIKeyCiphertext,
+			INSERT INTO remix_lab_slots(id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			slot.ID, slot.ExperimentID, slot.SortIndex, slot.Label, slot.BaseURL, slot.Model, slot.ReasoningEffort, slot.RunCount, slot.APIKeyCiphertext, slot.Pipeline,
 		); err != nil {
 			return fmt.Errorf("insert remix lab slot: %w", err)
 		}
@@ -64,10 +75,12 @@ func (r *RemixLabRepository) CreateExperiment(ctx context.Context, exp RemixLabE
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO remix_lab_runs(
 				id, experiment_id, slot_id, run_index, status, continuous_script, titles_json,
-				error_message, comment, output_dir, adopted_project_id, started_at, finished_at
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				error_message, comment, output_dir, adopted_project_id, started_at, finished_at,
+				prompt_id, prompt_stamp, prompt_name, package_json, draft_v1_json, review_json
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			run.ID, run.ExperimentID, run.SlotID, run.RunIndex, run.Status, run.ContinuousScript, run.TitlesJSON,
 			run.ErrorMessage, run.Comment, run.OutputDir, run.AdoptedProjectID, run.StartedAt, run.FinishedAt,
+			run.PromptID, run.PromptStamp, run.PromptName, run.PackageJSON, run.DraftV1JSON, run.ReviewJSON,
 		); err != nil {
 			return fmt.Errorf("insert remix lab run: %w", err)
 		}
@@ -77,7 +90,7 @@ func (r *RemixLabRepository) CreateExperiment(ctx context.Context, exp RemixLabE
 
 func (r *RemixLabRepository) ListExperiments(ctx context.Context) ([]RemixLabExperimentRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, title, source_text, prompt_stamp, status, created_at, updated_at
+		SELECT id, title, source_text, prompt_stamp, status, workflow_json, produce_account_id, produce_auto, created_at, updated_at
 		FROM remix_lab_experiments
 		ORDER BY created_at DESC, id`)
 	if err != nil {
@@ -88,7 +101,7 @@ func (r *RemixLabRepository) ListExperiments(ctx context.Context) ([]RemixLabExp
 	out := make([]RemixLabExperimentRecord, 0)
 	for rows.Next() {
 		var exp RemixLabExperimentRecord
-		if err := rows.Scan(&exp.ID, &exp.Title, &exp.SourceText, &exp.PromptStamp, &exp.Status, &exp.CreatedAt, &exp.UpdatedAt); err != nil {
+		if err := rows.Scan(&exp.ID, &exp.Title, &exp.SourceText, &exp.PromptStamp, &exp.Status, &exp.WorkflowJSON, &exp.ProduceAccountID, &exp.ProduceAuto, &exp.CreatedAt, &exp.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, exp)
@@ -99,9 +112,9 @@ func (r *RemixLabRepository) ListExperiments(ctx context.Context) ([]RemixLabExp
 func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (RemixLabExperimentRecord, []RemixLabSlotRecord, []RemixLabRunRecord, error) {
 	var exp RemixLabExperimentRecord
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, title, source_text, prompt_stamp, status, created_at, updated_at
+		SELECT id, title, source_text, prompt_stamp, status, workflow_json, produce_account_id, produce_auto, created_at, updated_at
 		FROM remix_lab_experiments WHERE id=?`, id,
-	).Scan(&exp.ID, &exp.Title, &exp.SourceText, &exp.PromptStamp, &exp.Status, &exp.CreatedAt, &exp.UpdatedAt)
+	).Scan(&exp.ID, &exp.Title, &exp.SourceText, &exp.PromptStamp, &exp.Status, &exp.WorkflowJSON, &exp.ProduceAccountID, &exp.ProduceAuto, &exp.CreatedAt, &exp.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RemixLabExperimentRecord{}, nil, nil, ErrRemixLabNotFound
 	}
@@ -110,7 +123,7 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 	}
 
 	slotRows, err := r.db.QueryContext(ctx, `
-		SELECT id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext
+		SELECT id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline
 		FROM remix_lab_slots WHERE experiment_id=? ORDER BY sort_index, id`, id)
 	if err != nil {
 		return RemixLabExperimentRecord{}, nil, nil, err
@@ -119,7 +132,7 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 	slots := make([]RemixLabSlotRecord, 0)
 	for slotRows.Next() {
 		var slot RemixLabSlotRecord
-		if err := slotRows.Scan(&slot.ID, &slot.ExperimentID, &slot.SortIndex, &slot.Label, &slot.BaseURL, &slot.Model, &slot.ReasoningEffort, &slot.RunCount, &slot.APIKeyCiphertext); err != nil {
+		if err := slotRows.Scan(&slot.ID, &slot.ExperimentID, &slot.SortIndex, &slot.Label, &slot.BaseURL, &slot.Model, &slot.ReasoningEffort, &slot.RunCount, &slot.APIKeyCiphertext, &slot.Pipeline); err != nil {
 			return RemixLabExperimentRecord{}, nil, nil, err
 		}
 		slots = append(slots, slot)
@@ -130,7 +143,8 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 
 	runRows, err := r.db.QueryContext(ctx, `
 		SELECT id, experiment_id, slot_id, run_index, status, continuous_script, titles_json,
-			error_message, comment, output_dir, adopted_project_id, started_at, finished_at
+			error_message, comment, output_dir, adopted_project_id, started_at, finished_at,
+			prompt_id, prompt_stamp, prompt_name, package_json, draft_v1_json, review_json
 		FROM remix_lab_runs WHERE experiment_id=? ORDER BY slot_id, run_index, id`, id)
 	if err != nil {
 		return RemixLabExperimentRecord{}, nil, nil, err
@@ -150,10 +164,26 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 	return exp, slots, runs, nil
 }
 
+func (r *RemixLabRepository) GetLatestRunByAdoptedProject(ctx context.Context, projectID string) (RemixLabRunRecord, error) {
+	run, err := scanRemixLabRun(r.db.QueryRowContext(ctx, `
+		SELECT id, experiment_id, slot_id, run_index, status, continuous_script, titles_json,
+			error_message, comment, output_dir, adopted_project_id, started_at, finished_at,
+			prompt_id, prompt_stamp, prompt_name, package_json, draft_v1_json, review_json
+		FROM remix_lab_runs
+		WHERE adopted_project_id=? AND adopted_project_id!=''
+		ORDER BY COALESCE(finished_at, started_at) DESC, run_index DESC, id DESC
+		LIMIT 1`, projectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RemixLabRunRecord{}, ErrRemixLabNotFound
+	}
+	return run, err
+}
+
 func (r *RemixLabRepository) GetRun(ctx context.Context, id string) (RemixLabRunRecord, error) {
 	run, err := scanRemixLabRun(r.db.QueryRowContext(ctx, `
 		SELECT id, experiment_id, slot_id, run_index, status, continuous_script, titles_json,
-			error_message, comment, output_dir, adopted_project_id, started_at, finished_at
+			error_message, comment, output_dir, adopted_project_id, started_at, finished_at,
+			prompt_id, prompt_stamp, prompt_name, package_json, draft_v1_json, review_json
 		FROM remix_lab_runs WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RemixLabRunRecord{}, ErrRemixLabNotFound
@@ -171,10 +201,12 @@ func (r *RemixLabRepository) UpdateRun(ctx context.Context, run RemixLabRunRecor
 	result, err := tx.ExecContext(ctx, `
 		UPDATE remix_lab_runs SET
 			status=?, continuous_script=?, titles_json=?, error_message=?, comment=?,
-			output_dir=?, adopted_project_id=?, started_at=?, finished_at=?
+			output_dir=?, adopted_project_id=?, started_at=?, finished_at=?,
+			package_json=?, draft_v1_json=?, review_json=?
 		WHERE id=?`,
 		run.Status, run.ContinuousScript, run.TitlesJSON, run.ErrorMessage, run.Comment,
-		run.OutputDir, run.AdoptedProjectID, run.StartedAt, run.FinishedAt, run.ID,
+		run.OutputDir, run.AdoptedProjectID, run.StartedAt, run.FinishedAt,
+		run.PackageJSON, run.DraftV1JSON, run.ReviewJSON, run.ID,
 	)
 	if err != nil {
 		return err
@@ -220,6 +252,24 @@ func (r *RemixLabRepository) UpdateRunComment(ctx context.Context, id, comment s
 	return nil
 }
 
+// UpdateRunPackage 保存操作员在创作台编辑后的定稿：正文、标题镜像列和完整发布包。
+func (r *RemixLabRepository) UpdateRunPackage(ctx context.Context, id, script, titlesJSON, packageJSON string) error {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE remix_lab_runs SET continuous_script=?, titles_json=?, package_json=? WHERE id=?`,
+		script, titlesJSON, packageJSON, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrRemixLabNotFound
+	}
+	return nil
+}
+
 func (r *RemixLabRepository) UpdateRunAdoptedProject(ctx context.Context, id, projectID string) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE remix_lab_runs SET adopted_project_id=? WHERE id=?`, projectID, id)
 	if err != nil {
@@ -238,6 +288,33 @@ func (r *RemixLabRepository) UpdateRunAdoptedProject(ctx context.Context, id, pr
 		return err
 	}
 	return nil
+}
+
+func (r *RemixLabRepository) DeleteExperiment(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var found string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM remix_lab_experiments WHERE id=?`, id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRemixLabNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remix_lab_runs WHERE experiment_id=?`, id); err != nil {
+		return fmt.Errorf("delete remix lab runs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remix_lab_slots WHERE experiment_id=?`, id); err != nil {
+		return fmt.Errorf("delete remix lab slots: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remix_lab_experiments WHERE id=?`, id); err != nil {
+		return fmt.Errorf("delete remix lab experiment: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (r *RemixLabRepository) UpdateExperimentStatus(ctx context.Context, id, status string, updatedAt time.Time) error {
@@ -337,6 +414,7 @@ func scanRemixLabRun(scanner remixLabRunScanner) (RemixLabRunRecord, error) {
 	err := scanner.Scan(
 		&run.ID, &run.ExperimentID, &run.SlotID, &run.RunIndex, &run.Status, &run.ContinuousScript, &run.TitlesJSON,
 		&run.ErrorMessage, &run.Comment, &run.OutputDir, &run.AdoptedProjectID, &startedAt, &finishedAt,
+		&run.PromptID, &run.PromptStamp, &run.PromptName, &run.PackageJSON, &run.DraftV1JSON, &run.ReviewJSON,
 	)
 	if err != nil {
 		return RemixLabRunRecord{}, err

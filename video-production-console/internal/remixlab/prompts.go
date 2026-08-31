@@ -131,7 +131,7 @@ func sharedHardFloor() string {
 func sharedJSONContract() string {
 	return `只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。
 continuous_script 必须是完整连续口播正文。
-titles 8到12条。short_titles 恰好5条、每条6到16个字、不要#。descriptions 恰好3条。话题只能从这些热门标签里选3到4个：#经济 #思维认知 #认知 #宏观趋势 #思维 #干货分享 #认知觉醒。cta 一句催促上车。`
+titles 8到12条。short_titles 恰好3条、每条最多15个字、不要#：第1条当视频板面主标题、第2条当副标题、第3条备选。descriptions 恰好3条，每条40到70个字。topics 4到5个带#的话题：第1个用大流量池标签（#财经 #经济 这类），其余贴这条视频的垂直内容（如 #楼市 #房贷 #家庭理财 #存钱），贴内容比蹭热门重要。cta 一句留人话术，不许催付款。`
 }
 
 func promptBoneFlesh() PromptTemplate {

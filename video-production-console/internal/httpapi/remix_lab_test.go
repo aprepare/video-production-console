@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -313,5 +314,194 @@ func TestRemixLabAdoptHTTP(t *testing.T) {
 	}
 	if errBody["code"] != "project_not_found" {
 		t.Fatalf("error body=%v", errBody)
+	}
+}
+
+func TestRemixLabPromptLibraryAndAgentSettings(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/remix-lab/prompts", nil)
+	listRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("list prompts status=%d body=%s", listRes.Code, listRes.Body.String())
+	}
+	var listed struct {
+		Prompts []remixlab.PromptTemplate `json:"prompts"`
+	}
+	if err := json.Unmarshal(listRes.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Prompts) < 2 || listed.Prompts[0].ID != "elder_stable" {
+		t.Fatalf("prompts=%+v", listed.Prompts)
+	}
+
+	createExp := httptest.NewRequest(http.MethodPost, "/api/remix-lab/experiments", strings.NewReader(`{"source":"交叉原文","prompt_ids":["elder_stable","bone_flesh"],"slots":[{"model":"m1","run_count":1},{"model":"m2","run_count":1}]}`))
+	createExp.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createExp)
+	if createRes.Code != http.StatusAccepted {
+		t.Fatalf("cross create status=%d body=%s", createRes.Code, createRes.Body.String())
+	}
+	var exp remixlab.Experiment
+	if err := json.Unmarshal(createRes.Body.Bytes(), &exp); err != nil {
+		t.Fatal(err)
+	}
+	if exp.PromptStamp != "交叉试验" || len(exp.Runs) != 4 {
+		t.Fatalf("cross exp=%+v", exp)
+	}
+
+	// 等实验落到终态再继续：异步运行协程还在往 DataRoot 写文件时就让测试
+	// 返回，Windows 下 TempDir 清理会撞上「directory is not empty」。
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for {
+		getReq := httptest.NewRequest(http.MethodGet, "/api/remix-lab/experiments/"+exp.ID, nil)
+		getRes := httptest.NewRecorder()
+		handler.ServeHTTP(getRes, getReq)
+		if getRes.Code != http.StatusOK {
+			t.Fatalf("get cross exp status=%d body=%s", getRes.Code, getRes.Body.String())
+		}
+		var polled remixlab.Experiment
+		if err := json.Unmarshal(getRes.Body.Bytes(), &polled); err != nil {
+			t.Fatal(err)
+		}
+		if polled.Status == "completed" || polled.Status == "partial" || polled.Status == "failed" {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatalf("timeout waiting for cross experiment terminal status: %+v", polled)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	putAgent := httptest.NewRequest(http.MethodPut, "/api/remix-lab/agent-settings", strings.NewReader(`{"model":"claude-sonnet-4-6","api_key":"sk-agent-secret"}`))
+	putAgent.Header.Set("Content-Type", "application/json")
+	putRes := httptest.NewRecorder()
+	handler.ServeHTTP(putRes, putAgent)
+	if putRes.Code != http.StatusOK {
+		t.Fatalf("put agent status=%d body=%s", putRes.Code, putRes.Body.String())
+	}
+	assertNoSecretLeak(t, putRes.Body.String())
+	if strings.Contains(putRes.Body.String(), "api_key\":") && strings.Contains(putRes.Body.String(), "sk-") {
+		t.Fatal("agent settings leaked api key field")
+	}
+
+	getAgent := httptest.NewRequest(http.MethodGet, "/api/remix-lab/agent-settings", nil)
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, getAgent)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("get agent status=%d body=%s", getRes.Code, getRes.Body.String())
+	}
+	assertNoSecretLeak(t, getRes.Body.String())
+	var agent remixlab.AgentSettingsView
+	if err := json.Unmarshal(getRes.Body.Bytes(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	if agent.Model != "claude-sonnet-4-6" || !agent.APIKeyConfigured {
+		t.Fatalf("%+v", agent)
+	}
+}
+
+func TestRemixLabDeleteExperimentHTTP(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/remix-lab/experiments", strings.NewReader(`{"source":"待删原文","slots":[{"model":"m","run_count":1}]}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", createRes.Code, createRes.Body.String())
+	}
+	var exp remixlab.Experiment
+	if err := json.Unmarshal(createRes.Body.Bytes(), &exp); err != nil {
+		t.Fatal(err)
+	}
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/remix-lab/experiments/"+exp.ID, nil)
+	delRes := httptest.NewRecorder()
+	handler.ServeHTTP(delRes, delReq)
+	if delRes.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", delRes.Code, delRes.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/remix-lab/experiments/"+exp.ID, nil)
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusNotFound {
+		t.Fatalf("get after delete status=%d body=%s", getRes.Code, getRes.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/remix-lab/experiments", nil)
+	listRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRes.Code, listRes.Body.String())
+	}
+	var listed []remixlab.ExperimentSummary
+	if err := json.Unmarshal(listRes.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("listed=%+v", listed)
+	}
+
+	again := httptest.NewRequest(http.MethodDelete, "/api/remix-lab/experiments/"+exp.ID, nil)
+	againRes := httptest.NewRecorder()
+	handler.ServeHTTP(againRes, again)
+	if againRes.Code != http.StatusNotFound {
+		t.Fatalf("second delete status=%d body=%s", againRes.Code, againRes.Body.String())
+	}
+}
+
+func TestRemixLabAgentHistoryHTTP(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+	get := httptest.NewRequest(http.MethodGet, "/api/remix-lab/agent/history", nil)
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, get)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", getRes.Code, getRes.Body.String())
+	}
+	if !strings.Contains(getRes.Body.String(), `"turns":[]`) {
+		t.Fatalf("get body=%s", getRes.Body.String())
+	}
+	del := httptest.NewRequest(http.MethodDelete, "/api/remix-lab/agent/history", nil)
+	delRes := httptest.NewRecorder()
+	handler.ServeHTTP(delRes, del)
+	if delRes.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", delRes.Code, delRes.Body.String())
+	}
+}
+
+func TestRemixLabAgentLastEmptyHTTP(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/remix-lab/agent/last", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"found":false`) {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestWriteRemixLabErrorSurfacesAgentUpstream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeRemixLabError(rec, fmt.Errorf("%w: decode chat response: json cannot unmarshal object", remixlab.ErrAgentUpstream))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "智能体请求失败") || !strings.Contains(rec.Body.String(), "decode chat response") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestWriteRemixLabErrorExplainsGateway504(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeRemixLabError(rec, fmt.Errorf("%w: chat completions status 504: error code: 504", remixlab.ErrAgentUpstream))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "上游网关 504") || !strings.Contains(rec.Body.String(), "后台") {
+		t.Fatalf("body=%s", rec.Body.String())
 	}
 }

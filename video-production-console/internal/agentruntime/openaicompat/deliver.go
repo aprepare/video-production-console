@@ -22,6 +22,10 @@ var hotPublishingTopics = []string{
 
 var trailingHashtagRun = regexp.MustCompile(`(?:\s*#[^\s#]+)+\s*$`)
 
+// brokenJSONFieldBoundary 匹配烂 JSON 抢救时正文字段的结束边界：
+// 闭引号、逗号、任意空白（可跨空行）、下一个已知字段名。
+var brokenJSONFieldBoundary = regexp.MustCompile(`"\s*,\s*"(?:titles|short_titles|descriptions|topics|cta)"\s*:`)
+
 type remixDraft struct {
 	ContinuousScript string   `json:"continuous_script"`
 	Titles           []string `json:"titles"`
@@ -39,9 +43,8 @@ func parseRemixDraft(raw string) (remixDraft, error) {
 	if draft, ok := decodeRemixDraft(text); ok {
 		return draft, nil
 	}
-	if recovered, ok := recoverRemixDraftFromBrokenJSON(text); ok {
-		return recovered, nil
-	}
+	// 引号修复放在烂 JSON 抢救之前：修好未转义引号就能完整解析出全部字段，
+	// 抢救路径是有损的最后手段（曾把 JSON 尾巴整段当正文交付）。
 	if repaired := repairUnescapedJSONQuotes(text); repaired != text {
 		if draft, ok := decodeRemixDraft(repaired); ok {
 			return draft, nil
@@ -56,6 +59,9 @@ func parseRemixDraft(raw string) (remixDraft, error) {
 				return draft, nil
 			}
 		}
+	}
+	if recovered, ok := recoverRemixDraftFromBrokenJSON(text); ok {
+		return recovered, nil
 	}
 	if strings.Contains(text, "{") {
 		return remixDraft{}, fmt.Errorf("model returned malformed structured remix response")
@@ -247,15 +253,10 @@ func extractBrokenJSONStringField(text, key string) (string, bool) {
 		return "", false
 	}
 	body := rest[1:]
+	// 字段边界容忍任意空白（含空行）：模型常在字段之间空一行。
 	end := -1
-	for _, marker := range []string{
-		"\",\n  \"titles\"", "\",\n  \"short_titles\"", "\",\n  \"descriptions\"",
-		"\",\n  \"topics\"", "\",\n  \"cta\"",
-		`","titles"`, `","short_titles"`, `","descriptions"`, `","topics"`, `","cta"`,
-	} {
-		if idx := strings.LastIndex(body, marker); idx >= 0 && (end < 0 || idx < end) {
-			end = idx
-		}
+	if loc := brokenJSONFieldBoundary.FindStringIndex(body); loc != nil {
+		end = loc[0]
 	}
 	if end < 0 {
 		script := strings.TrimSpace(unescapeJSONString(body))
@@ -544,9 +545,9 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	if len(titles) > 12 {
 		titles = titles[:12]
 	}
-	short := uniqueFilled(draft.ShortTitles, shortTitleFallbacks(script), 5, 5)
-	if len(short) > 5 {
-		short = short[:5]
+	short := uniqueFilled(draft.ShortTitles, shortTitleFallbacks(script), 3, 3)
+	if len(short) > 3 {
+		short = short[:3]
 	}
 	descriptions := uniqueFilled(draft.Descriptions, descriptionFallbacks(script), 3, 3)
 	if len(descriptions) > 3 {
@@ -580,8 +581,8 @@ func titleFallbacks(script string) []string {
 }
 
 func shortTitleFallbacks(script string) []string {
-	seed := clipRunes(firstSentence(script), 6, 16)
-	return uniqueFilled(nil, []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}, 5, 5)
+	seed := clipRunes(firstSentence(script), 6, 15)
+	return []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}
 }
 
 func descriptionFallbacks(script string) []string {
@@ -603,16 +604,14 @@ func normalizeHashtag(raw string) string {
 	return strings.ReplaceAll(tag, " ", "")
 }
 
+// pickHotTopics 收模型给的话题（不再卡白名单，垂直标签如 #楼市 #房贷 更利于
+// 精准流量池），不足 4 个时从热门池补齐，最多 5 个。
 func pickHotTopics(given []string, seed string) []string {
-	allow := make(map[string]bool, len(hotPublishingTopics))
-	for _, tag := range hotPublishingTopics {
-		allow[tag] = true
-	}
 	seen := map[string]bool{}
-	out := make([]string, 0, 4)
+	out := make([]string, 0, 5)
 	add := func(tag string) {
 		tag = normalizeHashtag(tag)
-		if !allow[tag] || seen[tag] || len(out) >= 4 {
+		if tag == "" || tag == "#" || seen[tag] || len(out) >= 5 {
 			return
 		}
 		seen[tag] = true
@@ -621,7 +620,7 @@ func pickHotTopics(given []string, seed string) []string {
 	for _, tag := range given {
 		add(tag)
 	}
-	if len(out) >= 3 {
+	if len(out) >= 4 {
 		return out
 	}
 	start := 0
@@ -629,7 +628,7 @@ func pickHotTopics(given []string, seed string) []string {
 		sum := sha256.Sum256([]byte(seed))
 		start = int(sum[0]) % len(hotPublishingTopics)
 	}
-	for i := 0; len(out) < 3; i++ {
+	for i := 0; len(out) < 4; i++ {
 		add(hotPublishingTopics[(start+i)%len(hotPublishingTopics)])
 	}
 	return out

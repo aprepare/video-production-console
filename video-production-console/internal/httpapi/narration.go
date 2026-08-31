@@ -38,17 +38,26 @@ type narrationStore interface {
 	AddAsset(context.Context, *domain.Asset) (store.CommitState, error)
 }
 
+// narrationAccountStore reads the project's account so per-account voice
+// overrides can replace the global speaker. Nil disables the override path.
+type narrationAccountStore interface {
+	Get(context.Context, string) (domain.Account, error)
+}
+
 // NarrationHandlerOptions supplies the credentials source and, for tests, a
 // replacement for the vendor call.
 type NarrationHandlerOptions struct {
 	Runtime AssetRuntimeProvider
 	Produce func(context.Context, narration.ProduceRequest) (narration.Delivery, error)
+	// Accounts enables per-account voice overrides; nil keeps the global voice.
+	Accounts narrationAccountStore
 }
 
 type narrationHandler struct {
 	repository narrationStore
 	assets     *assets.Service
 	runtime    AssetRuntimeProvider
+	accounts   narrationAccountStore
 	produce    func(context.Context, narration.ProduceRequest) (narration.Delivery, error)
 	inFlight   sync.Map
 }
@@ -58,11 +67,14 @@ type narrationHandler struct {
 // this process and registers its output through the same asset path an operator
 // upload takes.
 func NewNarrationHandler(db *sql.DB, service *assets.Service, options NarrationHandlerOptions) http.Handler {
+	if options.Accounts == nil {
+		options.Accounts = store.NewAccountRepository(db)
+	}
 	return newNarrationHandler(store.NewProjectRepository(db), service, options)
 }
 
 func newNarrationHandler(repository narrationStore, service *assets.Service, options NarrationHandlerOptions) http.Handler {
-	h := &narrationHandler{repository: repository, assets: service, runtime: options.Runtime, produce: options.Produce}
+	h := &narrationHandler{repository: repository, assets: service, runtime: options.Runtime, accounts: options.Accounts, produce: options.Produce}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/projects/{id}/narration", h.create)
 	return mux
@@ -88,7 +100,8 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "asset_save_failed", "The asset service is unavailable.")
 		return
 	}
-	if _, err := h.repository.GetProject(r.Context(), id); errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+	project, err := h.repository.GetProject(r.Context(), id)
+	if errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "project_not_found", "The project was not found.")
 		return
 	} else if err != nil {
@@ -122,11 +135,12 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 	// breaks); the 口播稿 lines only cut the subtitles against the word timings.
 	speech := spokenlines.SpeechFromScript(scriptText)
 	lines := spokenlines.Lines(formatted)
-	request, code, err := h.produceRequest(r.Context(), speech)
+	request, code, err := h.produceRequest(r.Context(), speech, h.accountVoice(r.Context(), project.AccountID))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, code, err.Error())
 		return
 	}
+	applyNarrationOverrides(&request, readNarrationOverrides(r))
 	request.SpokenLines = lines
 	ctx, cancel := context.WithTimeout(r.Context(), narrationTimeout)
 	defer cancel()
@@ -270,9 +284,28 @@ func (h *narrationHandler) readSpokenScript(ctx context.Context, projectID strin
 	return string(data), asset, "", nil
 }
 
+// accountVoice reads the project account's voice override. A missing account
+// or read error just keeps the global voice — narration must not fail on it.
+func (h *narrationHandler) accountVoice(ctx context.Context, accountID string) *domain.VoiceOverride {
+	if h.accounts == nil || strings.TrimSpace(accountID) == "" {
+		return nil
+	}
+	account, err := h.accounts.Get(ctx, accountID)
+	if err != nil {
+		logging.LoggerFrom(ctx).Warn("account voice override unavailable, using global voice",
+			"account_id", accountID, "error", err)
+		return nil
+	}
+	if account.Overrides == nil {
+		return nil
+	}
+	return account.Overrides.Voice
+}
+
 // produceRequest assembles the vendor call from stored settings. The API key
 // stays inside the returned client and never reaches a response or a snapshot.
-func (h *narrationHandler) produceRequest(ctx context.Context, script string) (narration.ProduceRequest, string, error) {
+// A non-nil voice override replaces the global speaker for this project's account.
+func (h *narrationHandler) produceRequest(ctx context.Context, script string, voice *domain.VoiceOverride) (narration.ProduceRequest, string, error) {
 	if h.runtime == nil {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("配音服务未配置，请在设置的配音页填写 Aura Studio 凭据。")
 	}
@@ -288,6 +321,9 @@ func (h *narrationHandler) produceRequest(ctx context.Context, script string) (n
 			return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置的配音页填写 Aura Studio API Key。")
 		}
 		voiceID := strings.TrimSpace(runtime.AuraSTDVoiceID)
+		if voice != nil && strings.TrimSpace(voice.AuraSTDVoiceID) != "" {
+			voiceID = strings.TrimSpace(voice.AuraSTDVoiceID)
+		}
 		if voiceID == "" {
 			return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置的配音页填写克隆音色 ID。")
 		}
@@ -310,10 +346,57 @@ func (h *narrationHandler) produceRequest(ctx context.Context, script string) (n
 	if strings.TrimSpace(runtime.VolcSpeechAPIKey) == "" {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置中填写火山语音 API Key。")
 	}
-	if strings.TrimSpace(runtime.VolcSpeechSpeakerID) == "" {
+	speakerID := strings.TrimSpace(runtime.VolcSpeechSpeakerID)
+	if voice != nil && strings.TrimSpace(voice.VolcSpeechSpeakerID) != "" {
+		speakerID = strings.TrimSpace(voice.VolcSpeechSpeakerID)
+	}
+	if speakerID == "" {
 		return narration.ProduceRequest{}, "narration_not_configured", errors.New("请先在设置中填写火山音色 ID。")
 	}
-	return narration.ProduceRequest{Script: script, SpeakerID: strings.TrimSpace(runtime.VolcSpeechSpeakerID), Provider: "volc"}, "", nil
+	return narration.ProduceRequest{Script: script, SpeakerID: speakerID, Provider: "volc"}, "", nil
+}
+
+type narrationOverrides struct {
+	VoiceID   string   `json:"voice_id"`
+	SpeakerID string   `json:"speaker_id"`
+	Model     string   `json:"model"`
+	Emotion   string   `json:"emotion"`
+	Speed     *float64 `json:"speed"`
+	Volume    *float64 `json:"volume"`
+	Pitch     *int     `json:"pitch"`
+}
+
+func readNarrationOverrides(r *http.Request) narrationOverrides {
+	var ov narrationOverrides
+	if r.Body == nil {
+		return ov
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&ov)
+	return ov
+}
+
+func applyNarrationOverrides(req *narration.ProduceRequest, ov narrationOverrides) {
+	if id := strings.TrimSpace(ov.VoiceID); id != "" {
+		req.SpeakerID = id
+	}
+	if id := strings.TrimSpace(ov.SpeakerID); id != "" {
+		req.SpeakerID = id
+	}
+	if model := strings.TrimSpace(ov.Model); model != "" {
+		req.Model = model
+	}
+	if emotion := strings.TrimSpace(ov.Emotion); emotion != "" {
+		req.Emotion = emotion
+	}
+	if ov.Speed != nil {
+		req.Speed = *ov.Speed
+	}
+	if ov.Volume != nil {
+		req.Volume = *ov.Volume
+	}
+	if ov.Pitch != nil {
+		req.Pitch = *ov.Pitch
+	}
 }
 
 func chosenTTSProvider(runtime consoleSettings.Runtime) string {

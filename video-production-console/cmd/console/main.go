@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -327,13 +329,27 @@ func main() {
 	}
 	serveCtx, requestShutdown := context.WithCancel(signalCtx)
 	defer requestShutdown()
-	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator, ImageVideoService: imageVideoService, ImageVideoStarter: imageVideoLifecycle, ImageVideoCloser: imageVideoLifecycle, Restart: newSelfRestart(workingDirectory, requestShutdown)})
+	application := app.New(app.Options{Config: settings, DB: db, AssetService: assetService, Scheduler: scheduler, Realtime: hub, Obsidian: obsidian.New(settings.ObsidianVault), AuthService: authService, Settings: settingsService, Skills: skillsService, TaskPreparer: taskPreparer, AppServerHealth: appServerHealth, MontageRetryer: montageRetryer, CompletionRetryer: completionRetryer, DesktopOpener: assets.NewDesktopOpener(), RemixCoordinator: remixCoordinator, ImageVideoService: imageVideoService, ImageVideoStarter: imageVideoLifecycle, ImageVideoCloser: imageVideoLifecycle, Restart: newSelfRestart(workingDirectory, requestShutdown), InternalToken: newInternalToken()})
 	defer application.Close()
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
+	// 监听起来后续跑重启前进行到一半的生产段（驱动器走回环 HTTP）。
+	go func() {
+		time.Sleep(3 * time.Second)
+		application.ResumeProductions()
+	}()
 	if err := serveUntilShutdown(serveCtx, server); err != nil {
 		slog.Error("serve video production console", "listen_addr", settings.ListenAddr, "error", err)
 	}
+}
+
+// newInternalToken 每次启动随机生成本进程服务间调用的旁路令牌。
+func newInternalToken() string {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw)
 }
 
 const defaultInitialPassword = "123456"
@@ -1309,9 +1325,9 @@ func newServer(address string, handler http.Handler) *http.Server {
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       2 * time.Minute,
+		ReadTimeout:       12 * time.Minute,
 		WriteTimeout:      15 * time.Minute,
-		IdleTimeout:       time.Minute,
+		IdleTimeout:       3 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
 	}
 }

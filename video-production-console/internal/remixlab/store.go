@@ -65,6 +65,42 @@ func (s Store) SetActive(active ActivePrompt) error {
 	return nil
 }
 
+// AdoptPrompt stores a library prompt as the daily remix writer. elder_stable
+// without edits stays on the compiled rewrite path (no active file).
+func (s Store) AdoptPrompt(id string) (ActivePrompt, error) {
+	p, ok, err := s.GetPrompt(id)
+	if err != nil {
+		return ActivePrompt{}, err
+	}
+	if !ok {
+		return ActivePrompt{}, fmt.Errorf("unknown prompt %q", id)
+	}
+	compiled := ResolvePrompt("elder_stable", "", "")
+	if p.ID == "elder_stable" && strings.TrimSpace(p.System) == strings.TrimSpace(compiled.System) && strings.TrimSpace(p.User) == strings.TrimSpace(compiled.User) {
+		return s.AdoptFromTemplate("elder_stable", "", "")
+	}
+	active := ActivePrompt{
+		ID:     p.ID,
+		Name:   p.Name,
+		Stamp:  p.Stamp,
+		Style:  "rewrite",
+		System: p.System,
+		User:   p.User,
+	}
+	if strings.TrimSpace(active.System) == "" {
+		resolved := ResolvePrompt(p.ID, "", "")
+		active.System = resolved.System
+		active.User = resolved.User
+		if active.Stamp == "" {
+			active.Stamp = resolved.Stamp
+		}
+	}
+	if err := s.SetActive(active); err != nil {
+		return ActivePrompt{}, err
+	}
+	return active, nil
+}
+
 // AdoptFromTemplate resolves a catalog id (with optional edits) and stores it.
 func (s Store) AdoptFromTemplate(id, systemOverride, userOverride string) (ActivePrompt, error) {
 	resolved := ResolvePrompt(id, systemOverride, userOverride)

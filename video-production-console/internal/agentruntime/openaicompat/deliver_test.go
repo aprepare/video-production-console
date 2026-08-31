@@ -111,32 +111,29 @@ func TestPublishingFallbacksDoNotHardcodeFixedPlot(t *testing.T) {
 	}
 }
 
-func TestPickHotTopicsKeepsOnlyAllowlist(t *testing.T) {
-	got := pickHotTopics([]string{"#人民币", "#经济", "#干货分享", "#随便写"}, "seed")
-	if len(got) < 3 || len(got) > 4 {
+func TestPickHotTopicsKeepsVerticalTagsAndPads(t *testing.T) {
+	// 模型给的垂直标签（#楼市 #房贷 这类）直接保留，不再卡白名单；
+	// 不足 4 个时从热门池补齐，最多 5 个。
+	got := pickHotTopics([]string{"#楼市", "#房贷"}, "seed")
+	if len(got) < 4 || len(got) > 5 {
 		t.Fatalf("count=%d %v", len(got), got)
 	}
-	if got[0] != "#经济" || got[1] != "#干货分享" {
-		t.Fatalf("kept order = %v", got)
+	if got[0] != "#楼市" || got[1] != "#房贷" {
+		t.Fatalf("given tags must keep order = %v", got)
 	}
-	allow := map[string]bool{}
-	for _, tag := range hotPublishingTopics {
-		allow[tag] = true
-	}
-	for _, tag := range got {
-		if !allow[tag] {
-			t.Fatalf("unexpected %q", tag)
-		}
+	full := pickHotTopics([]string{"#楼市", "#房贷", "#家庭理财", "#财经", "#存钱", "#多余的"}, "seed")
+	if len(full) != 5 {
+		t.Fatalf("cap at 5, got %v", full)
 	}
 }
 
-func TestPublishingPackageRewritesInventedHashtags(t *testing.T) {
+func TestPublishingPackageKeepsModelTopicsInDescriptions(t *testing.T) {
 	pkg := publishingPackageFromDraft(remixDraft{
-		Descriptions: []string{"前两次换锚分别推高了外贸和房子。 #人民币 #财富趋势 #经济周期"},
-		Topics:       []string{"#人民币", "#财富趋势", "#资金流向"},
+		Descriptions: []string{"前两次的行情分别推高了外贸和房子。 #旧话题 #被换掉"},
+		Topics:       []string{"#楼市", "#房贷", "#家庭理财", "#财经"},
 	}, "又一批人要发财了。")
 	topics, _ := pkg["topics"].([]string)
-	if len(topics) < 3 || len(topics) > 4 {
+	if len(topics) != 4 {
 		t.Fatalf("topics=%v", topics)
 	}
 	joined := strings.Join(topics, " ")
@@ -144,9 +141,13 @@ func TestPublishingPackageRewritesInventedHashtags(t *testing.T) {
 		if !strings.HasSuffix(desc, joined) {
 			t.Fatalf("description=%q topics=%v", desc, topics)
 		}
-		if strings.Contains(desc, "#人民币") || strings.Contains(desc, "#财富趋势") {
-			t.Fatalf("invented hashtag leaked: %q", desc)
+		if strings.Contains(desc, "#旧话题") {
+			t.Fatalf("stale hashtag leaked: %q", desc)
 		}
+	}
+	shorts, _ := pkg["short_titles"].([]string)
+	if len(shorts) != 3 {
+		t.Fatalf("short_titles must be exactly 3, got %v", shorts)
 	}
 }
 

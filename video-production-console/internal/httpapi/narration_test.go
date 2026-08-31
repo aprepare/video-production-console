@@ -377,6 +377,49 @@ func TestNarrationUsesAuraSTDVoiceSettingsWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNarrationAppliesOptionalBodyOverrides(t *testing.T) {
+	projectID := uuid.NewString()
+	repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
+	var got narration.ProduceRequest
+	handler, service, _ := newNarrationTestHandler(t, repository,
+		narrationTestSettings{runtime: consoleSettings.Runtime{
+			PublicSettings: domain.PublicSettings{
+				TTSProvider:    "aurastd",
+				AuraSTDModel:   "speech-2.8-hd",
+				AuraSTDVoiceID: "moss_audio_global",
+				AuraSTDSpeed:   1,
+				AuraSTDVolume:  1,
+				AuraSTDPitch:   0,
+			},
+			AuraSTDTTsAPIKey: "aurastd-key",
+		}},
+		func(_ context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
+			got = request
+			return narrationDelivery(request.Provider), nil
+		})
+	seedNarrationInputs(t, service, repository, projectID, "货还在。", "货还在")
+
+	speed, volume, pitch := 1.35, 2.2, 3
+	response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", map[string]any{
+		"voice_id": "moss_audio_override",
+		"model":    "speech-2.8-turbo",
+		"emotion":  "calm",
+		"speed":    speed,
+		"volume":   volume,
+		"pitch":    pitch,
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, readResponseBody(t, response))
+	}
+	if got.SpeakerID != "moss_audio_override" || got.Model != "speech-2.8-turbo" || got.Emotion != "calm" {
+		t.Errorf("override identity = %+v", got)
+	}
+	if got.Speed != speed || got.Volume != volume || got.Pitch != pitch {
+		t.Errorf("override params = %+v", got)
+	}
+}
+
 func TestNarrationReportsMissingVendorConfiguration(t *testing.T) {
 	projectID := uuid.NewString()
 	for _, tt := range []struct {

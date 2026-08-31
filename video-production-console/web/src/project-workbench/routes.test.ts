@@ -5,7 +5,7 @@ const projectID = "123e4567-e89b-12d3-a456-426614174000";
 
 describe("application routes", () => {
   test("parses each production page into an explicit route", () => {
-    expect(parseLocation("/")).toEqual({ view: "projects" });
+    expect(parseLocation("/")).toEqual({ view: "remix-lab" });
     expect(parseLocation("/projects")).toEqual({ view: "projects" });
     expect(parseLocation(`/projects/${projectID}`)).toEqual({
       view: "project",
