@@ -7,7 +7,16 @@
 
 ## Next unified build
 
-The root unified build must run these commands in order:
+- [ ] Implement the root unified build entry point. It must derive `repoRoot` from
+  the entry point's own location (for example, with
+  `git -C "$(dirname "$0")" rev-parse --show-toplevel`), set
+  `projectDir="${repoRoot}/video-production-console"`, and `cd` to
+  `projectDir` before running anything; it must not depend on the caller's
+  current directory.
+
+After changing to `${repoRoot}/video-production-console`, the entry point must
+run these commands in strict order with immediate non-zero exit on failure
+(for example, `set -e`):
 
 1. `npm --prefix web run build:embed`
 2. `go test ./...`
