@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>中心意象规则 · 改后对照</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --ink:#1a2332; --paper:#e8dcc8; --seal:#b23a2f; --oil:#c9893a; --ash:#8a8175; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg,#121820,#1a2332 45%,#10161e);
+      color: var(--paper);
+      font-family: "Noto Sans SC", sans-serif;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 28px 24px 64px; }
+    .kicker { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--oil); letter-spacing: .16em; }
+    h1 { font-family: "Noto Serif SC", serif; font-size: 30px; margin: 8px 0 10px; }
+    .lead { color:#d8cbb4; line-height:1.7; max-width:72ch; }
+    h2 { font-family: "Noto Serif SC", serif; font-size: 22px; margin: 32px 0 12px; }
+    .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .col { border:1px solid rgba(232,220,200,.14); padding:14px 16px; font-size:14px; line-height:1.7; }
+    .was { background: rgba(178,58,47,.12); }
+    .now { background: rgba(61,107,90,.16); }
+    .tag { font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; margin-bottom:8px; color:var(--oil); }
+    .kill { text-decoration:line-through; color:#e7a39d; }
+    @media (max-width:860px) { .pair { grid-template-columns:1fr; } main { padding:18px 14px 48px; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="kicker">v3.5 → v3.5.1 · 2026-09-01</div>
+  <h1>已改：不再强制中心意象</h1>
+  <p class="lead">只动了弹药库和写手第二步。禁用清单还在。钩子、事实核查、审稿、课尾没动。新跑才吃到这版，旧实验快照不会自动变。</p>
+
+  <h2>弹药库 · center_options</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p><span class="kill">3 个原文没用过的中心意象候选</span>，每个附一句为什么适配这篇的事实链。生活道具优先：存折、菜市场、户口、赶集。</p>
+      <p>注入写手：<span class="kill">中心意象从 center_options 挑一个（自造更好的也行）</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新 · 线上已替换</div>
+      <p>不是必选。原文靠概念主线、只是局部打比方时，返回空数组。只有原文把同一个生活道具贯穿全文、直说会大段撞车时，才给 1 个局部意象，并写清用在哪一段。不要给 3 个，也不要求全篇围着它转。</p>
+      <p>注入写手：center_options 为空就直说，不要硬造贯穿全文的中心意象；有值也只许用在它标明的那一段。</p>
+    </article>
+  </div>
+
+  <h2>写手系统提示词 · 第二步</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p>盘点原文意象，然后全部换掉（决定成败）</p>
+      <p><span class="kill">给新稿选一个原文没用过的中心比喻（车站、开秤、渔汛、分田、赶集……），全篇围绕这个意象的词汇系统把整条事实链重述一遍。</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新 · 线上已替换</div>
+      <p>盘点原文用过的比喻，禁用即可，不要另造中心意象。</p>
+      <p>禁止为了换皮硬造粮缸、户口本、电表、棋牌换庄这类贯穿全文的道具。原文靠概念主线推进时，新稿也靠事实链直说；局部需要才用一个生活比方，用完就放下。</p>
+      <p>开场禁词（锚点、换锚等）仍然要避：不能说原词，就用大白话讲同一条概念主线，不要另起一个道具来替换。</p>
+      <p>情报包 center_options 为空就不要自己补一个；有值也只许用在标明的那一段。</p>
+    </article>
+  </div>
+
+  <h2>写手用户模板 · 那一行</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p>动笔前先列原文的意象禁用清单，<span class="kill">再选一个全新的中心意象，全篇用它重述。</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新 · 线上已替换</div>
+      <p>动笔前先列原文的意象禁用清单并避开。不要另选一个中心意象扛完全文；能直说就直说，局部比喻用完就放下。</p>
+    </article>
+  </div>
+</main>
+</body>
+</html>

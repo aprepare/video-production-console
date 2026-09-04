@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>提示词对照 · v3.4.1 → v3.5</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #1a2332;
+      --paper: #e8dcc8;
+      --paper-2: #f3ead8;
+      --seal: #b23a2f;
+      --patina: #3d6b5a;
+      --oil: #c9893a;
+      --ash: #8a8175;
+      --old: #8b3a3a;
+      --old-bg: rgba(178, 58, 47, 0.12);
+      --new: #2f6b4f;
+      --new-bg: rgba(61, 107, 90, 0.16);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(1100px 520px at 8% -8%, rgba(201, 137, 58, 0.12), transparent 52%),
+        linear-gradient(180deg, #121820 0%, var(--ink) 42%, #10161e 100%);
+      color: var(--paper);
+      font-family: "Noto Sans SC", sans-serif;
+    }
+    .desk {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 92px 1fr;
+    }
+    .spine {
+      border-right: 1px solid rgba(232, 220, 200, 0.12);
+      padding: 28px 0 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+    .spine h1 {
+      writing-mode: vertical-rl;
+      font-family: "Noto Serif SC", serif;
+      font-size: 22px;
+      font-weight: 700;
+      margin: 0;
+    }
+    .spine p {
+      writing-mode: vertical-rl;
+      margin: 0;
+      color: var(--ash);
+      font-size: 12px;
+      letter-spacing: 0.18em;
+    }
+    .folio { padding: 28px 36px 56px; min-width: 0; }
+    .mast { display: flex; justify-content: space-between; align-items: end; gap: 20px; flex-wrap: wrap; }
+    .kicker {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 11px;
+      color: var(--oil);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .mast h2 {
+      margin: 6px 0 0;
+      font-family: "Noto Serif SC", serif;
+      font-size: 34px;
+      line-height: 1.15;
+    }
+    .stamps { display: flex; gap: 10px; flex-wrap: wrap; }
+    .stamp {
+      min-width: 220px;
+      padding: 12px 14px;
+      border: 1px solid rgba(232, 220, 200, 0.16);
+      background: rgba(232, 220, 200, 0.04);
+    }
+    .stamp .lab { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ash); }
+    .stamp b { display: block; margin-top: 6px; font-size: 15px; }
+    .stamp.old { border-color: rgba(178, 58, 47, 0.35); }
+    .stamp.new { border-color: rgba(61, 107, 90, 0.45); background: rgba(61, 107, 90, 0.1); }
+    .why {
+      margin: 18px 0 0;
+      color: #d8cbb4;
+      font-size: 15px;
+      line-height: 1.7;
+      max-width: 72ch;
+    }
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 22px 0 8px;
+    }
+    .nav a {
+      color: var(--paper);
+      text-decoration: none;
+      border: 1px solid rgba(232, 220, 200, 0.16);
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+    .nav a:hover, .nav a:focus-visible { border-color: var(--oil); outline: none; }
+    .keep {
+      margin: 8px 0 28px;
+      padding: 14px 16px;
+      border: 1px dashed rgba(232, 220, 200, 0.2);
+      color: var(--ash);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .keep strong { color: var(--paper); font-weight: 500; }
+    section.block {
+      margin: 0 0 28px;
+      scroll-margin-top: 18px;
+    }
+    .block h3 {
+      margin: 0 0 8px;
+      font-family: "Noto Serif SC", serif;
+      font-size: 24px;
+    }
+    .change {
+      margin: 0 0 14px;
+      color: var(--oil);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .col {
+      padding: 16px 16px 14px;
+      border: 1px solid rgba(232, 220, 200, 0.12);
+      min-width: 0;
+    }
+    .col.was { background: var(--old-bg); border-color: rgba(178, 58, 47, 0.28); }
+    .col.now { background: var(--new-bg); border-color: rgba(61, 107, 90, 0.32); }
+    .col .tag {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      margin-bottom: 10px;
+    }
+    .col.was .tag { color: #e08a82; }
+    .col.now .tag { color: #8fcdb0; }
+    .col p, .col li { margin: 0 0 10px; line-height: 1.7; font-size: 14px; }
+    .col p:last-child, .col li:last-child { margin-bottom: 0; }
+    .col ol, .col ul { margin: 0; padding-left: 1.2em; }
+    .kill { text-decoration: line-through; color: #e7a39d; }
+    .add { color: #c8ead8; background: rgba(61, 107, 90, 0.28); padding: 0 3px; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin: 0 0 16px;
+    }
+    .step, .hook {
+      padding: 10px 8px;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.45;
+      border: 1px solid rgba(232, 220, 200, 0.14);
+    }
+    .step { background: var(--old-bg); color: #e7a39d; text-decoration: line-through; }
+    .hooks { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+    .hook { background: var(--new-bg); color: #c8ead8; }
+    .hook b, .step b { display: block; font-family: "IBM Plex Mono", monospace; font-size: 10px; margin-bottom: 4px; letter-spacing: 0.08em; text-decoration: none; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "Noto Sans SC", sans-serif;
+      font-size: 13.5px;
+      line-height: 1.7;
+    }
+    @media (max-width: 980px) {
+      .desk { grid-template-columns: 1fr; }
+      .spine { display: none; }
+      .pair, .flow, .hooks { grid-template-columns: 1fr; }
+      .folio { padding: 20px 16px 40px; }
+      .mast h2 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="desk">
+    <aside class="spine">
+      <h1>提示词对照册</h1>
+      <p>v3.4.1 → v3.5 · 2026-09-01</p>
+    </aside>
+    <main class="folio">
+      <header class="mast">
+        <div>
+          <div class="kicker">Writer prompt diff</div>
+          <h2>课尾从固定六步，改成按原文现编</h2>
+        </div>
+        <div class="stamps">
+          <div class="stamp old">
+            <div class="lab">旧 · 线上到 8/26</div>
+            <b>骨肉分离 v3.4.1 宁短勿凑</b>
+          </div>
+          <div class="stamp new">
+            <div class="lab">新 · 现用 9/01</div>
+            <b>骨肉分离 v3.5 课尾钩子</b>
+          </div>
+        </div>
+      </header>
+      <p class="why">旧提示词把每篇课尾写成同一套流水线，审稿还强制用「关注我」收尾，所以几篇二创结尾冻在一起。v3.5 只改收尾怎么写：要素齐、钩子从这篇原文借、句子全换。开场、骨肉分离、篇幅这些没动。</p>
+      <nav class="nav" aria-label="跳到改动块">
+        <a href="#close">课尾</a>
+        <a href="#skeleton">拆骨架第5条</a>
+        <a href="#mid">中段点赞评论</a>
+        <a href="#cta">cta 字段</a>
+        <a href="#user">用户消息</a>
+        <a href="#review">审稿</a>
+        <a href="#ammo">弹药库</a>
+      </nav>
+      <p class="keep"><strong>没改的：</strong>观众画像 · 骨肉分离 · 开场贴原文前两三句 · 意象禁用清单 · 10字不连抄 · 篇幅 0.8～1.1 倍宁短勿凑 · 课名《财富觉醒方法论》一次、橱窗一次、五块钱一次 · 不换题、答案继续藏</p>
+
+      <section class="block" id="close">
+        <h3>1. 课尾：最大一处</h3>
+        <p class="change">旧：必须按固定顺序走完六步。新：只要三件要素各出现一次，收法从这篇原文课尾借机制，每篇现编。</p>
+        <div class="flow" aria-label="旧六步已废">
+          <div class="step"><b>1</b>提问</div>
+          <div class="step"><b>2</b>课名橱窗五块钱</div>
+          <div class="step"><b>3</b>万金油课纲</div>
+          <div class="step"><b>4</b>不承诺赚钱只保证听懂</div>
+          <div class="step"><b>5</b>点主页橱窗</div>
+          <div class="step"><b>6</b>下期钩子 + 关注</div>
+        </div>
+        <div class="hooks" aria-label="新收法五选一">
+          <div class="hook"><b>择一</b>窗口将关</div>
+          <div class="hook"><b>择一</b>看懂 ≠ 用上</div>
+          <div class="hook"><b>择一</b>对号入座</div>
+          <div class="hook"><b>择一</b>继续刷还是花五块</div>
+          <div class="hook"><b>择一</b>一句压轴金句</div>
+        </div>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧 · 150～250 字 · 有分量但不吆喝</div>
+            <p>课程只在全文最末出现一次，<span class="kill">按这个顺序走完一段</span>：</p>
+            <ol>
+              <li>先替观众把心里那个没答的问题问出来</li>
+              <li>报课名《财富觉醒方法论》、主页橱窗、五块钱</li>
+              <li><span class="kill">用两三句讲课纲：方向在哪几条、不同本金怎么切入、先做什么后做什么</span></li>
+              <li><span class="kill">不承诺赚钱，只保证听懂；听不明白可以反复听</span></li>
+              <li>点开我的主页，找到橱窗</li>
+              <li><span class="kill">最后一两句用下期钩子加关注收尾</span></li>
+            </ol>
+            <p>姿态放平：<span class="kill">话说到位，买不买随他。</span></p>
+          </article>
+          <article class="col now">
+            <div class="tag">新 · 150～280 字 · 力度对齐原文课尾</div>
+            <p>课尾不是固定话术。要素只要齐：<span class="add">课名一次、橱窗一次、五块钱一次</span>。句子顺序、过渡、收法每篇按本条原文现编。</p>
+            <p>先拆原文课尾（不输出）：观众卡着哪个动作；原文靠什么钩子压人；课是「把刚才那套规则翻成能下手的东西」，不是家庭理财入门。</p>
+            <ul>
+              <li><span class="add">缺口必须从本条正文长出来</span>，禁止「钱往哪放 / 几条路 / 本金怎么切」</li>
+              <li>对号、选择框、窗口金句，<span class="add">每篇最多用一种，且必须改写成这篇的词</span></li>
+              <li><span class="add">最后一句压在本条窗口或未揭答案上</span>，禁止「下一条讲 xxx，关注我」</li>
+              <li>禁止把「不承诺赚钱只保证听懂」当必写项；也不许把课尾写软成「买不买随他」</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="skeleton">
+        <h3>2. 拆骨架第 5 条</h3>
+        <p class="change">从「记得收口」改成「先拆原文课尾的钩子机制」。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧</div>
+            <p>5. 情绪升级与课尾收口</p>
+          </article>
+          <article class="col now">
+            <div class="tag">新</div>
+            <p>5. 情绪升级，以及原文课尾靠什么钩子压人上车（窗口、缺口、对号、选择、压轴金句——<span class="add">记下机制，句子全换</span>）</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="mid">
+        <h3>3. 中段点赞 / 评论</h3>
+        <p class="change">从「可删」改成「机制必须留，词必须换」。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧</div>
+            <p>原文求点赞、求评论的互动段不许照搬：<span class="kill">要么删掉，要么换成一两句全新的留人话术</span></p>
+          </article>
+          <article class="col now">
+            <div class="tag">新</div>
+            <p>原文中段点赞 / 评论锁内容的机制留下（帮他把这条存进以后找得回的地方，留一句以后对照用的话），<span class="add">四字词和句子必须新编。禁止整段照抄，也禁止整段删光</span></p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="cta">
+        <h3>4. cta 字段</h3>
+        <p class="change">从「留人话术」改成「课尾最后那句压轴」。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧</div>
+            <p>cta 一句留人话术，不许催付款。</p>
+          </article>
+          <article class="col now">
+            <div class="tag">新</div>
+            <p>cta 写课尾最后那句压轴（本条窗口或未揭答案），<span class="add">不要写关注引导</span>。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="user">
+        <h3>5. 用户消息（每次发给写手的那一行）</h3>
+        <p class="change">系统提示词改了，用户模板也改了同一句，避免模型只听用户消息又走回六步。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧</div>
+            <pre>课尾一段收完、150到250字：替他问出问题、课名橱窗五块钱、课里讲什么说具体两三句、<span class="kill">不承诺赚钱只保证听懂可反复听</span>、一句怎么点进去，<span class="kill">最后下期钩子加关注</span>。不许喊付款，也不许只报一句课名就跑。</pre>
+          </article>
+          <article class="col now">
+            <div class="tag">新</div>
+            <pre>课尾按本条缺口现编，150到280字：要素只要课名、橱窗、五块钱；收法从原文课尾借机制（窗口/看懂≠用上/对号/选择/压轴金句），句子全新。禁止固定六步，禁止「不承诺赚钱只保证听懂」，禁止「下一条讲xxx，关注我」。最后一句压在本条窗口或未揭答案上，cta 就写这句。</pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="review">
+        <h3>6. 审稿（防止写手写对了又被改回去）</h3>
+        <p class="change">旧审稿第 5 条要求「只许通用的关注引导」，等于把强钩子改软。新规则禁止这么改。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧 · 规范清单第 5 条</div>
+            <p>全文最末一段收完（150～250字）：课名、橱窗、5块钱要素齐全；不吆喝不催付；<span class="kill">结尾禁止预告下一条的具体内容，只许通用的关注引导。</span></p>
+          </article>
+          <article class="col now">
+            <div class="tag">新 · 规范清单第 5 条</div>
+            <p>大约 150～280 字：课名、橱窗、5块钱必须各出现一次。<span class="add">必须接住本条没说完的缺口或窗口，最后一句压在本条主题上。</span>禁止改成「下一条讲 xxx，关注我」；禁止把「不承诺赚钱只保证听懂」当成必写项往上补；禁止把每篇课纲都改成「几条路、不同本金、先做什么」。要素齐、钩子在即可，<span class="add">不要按固定句序重排写手的课尾。</span></p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="ammo">
+        <h3>7. 弹药库 course_hook_options</h3>
+        <p class="change">旧的只给「不吆喝的过渡句」。新的要三种互不相同的课尾接法，并写清钩子类型。</p>
+        <div class="pair">
+          <article class="col was">
+            <div class="tag">旧</div>
+            <p>课尾从正文滑向课程的过渡句 3 种（不吆喝，是替观众把没答的问题问出来那种）</p>
+          </article>
+          <article class="col now">
+            <div class="tag">新</div>
+            <p>3 种互不相同的课尾接法。每种写清：本条观众卡着的缺口、钩子类型（窗口将关 / 看懂≠用上 / 对号入座 / 继续刷还是花五块 / 一句压轴）、以及一句过渡。<span class="add">禁止三种都是「钱到底往哪放」的变体。</span></p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

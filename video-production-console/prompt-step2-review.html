@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>第二步 · 改后对照</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --paper:#e8dcc8; --oil:#c9893a; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:linear-gradient(180deg,#121820,#1a2332 45%,#10161e); color:var(--paper); font-family:"Noto Sans SC",sans-serif; }
+    main { max-width:1080px; margin:0 auto; padding:28px 24px 64px; }
+    .kicker { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--oil); letter-spacing:.16em; }
+    h1 { font-family:"Noto Serif SC",serif; font-size:30px; margin:8px 0 10px; }
+    .lead { color:#d8cbb4; line-height:1.7; max-width:74ch; }
+    h2 { font-family:"Noto Serif SC",serif; font-size:22px; margin:32px 0 12px; }
+    .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .col { border:1px solid rgba(232,220,200,.14); padding:14px 16px; font-size:14px; line-height:1.7; }
+    .was { background:rgba(178,58,47,.12); }
+    .now { background:rgba(61,107,90,.16); }
+    .tag { font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; margin-bottom:8px; color:var(--oil); }
+    .kill { text-decoration:line-through; color:#e7a39d; }
+    @media (max-width:860px) { .pair { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="kicker">v3.5.2 → v3.5.3 · 2026-09-01</div>
+  <h1>已改：近义词、禁词、现场</h1>
+  <p class="lead">写手第二步和硬性底线已替换。开场禁词整串删除，包括认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场。新跑才吃到这版。</p>
+
+  <h2>比喻与近义词</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p>禁用清单里的词，新稿<span class="kill">一个都不许出现，换个近义词再用也不行</span>。</p>
+    </article>
+    <article class="col now">
+      <div class="tag">新</div>
+      <p>不要整段照抄，也不要沿着同一套意象链换皮。单个近义词可以。收尾段仍盯整句照抄。</p>
+    </article>
+  </div>
+
+  <h2>换锚 / 开场禁词</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p><span class="kill">开场禁词仍然要避（锚点、换锚等）。不能说原词。</span></p>
+      <p>底线里还禁：<span class="kill">锚点、换锚、货币、结汇、印钞、认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新</div>
+      <p>换锚、锚点这类原词可以直接说。硬性底线里的开场禁词整条已删，后一串也放开。</p>
+    </article>
+  </div>
+
+  <h2>中后段现场</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p><span class="kill">至少加两处</span>原文没有的现场或人物（街坊、老师傅、柜台、菜场摊主、老同学……）。</p>
+      <p>不许编造金额——这一条留下了。</p>
+    </article>
+    <article class="col now">
+      <div class="tag">新</div>
+      <p>可以加现场换切口，不是必须。加了只许有人、有事、有对话，钱数只用原文里的。</p>
+    </article>
+  </div>
+</main>
+</body>
+</html>

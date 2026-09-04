@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>爆款素材库 · 片段录入</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1c2330;
+    --muted: #6b7686;
+    --line: #e4e8ee;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --green: #16a34a;
+    --green-soft: #ecfdf3;
+    --amber: #b45309;
+    --amber-soft: #fffbeb;
+    --purple: #7c3aed;
+    --purple-soft: #f5f3ff;
+    --danger: #dc2626;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--ink);
+    line-height: 1.7; padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 20px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 15px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; font-size: 14px; font-family: inherit;
+    background: #fff; color: var(--ink); outline: none;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .slot-tabs { display: flex; gap: 8px; margin-bottom: 4px; }
+  .slot-tab {
+    flex: 1; text-align: center; padding: 10px 6px; border-radius: 8px;
+    border: 1px solid var(--line); background: #fff; cursor: pointer;
+    font-size: 14px; user-select: none; transition: all .15s;
+  }
+  .slot-tab small { display: block; font-size: 11px; color: var(--muted); font-weight: normal; }
+  .slot-tab.active-opening { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .slot-tab.active-mid { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); font-weight: 600; }
+  .slot-tab.active-ending { background: var(--purple-soft); border-color: var(--purple); color: var(--purple); font-weight: 600; }
+  .btn {
+    display: inline-block; border: none; border-radius: 8px; cursor: pointer;
+    padding: 10px 22px; font-size: 14px; font-family: inherit;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-ghost { background: #fff; border: 1px solid var(--line); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger-ghost { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 12px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+  .count-pill {
+    font-size: 12px; color: var(--muted); background: #fff;
+    border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px;
+  }
+  .entry {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px; background: #fff;
+  }
+  .entry-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tag { font-size: 12px; border-radius: 6px; padding: 2px 10px; font-weight: 600; }
+  .tag-opening { background: var(--accent-soft); color: var(--accent); }
+  .tag-mid { background: var(--amber-soft); color: var(--amber); }
+  .tag-ending { background: var(--purple-soft); color: var(--purple); }
+  .tag-stats { background: var(--green-soft); color: var(--green); font-weight: normal; }
+  .entry-meta { font-size: 12px; color: var(--muted); }
+  .entry-text {
+    font-size: 14px; white-space: pre-wrap; word-break: break-word;
+    background: var(--bg); border-radius: 8px; padding: 10px 12px;
+  }
+  .entry-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .entry-foot { text-align: right; margin-top: 6px; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
+  .hint {
+    font-size: 12px; color: var(--muted); background: var(--accent-soft);
+    border-radius: 8px; padding: 10px 14px; margin-top: 14px;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: #fff; font-size: 13px; padding: 10px 20px;
+    border-radius: 8px; opacity: 0; pointer-events: none; transition: all .25s;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .filter-bar button {
+    font-size: 12px; padding: 5px 14px; border-radius: 99px;
+    border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--muted);
+  }
+  .filter-bar button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>爆款素材库 · 片段录入</h1>
+  <p class="sub">把之前爆过的开头、中段引导评论、结尾引导课程一条条贴进来，标好战绩。数据自动存在本浏览器里，随时能导出 JSON 交给 AI 拆解机制。</p>
+
+  <div class="card">
+    <h2>录入一条片段</h2>
+    <div class="slot-tabs" id="slotTabs">
+      <div class="slot-tab" data-slot="opening">开头钩子<small>黄金3秒~前几句</small></div>
+      <div class="slot-tab" data-slot="mid">中段引导<small>点赞 / 评论 / 存档</small></div>
+      <div class="slot-tab" data-slot="ending">结尾引导<small>课程 / 橱窗 / 关注</small></div>
+    </div>
+
+    <label>片段原文（整段粘贴，保留原句）</label>
+    <textarea id="fragText" placeholder="例：所有家人先停一下刷视频。今天这条内容直接关乎你手里每一分钱的去向……"></textarea>
+
+    <div class="row">
+      <div>
+        <label>来源（视频标题或主题，方便回查）</label>
+        <input type="text" id="fragSource" placeholder="例：第四次财富大迁徙">
+      </div>
+      <div>
+        <label>播放量（万，可不填）</label>
+        <input type="number" id="fragViews" placeholder="例：120" min="0" step="0.1">
+      </div>
+      <div>
+        <label>点赞（万，可不填）</label>
+        <input type="number" id="fragLikes" placeholder="例：3.5" min="0" step="0.1">
+      </div>
+    </div>
+
+    <label>备注（可不填：转化情况、当时为什么爆、平台等）</label>
+    <input type="text" id="fragNote" placeholder="例：评论区打「来财」的特别多；视频号；带货转化好">
+
+    <div class="toolbar">
+      <button class="btn btn-primary" id="addBtn">保存这条</button>
+      <span class="count-pill" id="countPill">已存 0 条</span>
+    </div>
+    <div class="hint">
+      建议每条只放一个位置的片段：开头就贴开头那几句，结尾就贴从课程引导开始到最后。同一篇爆款的开头和结尾分两条录。<br>
+      录完点下方「导出 JSON」，把文件发给 AI，让它补机制拆解和类型标签。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>已录入的片段</h2>
+    <div class="filter-bar" id="filterBar">
+      <button data-f="all" class="on">全部</button>
+      <button data-f="opening">开头</button>
+      <button data-f="mid">中段引导</button>
+      <button data-f="ending">结尾引导</button>
+    </div>
+    <div id="entryList"></div>
+    <div class="toolbar">
+      <button class="btn btn-ghost" id="exportBtn">导出 JSON</button>
+      <button class="btn btn-ghost" id="copyBtn">复制全部到剪贴板</button>
+      <button class="btn btn-ghost" id="importBtn">导入 JSON</button>
+      <input type="file" id="importFile" accept=".json" style="display:none">
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  const KEY = "hook_library_entries_v1";
+  const SLOT_NAMES = { opening: "开头钩子", mid: "中段引导", ending: "结尾引导" };
+  let entries = [];
+  let currentSlot = "opening";
+  let filter = "all";
+
+  try { entries = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { entries = []; }
+
+  const $ = (id) => document.getElementById(id);
+  const toastEl = $("toast");
+  let toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1800);
+  }
+
+  function save() { localStorage.setItem(KEY, JSON.stringify(entries)); }
+
+  function renderTabs() {
+    document.querySelectorAll(".slot-tab").forEach((el) => {
+      el.className = "slot-tab" + (el.dataset.slot === currentSlot ? " active-" + currentSlot : "");
+    });
+  }
+
+  function statsText(e) {
+    const parts = [];
+    if (e.views_wan) parts.push("播放 " + e.views_wan + "万");
+    if (e.likes_wan) parts.push("点赞 " + e.likes_wan + "万");
+    return parts.join(" · ");
+  }
+
+  function render() {
+    renderTabs();
+    $("countPill").textContent = "已存 " + entries.length + " 条";
+    const list = $("entryList");
+    const shown = entries.filter((e) => filter === "all" || e.slot === filter);
+    if (!shown.length) {
+      list.innerHTML = '<div class="empty">还没有' + (filter === "all" ? "" : SLOT_NAMES[filter]) + '片段，从上面贴第一条开始。</div>';
+      return;
+    }
+    list.innerHTML = "";
+    shown.slice().reverse().forEach((e) => {
+      const div = document.createElement("div");
+      div.className = "entry";
+      const head = document.createElement("div");
+      head.className = "entry-head";
+      const tag = document.createElement("span");
+      tag.className = "tag tag-" + e.slot;
+      tag.textContent = SLOT_NAMES[e.slot] || e.slot;
+      head.appendChild(tag);
+      const st = statsText(e);
+      if (st) {
+        const stTag = document.createElement("span");
+        stTag.className = "tag tag-stats";
+        stTag.textContent = st;
+        head.appendChild(stTag);
+      }
+      const meta = document.createElement("span");
+      meta.className = "entry-meta";
+      meta.textContent = (e.source ? "《" + e.source + "》 · " : "") + e.created_at;
+      head.appendChild(meta);
+      div.appendChild(head);
+
+      const text = document.createElement("div");
+      text.className = "entry-text";
+      text.textContent = e.text;
+      div.appendChild(text);
+
+      if (e.note) {
+        const note = document.createElement("div");
+        note.className = "entry-note";
+        note.textContent = "备注：" + e.note;
+        div.appendChild(note);
+      }
+
+      const foot = document.createElement("div");
+      foot.className = "entry-foot";
+      const del = document.createElement("button");
+      del.className = "btn-danger-ghost";
+      del.textContent = "删除";
+      del.onclick = () => {
+        if (!confirm("删除这条片段？")) return;
+        entries = entries.filter((x) => x.id !== e.id);
+        save(); render();
+      };
+      foot.appendChild(del);
+      div.appendChild(foot);
+      list.appendChild(div);
+    });
+  }
+
+  document.querySelectorAll(".slot-tab").forEach((el) => {
+    el.onclick = () => { currentSlot = el.dataset.slot; renderTabs(); };
+  });
+
+  $("filterBar").onclick = (ev) => {
+    const btn = ev.target.closest("button");
+    if (!btn) return;
+    filter = btn.dataset.f;
+    document.querySelectorAll("#filterBar button").forEach((b) => b.classList.toggle("on", b === btn));
+    render();
+  };
+
+  $("addBtn").onclick = () => {
+    const text = $("fragText").value.trim();
+    if (!text) { toast("片段原文不能为空"); return; }
+    entries.push({
+      id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+      slot: currentSlot,
+      text: text,
+      source: $("fragSource").value.trim(),
+      views_wan: parseFloat($("fragViews").value) || null,
+      likes_wan: parseFloat($("fragLikes").value) || null,
+      note: $("fragNote").value.trim(),
+      // 下面三个字段留空，由 AI 拆解后回填
+      hook_type: "",
+      mechanism: "",
+      reusable_pattern: "",
+      created_at: new Date().toLocaleDateString("zh-CN")
+    });
+    save();
+    $("fragText").value = "";
+    $("fragNote").value = "";
+    render();
+    toast("已保存，可以贴下一条");
+  };
+
+  function exportPayload() {
+    return JSON.stringify({
+      format: "hook_library_raw",
+      version: 1,
+      exported_at: new Date().toISOString(),
+      note: "hook_type / mechanism / reusable_pattern 为空的条目等待 AI 拆解回填",
+      entries: entries
+    }, null, 2);
+  }
+
+  $("exportBtn").onclick = () => {
+    if (!entries.length) { toast("还没有片段可导出"); return; }
+    const blob = new Blob([exportPayload()], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "hook_library_raw.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("已导出 hook_library_raw.json");
+  };
+
+  $("copyBtn").onclick = async () => {
+    if (!entries.length) { toast("还没有片段可复制"); return; }
+    try {
+      await navigator.clipboard.writeText(exportPayload());
+      toast("已复制，直接粘贴给 AI 即可");
+    } catch (e) {
+      toast("复制失败，请用导出 JSON");
+    }
+  };
+
+  $("importBtn").onclick = () => $("importFile").click();
+  $("importFile").onchange = (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        const list = Array.isArray(data) ? data : data.entries;
+        if (!Array.isArray(list)) throw new Error("bad format");
+        const ids = new Set(entries.map((e) => e.id));
+        let added = 0;
+        list.forEach((e) => {
+          if (e && e.text && !ids.has(e.id)) { entries.push(e); added++; }
+        });
+        save(); render();
+        toast("导入完成，新增 " + added + " 条");
+      } catch (err) {
+        toast("文件格式不对，需要本页导出的 JSON");
+      }
+      ev.target.value = "";
+    };
+    reader.readAsText(file, "utf-8");
+  };
+
+  renderTabs();
+  render();
+})();
+</script>
+</body>
+</html>

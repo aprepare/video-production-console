@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>观众画像 · 改后对照</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --paper:#e8dcc8; --oil:#c9893a; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:linear-gradient(180deg,#121820,#1a2332 45%,#10161e); color:var(--paper); font-family:"Noto Sans SC",sans-serif; }
+    main { max-width:1080px; margin:0 auto; padding:28px 24px 64px; }
+    .kicker { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--oil); letter-spacing:.16em; }
+    h1 { font-family:"Noto Serif SC",serif; font-size:30px; margin:8px 0 10px; }
+    .lead { color:#d8cbb4; line-height:1.7; max-width:72ch; }
+    h2 { font-family:"Noto Serif SC",serif; font-size:22px; margin:32px 0 12px; }
+    .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .col { border:1px solid rgba(232,220,200,.14); padding:14px 16px; font-size:14px; line-height:1.7; }
+    .was { background:rgba(178,58,47,.12); }
+    .now { background:rgba(61,107,90,.16); }
+    .tag { font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; margin-bottom:8px; color:var(--oil); }
+    .kill { text-decoration:line-through; color:#e7a39d; }
+    @media (max-width:860px) { .pair { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="kicker">v3.5.1 → v3.5.2 · 2026-09-01</div>
+  <h1>已改：画像只留听众是谁</h1>
+  <p class="lead">写手系统和用户模板已替换。弹药库、钩子、事实核查、审稿没动。新跑才吃到这版。</p>
+
+  <h2>写手系统 · 观众画像</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p>听的人九成 40 岁往上，一多半超过 50，男性居多，视频号。只认听得懂、跟自家钱有关。</p>
+      <p><span class="kill">全程街坊唠嗑；句子短；金融词必须拆；比喻只用存折、菜市场、退休金、水电费、孙子、棋牌室；每个数字算到你家那笔钱；专戳定存、利息变薄、养老钱、给儿孙留东西；每一段结尾留话头。</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新 · 线上已替换</div>
+      <p>听的人多是 40 岁往上、视频号。第一句不用停下来想，数字能对上自家那笔钱。像跟人说话，不要讲解员腔。</p>
+      <p>不要为了显得亲切，把每篇都写成定存、孙子、菜市场。</p>
+    </article>
+  </div>
+
+  <h2>写手用户模板 · 那一行</h2>
+  <div class="pair">
+    <article class="col was">
+      <div class="tag">旧</div>
+      <p>写给 40 岁往上的街坊听：<span class="kill">句子短、词要土、每个数字都算到他家那笔钱头上。</span></p>
+    </article>
+    <article class="col now">
+      <div class="tag">新 · 线上已替换</div>
+      <p>听的人多是 40 岁往上、视频号：第一句不用停下来想。不要为了显得亲切，把每篇都写成定存、孙子、菜市场。</p>
+    </article>
+  </div>
+</main>
+</body>
+</html>

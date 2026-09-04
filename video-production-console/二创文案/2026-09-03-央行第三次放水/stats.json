@@ -1,0 +1,84 @@
+{
+  "source": 2649,
+  "results": [
+    {
+      "file": "二创01.txt",
+      "total": 2561,
+      "ratio": 0.97,
+      "tail": 479,
+      "wukuai": 5,
+      "chuchuang": 2,
+      "kemin": 1,
+      "interactPct": 11,
+      "overlapRuns": 0,
+      "overlapPct": 0,
+      "runs": [],
+      "paragraphs": 14
+    },
+    {
+      "file": "二创02.txt",
+      "total": 2033,
+      "ratio": 0.77,
+      "tail": 450,
+      "wukuai": 5,
+      "chuchuang": 2,
+      "kemin": 1,
+      "interactPct": 12,
+      "overlapRuns": 1,
+      "overlapPct": 0.6,
+      "runs": [
+        "大放水我都提前把方向"
+      ],
+      "paragraphs": 14
+    },
+    {
+      "file": "二创03.txt",
+      "total": 1896,
+      "ratio": 0.72,
+      "tail": 432,
+      "wukuai": 5,
+      "chuchuang": 2,
+      "kemin": 1,
+      "interactPct": 13,
+      "overlapRuns": 4,
+      "overlapPct": 3.4,
+      "runs": [
+        "开发的搞建材装修的干工程机械的",
+        "第二现在是信息时代消息",
+        "家的钱路子就不一样有人",
+        "五块钱还是缺一个把事看透的脑子"
+      ],
+      "paragraphs": 14
+    },
+    {
+      "file": "二创04.txt",
+      "total": 1821,
+      "ratio": 0.69,
+      "tail": 408,
+      "wukuai": 5,
+      "chuchuang": 2,
+      "kemin": 1,
+      "interactPct": 12,
+      "overlapRuns": 0,
+      "overlapPct": 0,
+      "runs": [],
+      "paragraphs": 14
+    },
+    {
+      "file": "二创05.txt",
+      "total": 1837,
+      "ratio": 0.69,
+      "tail": 428,
+      "wukuai": 5,
+      "chuchuang": 2,
+      "kemin": 1,
+      "interactPct": 13,
+      "overlapRuns": 1,
+      "overlapPct": 0.9,
+      "runs": [
+        "年都有可能这条视频别人划走"
+      ],
+      "paragraphs": 13
+    }
+  ]
+}
