@@ -717,8 +717,10 @@ test("remix-lab detail shows source text, 1-based run labels, and groups by slot
 
   render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
   expect(await screen.findByRole("button", { name: "改稿" })).toBeTruthy();
-  expect(screen.getAllByRole("button", { name: "运行 1" })).toHaveLength(2);
-  expect(screen.queryByRole("button", { name: "运行 2" })).toBeNull();
+  // 多模型对比：运行页签按模型名区分，而不是两个一样的「运行 1」。
+  expect(screen.getByRole("button", { name: "model-a" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "model-b" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "运行 1" })).toBeNull();
 });
 
 test("remix-lab patches comment on blur and adopts into a project", async () => {
@@ -809,6 +811,24 @@ const workbenchRun = {
     summary: "改了开头一处。",
     issues: [{ where: "旧开头", problem: "口语度", fix: "换成二选一逼问" }],
     at: "2026-08-29T00:00:00Z",
+    // 审稿结论自带两版快照：正文和发布字段都能并排对照
+    before: {
+      continuous_script: "这是写手初稿正文。",
+      titles: ["标题甲"],
+      short_titles: ["旧板标题", "旧副标题", "旧备选"],
+      descriptions: ["旧描述一", "旧描述二"],
+      topics: ["#楼市", "#房贷", "#家庭理财", "#财经"],
+      cta: "",
+    },
+    revised: {
+      continuous_script:
+        "这是审稿后的定稿正文，讲家里那笔钱该往哪放，一次说明白，足够四十个字了吧，再补几个字凑够下限。",
+      titles: ["标题甲"],
+      short_titles: ["板标题甲", "副标题乙", "备选丙"],
+      descriptions: ["描述一", "描述二", "描述三"],
+      topics: ["#楼市", "#房贷", "#家庭理财", "#财经"],
+      cta: "",
+    },
   }),
   error_message: "",
   comment: "",
@@ -850,12 +870,32 @@ test("creation studio shows review verdict, saves edited package, and reworks wi
 
   render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "改稿" }));
-  // 审稿结论与双版本对照
+  // 审稿结论与审稿前/后对照：正文默认只看改动（句级 diff），短标题、描述并排给出
   expect(await screen.findByText("审稿已修订")).toBeTruthy();
-  expect(screen.getByText("这是写手初稿正文。")).toBeTruthy();
+  expect(screen.getByText(/审稿改了 2 句（删 1 · 加 1）/)).toBeTruthy();
+  const deleted = screen.getByText("这是写手初稿正文。");
+  expect(deleted.className).toContain("remix-lab-diff__del");
+  // 切到并排全文再切回来
+  fireEvent.click(screen.getByRole("button", { name: "并排全文" }));
+  expect(screen.getAllByText(/这是写手初稿正文。/).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "只看改动" }));
+  expect(screen.getByText("旧板标题")).toBeTruthy();
+  expect(screen.getByText("旧描述一")).toBeTruthy();
+  expect(screen.getByText(/审稿改了 3 处字段：正文、短标题、视频描述/)).toBeTruthy();
+  // 话题、长标题两版一致，只显示一遍
+  expect(screen.getAllByText("两版一致").length).toBe(2);
   expect(screen.getByDisplayValue("板标题甲")).toBeTruthy();
 
-  // 编辑正文并保存
+  // 不采用审稿改的短标题：一键回填写手那版到编辑器
+  fireEvent.click(screen.getByRole("button", { name: "短标题用审稿前" }));
+  expect(screen.getByDisplayValue("旧板标题")).toBeTruthy();
+  expect(screen.queryByDisplayValue("板标题甲")).toBeNull();
+  // 正文默认是审稿后那版；采用审稿前正文再切回审稿后
+  fireEvent.click(screen.getByRole("button", { name: "正文用审稿前" }));
+  expect(screen.getByDisplayValue("这是写手初稿正文。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "正文用审稿后" }));
+
+  // 编辑正文并保存：短标题保存的是采用的审稿前版本
   const script = screen.getByLabelText("运行 1 正文");
   fireEvent.change(script, {
     target: { value: "改过之后的定稿正文，讲家里那笔钱该往哪放，一次说明白，足够四十个字了吧，再补几个字凑够下限。" },
@@ -863,7 +903,8 @@ test("creation studio shows review verdict, saves edited package, and reworks wi
   fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
   await waitFor(() => expect(packagePuts).toHaveLength(1));
   expect(String(packagePuts[0].body.continuous_script)).toContain("改过之后的定稿正文");
-  expect(packagePuts[0].body.short_titles).toEqual(["板标题甲", "副标题乙", "备选丙"]);
+  expect(packagePuts[0].body.short_titles).toEqual(["旧板标题", "旧副标题", "旧备选"]);
+  expect(packagePuts[0].body.descriptions).toEqual(["描述一", "描述二", "描述三"]);
 
   // 批注打回
   fireEvent.change(screen.getByLabelText("批注"), { target: { value: "开头再狠一点" } });
@@ -913,6 +954,71 @@ test("run workbench opens the workflow view and inspects the failed stage", asyn
   // 默认选中第一个失败节点，检视器里能看到错误
   expect(await screen.findByText("ammo agent down")).toBeTruthy();
   expect(screen.getByRole("button", { name: "编辑这路Agent提示词" })).toBeTruthy();
+  // 审稿节点：结论按人话展示，原始 JSON 收进折叠
+  fireEvent.click(screen.getByText("审稿终审"));
+  expect(await screen.findByText("审稿通过")).toBeTruthy();
+  expect(screen.getByText("原始 review.json")).toBeTruthy();
+});
+
+test("final node shows the tidy script and copy buttons instead of raw JSON", async () => {
+  const finalPackage = {
+    continuous_script: "明年开始，9样东西掉价掉到你不敢认。\n\n先把自家日子过稳当了。",
+    titles: ["候选标题一", "候选标题二"],
+    short_titles: ["板面主标题", "副标题", "备选"],
+    descriptions: ["描述一：这条内容顺手存一下。"],
+    topics: ["#楼市", "#财经"],
+    cta: "课名《财富觉醒方法论》在主页橱窗，5块钱。",
+  };
+  const stagesFixture = {
+    run_id: runID,
+    pipeline: "workflow",
+    status: "completed",
+    stages: [
+      { id: "source", kind: "input", title: "对标原文", status: "ok", x: 0, y: 190, output: "原文" },
+      { id: "final", kind: "output", title: "定稿与发布包", status: "ok", x: 600, y: 190, output: JSON.stringify(finalPackage) },
+    ],
+    edges: [["source", "final"]],
+  };
+  const packagePuts: Array<Record<string, unknown>> = [];
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === `/api/remix-lab/experiments/${experimentID}`) return json(workbenchExperiment());
+    if (path === `/api/remix-lab/runs/${runID}/stages`) return json(stagesFixture);
+    if (path === `/api/remix-lab/runs/${runID}/package` && init?.method === "PUT") {
+      packagePuts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return json({ status: "ok" });
+    }
+    if (path === `/api/remix-lab/runs/${runID}` && init?.method === "PATCH") return json({ status: "ok" });
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByText("定稿与发布包"));
+
+  // 正文按文章排版展示（原始 JSON 折叠里还有一份，允许多处匹配）
+  expect((await screen.findAllByText(/明年开始，9样东西掉价掉到你不敢认/)).length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "复制正文" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "板面主标题" })).toBeTruthy();
+  // 发布包精简：不再列候选标题，话题已接在描述末尾、不单独给复制按钮
+  expect(screen.queryByRole("button", { name: "候选标题一" })).toBeNull();
+  expect(screen.getByRole("button", { name: "复制描述 1" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "复制话题 #楼市 #财经" })).toBeNull();
+  // 原始 JSON 收进折叠里备查
+  expect(screen.getByText("原始 JSON")).toBeTruthy();
+
+  // 就地编辑定稿：改正文和短标题后保存，混剪用新稿
+  fireEvent.click(screen.getByRole("button", { name: "编辑定稿" }));
+  const editedScript = "手改后的口播正文。".repeat(10);
+  fireEvent.change(screen.getByLabelText("编辑定稿正文"), { target: { value: editedScript } });
+  fireEvent.change(screen.getByLabelText("编辑短标题"), { target: { value: "新板面主标题\n新副标题\n新备选" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存定稿" }));
+  await waitFor(() => expect(packagePuts).toHaveLength(1));
+  expect(packagePuts[0].continuous_script).toBe(editedScript);
+  expect(packagePuts[0].short_titles).toEqual(["新板面主标题", "新副标题", "新备选"]);
+  expect(packagePuts[0].topics).toEqual(["#楼市", "#财经"]);
+  // 保存成功后退出编辑态
+  await waitFor(() => expect(screen.queryByLabelText("编辑定稿正文")).toBeNull());
 });
 
 test("run workbench confirms the produce gate and posts the account", async () => {
@@ -933,6 +1039,15 @@ test("run workbench confirms the produce gate and posts the account", async () =
     if (path === "/api/remix-lab/defaults") return json(defaults);
     if (path === "/api/remix-lab/experiments") return json([]);
     if (path === `/api/remix-lab/experiments/${experimentID}`) return json(gateExperiment());
+    // 真实后端有生产记录时 stages 响应总带 production；不带的话画布会把
+    // 闸门状态覆盖成 null，确认按钮消失（之前靠通用兜底 fixture 是碰运气）。
+    if (path === `/api/remix-lab/runs/${runID}/stages`) {
+      return json({
+        run_id: runID, pipeline: "workflow", status: "completed",
+        production: { status: "waiting_confirm", step: "confirm", account_id: "", auto: false },
+        stages: [], edges: [],
+      });
+    }
     if (path === "/api/accounts") {
       return json([{ id: "acct-9", name: "观局思考", status: "active" }]);
     }
@@ -944,13 +1059,65 @@ test("run workbench confirms the produce gate and posts the account", async () =
     throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
   }));
 
+  // 前面的用例会把选中账号写进 localStorage，带着它渲染会走另一条工作流请求
+  // 路径，闸门按钮出现时机不同；这里从干净状态开始。
+  window.localStorage.clear();
   render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
-  expect(await screen.findByRole("button", { name: "确认开始混剪" })).toBeTruthy();
-  // 账号列表拉回来后自动选中第一个
-  await waitFor(() => expect((screen.getByLabelText("混剪账号") as HTMLSelectElement).value).toBe("acct-9"));
+  // 闸门按钮要等实验详情 + stages 两轮请求都回来；整套并发跑时 1s 默认超时偶发不够。
+  expect(await screen.findByRole("button", { name: "确认开始混剪" }, { timeout: 5000 })).toBeTruthy();
+  // 闸门不再自动塞第一个账号：等账号列表回来，由操作员选；选完不切换页面工作流。
+  const gateSelect = screen.getByLabelText("混剪账号") as HTMLSelectElement;
+  await waitFor(() => expect(gateSelect.querySelector('option[value="acct-9"]')).toBeTruthy());
+  expect(gateSelect.value).toBe("");
+  fireEvent.change(gateSelect, { target: { value: "acct-9" } });
+  expect(api).not.toHaveBeenCalledWith(expect.stringContaining("workflow?account_id=acct-9"), undefined);
   fireEvent.click(screen.getByRole("button", { name: "确认开始混剪" }));
   await waitFor(() => expect(produces).toHaveLength(1));
   expect(produces[0].account_id).toBe("acct-9");
+});
+
+test("produce gate defaults to the run's own account and warns when switched", async () => {
+  const produces: Array<Record<string, string>> = [];
+  const production = { status: "waiting_confirm", step: "confirm", account_id: "acct-2", auto: false };
+  const gateExperiment = () => {
+    const exp = workbenchExperiment();
+    return { ...exp, produce_account_id: "acct-2", runs: exp.runs.map((run) => ({ ...run, production })) };
+  };
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === `/api/remix-lab/experiments/${experimentID}`) return json(gateExperiment());
+    if (path === `/api/remix-lab/runs/${runID}/stages`) {
+      return json({ run_id: runID, pipeline: "workflow", status: "completed", production, stages: [], edges: [] });
+    }
+    if (path === "/api/accounts") {
+      return json([
+        { id: "acct-1", name: "云中观局", status: "active" },
+        { id: "acct-2", name: "财经漫游", status: "active" },
+      ]);
+    }
+    if (path === `/api/remix-lab/runs/${runID}/produce` && init?.method === "POST") {
+      produces.push(JSON.parse(String(init.body)) as Record<string, string>);
+      return json({ status: "ok" }, 202);
+    }
+    if (path === `/api/remix-lab/runs/${runID}` && init?.method === "PATCH") return json({ status: "ok" });
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  window.localStorage.clear();
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
+  expect(await screen.findByRole("button", { name: "确认开始混剪" }, { timeout: 5000 })).toBeTruthy();
+  const gateSelect = screen.getByLabelText("混剪账号") as HTMLSelectElement;
+  await waitFor(() => expect(gateSelect.querySelector('option[value="acct-2"]')).toBeTruthy());
+  // 这稿是财经漫游跑出来的，闸门默认就是财经漫游，不沾上一稿选过的账号。
+  expect(gateSelect.value).toBe("acct-2");
+  expect(screen.queryByText(/确认要进别的号/)).toBeNull();
+  fireEvent.change(gateSelect, { target: { value: "acct-1" } });
+  expect(screen.getByText(/这稿是按「财经漫游」写的/)).toBeTruthy();
+  fireEvent.change(gateSelect, { target: { value: "acct-2" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认开始混剪" }));
+  await waitFor(() => expect(produces).toHaveLength(1));
+  expect(produces[0].account_id).toBe("acct-2");
 });
 
 test("creation studio imports the package into a new montage project", async () => {
@@ -1002,7 +1169,8 @@ test("creation studio imports the package into a new montage project", async () 
   expect(await screen.findByText(/已进项目/)).toBeTruthy();
 });
 
-test("remix-lab shows agent thinking progress until the reply arrives", async () => {
+// 智能体面板暂时隐藏（AGENT_PANEL_HIDDEN），恢复面板时把下面四个 skip 撤掉。
+test.skip("remix-lab shows agent thinking progress until the reply arrives", async () => {
   let finishChat: (value: Response) => void = () => {};
   const chatPending = new Promise<Response>((resolve) => {
     finishChat = resolve;
@@ -1025,7 +1193,7 @@ test("remix-lab shows agent thinking progress until the reply arrives", async ()
   expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
 });
 
-test("remix-lab restores the saved agent conversation", async () => {
+test.skip("remix-lab restores the saved agent conversation", async () => {
   const api = vi.fn(withLabExtras(async (path: string) => {
     if (path === "/api/remix-lab/defaults") return json(defaults);
     if (path === "/api/remix-lab/experiments") return json([]);
@@ -1054,7 +1222,7 @@ test("remix-lab restores the saved agent conversation", async () => {
   expect(screen.getByText("补篇幅")).toBeTruthy();
 });
 
-test("remix-lab sends on Enter and starts a fresh chat", async () => {
+test.skip("remix-lab sends on Enter and starts a fresh chat", async () => {
   const chats: string[] = [];
   let historyCleared = false;
   const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
@@ -1082,7 +1250,7 @@ test("remix-lab sends on Enter and starts a fresh chat", async () => {
   expect(screen.queryByText("记住了这轮")).toBeNull();
 });
 
-test("remix-lab recovers last reply after a dropped chat", async () => {
+test.skip("remix-lab recovers last reply after a dropped chat", async () => {
   let chatAttempted = false;
   const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
     if (path === "/api/remix-lab/defaults") return json(defaults);
@@ -1170,6 +1338,54 @@ test("switching account remounts the canvas and fetches workflow with account_id
   });
 });
 
+test("history rail lists recent experiments and filters them by account", async () => {
+  const onNavigate = vi.fn();
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/accounts") {
+      return json([
+        { id: "acct-a", name: "账号A", status: "active" },
+        { id: "acct-b", name: "账号B", status: "active" },
+      ]);
+    }
+    if (path === "/api/remix-lab/experiments") {
+      return json([
+        {
+          id: "exp-waiting", title: "现金为王的时代真的要来了", prompt_stamp: "s",
+          status: "completed", workflow: true, account_id: "acct-a",
+          created_at: "2026-08-31T08:12:00Z", updated_at: "2026-08-31T08:27:05Z",
+        },
+        {
+          id: "exp-broken", title: "被重启打断的一次", prompt_stamp: "s",
+          status: "failed", workflow: true, account_id: "acct-b",
+          created_at: "2026-08-31T08:35:09Z", updated_at: "2026-08-31T08:41:00Z",
+        },
+      ]);
+    }
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} onNavigate={onNavigate} />);
+
+  // 没选账号（全局默认工作流）：全量展示，标题带条数，全局视图下每条标账号
+  expect(await screen.findByText(/内容 2 条/)).toBeTruthy();
+  expect(screen.getByText("二创完成")).toBeTruthy();
+  expect(screen.getByText("二创失败")).toBeTruthy();
+  fireEvent.click(screen.getByText("现金为王的时代真的要来了"));
+  expect(onNavigate).toHaveBeenCalledWith("/remix-lab/exp-waiting");
+
+  // 搜索框按标题过滤
+  fireEvent.change(screen.getByLabelText("搜索历史"), { target: { value: "重启" } });
+  await waitFor(() => expect(screen.queryByText("现金为王的时代真的要来了")).toBeNull());
+  expect(screen.getByText("被重启打断的一次")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("搜索历史"), { target: { value: "" } });
+
+  // 切到账号A：只剩A的实验，B的隐藏
+  fireEvent.change(screen.getByLabelText("切换账号工作流"), { target: { value: "acct-a" } });
+  await waitFor(() => expect(screen.queryByText("被重启打断的一次")).toBeNull());
+  expect(screen.getByText("现金为王的时代真的要来了")).toBeTruthy();
+});
+
 test("history projects group by account and filter after switching to A", async () => {
   const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
     if (path === "/api/remix-lab/defaults") return json(defaults);
@@ -1179,11 +1395,12 @@ test("history projects group by account and filter after switching to A", async 
   }));
 
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  // 这些项目没有对应的二创实验 → 列在「其他项目」里，全局视图下每条带账号名
   expect(await screen.findByRole("button", { name: /^A项目一/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /^A项目二/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /^B项目/ })).toBeTruthy();
-  const groupTitles = [...document.querySelectorAll(".remix-lab__history-group-title")].map((node) => node.textContent);
-  expect(groupTitles).toEqual(["账号A", "账号B"]);
+  expect(screen.getByText(/其他项目 3 条/)).toBeTruthy();
+  expect(screen.getAllByText("账号A").length).toBeGreaterThan(0);
 
   fireEvent.change(screen.getByLabelText("切换账号工作流"), { target: { value: accountA } });
   await waitFor(() => {
@@ -1214,4 +1431,194 @@ test("new account form shows the account name field", async () => {
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "新增账号" }));
   expect(screen.getByLabelText("账号名称")).toBeTruthy();
+});
+
+test("tidy layout button realigns the graph and autosaves clean positions", async () => {
+  const puts: Array<Record<string, unknown>> = [];
+  const messyWorkflow = {
+    ...workflowFixture,
+    nodes: workflowFixture.nodes.map((node) =>
+      node.id === "hook"
+        ? { ...node, x: 777, y: 555 }
+        : node.id === "writer"
+          ? { ...node, x: 50, y: 900 }
+          : node,
+    ),
+    production: { captions_disabled: true, node_positions: { "produce-montage": { x: 999, y: 888 } } },
+  };
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path.startsWith("/api/remix-lab/workflow") && (!init?.method || init.method === "GET")) {
+      return json(messyWorkflow);
+    }
+    if (path.startsWith("/api/remix-lab/workflow") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      puts.push(body);
+      return json(body);
+    }
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "一键整理" }));
+
+  await waitFor(() => {
+    const last = puts[puts.length - 1] as
+      | { nodes?: Array<{ id: string; x: number; y: number }>; production?: { node_positions?: unknown } }
+      | undefined;
+    expect(last).toBeTruthy();
+    const byID = new Map((last?.nodes ?? []).map((node) => [node.id, node]));
+    // 单个 agent 回到写手左侧居中；写手回到骨干链横排
+    expect(byID.get("hook")).toMatchObject({ x: 300, y: 190 });
+    expect(byID.get("writer")).toMatchObject({ x: 600, y: 190 });
+    expect(byID.get("final")).toMatchObject({ x: 1440, y: 190 });
+    // 生产排拖动过的位置被清掉，回到默认横排
+    expect(last?.production?.node_positions).toBeUndefined();
+  }, { timeout: 3000 });
+});
+
+test("spoken node lets the operator edit and save the script before narration", async () => {
+  const uploads: string[] = [];
+  const producedExperiment = () => {
+    const exp = workbenchExperiment();
+    return {
+      ...exp,
+      runs: exp.runs.map((run) => ({
+        ...run,
+        production: {
+          status: "completed", step: "done", account_id: "acct-9", auto: false, project_id: "proj-1",
+        },
+      })),
+    };
+  };
+  const stagesFixture = {
+    run_id: runID,
+    pipeline: "workflow",
+    status: "completed",
+    production: { status: "completed", step: "done", account_id: "acct-9", auto: false, project_id: "proj-1" },
+    stages: [
+      {
+        id: "produce-spoken", kind: "produce", title: "口播稿", status: "ok", x: 370, y: 430,
+        extra: { production: true, production_step: "spoken", project_id: "proj-1", asset_type: "spoken_script" },
+      },
+    ],
+    edges: [],
+  };
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === `/api/remix-lab/experiments/${experimentID}`) return json(producedExperiment());
+    if (path === `/api/remix-lab/runs/${runID}/stages`) return json(stagesFixture);
+    if (path === "/api/projects/proj-1" && (!init?.method || init.method === "GET")) {
+      return json({
+        project: { id: "proj-1", stage: "review" },
+        assets: { spoken_script: { id: "spoken-1", state: "ready" } },
+      });
+    }
+    if (path === "/api/assets/spoken-1/content") {
+      return new Response("手里有钱的都听好了\n翻来覆去睡不着的夜", { status: 200 });
+    }
+    if (path === "/api/projects/proj-1/assets/spoken_script" && init?.method === "POST") {
+      uploads.push(path);
+      return json({ status: "ok" });
+    }
+    if (path === `/api/remix-lab/runs/${runID}` && init?.method === "PATCH") return json({ status: "ok" });
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByText("口播稿"));
+  expect(await screen.findByText(/手里有钱的都听好了/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "编辑口播稿" }));
+  fireEvent.change(screen.getByLabelText("编辑口播稿"), {
+    target: { value: "手里有钱的都听好了\n先把手揣兜里" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存口播稿" }));
+  await waitFor(() => expect(uploads).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByLabelText("编辑口播稿")).toBeNull());
+});
+
+test("produce nodes offer redo, export and publish actions on the canvas", async () => {
+  const redos: Array<Record<string, string>> = [];
+  const publishes: string[] = [];
+  const producedExperiment = () => {
+    const exp = workbenchExperiment();
+    return {
+      ...exp,
+      runs: exp.runs.map((run) => ({
+        ...run,
+        production: {
+          status: "completed", step: "done", account_id: "acct-9", auto: false, project_id: "proj-1",
+        },
+      })),
+    };
+  };
+  const stagesFixture = {
+    run_id: runID,
+    pipeline: "workflow",
+    status: "completed",
+    production: { status: "completed", step: "done", account_id: "acct-9", auto: false, project_id: "proj-1" },
+    stages: [
+      { id: "source", kind: "input", title: "对标原文", status: "ok", x: 0, y: 190, output: "原文" },
+      { id: "final", kind: "output", title: "定稿与发布包", status: "ok", x: 600, y: 190, output: "{}" },
+      {
+        id: "produce-montage", kind: "produce", title: "混剪草稿", status: "ok", x: 600, y: 430,
+        system_prompt: "混剪提示词",
+        extra: { production: true, production_step: "montage", project_id: "proj-1", task_id: "task-m" },
+      },
+      {
+        id: "produce-publish", kind: "produce", title: "发布", status: "waiting", x: 830, y: 430,
+        extra: {
+          production: true, production_step: "publish", project_id: "proj-1",
+          publishing: { descriptions: ["视频描述一"], short_titles: ["板题", "副题"], topics: ["#楼市"] },
+        },
+      },
+    ],
+    edges: [["source", "final"], ["final", "produce-montage"], ["produce-montage", "produce-publish"]],
+  };
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === `/api/remix-lab/experiments/${experimentID}`) return json(producedExperiment());
+    if (path === `/api/remix-lab/runs/${runID}/stages`) return json(stagesFixture);
+    if (path === "/api/tasks/task-m") return json({ status: "completed" });
+    if (path === "/api/projects/proj-1" && (!init?.method || init.method === "GET")) {
+      return json({
+        project: { id: "proj-1", stage: "review" },
+        assets: {
+          mix_draft: { id: "draft-1", state: "ready" },
+          narration: { id: "narr-1", state: "ready" },
+        },
+      });
+    }
+    if (path === `/api/remix-lab/runs/${runID}/produce/redo` && init?.method === "POST") {
+      redos.push(JSON.parse(String(init.body)) as Record<string, string>);
+      return json({ status: "ok" }, 202);
+    }
+    if (path === "/api/projects/proj-1/publish" && init?.method === "POST") {
+      publishes.push(path);
+      return json({ id: "proj-1", stage: "published" });
+    }
+    if (path === `/api/remix-lab/runs/${runID}` && init?.method === "PATCH") return json({ status: "ok" });
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
+
+  // 混剪草稿节点：导出视频、打开目录、重出草稿
+  fireEvent.click(await screen.findByText("混剪草稿"));
+  expect(await screen.findByRole("button", { name: "导出视频" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "在电脑上打开剪映目录" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "重出一份剪映草稿（旧的保留）" }));
+  await waitFor(() => expect(redos).toHaveLength(1));
+  expect(redos[0]).toEqual({ step: "montage" });
+
+  // 发布节点：发布文案复制入口 + 确认已发布
+  fireEvent.click(screen.getByText("发布"));
+  expect(await screen.findByText("视频描述一")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "复制描述 1" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "板题" })).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "确认已发布" }));
+  await waitFor(() => expect(publishes).toHaveLength(1));
 });

@@ -19,12 +19,20 @@ import (
 )
 
 type ExperimentSummary struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	PromptStamp string    `json:"prompt_stamp"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	PromptStamp string `json:"prompt_stamp"`
+	Status      string `json:"status"`
+	// AccountID 是开跑时选的生产账号（空=挂在全局默认工作流下），
+	// 历史栏「最近实验」按它过滤到当前账号。
+	AccountID string    `json:"account_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// 生产段（混剪）进度：历史栏把二创和混剪合成一条内容展示时用。
+	// 多稿实验取最近更新的那条生产记录。
+	ProductionStatus string `json:"production_status,omitempty"` // waiting_confirm / running / completed / failed
+	ProductionStep   string `json:"production_step,omitempty"`
+	ProjectID        string `json:"project_id,omitempty"`
 }
 
 func (s *Service) GetExperiment(ctx context.Context, id string) (Experiment, error) {
@@ -46,14 +54,33 @@ func (s *Service) ListExperiments(ctx context.Context) ([]ExperimentSummary, err
 	}
 	out := make([]ExperimentSummary, 0, len(rows))
 	for _, exp := range rows {
-		out = append(out, ExperimentSummary{
+		summary := ExperimentSummary{
 			ID:          exp.ID,
 			Title:       exp.Title,
 			PromptStamp: exp.PromptStamp,
 			Status:      exp.Status,
+			AccountID:   strings.TrimSpace(exp.ProduceAccountID),
 			CreatedAt:   exp.CreatedAt,
 			UpdatedAt:   exp.UpdatedAt,
-		})
+		}
+		if productions, err := s.repo.ListProductionsByExperiment(ctx, exp.ID); err == nil && len(productions) > 0 {
+			latest := productions[0]
+			for _, rec := range productions[1:] {
+				if rec.UpdatedAt.After(latest.UpdatedAt) {
+					latest = rec
+				}
+			}
+			summary.ProductionStatus = latest.Status
+			summary.ProductionStep = latest.Step
+			summary.ProjectID = latest.ProjectID
+			if summary.AccountID == "" {
+				summary.AccountID = strings.TrimSpace(latest.AccountID)
+			}
+			if latest.UpdatedAt.After(summary.UpdatedAt) {
+				summary.UpdatedAt = latest.UpdatedAt
+			}
+		}
+		out = append(out, summary)
 	}
 	return out, nil
 }
@@ -234,6 +261,8 @@ func (s *Service) executeRun(ctx context.Context, exp store.RemixLabExperimentRe
 		Pipeline:          slot.Pipeline,
 		// 创作台默认走审稿agent终审：只修违规处，留 draft_v1/review 双版本产物。
 		ReviewerEnabled: true,
+		// 工作流 agent 节点 {{file:名字}} 占位符的取文件目录（爆款素材库等）。
+		IntelFileDir: filepath.Join(s.dataRoot, "remix_lab"),
 	}
 	// 操作员在「Agent提示词」编辑器里的覆盖文本（钩子/事实/弹药/审稿）。
 	s.applyAgentPromptOverrides(&opts)

@@ -24,8 +24,14 @@ export type RemixLabExperimentSummary = {
   prompt_stamp: string;
   status: string;
   workflow?: boolean;
+  /** 开跑时选的生产账号（空=挂在全局默认工作流下）。 */
+  account_id?: string;
   created_at: string;
   updated_at: string;
+  /** 混剪进度（有生产记录时）；历史栏把二创和混剪合成一条内容展示。 */
+  production_status?: string;
+  production_step?: string;
+  project_id?: string;
 };
 
 /** 工作流定义：节点带各自的模型/通道/提示词配置，边决定数据流向。 */
@@ -58,6 +64,8 @@ export type RemixLabWorkflowNode = {
 /** 生产段配置：字幕关键词默认关闭，口播/配音/混剪参数随实验快照冻结。 */
 export type RemixLabWorkflowProduction = {
   captions_disabled?: boolean;
+  /** 生产节点在画布上的位置覆盖（key 是 produce-* 节点 ID，拖动后保存）。 */
+  node_positions?: Record<string, { x: number; y: number }>;
   spoken_prompt?: string;
   captions_prompt?: string;
   montage_prompt?: string;
@@ -112,17 +120,23 @@ export async function saveRemixLabWorkflow(
 }
 
 // 用当前工作流开跑一个实验（run_count 1-3；可带生产账号与全自动开关）。
+// models 非空时显式指定写手主模型，优先级高于写手节点覆盖和模型配置预设；
+// 给多个模型则每个模型各开一个槽并行出稿，供快慢/质量对比。
 export async function runRemixLabWorkflow(
   api: RemixLabApi,
   source: string,
   runCount: number,
   accountID: string,
   auto: boolean,
+  models?: string[],
 ): Promise<RemixLabExperiment> {
   const response = await api("/api/remix-lab/workflow/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, run_count: runCount, account_id: accountID, auto }),
+    body: JSON.stringify({
+      source, run_count: runCount, account_id: accountID, auto,
+      models: (models ?? []).map((item) => item.trim()).filter(Boolean),
+    }),
   });
   if (!response.ok) throw new Error(await readAPIError(response, "工作流开跑失败。"));
   return (await response.json()) as RemixLabExperiment;
@@ -156,6 +170,21 @@ export async function produceRemixLabRun(
     body: JSON.stringify({ account_id: accountID ?? "" }),
   });
   if (!response.ok) throw new Error(await readAPIError(response, "开始混剪失败。"));
+}
+
+// 单步重做：从指定生产步骤（spoken/captions/narration/montage）起清掉任务
+// ID 续跑到草稿。重做口播会连带重配音重出草稿；重做混剪只出新草稿。
+export async function redoRemixLabProduceStep(
+  api: RemixLabApi,
+  runID: string,
+  step: string,
+): Promise<void> {
+  const response = await api(`/api/remix-lab/runs/${runID}/produce/redo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ step }),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "重做这一步失败。"));
 }
 
 export type RemixLabSlotView = {
@@ -214,16 +243,6 @@ export type RemixLabReviewIssue = {
   fix: string;
 };
 
-export type RemixLabReviewRecord = {
-  verdict: "pass" | "fixed" | "skipped" | "error" | string;
-  round: number;
-  summary: string;
-  issues?: RemixLabReviewIssue[];
-  annotations?: string;
-  error?: string;
-  at: string;
-};
-
 /** 发布包编辑字段（写手 JSON 的 draft 形状）。 */
 export type RemixLabPackageInput = {
   continuous_script: string;
@@ -232,6 +251,20 @@ export type RemixLabPackageInput = {
   descriptions: string[];
   topics: string[];
   cta: string;
+};
+
+export type RemixLabReviewRecord = {
+  verdict: "pass" | "fixed" | "skipped" | "error" | string;
+  round: number;
+  summary: string;
+  issues?: RemixLabReviewIssue[];
+  annotations?: string;
+  error?: string;
+  at: string;
+  /** 本轮进审稿（正文+全部发布字段）。 */
+  before?: Partial<RemixLabPackageInput>;
+  /** 审稿修订稿，只有 verdict=fixed 时才有。 */
+  revised?: Partial<RemixLabPackageInput>;
 };
 
 export type RemixLabPrompt = {
@@ -490,6 +523,53 @@ export async function saveRemixLabAgentPrompts(
   return (await response.json()) as RemixLabAgentPromptsView;
 }
 
+/** 已发布文案库一条：出过草稿的成稿 + 手填成绩。 */
+export type RemixLabPublishedMetrics = {
+  views: number;
+  likes: number;
+  orders: number;
+  notes: string;
+  updated_at?: string;
+};
+
+export type RemixLabPublishedScript = {
+  run_id: string;
+  experiment_id: string;
+  account_id: string;
+  project_id: string;
+  title: string;
+  board_title: string;
+  model: string;
+  prompt_stamp: string;
+  script: string;
+  script_runes: number;
+  opening: string;
+  ending: string;
+  produced_at: string;
+  published: boolean;
+  metrics?: RemixLabPublishedMetrics | null;
+};
+
+export async function fetchRemixLabPublished(api: RemixLabApi): Promise<RemixLabPublishedScript[]> {
+  const response = await api("/api/remix-lab/published");
+  if (!response.ok) throw new Error(await readAPIError(response, "文案库读取失败。"));
+  const body = (await response.json()) as { items?: RemixLabPublishedScript[] };
+  return body.items ?? [];
+}
+
+export async function saveRemixLabPublishedMetrics(
+  api: RemixLabApi,
+  runID: string,
+  metrics: RemixLabPublishedMetrics,
+): Promise<void> {
+  const response = await api(`/api/remix-lab/published/${runID}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(metrics),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "成绩保存失败。"));
+}
+
 async function readAPIError(response: Response, fallback: string): Promise<string> {
   try {
     const body = (await response.json()) as { message?: string };
@@ -605,16 +685,18 @@ export async function saveRemixLabRunPackage(
 }
 
 // 断点重试：失败运行整体重试（agent产物复用）；指定 nodeID 时该节点作废重跑，
-// 写手链路重做后自动续走后面的环节。
+// 写手链路重做后自动续走后面的环节。model 非空时先换模型再重试（agent 节点
+// 改快照里该节点的模型，其余改槽位主模型），之后的重试沿用新模型。
 export async function retryRemixLabRun(
   api: RemixLabApi,
   runID: string,
   nodeID?: string,
+  model?: string,
 ): Promise<void> {
   const response = await api(`/api/remix-lab/runs/${runID}/retry`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ node_id: nodeID ?? "" }),
+    body: JSON.stringify({ node_id: nodeID ?? "", model: model ?? "" }),
   });
   if (!response.ok) throw new Error(await readAPIError(response, "重试提交失败。"));
 }

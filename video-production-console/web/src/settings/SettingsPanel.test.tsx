@@ -125,7 +125,19 @@ function jsonResponse(payload: unknown, status = 200) {
 function renderPanel(overrides: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
   const onDraftChange = vi.fn();
   const onSecretDraftChange = vi.fn();
-  const api = vi.fn(async () => jsonResponse(bgmLibrary));
+  const api = vi.fn(async (path?: string) => {
+    if (path === "/api/remix-lab/active-prompt") {
+      return jsonResponse({
+        active: false,
+        prompt: {
+          id: "elder_stable",
+          name: "中老年定稿（生产默认）",
+          stamp: "语感回流 2026-08-25 批注回流2",
+        },
+      });
+    }
+    return jsonResponse(bgmLibrary);
+  });
   render(
     <SettingsPanel
       api={api}
@@ -182,10 +194,9 @@ test("remix model fields are editable independently", () => {
     target: { value: "gpt-5.6-sol" },
   });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
-  fireEvent.change(screen.getByRole("combobox", { name: "二创提示词" }), {
-    target: { value: "copy" },
-  });
-  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_prompt_style: "copy" });
+  expect(screen.queryByRole("combobox", { name: "二创提示词" })).toBeNull();
+  expect(screen.getByLabelText("当前二创提示词").textContent).toContain("语感回流 2026-08-25 批注回流2");
+  expect(screen.getByLabelText("当前二创提示词").textContent).toContain("由文案创作台采用");
   fireEvent.change(screen.getByRole("combobox", { name: "二创思考强度" }), {
     target: { value: "high" },
   });
@@ -365,11 +376,9 @@ test("the 混剪样式 tab binds caption, title and BGM fields with defaults", a
 
   expect(screen.getByLabelText("混剪样式预览").textContent).toContain("往后两个月");
   expect(screen.getByLabelText("混剪样式预览").textContent).toContain("发财");
-  fireEvent.change(screen.getByRole("slider", { name: "BGM 音量滑杆" }), { target: { value: "0.4" } });
-  expect(onDraftChange).toHaveBeenCalledWith({
-    ...draft,
-    montage_style: { ...montageStyleDefaults, bgm_volume: 0.4 },
-  });
+  // 内置验证曲目的音量锁死（validate-plan 会拦），默认样式下不给滑杆、给固定提示。
+  expect(screen.queryByRole("slider", { name: "BGM 音量滑杆" })).toBeNull();
+  expect(screen.getByText(/内置验证曲目音量固定/)).toBeTruthy();
   fireEvent.change(screen.getByLabelText("字幕颜色"), { target: { value: "#aabbcc" } });
   expect(onDraftChange).toHaveBeenCalledWith({
     ...draft,

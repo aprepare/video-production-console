@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
+  BookOpenText,
   Check,
   LogOut,
   PanelLeftClose,
@@ -16,6 +17,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  Users,
   Workflow,
   X,
 } from "lucide-react";
@@ -24,6 +26,7 @@ import {
   chatRemixLabAgent,
   clearRemixLabAgentHistory,
   confirmRemixLabAgentProposal,
+  deleteRemixLabExperiment,
   deleteRemixLabPrompt,
   fetchRemixLabActivePrompt,
   fetchRemixLabAgentHistory,
@@ -32,6 +35,7 @@ import {
   fetchRemixLabAgentSettings,
   fetchRemixLabDefaults,
   fetchRemixLabExperiment,
+  fetchRemixLabExperiments,
   fetchRemixLabProductionByProject,
   fetchRemixLabPrompts,
   produceRemixLabRun,
@@ -52,12 +56,15 @@ import {
   type RemixLabCreateSlot,
   type RemixLabDefaults,
   type RemixLabExperiment,
+  type RemixLabExperimentSummary,
   type RemixLabPrompt,
   type RemixLabRunView,
 } from "./api";
 import { RunWorkbench } from "./RunWorkbench";
 import { RunFlow } from "./RunFlow";
 import { WorkflowCanvas } from "./WorkflowCanvas";
+import { AccountsOverview } from "./AccountsOverview";
+import { PublishedLibrary } from "./PublishedLibrary";
 import { AccountOverridesDialog } from "../accounts/AccountOverridesDialog";
 import { stageLabel } from "../projects/stages";
 import type { Account, MontageStyle, Project, Theme } from "../types";
@@ -106,6 +113,8 @@ const AGENT_SUGGESTIONS = ["按最新批注把提示词改一版", "给工作流
 
 const MAX_SLOTS = 4;
 const DEFAULT_PROMPT_ID = "elder_stable";
+// 智能体面板暂时隐藏：入口与侧栏都不渲染，代码保留，改回 false 即恢复。
+const AGENT_PANEL_HIDDEN = true;
 
 const AGENT_PROMPT_FIELDS: Array<{
   key: keyof RemixLabAgentPrompts;
@@ -191,6 +200,21 @@ function formatHistoryTime(iso: string): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const EXPERIMENT_STATUS_LABEL: Record<string, string> = {
+  queued: "排队中",
+  running: "二创中",
+  completed: "二创完成",
+  failed: "二创失败",
+};
+
+const PRODUCE_STEP_LABEL: Record<string, string> = {
+  project: "建项目",
+  spoken: "口播稿",
+  captions: "字幕关键词",
+  narration: "配音",
+  montage: "混剪草稿",
+};
+
 function formatElapsed(seconds: number): string {
   const mins = Math.floor(Math.max(0, seconds) / 60);
   const secs = Math.max(0, seconds) % 60;
@@ -227,6 +251,8 @@ export function RemixLabPage({
   const [defaults, setDefaults] = useState<RemixLabDefaults | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  // 最近实验：没确认混剪就没有项目，刷新后全靠这份列表找回入口。
+  const [recentExperiments, setRecentExperiments] = useState<RemixLabExperimentSummary[]>([]);
   const [accountID, setAccountID] = useState(() => {
     try {
       return window.localStorage.getItem("remix-lab:produce-account") ?? "";
@@ -257,6 +283,8 @@ export function RemixLabPage({
   const [libraryTab, setLibraryTab] = useState<"writer" | "pipeline">("writer");
   const [packageRun, setPackageRun] = useState<RemixLabRunView | null>(null);
   const [flowRun, setFlowRun] = useState<{ id: string; label: string } | null>(null);
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const [publishedOpen, setPublishedOpen] = useState(false);
   const [agentSettings, setAgentSettings] = useState<RemixLabAgentSettings>({
     model: "",
     base_url: "",
@@ -327,7 +355,11 @@ export function RemixLabPage({
     let cancelled = false;
     void (async () => {
       try {
-        const [accountRes, projectRes] = await Promise.all([api("/api/accounts"), api("/api/projects")]);
+        const [accountRes, projectRes, experimentList] = await Promise.all([
+          api("/api/accounts"),
+          api("/api/projects"),
+          fetchRemixLabExperiments(api).catch(() => [] as RemixLabExperimentSummary[]),
+        ]);
         if (cancelled) return;
         if (accountRes.ok) {
           const next = (await accountRes.json()) as Account[];
@@ -336,6 +368,7 @@ export function RemixLabPage({
         if (projectRes.ok) {
           setProjects((await projectRes.json()) as Project[]);
         }
+        setRecentExperiments(experimentList);
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "项目列表读取失败。");
       }
@@ -343,7 +376,7 @@ export function RemixLabPage({
     return () => {
       cancelled = true;
     };
-  }, [api, selectedProjectID]);
+  }, [api, selectedProjectID, experimentID]);
 
   const pickAccount = (value: string) => {
     setAccountID(value);
@@ -382,22 +415,60 @@ export function RemixLabPage({
     }
   };
 
-  const visibleProjects = useMemo(
-    () => (accountID ? projects.filter((project) => project.account_id === accountID) : projects),
-    [projects, accountID],
+  // 历史栏搜索 + 展开：默认只列最近 5 条实验，搜关键词或点「显示全部」看更多。
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const historyMatch = (title: string) =>
+    !historyQuery.trim() || (title || "").toLowerCase().includes(historyQuery.trim().toLowerCase());
+
+  // 历史 = 一条内容一个条目：实验带着它的混剪进度一起显示，不再拆成两张表。
+  // 按当前账号过滤；没选账号（全局默认工作流）时全量展示，最新在前。
+  const filteredExperiments = useMemo(() => {
+    const byAccount = accountID
+      ? recentExperiments.filter((item) => (item.account_id ?? "") === accountID)
+      : recentExperiments;
+    return byAccount
+      .filter((item) => historyMatch(item.title))
+      .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentExperiments, accountID, historyQuery]);
+  const visibleExperiments = useMemo(
+    () => (historyExpanded || historyQuery.trim() ? filteredExperiments : filteredExperiments.slice(0, 5)),
+    [filteredExperiments, historyExpanded, historyQuery],
   );
 
-  const projectsByAccount = useMemo(() => {
-    const nameOf = (id: string) => accounts.find((item) => item.id === id)?.name || "未分组账号";
-    const groups = new Map<string, { accountID: string; name: string; items: Project[] }>();
-    for (const project of visibleProjects) {
-      const key = project.account_id || "unknown";
-      const current = groups.get(key) ?? { accountID: key, name: nameOf(key), items: [] };
-      current.items.push(project);
-      groups.set(key, current);
+  // 没有对应实验的项目（手动建的、旧数据）单独列在最后，不和内容条目混。
+  const [projectsExpanded, setProjectsExpanded] = useState(false);
+  const orphanProjects = useMemo(() => {
+    const linked = new Set(recentExperiments.map((item) => item.project_id).filter(Boolean));
+    return (accountID ? projects.filter((project) => project.account_id === accountID) : projects)
+      .filter((project) => !linked.has(project.id) && historyMatch(project.title || ""))
+      .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, recentExperiments, accountID, historyQuery]);
+  const visibleProjects = useMemo(
+    () => (projectsExpanded || historyQuery.trim() ? orphanProjects : orphanProjects.slice(0, 5)),
+    [orphanProjects, projectsExpanded, historyQuery],
+  );
+  const projectByID = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+
+  // 混剪进度一句话：优先项目阶段（已发布等），没有项目时看生产记录状态。
+  const montageLabel = (item: RemixLabExperimentSummary): string => {
+    const project = item.project_id ? projectByID.get(item.project_id) : undefined;
+    if (project?.stage === "published") return "已发布";
+    switch (item.production_status) {
+      case "waiting_confirm":
+        return "待确认混剪";
+      case "running":
+        return `混剪中 · ${PRODUCE_STEP_LABEL[item.production_step ?? ""] ?? item.production_step ?? ""}`;
+      case "completed":
+        return project ? stageLabel(project.stage) : "草稿已出";
+      case "failed":
+        return "混剪失败";
+      default:
+        return "";
     }
-    return [...groups.values()];
-  }, [visibleProjects, accounts]);
+  };
 
   const historySelectedID = useMemo(() => {
     if (selectedProjectID) return selectedProjectID;
@@ -417,6 +488,18 @@ export function RemixLabPage({
       if (selectedProjectID === id) onNavigate("/");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "项目删除失败。");
+    }
+  };
+
+  // 删实验：没确认混剪的实验只存在于这个列表里，删掉即彻底清理；正在看的
+  // 实验被删后回到画布。
+  const removeExperiment = async (id: string) => {
+    try {
+      await deleteRemixLabExperiment(api, id);
+      setRecentExperiments((current) => current.filter((item) => item.id !== id));
+      if (experimentID === id) onNavigate("/");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "实验删除失败。");
     }
   };
 
@@ -506,7 +589,7 @@ export function RemixLabPage({
   }, [agentBusy, agentElapsed, agentTurns]);
 
   useEffect(() => {
-    if (!editingPrompt && !slotConfigOpen && !libraryOpen && !packageRun) return;
+    if (!editingPrompt && !slotConfigOpen && !libraryOpen && !packageRun && !overviewOpen && !publishedOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (editingPrompt) {
@@ -521,11 +604,19 @@ export function RemixLabPage({
         setLibraryOpen(false);
         return;
       }
+      if (overviewOpen) {
+        setOverviewOpen(false);
+        return;
+      }
+      if (publishedOpen) {
+        setPublishedOpen(false);
+        return;
+      }
       setSlotConfigOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editingPrompt, slotConfigOpen, libraryOpen, packageRun]);
+  }, [editingPrompt, slotConfigOpen, libraryOpen, packageRun, overviewOpen, publishedOpen]);
 
   const openLibrary = async (tab: "writer" | "pipeline" = "writer") => {
     setLibraryTab(tab);
@@ -600,16 +691,22 @@ export function RemixLabPage({
   };
 
   // 工作流开跑：画布调用（带生产账号与全自动开关）。
-  const startWorkflowRun = async (sourceText: string, runCount: number, accountID: string, auto: boolean) => {
-    const created = await runRemixLabWorkflow(api, sourceText, runCount, accountID, auto);
+  const startWorkflowRun = async (sourceText: string, runCount: number, accountID: string, auto: boolean, models: string[]) => {
+    const created = await runRemixLabWorkflow(api, sourceText, runCount, accountID, auto, models);
     return created;
   };
 
-  // 断点重试（详情页/弹窗用）：提交后刷新详情恢复轮询。
-  const retryRunFromDetail = async (runID: string, nodeID: string) => {
+  // 断点重试（详情页/弹窗用）：提交后刷新详情恢复轮询。model 非空时先换模型。
+  const retryRunFromDetail = async (runID: string, nodeID: string, model?: string) => {
     try {
-      await retryRemixLabRun(api, runID, nodeID || undefined);
-      setMessage(nodeID ? "已重试该节点，成功后自动续跑后面的环节。" : "已从断点重试，跑过的agent节点直接复用产物。");
+      await retryRemixLabRun(api, runID, nodeID || undefined, model);
+      setMessage(
+        model
+          ? `已换用 ${model} 重试，后续重试与返工也用它。`
+          : nodeID
+            ? "已重试该节点，成功后自动续跑后面的环节。"
+            : "已从断点重试，跑过的agent节点直接复用产物。",
+      );
       setFlowRun(null);
       setDetailRefresh((n) => n + 1);
     } catch (error) {
@@ -852,12 +949,23 @@ export function RemixLabPage({
               </select>
             </label>
           ) : null}
+          <button type="button" className="header-button remix-lab-icon-btn" onClick={() => setOverviewOpen(true)}>
+            <Users size={16} strokeWidth={2} />
+            账号总览
+          </button>
+          <button type="button" className="header-button remix-lab-icon-btn" onClick={() => setPublishedOpen(true)}>
+            <BookOpenText size={16} strokeWidth={2} />
+            文案库
+          </button>
           {onOpenSettings ? (
             <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void onOpenSettings()}>
               <Settings size={16} strokeWidth={2} />
               设置
             </button>
           ) : null}
+          <button type="button" className="header-button" onClick={() => onNavigate("/ai-shorts")}>
+            AI 短片
+          </button>
           <button type="button" className="header-button" onClick={() => onNavigate("/image-projects")}>
             图文制作
           </button>
@@ -874,6 +982,7 @@ export function RemixLabPage({
           "remix-lab__body",
           historyCollapsed ? "remix-lab__body--history-collapsed" : "",
           agentCollapsed ? "remix-lab__body--agent-collapsed" : "",
+          AGENT_PANEL_HIDDEN ? "remix-lab__body--agent-hidden" : "",
           projectView && !experimentID ? "remix-lab__body--project" : "",
         ].join(" ")}
       >
@@ -898,18 +1007,80 @@ export function RemixLabPage({
               </button>
             ) : null}
           </div>
-          {visibleProjects.length === 0 ? (
+          {!historyCollapsed ? (
+            <input
+              type="search"
+              className="remix-lab__history-search"
+              aria-label="搜索历史"
+              placeholder="搜标题…"
+              value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.target.value)}
+            />
+          ) : null}
+          {visibleExperiments.length > 0 ? (
+            <div className="remix-lab__history-group">
+              <p className="remix-lab__history-group-title">
+                内容 {filteredExperiments.length} 条（二创 + 混剪进度）
+              </p>
+              <ul>
+                {visibleExperiments.map((item) => (
+                  <li key={item.id} className={item.id === experimentID ? "is-selected" : undefined}>
+                    <button
+                      type="button"
+                      className={item.id === experimentID ? "remix-lab__history-item selected" : "remix-lab__history-item"}
+                      onClick={() => onNavigate(`/remix-lab/${item.id}`)}
+                    >
+                      <strong>{item.title || item.id}</strong>
+                      <span className="remix-lab__history-meta">
+                        {!accountID && item.account_id ? (
+                          <span className="remix-lab-chip remix-lab-chip--account">
+                            {accounts.find((a) => a.id === item.account_id)?.name ?? "全局"}
+                          </span>
+                        ) : null}
+                        <span className="remix-lab-chip">{EXPERIMENT_STATUS_LABEL[item.status] ?? item.status}</span>
+                        {montageLabel(item) ? (
+                          <span className="remix-lab-chip remix-lab-chip--montage">{montageLabel(item)}</span>
+                        ) : null}
+                        {item.updated_at ? (
+                          <small className="remix-lab__history-time">{formatHistoryTime(item.updated_at)}</small>
+                        ) : null}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="header-button remix-lab-icon-btn remix-lab__history-delete"
+                      aria-label={`删除实验 ${item.title || item.id}`}
+                      onClick={() => void removeExperiment(item.id)}
+                    >
+                      <Trash2 size={14} strokeWidth={2} />
+                      删除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {!historyQuery.trim() && filteredExperiments.length > 5 ? (
+                <button
+                  type="button"
+                  className="header-button remix-lab__history-more"
+                  onClick={() => setHistoryExpanded((open) => !open)}
+                >
+                  {historyExpanded ? "只看最近 5 条" : `显示全部 ${filteredExperiments.length} 条`}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {filteredExperiments.length === 0 && orphanProjects.length === 0 ? (
             <p className="remix-lab__history-empty">
-              {accountID ? "这个账号还没有项目。跑完工作流或从混剪节点建项目后会出现在这里。" : "还没有项目。中间贴原文开跑，或等混剪建好项目。"}
+              {accountID ? "这个账号还没有内容。贴原文开跑后会出现在这里。" : "还没有内容。中间贴原文开跑。"}
             </p>
           ) : null}
-          {projectsByAccount.map((group) => (
-            <div key={group.accountID} className="remix-lab__history-group">
-              {!accountID && projectsByAccount.length > 1 ? (
-                <p className="remix-lab__history-group-title">{group.name}</p>
-              ) : null}
+          {visibleProjects.length > 0 ? (
+            <div className="remix-lab__history-group">
+              <p className="remix-lab__history-group-title remix-lab__history-section">
+                其他项目 {orphanProjects.length} 条（不是从二创出来的）
+              </p>
               <ul>
-                {group.items.map((item) => (
+                {visibleProjects.map((item) => (
                   <li key={item.id} className={item.id === historySelectedID ? "is-selected" : undefined}>
                     <button
                       type="button"
@@ -918,6 +1089,11 @@ export function RemixLabPage({
                     >
                       <strong>{item.title || item.id}</strong>
                       <span className="remix-lab__history-meta">
+                        {!accountID && item.account_id ? (
+                          <span className="remix-lab-chip remix-lab-chip--account">
+                            {accounts.find((a) => a.id === item.account_id)?.name ?? "未分组"}
+                          </span>
+                        ) : null}
                         <span className="remix-lab-chip">{stageLabel(item.stage)}</span>
                         {item.updated_at ? (
                           <small className="remix-lab__history-time">{formatHistoryTime(item.updated_at)}</small>
@@ -936,8 +1112,17 @@ export function RemixLabPage({
                   </li>
                 ))}
               </ul>
+              {!historyQuery.trim() && orphanProjects.length > 5 ? (
+                <button
+                  type="button"
+                  className="header-button remix-lab__history-more"
+                  onClick={() => setProjectsExpanded((open) => !open)}
+                >
+                  {projectsExpanded ? "只看最近 5 个" : `显示全部 ${orphanProjects.length} 个`}
+                </button>
+              ) : null}
             </div>
-          ))}
+          ) : null}
         </aside>
         <main className="remix-lab__main">
           {projectView && !experimentID ? (
@@ -971,6 +1156,7 @@ export function RemixLabPage({
             </section>
           )}
         </main>
+        {AGENT_PANEL_HIDDEN ? null : (
         <aside
           className={agentCollapsed ? "remix-lab__agent remix-lab__side--collapsed" : "remix-lab__agent"}
           aria-label="创作台智能体"
@@ -1138,7 +1324,37 @@ export function RemixLabPage({
             </button>
           </form>
         </aside>
+        )}
       </div>
+      {publishedOpen ? (
+        <PublishedLibrary
+          api={api}
+          accounts={accounts}
+          onClose={() => setPublishedOpen(false)}
+          onMessage={setMessage}
+          onOpenRun={(expID) => {
+            setPublishedOpen(false);
+            onNavigate(`/remix-lab/${expID}`);
+          }}
+        />
+      ) : null}
+      {overviewOpen ? (
+        <AccountsOverview
+          api={api}
+          accounts={accounts}
+          onClose={() => setOverviewOpen(false)}
+          onMessage={setMessage}
+          onOpenAccount={(id, expID) => {
+            pickAccount(id);
+            setOverviewOpen(false);
+            onNavigate(expID ? `/remix-lab/${expID}` : "/");
+          }}
+          onAccountDeactivated={(id) => {
+            setAccounts((current) => current.filter((item) => item.id !== id));
+            if (accountID === id) pickAccount("");
+          }}
+        />
+      ) : null}
       {editingPrompt ? (
         <div
           className="modal-backdrop"
@@ -1332,7 +1548,7 @@ export function RemixLabPage({
           onClose={() => setFlowRun(null)}
           onEditAgentPrompts={() => void openLibrary("pipeline")}
           onMessage={setMessage}
-          onRetryNode={(nodeID) => void retryRunFromDetail(flowRun.id, nodeID)}
+          onRetryNode={(nodeID, model) => void retryRunFromDetail(flowRun.id, nodeID, model)}
           onRetryProduce={() => void produceRunFromDetail(flowRun.id, "")}
         />
       ) : null}

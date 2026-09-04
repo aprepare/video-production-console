@@ -1904,6 +1904,23 @@ summary:focus-visible,
   font-size: 11px !important;
 }
 
+.model-multi-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-multi-custom input {
+  width: 260px;
+  padding: 6px 9px;
+  border: 1px solid var(--ds-border, #ccc);
+  border-radius: 8px;
+  background: var(--ds-surface, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
 .task-script-view {
   margin-top: 12px;
   border: 1px solid var(--line-strong);

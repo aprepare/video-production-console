@@ -28,10 +28,13 @@ func Format(raw string) (string, error) {
 	if script, ok := extractSpokenJSON(text); ok {
 		text = StripSpecialTokens(script)
 	}
+	text = stripLeadingFillerWord(text)
 	text = digitize(text)
 	var lines []string
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(StripSpecialTokens(line))
+		// 并行切块后每块开头都可能带 "The" 这类残渣，逐行滤一遍（每行本就是独立语义单元）。
+		line = stripLeadingFillerWord(line)
 		if line == "" {
 			continue
 		}
@@ -47,6 +50,46 @@ func Format(raw string) (string, error) {
 		b.WriteString(lineSuffix)
 	}
 	return b.String(), nil
+}
+
+// leadingFillerWords 是模型偶发拼在正文开头的英文残渣（如 "The9月1日之后"，
+// 疑似推理通道格式泄漏）。只滤这几个填充词，AI、iPhone 这类正经开头不受影响。
+var leadingFillerWords = []string{"the", "sure", "here", "okay", "certainly"}
+
+// stripLeadingFillerWord 去掉紧贴中文或数字正文的开头英文填充词。
+func stripLeadingFillerWord(text string) string {
+	runes := []rune(text)
+	end := 0
+	for end < len(runes) && end < 12 &&
+		((runes[end] >= 'A' && runes[end] <= 'Z') || (runes[end] >= 'a' && runes[end] <= 'z')) {
+		end++
+	}
+	if end == 0 {
+		return text
+	}
+	word := strings.ToLower(string(runes[:end]))
+	filler := false
+	for _, candidate := range leadingFillerWords {
+		if word == candidate {
+			filler = true
+			break
+		}
+	}
+	if !filler {
+		return text
+	}
+	rest := end
+	for rest < len(runes) && strings.ContainsRune(" :，,：\r\n", runes[rest]) {
+		rest++
+	}
+	if rest >= len(runes) {
+		return text
+	}
+	next := runes[rest]
+	if unicode.Is(unicode.Han, next) || (next >= '0' && next <= '9') {
+		return string(runes[rest:])
+	}
+	return text
 }
 
 // Lines returns the spoken units without trailing spaces.

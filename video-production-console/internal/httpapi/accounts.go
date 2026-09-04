@@ -28,6 +28,7 @@ type accountStore interface {
 	CreateWithBackground(context.Context, domain.Account, store.NewBackground) (store.CommitState, error)
 	Get(context.Context, string) (domain.Account, error)
 	Rename(context.Context, string, string, time.Time) (domain.Account, error)
+	UpdateOverrides(context.Context, string, *domain.AccountOverrides, time.Time) (domain.Account, error)
 	ReplaceBackground(context.Context, string, store.NewBackground, time.Time) (domain.Account, store.CommitState, error)
 	Deactivate(context.Context, string, time.Time) error
 }
@@ -35,13 +36,14 @@ type accountStore interface {
 const maxMultipartRequestSize = assets.MaxBackgroundSize + (1 << 20)
 
 type accountResponse struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	BackgroundAssetID string `json:"background_asset_id"`
-	Color             string `json:"color"`
-	Status            string `json:"status"`
-	CreatedAt         string `json:"created_at"`
-	UpdatedAt         string `json:"updated_at"`
+	ID                string                   `json:"id"`
+	Name              string                   `json:"name"`
+	BackgroundAssetID string                   `json:"background_asset_id"`
+	Color             string                   `json:"color"`
+	Status            string                   `json:"status"`
+	Overrides         *domain.AccountOverrides `json:"overrides,omitempty"`
+	CreatedAt         string                   `json:"created_at"`
+	UpdatedAt         string                   `json:"updated_at"`
 }
 
 func NewAccountsHandler(db *sql.DB, assetService *assets.Service) http.Handler {
@@ -54,6 +56,7 @@ func newAccountsHandler(repository accountStore, assetService *assets.Service) h
 	mux.HandleFunc("GET /api/accounts", handler.list)
 	mux.HandleFunc("POST /api/accounts", handler.create)
 	mux.HandleFunc("PATCH /api/accounts/{id}", handler.rename)
+	mux.HandleFunc("PUT /api/accounts/{id}/overrides", handler.updateOverrides)
 	mux.HandleFunc("POST /api/accounts/{id}/background", handler.replaceBackground)
 	mux.HandleFunc("DELETE /api/accounts/{id}", handler.deactivate)
 	return mux
@@ -160,6 +163,37 @@ func (h *accountsHandler) rename(response http.ResponseWriter, request *http.Req
 		return
 	}
 	if err != nil {
+		writeError(response, http.StatusInternalServerError, "account_update_failed", "The account could not be updated.")
+		return
+	}
+	writeJSON(response, http.StatusOK, toAccountResponse(account))
+}
+
+// updateOverrides 保存账号级混剪样式与配音音色覆盖；空对象即清除、回落全局。
+func (h *accountsHandler) updateOverrides(response http.ResponseWriter, request *http.Request) {
+	id, ok := accountID(response, request.PathValue("id"))
+	if !ok {
+		return
+	}
+	var input domain.AccountOverrides
+	if err := decodeJSON(response, request, maxNormalJSONRequest, &input); err != nil {
+		writeDecodeError(response, err, "invalid_json", "A JSON overrides object is required.")
+		return
+	}
+	if input.Voice != nil {
+		input.Voice.AuraSTDVoiceID = strings.TrimSpace(input.Voice.AuraSTDVoiceID)
+		input.Voice.VolcSpeechSpeakerID = strings.TrimSpace(input.Voice.VolcSpeechSpeakerID)
+		if input.Voice.AuraSTDVoiceID == "" && input.Voice.VolcSpeechSpeakerID == "" {
+			input.Voice = nil
+		}
+	}
+	account, err := h.repository.UpdateOverrides(request.Context(), id, &input, time.Now().UTC())
+	if errors.Is(err, store.ErrAccountNotFound) {
+		writeError(response, http.StatusNotFound, "account_not_found", "The account was not found.")
+		return
+	}
+	if err != nil {
+		logging.LoggerFrom(request.Context()).Error("update account overrides", "account_id", id, "error", err)
 		writeError(response, http.StatusInternalServerError, "account_update_failed", "The account could not be updated.")
 		return
 	}
@@ -288,7 +322,7 @@ func toAccountResponse(account domain.Account) accountResponse {
 	}
 	return accountResponse{
 		ID: account.ID, Name: account.Name, BackgroundAssetID: backgroundID,
-		Color: account.Color, Status: account.Status,
+		Color: account.Color, Status: account.Status, Overrides: account.Overrides,
 		CreatedAt: account.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: account.UpdatedAt.Format(time.RFC3339Nano),
 	}
 }

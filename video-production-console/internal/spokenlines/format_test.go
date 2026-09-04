@@ -225,6 +225,49 @@ func TestStripSpecialTokensRemovesModelEndMarkers(t *testing.T) {
 	}
 }
 
+// 模型偶发把英文填充词拼在正文开头（"The9月1日之后"，2026-08-27 实测）。
+// 只滤 The/Sure 这类残渣；AI、iPhone 这种正经开头不能动。
+func TestFormatStripsLeadingFillerWord(t *testing.T) {
+	for _, raw := range []string{
+		"The9月1日之后，你存银行的钱还是你的。",
+		"The 9月1日之后，你存银行的钱还是你的。",
+		"The\n9月1日之后，你存银行的钱还是你的。",
+	} {
+		formatted, err := Format(raw)
+		if err != nil {
+			t.Fatalf("Format(%q): %v", raw, err)
+		}
+		first := Lines(formatted)[0]
+		if strings.Contains(first, "The") || !strings.HasPrefix(first, "9月") {
+			t.Fatalf("filler word not stripped, first line = %q", first)
+		}
+	}
+	kept, err := Format("AI正在抢走一批人的饭碗，这不是吓唬你。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(Lines(kept)[0], "AI") {
+		t.Fatalf("legit AI opening must survive, got %q", Lines(kept)[0])
+	}
+}
+
+// 并行切块拼回后，残渣会出现在中段每块的开头行，同样要滤掉。
+func TestFormatStripsFillerWordAtChunkBoundaries(t *testing.T) {
+	raw := "活期0.05%\nThe利息收入跌到\n历史最低\nSure 可是此同时\n全国房贷余额"
+	formatted, err := Format(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range Lines(formatted) {
+		if strings.HasPrefix(line, "The") || strings.HasPrefix(line, "Sure") {
+			t.Fatalf("filler leaked into middle line %q; all=%v", line, Lines(formatted))
+		}
+	}
+	if joined := strings.Join(Lines(formatted), ""); !strings.Contains(joined, "利息收入跌到") || !strings.Contains(joined, "可是此同时") {
+		t.Fatalf("content lost while stripping: %v", Lines(formatted))
+	}
+}
+
 func TestFormatStripsTrailingEOSFromSpokenSheet(t *testing.T) {
 	got, err := Format("后面的政策节奏\n和钱的去向\n咱们接着盯 <|eos|>")
 	if err != nil {

@@ -228,6 +228,42 @@ func TestReconcileProjectAssetsKeepsAllVersionsAndRemovesOrphans(t *testing.T) {
 	}
 }
 
+// 导入发布包是 projects/{id}/publishing_package.json 旁挂文件，不入资产表；
+// 混剪板题靠它取主/副标题。2026-08-27 实测：重启触发回收把它当孤儿删了，
+// 导入的标题在混剪时消失。回收必须放过它（其他位置的同名文件照删）。
+func TestReconcileProjectAssetsKeepsImportedPublishingPackage(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	pid := uuid.NewString()
+	projectDir := filepath.Join(root, "projects", pid)
+	_ = os.MkdirAll(filepath.Join(projectDir, "audio"), 0o755)
+	keep := filepath.Join(projectDir, "publishing_package.json")
+	nested := filepath.Join(projectDir, "audio", "publishing_package.json")
+	badParent := filepath.Join(root, "projects", "not-a-uuid")
+	_ = os.MkdirAll(badParent, 0o755)
+	stray := filepath.Join(badParent, "publishing_package.json")
+	for _, p := range []string{keep, nested, stray} {
+		if err := os.WriteFile(p, []byte(`{"short_titles":["普通人要记住三个变化"]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := NewService(root).ReconcileProjectAssets(context.Background(), db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("imported publishing package must survive reconcile: %v", err)
+	}
+	for _, p := range []string{nested, stray} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("misplaced package %s should be removed", p)
+		}
+	}
+}
+
 func TestReconcileProjectAssetsPreservesRegisteredTaskDirectories(t *testing.T) {
 	root := t.TempDir()
 	db, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))

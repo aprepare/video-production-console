@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestHideKeywordSpansStripsAllHighlights(t *testing.T) {
+	items := []CaptionItem{
+		{Text: "全国法拍房挂牌", Spans: []CaptionSpan{{Start: 2, End: 5, Style: spokenKeywordStyle}}},
+		{Text: "已经堆到40万套", Spans: []CaptionSpan{{Start: 4, End: 8, Style: spokenKeywordStyle}}},
+		{Text: "很多人还在观望"},
+	}
+	hideKeywordSpans(items)
+	for i, item := range items {
+		if item.Spans != nil {
+			t.Fatalf("item %d still has spans: %#v", i, item.Spans)
+		}
+	}
+}
+
 func patchManifestSettings(t *testing.T, manifestPath string, extra map[string]any) {
 	t.Helper()
 	raw, err := os.ReadFile(manifestPath)
@@ -125,15 +139,37 @@ func TestBuildV2AppliesMontageStyleAndCustomBGM(t *testing.T) {
 	}
 }
 
-func TestBuildV2BuiltinBGMHonorsVolumeOverride(t *testing.T) {
+// 内置曲目是整体验证过的：样式里的音量不许覆盖它，否则 validate-plan 会以
+// "linear_volume must match the verified BGM" 拦下任务（2026-08-27 实测踩雷）。
+func TestBuildV2BuiltinBGMKeepsVerifiedVolume(t *testing.T) {
 	manifestPath, planPath := v2Fixture(t)
 	patchManifestSettings(t, manifestPath, map[string]any{
 		"montage_style": map[string]any{"bgm_volume": 0.1},
 	})
 	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
 	bgm := plan["audio"].(map[string]any)["bgm"].(map[string]any)
-	if bgm["music_id"] != "7555333028841670665" || bgm["linear_volume"].(float64) != 0.1 {
-		t.Fatalf("builtin bgm volume override lost: %#v", bgm)
+	if bgm["music_id"] != "7555333028841670665" || bgm["linear_volume"].(float64) != 0.2512 {
+		t.Fatalf("builtin bgm must keep verified volume: %#v", bgm)
+	}
+}
+
+func TestBuildV2DropsUnknownSubtitleFont(t *testing.T) {
+	manifestPath, planPath := v2Fixture(t)
+	patchManifestSettings(t, manifestPath, map[string]any{
+		"montage_style": map[string]any{
+			"caption_font":  "新青年体",
+			"title_font":    "新青年体",
+			"subtitle_font": "WenYue",
+		},
+	})
+	plan := buildV2PlanJSON(t, v2Options(manifestPath, planPath))
+	subtitle := plan["graphics"].(map[string]any)["subtitle"].(map[string]any)
+	if _, has := subtitle["font"]; has {
+		t.Fatalf("unknown subtitle font WenYue must not be written into the plan: %#v", subtitle)
+	}
+	spoken := plan["style_overrides"].(map[string]any)["spoken_v1"].(map[string]any)
+	if spoken["font"] != "新青年体" {
+		t.Fatalf("caption font must stay a FontType member: %#v", spoken)
 	}
 }
 

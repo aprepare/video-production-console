@@ -51,3 +51,47 @@
 .account-overrides-hint {
   margin: 0;
 }
+
+/* 从剪映草稿导入样式 */
+.account-overrides-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--workbench-border, #ccc);
+  border-radius: 10px;
+}
+
+.account-overrides-import__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.account-overrides-import__row select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--workbench-border, #ccc);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+.account-overrides-preview ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.account-overrides-note {
+  color: var(--workbench-muted, #777);
+}
+
+.account-overrides-error {
+  margin: 0;
+  font-size: 12px;
+  color: #dc2626;
+}

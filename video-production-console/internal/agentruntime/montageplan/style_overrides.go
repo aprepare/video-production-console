@@ -16,25 +16,80 @@ func planMontageStyle(ctx *planContext) domain.MontageStyle {
 	return domain.DefaultMontageStyle()
 }
 
+// hideKeywordSpans strips every caption highlight span so lines render in the
+// plain caption style, exactly like a line the keyword model left unmarked.
+func hideKeywordSpans(items []CaptionItem) {
+	for i := range items {
+		items[i].Spans = nil
+	}
+}
+
 // buildStyleOverrides encodes the user style as overrides for the Python
-// skill's text_styles. Only size/color/y/font are overridable; everything
-// else (borders, alignment) stays on the verified policy.
+// skill's text_styles. size/color/y/font always go out; border and
+// background keys are emitted only when the style sets them, so an
+// untouched field keeps its verified policy value.
 func buildStyleOverrides(style domain.MontageStyle) map[string]map[string]any {
 	captionY := style.CaptionTransformY()
-	entry := func(size float64, color string) map[string]any {
-		return map[string]any{
+	entry := func(size float64, color, borderColor string) map[string]any {
+		out := map[string]any{
 			"size":  roundStyleSize(size),
 			"color": hexToRGB(color),
 			"y":     captionY,
-			"font":  style.CaptionFont,
+			"font":  domain.MontageCaptionFont(style.CaptionFont),
 		}
+		switch {
+		case style.CaptionBorderHidden:
+			out["border_hidden"] = true
+		case isHexColor(borderColor):
+			out["border_color"] = hexToRGB(borderColor)
+			if style.CaptionBorderWidth > 0 {
+				out["border_width"] = style.CaptionBorderWidth
+			}
+		case style.CaptionBorderWidth > 0:
+			out["border_width"] = style.CaptionBorderWidth
+		}
+		if isHexColor(style.CaptionBgColor) {
+			out["bg_color"] = hexToRGB(style.CaptionBgColor)
+			out["bg_alpha"] = alphaOrOpaque(style.CaptionBgAlpha)
+		}
+		return out
 	}
 	return map[string]map[string]any{
-		"spoken_v1":         entry(style.CaptionSize, style.CaptionColor),
-		"spoken_plain_v1":   entry(style.PlainSize, style.CaptionColor),
-		"spoken_keyword_v1": entry(style.KeywordSize, style.KeywordColor),
-		"spoken_warning_v1": entry(style.KeywordSize, style.KeywordColor),
+		"spoken_v1":         entry(style.CaptionSize, style.CaptionColor, style.CaptionBorderColor),
+		"spoken_plain_v1":   entry(style.PlainSize, style.CaptionColor, style.CaptionBorderColor),
+		"spoken_keyword_v1": entry(style.KeywordSize, style.KeywordColor, style.KeywordBorderColor),
+		"spoken_warning_v1": entry(style.KeywordSize, style.KeywordColor, style.KeywordBorderColor),
 	}
+}
+
+// brandTextDecor fills the optional font/border/background of a board title
+// or subtitle from the style; empty values stay nil so Python keeps defaults.
+func brandTextDecor(font, borderColor, bgColor string, bgAlpha float64) (string, []float64, []float64, float64) {
+	var border, bg []float64
+	alpha := 0.0
+	if isHexColor(borderColor) {
+		border = hexToRGB(borderColor)
+	}
+	if isHexColor(bgColor) {
+		bg = hexToRGB(bgColor)
+		alpha = alphaOrOpaque(bgAlpha)
+	}
+	return domain.NormalizeMontageFont(font), border, bg, alpha
+}
+
+func isHexColor(hex string) bool {
+	if len(hex) != 7 || hex[0] != '#' {
+		return false
+	}
+	_, err := strconv.ParseUint(hex[1:], 16, 32)
+	return err == nil
+}
+
+func alphaOrOpaque(alpha float64) float64 {
+	if alpha <= 0 || alpha > 1 {
+		return 1
+	}
+	return math.Round(alpha*1000) / 1000
 }
 
 // customBGMPlacement encodes an analyzed local track for audio.bgm. The

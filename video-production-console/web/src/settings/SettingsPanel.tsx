@@ -73,6 +73,36 @@ type SettingsPanelProps = {
   onSaveAndRestart: () => void;
 };
 
+function RemixPromptStatus({ api }: { api: SettingsPanelProps["api"] }) {
+  const [label, setLabel] = useState("中老年定稿（生产默认） · 语感回流 2026-08-25 批注回流2");
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api("/api/remix-lab/active-prompt");
+        if (!response.ok) return;
+        const body = (await response.json()) as {
+          prompt?: { name?: string; stamp?: string };
+        };
+        const name = body.prompt?.name || "中老年定稿（生产默认）";
+        const stamp = body.prompt?.stamp || "语感回流 2026-08-25 批注回流2";
+        if (!cancelled) setLabel(`${name} · ${stamp}`);
+      } catch {
+        // keep compiled default
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+  return (
+    <div className="settings-remix-prompt" aria-label="当前二创提示词">
+      <strong>{label}</strong>
+      <small>由文案创作台采用。确认后立即生效，不用重启。</small>
+    </div>
+  );
+}
+
 function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`settings-field${props.wide ? " settings-field--wide" : ""}`}>
@@ -329,7 +359,7 @@ export function SettingsPanel({
                   onChange={(remix_check_model) => onDraftChange({ ...draft, remix_check_model })}
                 />
               </Field>
-              <Field label="口播稿模型（留空=跟随二创模型）">
+              <Field label="口播稿/字幕关键词模型（留空=跟随二创模型）">
                 <ModelSelect
                   aria-label="口播稿模型"
                   value={draft.spoken_lines_model || ""}
@@ -338,20 +368,7 @@ export function SettingsPanel({
                 />
               </Field>
               <Field label="二创提示词">
-                <select
-                  aria-label="二创提示词"
-                  value={draft.remix_prompt_style || "rewrite"}
-                  onChange={(event) =>
-                    onDraftChange({
-                      ...draft,
-                      remix_prompt_style: event.target.value as PublicSettings["remix_prompt_style"],
-                    })
-                  }
-                >
-                  <option value="rewrite">语感回流（稳妥默认，不打 copy）</option>
-                  <option value="rewrite_sharp">锋利优先（冲击力优先）</option>
-                  <option value="copy">口播copy整理（先打 hooks/scripts）</option>
-                </select>
+                <RemixPromptStatus api={api} />
               </Field>
               <Field label="二创思考强度">
                 <select
@@ -705,6 +722,14 @@ export function SettingsPanel({
                   ))}
                 </select>
               </Field>
+              <Field label="标注字幕关键词">
+                <input
+                  type="checkbox"
+                  aria-label="标注字幕关键词"
+                  checked={!montageStyle.keywords_hidden}
+                  onChange={(event) => patchMontageStyle({ keywords_hidden: !event.target.checked })}
+                />
+              </Field>
               <Field label="关键词字号">
                 <input
                   type="number"
@@ -831,14 +856,20 @@ export function SettingsPanel({
                   ))}
                 </select>
               </Field>
-              <SliderField
-                label="BGM 音量"
-                value={montageStyle.bgm_volume}
-                min={0.01}
-                max={1}
-                step={0.01}
-                onChange={(value) => patchMontageStyle({ bgm_volume: value })}
-              />
+              {montageStyle.bgm_id === "builtin" ? (
+                <Field label="BGM 音量">
+                  <span className="settings-hint">内置验证曲目音量固定（0.2512），选音乐库曲目后可调。</span>
+                </Field>
+              ) : (
+                <SliderField
+                  label="BGM 音量"
+                  value={montageStyle.bgm_volume}
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  onChange={(value) => patchMontageStyle({ bgm_volume: value })}
+                />
+              )}
               <Field label="BGM 目录" wide>
                 <input
                   value={draft.bgm_dir || ""}

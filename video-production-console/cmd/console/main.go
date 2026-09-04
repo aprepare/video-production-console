@@ -851,6 +851,7 @@ func buildMontageScriptCommand(cfg codex.Config, manifestPath string, resolveSki
 	if err != nil {
 		return nil, err
 	}
+	repairMachineProfileCache(cfg.MachineProfilePath)
 	if movieSkill, movieErr := resolveSkillRoot("jianying-movie-montage"); movieErr == nil {
 		if skillFromTaskManifest(manifestPath) == "jianying-movie-montage" {
 			if _, statErr := os.Stat(filepath.Join(movieSkill, "scripts", "run_montage_job.py")); statErr == nil {
@@ -930,6 +931,96 @@ func montagePythonBinary(profilePath string) (string, error) {
 		}
 	}
 	return filepath.Abs(pythonBinary)
+}
+
+// 剪映会自行整理 Cache\effect 目录：同一个转场特效（叠化 effect_id 322577）重新下载后
+// 落在新的哈希子目录里，机器模板里记的老路径就失效，混剪 validate-inputs 直接报
+// "transition_cross_dissolve missing"。这里在每次开混剪前自愈：老路径不在了就去
+// Cache\effect\322577\ 下找最新的子目录顶上去。找不到只记日志，让 Python 那边照常报错。
+const crossDissolveEffectID = "322577"
+
+func repairMachineProfileCache(profilePath string) {
+	profilePath = strings.TrimSpace(profilePath)
+	raw, err := os.ReadFile(profilePath)
+	if err != nil {
+		return
+	}
+	var profile map[string]any
+	if json.Unmarshal(raw, &profile) != nil {
+		return
+	}
+	cache, _ := profile["cache_paths"].(map[string]any)
+	if cache == nil {
+		return
+	}
+	current, _ := cache["transition_cross_dissolve"].(string)
+	if current != "" {
+		if _, err := os.Stat(current); err == nil {
+			return
+		}
+	}
+	// 从任一还在的缓存路径推出 Cache 根目录（…\Cache\music\x.mp3 → …\Cache）。
+	cacheRoot := ""
+	for _, v := range cache {
+		p, _ := v.(string)
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		for dir := filepath.Dir(p); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if strings.EqualFold(filepath.Base(dir), "Cache") {
+				cacheRoot = dir
+				break
+			}
+		}
+		if cacheRoot != "" {
+			break
+		}
+	}
+	if cacheRoot == "" && current != "" {
+		if idx := strings.Index(strings.ToLower(current), `\cache\`); idx >= 0 {
+			cacheRoot = current[:idx+len(`\cache`)]
+		}
+	}
+	if cacheRoot == "" {
+		slog.Default().Warn("montage: transition cache missing and Cache root unknown", "path", current)
+		return
+	}
+	effectDir := filepath.Join(cacheRoot, "effect", crossDissolveEffectID)
+	entries, err := os.ReadDir(effectDir)
+	if err != nil {
+		slog.Default().Warn("montage: 叠化 effect cache missing; open Jianying and use 叠化 once so it re-downloads", "dir", effectDir)
+		return
+	}
+	var newest string
+	var newestTime time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestTime) {
+			newest, newestTime = filepath.Join(effectDir, e.Name()), info.ModTime()
+		}
+	}
+	if newest == "" {
+		return
+	}
+	cache["transition_cross_dissolve"] = newest
+	out, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(profilePath, out, 0o644); err != nil {
+		slog.Default().Warn("montage: failed to repair machine profile", "error", err)
+		return
+	}
+	slog.Default().Info("montage: repaired transition cache path in machine profile", "old", current, "new", newest)
 }
 
 func buildOpenAICompatCommand(cfg codex.Config, task domain.CodexTask, manifestPath string, resolveSkillRoot func(string) (string, error)) (*exec.Cmd, error) {

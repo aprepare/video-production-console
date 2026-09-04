@@ -12,6 +12,10 @@ import (
 	"video-production-console/internal/domain"
 )
 
+// validPublishFieldsJSON 是合格的发布字段片段：这些测试关注正文自检，
+// 字段给齐了就不会触发发布字段补齐那一轮额外请求。
+const validPublishFieldsJSON = `"short_titles":["9月1日起你的数据能换钱了","五次机会你抓住过几回","这次不用本金也能进场"],"descriptions":["三份文件同一天生效，你的痕迹值钱了。","五次机会你抓住过几回？这回不用本金。"],"topics":["#财经","#数据资产","#新规落地"]`
+
 func TestRewritePromptStamp(t *testing.T) {
 	if RewritePromptStamp != RewritePromptStampStable {
 		t.Fatalf("stamp=%q want %q", RewritePromptStamp, RewritePromptStampStable)
@@ -67,8 +71,8 @@ func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 		"坏开头",
 		"好开头",
 		"禁止逐段同义改写",
-		"#家庭理财",
-		"4到5个",
+		"#数据资产",
+		"3到4个",
 		"必须从这篇口播长出来",
 		"再补两三句",
 		"禁止带年份",
@@ -351,7 +355,7 @@ func TestRunCopyStillRunsQualityGate(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "last.json")
 	script := source + "点开主页橱窗看《财富觉醒方法论》。"
-	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
 		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
@@ -393,7 +397,7 @@ func TestRunSharpStillRunsQualityGate(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "last.json")
 	script := source + "点开主页橱窗看《财富觉醒方法论》。"
-	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
 		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
@@ -473,8 +477,8 @@ func TestRunRewriteSelfCheckRepairsCopiedDraft(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "last.json")
 	copied := selfCheckTestSource + "去我主页橱窗看《财富觉醒方法论》。"
-	copiedPayload := `{"continuous_script":` + mustJSONString(copied) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
-	cleanPayload := `{"continuous_script":` + mustJSONString(selfCheckCleanScript) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	copiedPayload := `{"continuous_script":` + mustJSONString(copied) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
+	cleanPayload := `{"continuous_script":` + mustJSONString(selfCheckCleanScript) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
 	client := &sequenceClient{responses: []string{copiedPayload, cleanPayload}}
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
@@ -531,7 +535,7 @@ func TestRunRewriteSelfCheckFailsWhenRepairKeepsCopying(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "last.json")
 	copied := selfCheckTestSource + "去我主页橱窗看《财富觉醒方法论》。"
-	copiedPayload := `{"continuous_script":` + mustJSONString(copied) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	copiedPayload := `{"continuous_script":` + mustJSONString(copied) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
 	client := &sequenceClient{responses: []string{copiedPayload, copiedPayload}}
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
@@ -569,7 +573,7 @@ func TestRunRewriteSelfCheckSkipsShortSource(t *testing.T) {
 	_ = os.WriteFile(manifestPath, raw, 0o644)
 	last := filepath.Join(root, "last.json")
 	script := source + "去我主页橱窗看《财富觉醒方法论》。"
-	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
+	payload := `{"continuous_script":` + mustJSONString(script) + `,"titles":[],` + validPublishFieldsJSON + `,"cta":""}`
 	client := &textClient{content: payload}
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,

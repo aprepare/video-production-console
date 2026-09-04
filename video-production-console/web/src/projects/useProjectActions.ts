@@ -284,17 +284,18 @@ export function useProjectActions({
     }
   };
 
-  const startMontageTask = async (prompt: string, options?: { remake?: boolean }) => {
-    if (!selected) return;
+  // 返回是否真的启动成功：一键生成链路靠这个决定是重试、跳过还是停下。
+  const startMontageTask = async (prompt: string, options?: { remake?: boolean }): Promise<boolean> => {
+    if (!selected) return false;
     const project = selected;
     const projectDetail = detail;
     if (!projectDetail || projectDetail.project.id !== project.id) {
       setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
-      return;
+      return false;
     }
     const projectID = project.id;
     const lockKey = lockAction(projectID, "montage");
-    if (!lockKey) return;
+    if (!lockKey) return false;
     try {
       const started = await startProjectTaskMutation.mutateAsync({
         projectID,
@@ -308,16 +309,20 @@ export function useProjectActions({
       if (!started) {
         if (selectedIDRef.current === projectID)
           setMessage("混剪任务启动失败，请检查项目素材与模型配置后重试。");
-        return;
+        return false;
       }
-      if (selectedIDRef.current !== projectID) return;
+      if (selectedIDRef.current !== projectID) return true;
       setTaskModel({ model: "", reasoningEffort: "" });
       if (options?.remake) {
         setMessage("已重新排队混剪，会生成新的剪映草稿；旧草稿不会被删。");
+      } else {
+        setMessage("混剪任务已启动，完成后会自动登记剪映草稿。");
       }
+      return true;
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("混剪任务启动失败，请检查网络连接后重试。");
+      return false;
     } finally {
       unlockAction(lockKey);
     }
@@ -590,21 +595,21 @@ export function useProjectActions({
     }
   };
 
-  const startSpokenLinesTask = async () => {
-    if (!selected) return;
+  const startSpokenLinesTask = async (): Promise<boolean> => {
+    if (!selected) return false;
     const project = selected;
     const projectDetail = detail;
     if (!projectDetail || projectDetail.project.id !== project.id) {
       setMessage("项目详情仍在刷新，请确认当前项目后再启动任务。");
-      return;
+      return false;
     }
     if (projectDetail.assets.continuous_script?.state !== "ready") {
       setMessage("请先备好连续文案，再生成口播稿。");
-      return;
+      return false;
     }
     const projectID = project.id;
     const lockKey = lockAction(projectID, "spoken-lines");
-    if (!lockKey) return;
+    if (!lockKey) return false;
     try {
       const started = await startProjectTaskMutation.mutateAsync({
         projectID,
@@ -619,30 +624,32 @@ export function useProjectActions({
       if (!started) {
         if (selectedIDRef.current === projectID)
           setMessage("口播稿任务启动失败，请检查连续文案与模型配置后重试。");
-        return;
+        return false;
       }
-      if (selectedIDRef.current !== projectID) return;
+      if (selectedIDRef.current !== projectID) return true;
       setTaskModel({ model: "", reasoningEffort: "" });
       setMessage("口播稿任务已启动。完成后字幕会按这些行切。");
+      return true;
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("口播稿任务启动失败，请检查网络连接后重试。");
+      return false;
     } finally {
       unlockAction(lockKey);
     }
   };
 
-  const startCaptionKeywordsTask = async () => {
-    if (!selected) return;
+  const startCaptionKeywordsTask = async (): Promise<boolean> => {
+    if (!selected) return false;
     const project = selected;
     const projectDetail = detail;
-    if (!projectDetail || projectDetail.project.id !== project.id) return;
-    if (projectDetail.assets.spoken_script?.state !== "ready") return;
+    if (!projectDetail || projectDetail.project.id !== project.id) return false;
+    if (projectDetail.assets.spoken_script?.state !== "ready") return false;
     const projectID = project.id;
     const lockKey = lockAction(projectID, "caption-keywords");
-    if (!lockKey) return;
+    if (!lockKey) return false;
     try {
-      await startProjectTaskMutation.mutateAsync({
+      const started = await startProjectTaskMutation.mutateAsync({
         projectID,
         body: {
           account_id: project.account_id,
@@ -652,35 +659,42 @@ export function useProjectActions({
           ...modelOverrideBody(),
         },
       });
+      if (!started) {
+        // 关键词是可选增强：说清失败并回落本地词表，不打断流程。
+        if (selectedIDRef.current === projectID)
+          setMessage("字幕关键词任务启动失败，混剪字幕将回落本地词表。");
+        return false;
+      }
+      return true;
     } catch (error) {
-      // 关键词标注是可选增强：失败时混剪回落本地词表，不打断用户。
       if (!isAbortError(error) && selectedIDRef.current === projectID)
-        console.warn("caption keywords task failed to start", error);
+        setMessage("字幕关键词任务启动失败，混剪字幕将回落本地词表。");
+      return false;
     } finally {
       unlockAction(lockKey);
     }
   };
 
-  const generateNarration = async () => {
-    if (!selected) return;
+  const generateNarration = async (): Promise<boolean> => {
+    if (!selected) return false;
     const project = selected;
     const projectID = project.id;
     if (detail?.project.id !== projectID || detail.assets.continuous_script?.state !== "ready") {
       setMessage("请先备好连续文案，再生成配音与字幕。");
-      return;
+      return false;
     }
     if (detail.assets.spoken_script?.state !== "ready") {
       setMessage("请先生成口播稿，再生成配音与字幕。");
-      return;
+      return false;
     }
     const lockKey = lockAction(projectID, "generate-narration");
-    if (!lockKey) return;
+    if (!lockKey) return false;
     try {
       const outcome = await generateNarrationMutation.mutateAsync({ projectID });
-      if (selectedIDRef.current !== projectID) return;
+      if (selectedIDRef.current !== projectID) return outcome.ok;
       if (!outcome.ok) {
         setMessage(outcome.message);
-        return;
+        return false;
       }
       const warnings = outcome.result.warnings?.length || 0;
       setMessage(
@@ -688,9 +702,11 @@ export function useProjectActions({
           ? `配音与字幕已生成，但有 ${warnings} 条提醒，建议打开字幕确认。`
           : "配音与字幕已生成，可继续下一步。",
       );
+      return true;
     } catch (error) {
       if (!isAbortError(error) && selectedIDRef.current === projectID)
         setMessage("配音与字幕生成失败，请检查网络连接后重试。");
+      return false;
     } finally {
       unlockAction(lockKey);
     }

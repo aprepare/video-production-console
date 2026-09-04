@@ -113,17 +113,17 @@ func TestPublishingFallbacksDoNotHardcodeFixedPlot(t *testing.T) {
 
 func TestPickHotTopicsKeepsVerticalTagsAndPads(t *testing.T) {
 	// 模型给的垂直标签（#楼市 #房贷 这类）直接保留，不再卡白名单；
-	// 不足 4 个时从热门池补齐，最多 5 个。
+	// 不足 3 个时从热门池补齐，最多 4 个——话题堆多了稀释流量。
 	got := pickHotTopics([]string{"#楼市", "#房贷"}, "seed")
-	if len(got) < 4 || len(got) > 5 {
+	if len(got) < 3 || len(got) > 4 {
 		t.Fatalf("count=%d %v", len(got), got)
 	}
 	if got[0] != "#楼市" || got[1] != "#房贷" {
 		t.Fatalf("given tags must keep order = %v", got)
 	}
 	full := pickHotTopics([]string{"#楼市", "#房贷", "#家庭理财", "#财经", "#存钱", "#多余的"}, "seed")
-	if len(full) != 5 {
-		t.Fatalf("cap at 5, got %v", full)
+	if len(full) != 4 {
+		t.Fatalf("cap at 4, got %v", full)
 	}
 }
 
@@ -146,8 +146,9 @@ func TestPublishingPackageKeepsModelTopicsInDescriptions(t *testing.T) {
 		}
 	}
 	shorts, _ := pkg["short_titles"].([]string)
-	if len(shorts) != 3 {
-		t.Fatalf("short_titles must be exactly 3, got %v", shorts)
+	// 模型没给短标题时只从正文取，取不够就少给，不再凑「窗口不会等人」这类占位。
+	if len(shorts) == 0 || len(shorts) > 3 {
+		t.Fatalf("short_titles must be 1..3 script-derived items, got %v", shorts)
 	}
 }
 

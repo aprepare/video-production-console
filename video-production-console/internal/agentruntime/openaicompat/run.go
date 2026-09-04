@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/spokenlines"
@@ -51,6 +53,9 @@ type Options struct {
 	SearchAPIKey  string
 	SearchModel   string
 	SearchClient  ChatClient
+	// IntelFileDir 是工作流 agent 节点 {{file:名字}} 占位符的取文件目录
+	// （素材库等运行时从磁盘读最新内容，不用改提示词）。为空则占位符不解析。
+	IntelFileDir string
 }
 
 type manifestLite struct {
@@ -215,24 +220,30 @@ func Run(opts Options) error {
 		"pipeline": pipeline, "system_bytes": len(system), "user_bytes": len(user),
 	})
 
+	writerStarted := time.Now()
 	resp, err := client.Chat(ChatRequest{
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
 		Stream:          true,
 		Messages:        []Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
 	})
+	writerMillis := time.Since(writerStarted).Milliseconds()
 	if err != nil {
 		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "model_error", "model": model, "prompt_style": style, "prompt_stamp": stamp, "error": err.Error(),
+			"event": "model_error", "model": model, "prompt_style": style, "prompt_stamp": stamp, "error": err.Error(), "ms": writerMillis,
 		})
 		return writeFailure(outPath, manifestPath, err)
 	}
 	if len(resp.Choices) == 0 {
 		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "empty_choices", "model": model, "prompt_style": style, "prompt_stamp": stamp,
+			"event": "empty_choices", "model": model, "prompt_style": style, "prompt_stamp": stamp, "ms": writerMillis,
 		})
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
+	// 写手首稿耗时（不含自检返工），运行视图的写手节点用它显示用时。
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "writer", "model": model, "ms": writerMillis, "effort": strings.TrimSpace(opts.ReasoningEffort),
+	})
 	rawReply := resp.Choices[0].Message.Content
 	captureRemixModelReply(manifest.OutputDir, model, style, stamp, rawReply)
 	var (
@@ -309,6 +320,12 @@ func Run(opts Options) error {
 				content = outcome.RevisedJSON
 			}
 		}
+		// 发布字段（短标题/描述/话题）给少给错时，只补字段、不动正文。
+		var fieldsNote string
+		content, fieldsNote = repairPublishFields(client, model, strings.TrimSpace(opts.ReasoningEffort), system, user, content, manifest.OutputDir)
+		if fieldsNote != "" {
+			checkNote = appendCheckNote(checkNote, fieldsNote)
+		}
 	}
 	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
 		return writeFailure(outPath, manifestPath, err)
@@ -367,24 +384,57 @@ func runSpokenLines(opts Options, manifest manifestLite, source, outPath string)
 		model = "gpt-4o-mini"
 	}
 	system := spokenlines.SystemPrompt
-	user := spokenlines.UserPrompt(source)
-	captureWriterPrompts(manifest.OutputDir, system, user)
-	resp, err := client.Chat(ChatRequest{
-		Model:           model,
-		ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
-		Stream:          true,
-		Messages: []Message{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
+	captureWriterPrompts(manifest.OutputDir, system, spokenlines.UserPrompt(source))
+	// 切句只看局部上下文：长文案按句子边界切块并发请求，按序拼回。
+	// 任何一块失败整体失败，不拼半篇稿子。
+	chunks := spokenlines.SplitForParallel(source)
+	if len(chunks) == 0 {
+		return fail(fmt.Errorf("spoken source is empty"))
+	}
+	results := make([]string, len(chunks))
+	errs := make([]error, len(chunks))
+	chunkMillis := make([]int64, len(chunks))
+	spokenStarted := time.Now()
+	var wg sync.WaitGroup
+	for i, chunk := range chunks {
+		wg.Add(1)
+		go func(i int, chunk string) {
+			defer wg.Done()
+			started := time.Now()
+			defer func() { chunkMillis[i] = time.Since(started).Milliseconds() }()
+			resp, err := client.Chat(ChatRequest{
+				Model:           model,
+				ReasoningEffort: strings.TrimSpace(opts.ReasoningEffort),
+				Stream:          true,
+				Messages: []Message{
+					{Role: "system", Content: system},
+					{Role: "user", Content: spokenlines.UserPrompt(chunk)},
+				},
+			})
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			if len(resp.Choices) == 0 {
+				errs[i] = fmt.Errorf("empty chat choices")
+				return
+			}
+			results[i] = strings.TrimSpace(resp.Choices[0].Message.Content)
+		}(i, chunk)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return fail(fmt.Errorf("spoken chunk %d/%d: %w", i+1, len(chunks), err))
+		}
+	}
+	// 每块各自耗时 vs 总耗时：并行生效时总耗时≈最慢那块，而不是各块之和。
+	appendRemixRunLog(manifest.OutputDir, map[string]any{
+		"event": "spoken_lines", "chunks": len(chunks), "model": model,
+		"effort": strings.TrimSpace(opts.ReasoningEffort),
+		"chunk_ms": chunkMillis, "total_ms": time.Since(spokenStarted).Milliseconds(),
 	})
-	if err != nil {
-		return fail(err)
-	}
-	if len(resp.Choices) == 0 {
-		return fail(fmt.Errorf("empty chat choices"))
-	}
-	if err := writeSpokenDeliverable(manifest.OutputDir, manifest.TaskID, resp.Choices[0].Message.Content); err != nil {
+	if err := writeSpokenDeliverable(manifest.OutputDir, manifest.TaskID, strings.Join(results, "\n")); err != nil {
 		return fail(err)
 	}
 	resultFile := filepath.Join(manifest.OutputDir, "result.json")
@@ -468,7 +518,7 @@ func writerJSONContract() string {
 	return "只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。\n" +
 		"continuous_script 必须是完整连续口播正文。\n" +
 		"titles、short_titles、descriptions 必须从这篇口播长出来，讲的是同一件事。禁止拿别的成稿标题来凑数，也不要用提示词里没有出现在原文里的情节做标题。\n" +
-		"titles 8到12条。short_titles 恰好3条、每条最多15个字、不要#：第1条当视频板面主标题、第2条当副标题、第3条备选。descriptions 恰好3条，每条只用一到两句话概括这条视频、不超过40个字，不要复述正文段落。topics 4到5个带#的话题：第1个用大流量池标签（#财经 #经济 这类），其余贴这条视频的垂直内容（如 #楼市 #房贷 #家庭理财 #存钱），贴内容比蹭热门重要。三条描述末尾都带这同一组话题标签。cta 必须留空字符串。发布文案不要写课程名、主页橱窗、上车、推广期、几块钱。口播正文仍可按硬性保留收口到课程，但 titles / short_titles / descriptions / cta 一律不写推广。\n"
+		"titles 留空数组。short_titles 恰好3条、每条6到15个字、不要#，三条用三种不同钩子：第1条数字或日期砸脸（能当画面主标题，如「9月1日起你的数据能换钱了」）、第2条反常识或反问（如「五次机会你抓住过几回」）、第3条人群圈定或结果（如「这次不用本金也能进场」）；禁止通用口号（「普通人的新窗口」「窗口不会等人」「财富密码」），禁止截原文首句。descriptions 2到3条，每条一句话不超过40个字，各带一个具体钩子（日期、数字、反问、对号入座），三条钩子不重样，不复述正文，不写#话题（系统会追加）；禁止总结式空话（「看懂的人先拿位置」「答案先留着」）。topics 3到4个带#：第1个从 #财经 #经济 #理财 里选一个，其余必须是正文里真正出现过的名词（如 #数据资产 #存款利率 #楼市 #房贷），禁止 #认知 #思维认知 #干货分享 #认知觉醒 #宏观趋势 这类空泛词。发布字段里修辞性小数字用汉字（第六次、十个里八个、五块钱），年份日期金额用阿拉伯数字。cta 必须留空字符串。发布文案不要写课程名、主页橱窗、上车、推广期、几块钱。口播正文仍可按硬性保留收口到课程，但 titles / short_titles / descriptions / cta 一律不写推广。\n"
 }
 
 func buildAssemblePrompt() string {

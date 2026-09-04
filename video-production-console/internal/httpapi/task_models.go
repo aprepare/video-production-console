@@ -9,10 +9,11 @@ import (
 
 func modelKindForAction(action domain.TaskAction) string {
 	switch action {
-	case domain.ActionRemixSpokenLines:
+	// 字幕关键词跟口播稿走同一个（更轻的）模型：都是机械整理，不需要二创级推理。
+	case domain.ActionRemixSpokenLines, domain.ActionCaptionKeywords:
 		return taskmodel.KindSpokenLines
 	case domain.ActionTopicBrainstorm, domain.ActionTopicCommit, domain.ActionTopicDeepen,
-		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionCaptionKeywords, domain.ActionRemixReview:
+		domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic, domain.ActionRemixReview:
 		return taskmodel.KindRemix
 	default:
 		return taskmodel.KindCodex

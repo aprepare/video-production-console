@@ -15,6 +15,9 @@ func TestModelKindForActionKeepsMontageOnCodex(t *testing.T) {
 	if got := modelKindForAction(domain.ActionRemixSpokenLines); got != taskmodel.KindSpokenLines {
 		t.Fatalf("spoken lines kind=%q", got)
 	}
+	if got := modelKindForAction(domain.ActionCaptionKeywords); got != taskmodel.KindSpokenLines {
+		t.Fatalf("caption keywords kind=%q", got)
+	}
 	if got := modelKindForAction(domain.ActionRemixStandard); got != taskmodel.KindRemix {
 		t.Fatalf("remix kind=%q", got)
 	}

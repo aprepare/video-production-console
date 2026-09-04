@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { TaskModelFields } from "../TaskModelFields";
+import type { RuntimeStatus } from "../runtime/useRuntimeQuery";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { MontagePlanQC, ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
 import { canOneClickProduce, canRemakeMontage, deriveProductionStage, isLiveTaskStatus, missingProductionInputs, montageInputsReady, nextPrimaryAction } from "./workflow";
@@ -22,6 +23,7 @@ import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets
 import { ProjectTaskSummary } from "./ProjectTaskSummary";
 import type { MontageKind } from "../production-modes/catalog";
 import { montageKindLabel } from "../production-modes/catalog";
+import { applyBoardTitles } from "../projects/import-script";
 import "./project-workbench.css";
 
 type UploadAssetType = "narration" | "subtitle_srt";
@@ -36,9 +38,10 @@ export type ProjectWorkbenchProps = {
   onBack: () => void;
   onDelete: () => void;
   mixKind?: MontageKind;
-  onMix: () => void;
-  onMovieMix?: () => void;
-  onImageVideoMix?: () => void;
+  // 启动类回调可返回「是否真的启动成功」：一键生成链路靠它决定重试、跳过还是停下。
+  onMix: () => void | Promise<boolean | void>;
+  onMovieMix?: () => void | Promise<boolean | void>;
+  onImageVideoMix?: () => void | Promise<boolean | void>;
   onRemakeMontage?: () => void;
   onRemakeMovieMontage?: () => void;
   onRemakeImageVideo?: () => void;
@@ -48,12 +51,15 @@ export type ProjectWorkbenchProps = {
   onImportContinuousScript: (content: string) => void;
   loadSourceScriptContent?: (assetID: string) => Promise<string>;
   onReviseContinuousScript?: () => void;
-  onStartSpokenLines?: () => void;
-  onStartCaptionKeywords?: () => void;
-  onGenerateNarration?: () => void;
+  onStartSpokenLines?: () => void | Promise<boolean | void>;
+  onStartCaptionKeywords?: () => void | Promise<boolean | void>;
+  /** 设置里关掉「标注字幕关键词」后为 true：不再自动/一键触发关键词标注任务。 */
+  captionKeywordsDisabled?: boolean;
+  onGenerateNarration?: () => void | Promise<boolean | void>;
   taskModel: TaskModelOverride;
   onTaskModelChange: (value: TaskModelOverride) => void;
   taskModelDefaults?: TaskModelDefaults;
+  runtime?: RuntimeStatus;
   onReplaceBackground: (file: File) => void;
   onViewAsset: (asset: ProjectAsset) => void;
   onOpenTask: (task: ProjectTask) => void;
@@ -137,8 +143,18 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const spokenLinesLive = props.tasks.some((task) =>
     task.action === "remix.spoken_lines"
     && isLiveTaskStatus(task.status));
+  const montageRunning = props.tasks.some((task) =>
+    task.action === "montage.execute"
+    && isLiveTaskStatus(task.status));
+  const mixRunningLabel = mixKind === "movie"
+    ? "正在生成电影混剪"
+    : mixKind === "image-video"
+      ? "正在生成图片视频"
+      : "正在生成混剪草稿";
   const displayAction = action?.id === "start-mixing"
-    ? { ...action, label: mixLabel }
+    ? montageRunning
+      ? { ...action, label: mixRunningLabel, disabled: true }
+      : { ...action, label: mixLabel }
     : action?.id === "start-spoken-lines" && spokenLinesLive
       ? { ...action, label: "正在生成口播稿", disabled: true }
       : action;
@@ -172,6 +188,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const [sourceScript, setSourceScript] = useState("");
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [importScript, setImportScript] = useState("");
+  const [importTitle, setImportTitle] = useState("");
+  const [importSubtitle, setImportSubtitle] = useState("");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const sourceOpenButtonRef = useRef<HTMLButtonElement>(null);
   const importOpenButtonRef = useRef<HTMLButtonElement>(null);
@@ -180,6 +198,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const keywordAutoKey = useRef("");
   const oneClickSpokenKey = useRef("");
   const oneClickKeywordKey = useRef("");
+  // 记录「哪个口播版本的关键词任务启动失败」：自动标注和一键链共用。
+  // 用 state 而非 ref，保证链条 effect 会重跑并跳过关键词继续往配音走（混剪回落本地词表）。
+  const [keywordStartFailedID, setKeywordStartFailedID] = useState("");
   const oneClickNarrationKey = useRef("");
   const oneClickMontageKey = useRef("");
   const oneClickArmedAt = useRef(0);
@@ -196,9 +217,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const showTaskModel = Boolean(
     action && ["start-source-remix", "start-spoken-lines", "start-mixing"].includes(action.id),
   );
-  const montageLive = props.tasks.some((task) =>
-    task.action === "montage.execute"
-    && isLiveTaskStatus(task.status));
+  const montageLive = montageRunning;
   const remakeReady = canRemakeMontage(detail) && !montageLive && !props.pendingActions.includes("montage");
   const remakeMontage = Boolean(mixKind === "scenic" && props.onRemakeMontage && remakeReady);
   const remakeMovieMontage = Boolean(mixKind === "movie" && props.onRemakeMovieMontage && remakeReady);
@@ -214,11 +233,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     setSourceScript("");
     setSourceDialogOpen(false);
     setImportScript("");
+    setImportTitle("");
+    setImportSubtitle("");
     setImportDialogOpen(false);
     setCopiedKey("");
     keywordAutoKey.current = "";
     oneClickSpokenKey.current = "";
     oneClickKeywordKey.current = "";
+    setKeywordStartFailedID("");
     oneClickNarrationKey.current = "";
     oneClickMontageKey.current = "";
     oneClickArmedAt.current = 0;
@@ -231,6 +253,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     task.action === "remix.caption_keywords"
     && isLiveTaskStatus(task.status));
   useEffect(() => {
+    if (props.captionKeywordsDisabled) return;
     if (oneClickArmed) return;
     if (!props.onStartCaptionKeywords) return;
     if (detail.assets.spoken_script?.state !== "ready") return;
@@ -240,25 +263,33 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (!versionKey || keywordAutoKey.current === versionKey) return;
     keywordAutoKey.current = versionKey;
     oneClickKeywordKey.current = versionKey;
-    props.onStartCaptionKeywords();
-  }, [oneClickArmed, captionKeywordsLive, props.onStartCaptionKeywords, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
+    // 只试一次：启动失败时 startCaptionKeywordsTask 已给出横幅说明，混剪会回落本地词表。
+    // 不做自动重试，避免反复抢项目锁挤掉用户同时发起的其他操作。
+    // 失败要记在版本号上，之后用户点「一键生成」时链条才知道跳过关键词，不会干等。
+    void Promise.resolve(props.onStartCaptionKeywords()).then((started) => {
+      if (started === false) setKeywordStartFailedID(versionKey);
+    });
+  }, [oneClickArmed, captionKeywordsLive, props.onStartCaptionKeywords, props.captionKeywordsDisabled, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
 
   const narrationGenerating = props.pendingActions.includes("generate-narration");
   const oneClickBusy = projectPending || spokenLinesLive || montageLive || narrationGenerating || sourceRemixLive;
 
   const startCurrentMix = () => {
-    if (mixKind === "movie") props.onMovieMix?.();
-    else if (mixKind === "image-video") props.onImageVideoMix?.();
-    else props.onMix();
+    if (mixKind === "movie") return props.onMovieMix?.();
+    if (mixKind === "image-video") return props.onImageVideoMix?.();
+    return props.onMix();
   };
 
+  // 控制台重启后任务状态是 interrupted（error_code 才是 interrupted_on_restart），两种都算失败。
   const failedSinceArm = (action: string) => props.tasks.some((task) =>
-    ["failed", "canceled", "interrupted_on_restart"].includes(task.status)
+    ["failed", "canceled", "interrupted", "interrupted_on_restart"].includes(task.status)
     && task.action === action
     && Date.parse(task.created_at) >= oneClickArmedAt.current - 5000);
 
   // 文案确定后一点：口播稿 → 字幕关键词 → 配音字幕 → 混剪到剪映草稿。
   // 关键词和配音不能并行：项目锁同时只允许一个动作。关键词失败才回落本地词表。
+  // 每一步只有「真的启动成功」才算数：启动失败（常见是项目锁还没放开）就放开标记，
+  // 等下一轮刷新重试，而不是把链条永远挂在「正在一键生成」。
   useEffect(() => {
     if (!oneClickArmed) return;
     if (detail.assets.mix_draft?.state === "ready" || !canOneClickProduce(detail)) {
@@ -272,7 +303,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     const keywordsReady = detail.assets.caption_keywords?.state === "ready";
     const narrationReady = detail.assets.narration?.state === "ready";
     const srtReady = detail.assets.subtitle_srt?.state === "ready";
-    const keywordsFailed = failedSinceArm("remix.caption_keywords");
+    const keywordsFailed = failedSinceArm("remix.caption_keywords")
+      || (spokenID !== "" && keywordStartFailedID === spokenID);
 
     if (!spokenReady) {
       if (oneClickBusy) return;
@@ -282,17 +314,23 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         return;
       }
       oneClickSpokenKey.current = scriptID;
-      props.onStartSpokenLines();
+      void Promise.resolve(props.onStartSpokenLines()).then((started) => {
+        // 启动失败已有横幅说明原因；停下一键，等用户处理后再点。
+        if (started === false) setOneClickArmed(false);
+      });
       return;
     }
 
-    if (!keywordsReady && !keywordsFailed) {
+    if (!keywordsReady && !keywordsFailed && !props.captionKeywordsDisabled) {
       if (captionKeywordsLive || oneClickBusy) return;
       if (!props.onStartCaptionKeywords || !spokenID) return;
       if (oneClickKeywordKey.current === spokenID || keywordAutoKey.current === spokenID) return;
       oneClickKeywordKey.current = spokenID;
       keywordAutoKey.current = spokenID;
-      props.onStartCaptionKeywords();
+      void Promise.resolve(props.onStartCaptionKeywords()).then((started) => {
+        // 关键词启动失败不值得停整条链：标记放弃，下一轮直接去配音（混剪回落本地词表）。
+        if (started === false) setKeywordStartFailedID(spokenID);
+      });
       return;
     }
 
@@ -304,11 +342,15 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         return;
       }
       oneClickNarrationKey.current = spokenID;
-      props.onGenerateNarration();
+      void Promise.resolve(props.onGenerateNarration()).then((started) => {
+        if (started === false) setOneClickArmed(false);
+      });
       return;
     }
 
     if (captionKeywordsLive) return;
+    // 等配音等动作的项目锁放开再启动混剪，否则会被锁静默吞掉。
+    if (oneClickBusy) return;
     if (!montageInputsReady(detail)) {
       setOneClickArmed(false);
       return;
@@ -319,10 +361,13 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       return;
     }
     oneClickMontageKey.current = mixKey;
-    startCurrentMix();
+    void Promise.resolve(startCurrentMix()).then((started) => {
+      if (started === false) setOneClickArmed(false);
+    });
   }, [
     oneClickArmed,
     oneClickBusy,
+    keywordStartFailedID,
     captionKeywordsLive,
     narrationGenerating,
     detail,
@@ -341,6 +386,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (!oneClickAvailable || oneClickBusy) return;
     oneClickSpokenKey.current = "";
     oneClickKeywordKey.current = "";
+    // keywordStartFailedID 不清：失败记录跟着口播版本走，换新版本自然解锁；
+    // 这里清掉反而会让链条撞上已烧毁的 keywordAutoKey 干等。
     oneClickNarrationKey.current = "";
     oneClickMontageKey.current = "";
     oneClickArmedAt.current = Date.now();
@@ -486,12 +533,15 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
   const openImportDialog = () => {
     setSourceDialogOpen(false);
+    // 重新导入时带出已有板题，避免每次重填。
+    setImportTitle(shortTitles[0] || "");
+    setImportSubtitle(shortTitles[1] || "");
     setImportDialogOpen(true);
   };
 
   const saveImportedScript = () => {
     if (!importScript.trim()) return;
-    props.onImportContinuousScript(importScript.trim());
+    props.onImportContinuousScript(applyBoardTitles(importScript.trim(), importTitle, importSubtitle));
     setImportDialogOpen(false);
   };
 
@@ -544,6 +594,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </div>
         </div>
         <div className="workbench-masthead__actions">
+          {props.runtime ? (
+            <span
+              className={
+                props.runtime.Running >= props.runtime.Limit || props.runtime.Queued > 0
+                  ? "runtime-warning"
+                  : "runtime-state"
+              }
+              title="全局同时运行的任务数 / 上限；排满时新任务会排队"
+            >
+              任务 {props.runtime.Running}/{props.runtime.Limit}
+              {props.runtime.Queued > 0 ? ` · 排队 ${props.runtime.Queued}` : ""}
+            </span>
+          ) : null}
           <label className="workbench-theme-control">
             主题
             <select
@@ -700,6 +763,30 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 }}
               />
             </label>
+            <div className="import-script-titles">
+              <label>
+                主标题
+                <input
+                  type="text"
+                  aria-label="混剪主标题"
+                  value={importTitle}
+                  maxLength={20}
+                  onChange={(event) => setImportTitle(event.target.value)}
+                  placeholder="上混剪背景板，超15字截断"
+                />
+              </label>
+              <label>
+                副标题
+                <input
+                  type="text"
+                  aria-label="混剪副标题"
+                  value={importSubtitle}
+                  maxLength={20}
+                  onChange={(event) => setImportSubtitle(event.target.value)}
+                  placeholder="可不填"
+                />
+              </label>
+            </div>
             <footer>
               <small />
               <div>
@@ -807,7 +894,13 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               <span>{currentTaskIsLive ? "ACTIVE TASK" : "RECENT TASK"}</span>
               <span className={`task-presence ${currentTaskIsLive ? "task-presence--live" : "task-presence--idle"}`}>
                 <span aria-hidden="true" />
-                {currentTaskIsLive ? "运行中" : currentTask ? "最近记录" : "空闲"}
+                {currentTaskIsLive
+                  ? ["awaiting_input", "waiting_input"].includes(currentTask?.status || "")
+                    ? "需要回复"
+                    : currentTask?.status === "queued"
+                      ? "排队中"
+                      : "运行中"
+                  : currentTask ? "最近记录" : "空闲"}
               </span>
             </div>
             {currentTask ? (
@@ -903,6 +996,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           spokenLinesLive={spokenLinesLive}
           onStartCaptionKeywords={props.onStartCaptionKeywords}
           captionKeywordsLive={captionKeywordsLive}
+          montageLive={montageLive}
           onExportVideo={props.onExportVideo}
           videoExporting={props.videoExporting}
           onGenerateNarration={props.onGenerateNarration}

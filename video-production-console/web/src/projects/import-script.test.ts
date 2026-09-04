@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { unwrapImportedScript } from "./import-script";
+import { applyBoardTitles, unwrapImportedScript } from "./import-script";
 
 const remixJSON = `{
   "continuous_script": "又一批人要发财了。人民币第三次换锚已经开始。",
@@ -35,4 +35,24 @@ test("rejects remix JSON that has no continuous_script", () => {
   expect(got.ok).toBe(false);
   if (got.ok) return;
   expect(got.message).toContain("continuous_script");
+});
+
+test("applyBoardTitles wraps plain text into writer JSON with short_titles", () => {
+  const got = applyBoardTitles("你家早就有矿，别人偷偷挖了十几年。", "你家早就有矿", "第六座山开工了");
+  const draft = JSON.parse(got) as { continuous_script: string; short_titles: string[] };
+  expect(draft.continuous_script).toBe("你家早就有矿，别人偷偷挖了十几年。");
+  expect(draft.short_titles).toEqual(["你家早就有矿", "第六座山开工了"]);
+});
+
+test("applyBoardTitles leaves input unchanged when no titles typed", () => {
+  expect(applyBoardTitles("正文原样", "", "  ")).toBe("正文原样");
+});
+
+test("applyBoardTitles puts typed titles ahead of existing short_titles in JSON", () => {
+  const got = applyBoardTitles(remixJSON, "手写主标题", "");
+  const draft = JSON.parse(got) as { continuous_script: string; short_titles: string[]; cta: string };
+  expect(draft.short_titles[0]).toBe("手写主标题");
+  expect(draft.short_titles).toContain("第三次换锚来了");
+  expect(draft.continuous_script).toBe("又一批人要发财了。人民币第三次换锚已经开始。");
+  expect(draft.cta).toContain("财富觉醒方法论");
 });

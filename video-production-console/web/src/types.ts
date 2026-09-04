@@ -14,7 +14,18 @@ import type {
 
 export type Theme = "light" | "dark";
 
-export type Account = { id: string; name: string; status?: string };
+export type Account = { id: string; name: string; status?: string; overrides?: AccountOverrides | null };
+
+// 账号级制作差异化配置：矩阵账号靠不同样式和音色拉开内容指纹。
+export type VoiceOverride = {
+  aurastd_voice_id?: string;
+  volc_speech_speaker_id?: string;
+};
+
+export type AccountOverrides = {
+  montage_style?: MontageStyle;
+  voice?: VoiceOverride;
+};
 
 export type Project = Omit<ProjectSummary, "stage"> & {
   stage: ProjectStage | "topic" | "ready";
@@ -156,6 +167,7 @@ export type MontageStyle = {
   plain_size?: number;
   keyword_size?: number;
   keyword_color?: string;
+  keywords_hidden?: boolean;
   title_hidden?: boolean;
   title_size?: number;
   title_color?: string;
@@ -166,6 +178,43 @@ export type MontageStyle = {
   subtitle_y?: number;
   bgm_id?: string;
   bgm_volume?: number;
+  /** 描边 / 底色 / 字体扩展：空值沿用验证过的策略默认，主要由「从剪映草稿导入样式」回填。 */
+  caption_border_color?: string;
+  caption_border_width?: number;
+  caption_border_hidden?: boolean;
+  caption_bg_color?: string;
+  caption_bg_alpha?: number;
+  keyword_border_color?: string;
+  title_font?: string;
+  title_border_color?: string;
+  title_bg_color?: string;
+  title_bg_alpha?: number;
+  subtitle_font?: string;
+  subtitle_border_color?: string;
+  subtitle_bg_color?: string;
+  subtitle_bg_alpha?: number;
+};
+
+export type JianyingDraftInfo = {
+  name: string;
+  modified_at: string;
+  encrypted: boolean;
+};
+
+export type JianyingDraftsView = {
+  root: string;
+  drafts: JianyingDraftInfo[];
+  decrypt_tool_available: boolean;
+  decrypt_tip?: string;
+};
+
+export type JianyingStyleExtraction = {
+  style: MontageStyle;
+  notes: string[];
+  timeline?: string;
+  /** 草稿用的曲库 BGM；bgm_path 非空表示剪映缓存里有文件，可一键收进本地曲库。 */
+  bgm_name?: string;
+  bgm_path?: string;
 };
 
 export type BgmTrack = {

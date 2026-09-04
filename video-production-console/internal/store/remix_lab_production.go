@@ -23,9 +23,11 @@ type RemixLabProductionRecord struct {
 	SpokenTaskID  string
 	CaptionTaskID string
 	MontageTaskID string
-	Error         string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// ForceNarration 由单步重做设置：narration 步无视已就绪的旧配音强制重新生成。
+	ForceNarration bool
+	Error          string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // UpsertProduction 建立或整行覆盖一条生产状态。
@@ -33,15 +35,16 @@ func (r *RemixLabRepository) UpsertProduction(ctx context.Context, rec RemixLabP
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO remix_lab_productions(
 			run_id, experiment_id, account_id, auto, status, step, project_id,
-			spoken_task_id, caption_task_id, montage_task_id, error, created_at, updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+			spoken_task_id, caption_task_id, montage_task_id, force_narration, error, created_at, updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(run_id) DO UPDATE SET
 			account_id=excluded.account_id, auto=excluded.auto, status=excluded.status,
 			step=excluded.step, project_id=excluded.project_id,
 			spoken_task_id=excluded.spoken_task_id, caption_task_id=excluded.caption_task_id,
-			montage_task_id=excluded.montage_task_id, error=excluded.error, updated_at=excluded.updated_at`,
+			montage_task_id=excluded.montage_task_id, force_narration=excluded.force_narration,
+			error=excluded.error, updated_at=excluded.updated_at`,
 		rec.RunID, rec.ExperimentID, rec.AccountID, rec.Auto, rec.Status, rec.Step, rec.ProjectID,
-		rec.SpokenTaskID, rec.CaptionTaskID, rec.MontageTaskID, rec.Error, rec.CreatedAt, rec.UpdatedAt,
+		rec.SpokenTaskID, rec.CaptionTaskID, rec.MontageTaskID, rec.ForceNarration, rec.Error, rec.CreatedAt, rec.UpdatedAt,
 	)
 	return err
 }
@@ -49,7 +52,7 @@ func (r *RemixLabRepository) UpsertProduction(ctx context.Context, rec RemixLabP
 func (r *RemixLabRepository) GetProduction(ctx context.Context, runID string) (RemixLabProductionRecord, error) {
 	rec, err := scanProduction(r.db.QueryRowContext(ctx, `
 		SELECT run_id, experiment_id, account_id, auto, status, step, project_id,
-			spoken_task_id, caption_task_id, montage_task_id, error, created_at, updated_at
+			spoken_task_id, caption_task_id, montage_task_id, force_narration, error, created_at, updated_at
 		FROM remix_lab_productions WHERE run_id=?`, runID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RemixLabProductionRecord{}, ErrRemixLabNotFound
@@ -61,7 +64,7 @@ func (r *RemixLabRepository) GetProduction(ctx context.Context, runID string) (R
 func (r *RemixLabRepository) GetProductionByProjectID(ctx context.Context, projectID string) (RemixLabProductionRecord, error) {
 	rec, err := scanProduction(r.db.QueryRowContext(ctx, `
 		SELECT run_id, experiment_id, account_id, auto, status, step, project_id,
-			spoken_task_id, caption_task_id, montage_task_id, error, created_at, updated_at
+			spoken_task_id, caption_task_id, montage_task_id, force_narration, error, created_at, updated_at
 		FROM remix_lab_productions
 		WHERE project_id=? AND project_id!=''
 		ORDER BY updated_at DESC, created_at DESC, run_id DESC
@@ -75,7 +78,7 @@ func (r *RemixLabRepository) GetProductionByProjectID(ctx context.Context, proje
 func (r *RemixLabRepository) ListProductionsByExperiment(ctx context.Context, experimentID string) ([]RemixLabProductionRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT run_id, experiment_id, account_id, auto, status, step, project_id,
-			spoken_task_id, caption_task_id, montage_task_id, error, created_at, updated_at
+			spoken_task_id, caption_task_id, montage_task_id, force_narration, error, created_at, updated_at
 		FROM remix_lab_productions WHERE experiment_id=?`, experimentID)
 	if err != nil {
 		return nil, err
@@ -96,7 +99,7 @@ func (r *RemixLabRepository) ListProductionsByExperiment(ctx context.Context, ex
 func (r *RemixLabRepository) ListRunningProductions(ctx context.Context) ([]RemixLabProductionRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT run_id, experiment_id, account_id, auto, status, step, project_id,
-			spoken_task_id, caption_task_id, montage_task_id, error, created_at, updated_at
+			spoken_task_id, caption_task_id, montage_task_id, force_narration, error, created_at, updated_at
 		FROM remix_lab_productions WHERE status='running'`)
 	if err != nil {
 		return nil, err
@@ -117,10 +120,10 @@ func (r *RemixLabRepository) UpdateProduction(ctx context.Context, rec RemixLabP
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE remix_lab_productions SET
 			account_id=?, auto=?, status=?, step=?, project_id=?,
-			spoken_task_id=?, caption_task_id=?, montage_task_id=?, error=?, updated_at=?
+			spoken_task_id=?, caption_task_id=?, montage_task_id=?, force_narration=?, error=?, updated_at=?
 		WHERE run_id=?`,
 		rec.AccountID, rec.Auto, rec.Status, rec.Step, rec.ProjectID,
-		rec.SpokenTaskID, rec.CaptionTaskID, rec.MontageTaskID, rec.Error, rec.UpdatedAt, rec.RunID,
+		rec.SpokenTaskID, rec.CaptionTaskID, rec.MontageTaskID, rec.ForceNarration, rec.Error, rec.UpdatedAt, rec.RunID,
 	)
 	if err != nil {
 		return err
@@ -143,7 +146,7 @@ func scanProduction(scanner productionScanner) (RemixLabProductionRecord, error)
 	var rec RemixLabProductionRecord
 	err := scanner.Scan(
 		&rec.RunID, &rec.ExperimentID, &rec.AccountID, &rec.Auto, &rec.Status, &rec.Step, &rec.ProjectID,
-		&rec.SpokenTaskID, &rec.CaptionTaskID, &rec.MontageTaskID, &rec.Error, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.SpokenTaskID, &rec.CaptionTaskID, &rec.MontageTaskID, &rec.ForceNarration, &rec.Error, &rec.CreatedAt, &rec.UpdatedAt,
 	)
 	return rec, err
 }

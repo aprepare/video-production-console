@@ -1,0 +1,865 @@
+{
+ "materials": {
+  "drafts": [
+   {
+    "type": "combination",
+    "draft": {
+     "tracks": [
+      {
+       "type": "text",
+       "name": "",
+       "segments": [
+        {
+         "material_id": "CD1D1C97-64ED-4f6f-966F-376938E50346",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.536619742151717
+          },
+          "flip": {}
+         }
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "name": "",
+       "segments": [
+        {
+         "material_id": "F4B89120-5788-4b2d-A65A-D9311F16C32D",
+         "clip": {
+          "scale": {
+           "x": 1.1213557183556127,
+           "y": 1.1213557183556127
+          },
+          "transform": {
+           "x": 0.0,
+           "y": -0.5271026156941652
+          },
+          "flip": {}
+         }
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "name": "",
+       "segments": [
+        {
+         "material_id": "8201C781-2E32-4f06-A9D4-CAC09F017930",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "032D454E-4855-4e9e-92DF-6C039DBF3CE0",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "4EAB1A48-9C44-4d23-9FC4-7019F8E72FCB",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "5949EF25-BD4A-4037-8C6C-822FECC0B0D5",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "A10A0C63-57FE-438b-9E6A-9E689D6AA25A",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "6215336F-2126-4f36-BC27-0C1B6DB91C98",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "CFB0F2D9-395B-4b95-BE86-75BF22140C40",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "0FD9BA7A-B24D-415c-9234-72FFDD031130",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "2CDC754A-56BC-4b11-885E-161E1A4F4D67",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "2E59FF59-AC94-49d4-BD60-6C414CA9732D",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "F6334CDD-3CAD-43ee-A9C3-C802BF23A9A1",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "E7DD3967-A7A1-4094-A770-74ACFA3DE72E",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "0087B745-AC67-42bf-86D0-50278A2B648E",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "6F4E2408-73AA-40ed-A149-E67CF73EC1A6",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "384B65DB-ACE9-46ce-AC44-FEABD59D6F50",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "DD625930-3D31-4dc4-AEF6-FB508550769E",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "20AFBCD4-A66F-4aea-9856-44CD4A0A0BBE",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "3997A842-3850-49dd-835D-32DFD68DC144",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "58D35B99-E4D8-4d20-8169-C16100F08741",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "5DFD9FF3-0460-4599-9FE6-1E73ED2BF79E",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "3E527581-512C-4c85-B1C9-731F68A02AF8",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "A489F9AA-EC09-4752-B9C8-A949523D89BD",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "AD11EB14-8BE4-4aad-B710-B7B5A3613CBB",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "9C0DC6B8-C3A9-463c-B654-2C9EE5AF3B66",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "AC2FB40B-5755-4d05-8DBA-A93D86EB965A",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "6DD81E81-834D-4bc9-BDC8-0CFC881E6838",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "98B52928-32B9-4f2b-AF78-1FE27CAF1E19",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "26F5CC8F-D508-4808-B08D-6F4974E6E153",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "0880C1AF-C922-4ca4-A03D-7F12F10FD409",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "E6EC8973-A7E4-4562-8181-110BBAE27EDA",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "FE125474-6F60-4b73-AF7E-F7DBCACD654C",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "9D0485E8-B3A1-411c-A072-40212DA01585",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "B8A5B3CB-AED8-45d6-9DBE-92949406ED42",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "31CA13A3-96E3-4557-BE0E-6444B26B4BE1",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "48880A4F-9DA3-415b-BDED-11DCC002E9D3",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "A68D9BDB-C458-4fab-A598-158E27DA5AB2",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "1A1DB61E-ECFB-4119-8402-C91544B69C73",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "B4E77EFE-D020-4861-9C64-DDB7D3ECFEB2",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "6E61DEDD-D48E-4ad0-A5C0-A87020C037DE",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        },
+        {
+         "material_id": "915625F5-1C7E-468b-B5F4-3BF2FB0AFCA6",
+         "clip": {
+          "scale": {
+           "x": 1.0,
+           "y": 1.0
+          },
+          "transform": {
+           "x": 0.0,
+           "y": 0.0
+          },
+          "flip": {}
+         }
+        }
+       ]
+      }
+     ],
+     "materials": {
+      "texts": [
+       {
+        "id": "A10A0C63-57FE-438b-9E6A-9E689D6AA25A",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [2, 3], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [3, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [6, 8], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"点过的每一笔外卖\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "AC2FB40B-5755-4d05-8DBA-A93D86EB965A",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 5], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [5, 7], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"先把三件事记牢\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "B4E77EFE-D020-4861-9C64-DDB7D3ECFEB2",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 5], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [5, 7], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"数据产生的利润\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "48880A4F-9DA3-415b-BDED-11DCC002E9D3",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [3, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"查得到主人是谁\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "1A1DB61E-ECFB-4119-8402-C91544B69C73",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 6], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [6, 8], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"产权分配文件落地\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "384B65DB-ACE9-46ce-AC44-FEABD59D6F50",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [2, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"一天之内全解\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "4EAB1A48-9C44-4d23-9FC4-7019F8E72FCB",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [6, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"你手机里刷过的\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "CD1D1C97-64ED-4f6f-966F-376938E50346",
+        "content": "{\"text\":\"三份红头文件，正在重写财富\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[1,0.85879999399185181,0.10199999809265137]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":14.399999618530273,\"range\":[0,13]}]}",
+        "fonts": [
+         {
+          "id": "5A98376E-5176-45af-89EE-03F0F355272F",
+          "resource_id": "6740435892441190919",
+          "path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+          "effect_id": "6740435892441190919",
+          "title": "新青年体"
+         }
+        ],
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf"
+       },
+       {
+        "id": "2E59FF59-AC94-49d4-BD60-6C414CA9732D",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [4, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"白纸黑字写好了\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "F4B89120-5788-4b2d-A65A-D9311F16C32D",
+        "content": "{\"styles\":[{\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[0.0,0.0,0.0]}}},\"range\":[0,6],\"size\":12.199999809265137,\"useLetterColor\":true}],\"text\":\"窗口不会等人\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf",
+        "background_color": "#ffffff"
+       },
+       {
+        "id": "3997A842-3850-49dd-835D-32DFD68DC144",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 5], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"那我告诉你\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "A489F9AA-EC09-4752-B9C8-A949523D89BD",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 1], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [1, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [4, 8], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"干一辈子领的工资\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "032D454E-4855-4e9e-92DF-6C039DBF3CE0",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [2, 6], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [6, 8], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"三份文件同时生效\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "26F5CC8F-D508-4808-B08D-6F4974E6E153",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"所有数据\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "B8A5B3CB-AED8-45d6-9DBE-92949406ED42",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [2, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"登记文件\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "8201C781-2E32-4f06-A9D4-CAC09F017930",
+        "content": "{\"text\":\"2026年9月1日\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[1,0.082400001585483551,0.082400001585483551]}}},\"font\":{\"path\":\"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\",\"id\":\"6740435892441190919\"},\"strokes\":[{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}},\"width\":0.0599999986588955,\"mode\":0}],\"size\":23,\"useLetterColor\":true,\"range\":[0,9]}]}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "9C0DC6B8-C3A9-463c-B654-2C9EE5AF3B66",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 3], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [3, 5], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"是正在发生\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "AD11EB14-8BE4-4aad-B710-B7B5A3613CBB",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 9], \"size\": 20.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}}], \"text\": \"这事已经不是将来时\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "0FD9BA7A-B24D-415c-9234-72FFDD031130",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"这不是我瞎编\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "6E61DEDD-D48E-4ad0-A5C0-A87020C037DE",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"必须有人拿走\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "6F4E2408-73AA-40ed-A149-E67CF73EC1A6",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"三个死结\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "CFB0F2D9-395B-4b95-BE86-75BF22140C40",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"全部开始值钱\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "5949EF25-BD4A-4037-8C6C-822FECC0B0D5",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [3, 5], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"每一条视频\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "0880C1AF-C922-4ca4-A03D-7F12F10FD409",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"统一编号归档\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "20AFBCD4-A66F-4aea-9856-44CD4A0A0BBE",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 7], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [7, 9], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"这跟你没半毛钱关系\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "E6EC8973-A7E4-4562-8181-110BBAE27EDA",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [6, 9], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"再也不是一笔糊涂账\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "FE125474-6F60-4b73-AF7E-F7DBCACD654C",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"第二件\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "6215336F-2126-4f36-BC27-0C1B6DB91C98",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 2], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [2, 3], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [3, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [6, 8], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"走过的每一段导航\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "3E527581-512C-4c85-B1C9-731F68A02AF8",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"可能顶你\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "915625F5-1C7E-468b-B5F4-3BF2FB0AFCA6",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 7], \"size\": 20.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}}], \"text\": \"那个人可以是你\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "9D0485E8-B3A1-411c-A072-40212DA01585",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 5], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [5, 7], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"国家数据局出了\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "DD625930-3D31-4dc4-AEF6-FB508550769E",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 5], \"size\": 20.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}}], \"text\": \"你可能觉得\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "58D35B99-E4D8-4d20-8169-C16100F08741",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [6, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"别人用你产生的\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "31CA13A3-96E3-4557-BE0E-6444B26B4BE1",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [3, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [7, 9], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"每一条数据有了户口\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "5DFD9FF3-0460-4599-9FE6-1E73ED2BF79E",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [4, 7], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"数据换来的收入\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "A68D9BDB-C458-4fab-A598-158E27DA5AB2",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"第三件\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "E7DD3967-A7A1-4094-A770-74ACFA3DE72E",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 2], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [2, 4], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"怎么定价\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "6DD81E81-834D-4bc9-BDC8-0CFC881E6838",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"第一件\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "2CDC754A-56BC-4b11-885E-161E1A4F4D67",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 9], \"size\": 20.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}}], \"text\": \"财政部和国家数据局\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "F6334CDD-3CAD-43ee-A9C3-C802BF23A9A1",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 4], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [4, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"谁的数据归谁\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "98B52928-32B9-4f2b-AF78-1FE27CAF1E19",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [0, 3], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [3, 5], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [0.9765, 0.9529, 0.7686]}}}, \"range\": [5, 9], \"size\": 17.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.29019609093666077, 0.25882354378700256, 0.21960784494876862]}}, \"width\": 0.08000000000000002}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"财政部出了分类文件\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       },
+       {
+        "id": "0087B745-AC67-42bf-86D0-50278A2B648E",
+        "content": "{\"styles\": [{\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [0, 3], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}, {\"fill\": {\"alpha\": 1.0, \"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 0.0824, 0.0824]}}}, \"range\": [3, 6], \"size\": 23.0, \"bold\": false, \"italic\": false, \"underline\": false, \"strokes\": [{\"content\": {\"solid\": {\"alpha\": 1.0, \"color\": [0.0, 0.0, 0.0]}}, \"width\": 0.06}], \"font\": {\"id\": \"6740435892441190919\", \"path\": \"C:/Users/prepare/AppData/Local/JianyingPro/User Data/Cache/effect/349309/71a73f7e297831936018c928d61ce2b8/新青年体-文跃新青年体.ttf\"}, \"useLetterColor\": true}], \"text\": \"赚了钱怎么分\"}",
+        "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf"
+       }
+      ],
+      "audios": [
+       {
+        "type": "extract_music",
+        "name": "16072884-4c02-4103-8afe-84c7c3b2eb42.mp3"
+       },
+       {
+        "type": "music",
+        "name": "やわらかs'xな光"
+       },
+       {
+        "type": "music",
+        "name": "やわらかs'xな光"
+       }
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "tracks": [
+  {
+   "type": "video",
+   "segments": [
+    {}
+   ]
+  }
+ ]
+}

@@ -116,6 +116,9 @@ type ManifestSettings struct {
 	BoardSubtitle        string `json:"board_subtitle,omitempty"`
 	RevisionNotes        string `json:"revision_notes,omitempty"`
 	RemixPromptStyle     string `json:"remix_prompt_style,omitempty"`
+	RemixSystemPrompt    string `json:"remix_system_prompt,omitempty"`
+	RemixUserPrompt      string `json:"remix_user_prompt,omitempty"`
+	RemixPromptStamp     string `json:"remix_prompt_stamp,omitempty"`
 	RemixBaseURL         string `json:"remix_base_url,omitempty"`
 	RemixModel           string `json:"remix_model,omitempty"`
 	RemixReasoningEffort string `json:"remix_reasoning_effort,omitempty"`

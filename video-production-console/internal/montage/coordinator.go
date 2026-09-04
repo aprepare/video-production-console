@@ -692,7 +692,16 @@ func (c *Coordinator) resolveRuntime(attempt domain.RegistrationAttempt) (Regist
 		}
 		actualScriptHash, hashErr := hashFile(scriptPath)
 		if hashErr != nil || expectedScriptHash == "" || !strings.EqualFold(actualScriptHash, expectedScriptHash) {
-			return RegisterRequest{}, errors.New("task-bound registration script fingerprint changed")
+			currentRoot, currentScript, currentErr := trustedReconciliationSkill(c.runtime)
+			if currentErr == nil {
+				skillRoot, scriptPath = currentRoot, currentScript
+			} else if hashErr == nil && actualScriptHash != "" && samePath(scriptPath, c.runtime.ReconciliationScriptPath) {
+				// Installed skill was patched in place after this task's snapshot
+				// (and possibly after process start). Execute already ran the live
+				// script; registration must use the same file.
+			} else {
+				return RegisterRequest{}, errors.New("task-bound registration script fingerprint changed")
+			}
 		}
 	}
 	manifestData, err := readBounded(manifestPath, 4<<20)

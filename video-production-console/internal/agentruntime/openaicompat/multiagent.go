@@ -50,10 +50,10 @@ const factsAgentSystemOffline = `你是财经事实核查员。当前没有联�
 const ammoAgentSystem = `你是二创改写的军火库。只出弹药，不写成稿。
 只返回一个 JSON 对象，不要 Markdown，字段：
 - banned_imagery：原文用过的比喻、意象、场景道具，从头盘到尾全列出来（这是新稿的禁用清单，收尾段的比喻重点盘）
-- center_options：3 个原文没用过的中心意象候选，每个附一句为什么适配这篇的事实链（观众 40 到 65 岁，生活里的东西优先：存折、菜市场、户口、赶集这类）
-- scenes：2 到 3 个可插中后段的原创现场（有人、有事、有对话要点；禁止编造任何数字）
+- center_options：不是必选。先判断原文有没有「不换就会整篇撞车」的贯穿生活道具。原文主要靠概念主线推进（换锚、印钞、三次转折这类），只是局部打比方时，返回空数组 []。只有原文把同一个生活道具贯穿全文、直说会大段撞车时，才给 1 个局部可用的生活意象（不要给 3 个，也不要求全篇围着它转），附一句用在哪一段、为什么。
+- scenes：不是必选。原文没有点名的人物故事时返回空数组 []。只有原文本身就有具体人、现场、对话时，才给 1 个换说法的现场要点；禁止新编人物，禁止编造任何数字。
 - phrase_swaps：原文高频或标志性的表达换成什么讲法，8 到 15 组
-- course_hook_options：课尾从正文滑向课程的过渡句 3 种（不吆喝，是替观众把没答的问题问出来那种）`
+- course_hook_options：3 种互不相同的课尾接法。每种写清：本条观众卡着的缺口、钩子类型（窗口将关/看懂≠用上/对号入座/继续刷还是花五块/一句压轴）、以及一句过渡。禁止三种都是「钱到底往哪放」的变体。`
 
 type intelAgentSpec struct {
 	name   string
@@ -176,7 +176,7 @@ func runIntelPhase(mainClient ChatClient, opts Options, source, outputDir string
 		b.WriteString("\n")
 	}
 	if ammo, ok := byName["ammo"]; ok {
-		b.WriteString("\n〔意象与现场弹药〕banned_imagery 是禁用清单必须避开；中心意象从 center_options 挑一个（自造更好的也行）；scenes 和 phrase_swaps 可用可不用：\n")
+		b.WriteString("\n〔意象与现场弹药〕banned_imagery 是禁用清单必须避开；center_options 为空就直说，不要硬造贯穿全文的中心意象；有值也只许用在它标明的那一段；scenes 为空就不要自己编人物现场；有值也只许改写原文已有的人，不许新编老周柜员；phrase_swaps 可用可不用：\n")
 		b.WriteString(ammo)
 		b.WriteString("\n")
 	}

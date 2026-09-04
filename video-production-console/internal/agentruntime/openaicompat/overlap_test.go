@@ -170,6 +170,27 @@ func TestStripCourseYearAndCollapseDuplicateMentions(t *testing.T) {
 	}
 }
 
+// 读心式课尾会在课尾里点两三次课名，这些必须原样保留；只有前段的课名要删。
+func TestCollapseKeepsRepeatedMentionsInsideTail(t *testing.T) {
+	body := strings.Repeat("正文在讲存款利率和资金流向，一句接一句往下推。", 12) // 约 300 字正文
+	tail := "我把没展开的那一步装进了《财富觉醒方法论》，主页橱窗就能找到，五块钱。五块钱买瓶酱油都买不到好牌子。《财富觉醒方法论》里不念文件不堆大词。点开主页橱窗，上车要趁早。"
+	script := body + tail
+	got, notes := applyLocalCopyFixes(script)
+	if got != strings.TrimSpace(script) || len(notes) != 0 {
+		t.Fatalf("课尾内部的重复课名不许删: notes=%v", notes)
+	}
+	if issues := inspectCopyIssues(got, ""); containsIssue(issues, "课名") || containsIssue(issues, "过长") {
+		t.Fatalf("课尾内部重复不该报问题: %v", issues)
+	}
+
+	// 前段混进一句课名 → 只删那一句，课尾两次保留。
+	early := "开头两句。顺便说一句主页橱窗里有《财富觉醒方法论》。" + body + tail
+	got, notes = applyLocalCopyFixes(early)
+	if strings.Count(got, canonicalCourse) != 2 || !containsString(notes, "删掉重复的卖课收口") {
+		t.Fatalf("应只删前段那句: count=%d notes=%v", strings.Count(got, canonicalCourse), notes)
+	}
+}
+
 func TestRepairRemixDraftSavesLocalCourseFixesWithoutModel(t *testing.T) {
 	raw := `{"continuous_script":"两个月少了2万亿，钱去了哪儿？不是买房。第三，打开主页橱窗里的《2026财富觉醒方法论》。虽然才五块钱。主页橱窗里的《2026财富觉醒方法论》已经放好。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`
 	client := &sequenceClient{}

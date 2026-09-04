@@ -16,8 +16,10 @@ import (
 	"video-production-console/internal/spokenlines"
 )
 
+// hotPublishingTopics 是模型没给够话题时的补位池，只放财经大池标签；
+// 「#认知 #干货分享」这类空泛词不再补，宁缺毋滥。
 var hotPublishingTopics = []string{
-	"#经济", "#思维认知", "#认知", "#宏观趋势", "#思维", "#干货分享", "#认知觉醒",
+	"#财经", "#经济", "#理财", "#财富",
 }
 
 var trailingHashtagRun = regexp.MustCompile(`(?:\s*#[^\s#]+)+\s*$`)
@@ -131,6 +133,54 @@ func extractJSONObject(text string) string {
 		}
 	}
 	return strings.TrimSpace(text[start:])
+}
+
+// escapeControlCharsInJSONStrings 把 JSON 字符串字面量里的裸换行/回车/制表
+// 符转成合法转义。模型输出长正文时最常见的解析死法就是 continuous_script
+// 里带真实换行，json.Unmarshal 会直接拒绝控制字符。
+func escapeControlCharsInJSONStrings(text string) string {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text) + 64)
+	b.WriteString(text[:start])
+	inString := false
+	escape := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if !inString {
+			b.WriteByte(ch)
+			if ch == '"' {
+				inString = true
+				escape = false
+			}
+			continue
+		}
+		if escape {
+			b.WriteByte(ch)
+			escape = false
+			continue
+		}
+		switch ch {
+		case '\\':
+			b.WriteByte(ch)
+			escape = true
+		case '"':
+			b.WriteByte(ch)
+			inString = false
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
 }
 
 func repairUnescapedJSONQuotes(text string) string {
@@ -540,16 +590,18 @@ func writeKeywordsDeliverable(outputDir, taskID, modelText string, lines []strin
 	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
 }
 
+// publishingPackageFromDraft 整理发布包：备选标题不再凑数（模型给几条留几条，
+// 最多 3 条，不给就空）；描述 2～3 条、短促有钩子、末尾直接带话题；话题 3～4 个。
 func publishingPackageFromDraft(draft remixDraft, script string) map[string]any {
-	titles := uniqueFilled(draft.Titles, titleFallbacks(script), 8, 12)
-	if len(titles) > 12 {
-		titles = titles[:12]
+	titles := uniqueFilled(draft.Titles, nil, 0, 3)
+	if len(titles) > 3 {
+		titles = titles[:3]
 	}
 	short := uniqueFilled(draft.ShortTitles, shortTitleFallbacks(script), 3, 3)
 	if len(short) > 3 {
 		short = short[:3]
 	}
-	descriptions := uniqueFilled(draft.Descriptions, descriptionFallbacks(script), 3, 3)
+	descriptions := uniqueFilled(draft.Descriptions, descriptionFallbacks(script), 2, 3)
 	if len(descriptions) > 3 {
 		descriptions = descriptions[:3]
 	}
@@ -580,17 +632,72 @@ func titleFallbacks(script string) []string {
 		"真正拉开差距的是先看懂方向", "别只盯工资，先看钱往哪走", "新一轮机会开始，普通人还有没有窗口", "现在补判断力，比事后后悔便宜"}
 }
 
+// shortTitleFallbacks 只从正文里取：首句的第一个分句、正文里第一个反问句。
+// 不再塞「窗口不会等人」这类通用口号——宁可少一条，也不要发出去一条废话。
 func shortTitleFallbacks(script string) []string {
-	seed := clipRunes(firstSentence(script), 6, 15)
-	return []string{seed, "窗口不会等人", "钱会流向哪里", "下一批赢家是谁", "现在就上车吧"}
+	out := make([]string, 0, 3)
+	if clause := firstClause(firstSentence(script), 15); utf8.RuneCountInString(clause) >= 6 {
+		out = append(out, clause)
+	}
+	if q := firstQuestion(script); q != "" {
+		if clause := firstClause(q, 15); utf8.RuneCountInString(clause) >= 6 && !containsString(out, clause) {
+			out = append(out, clause)
+		}
+	}
+	return out
 }
 
+// descriptionFallbacks 同样只从正文取：开头一句、第一个反问句。
 func descriptionFallbacks(script string) []string {
-	lead := firstSentence(script)
-	if lead == "" {
-		lead = "看懂方向的人先拿位置，观望的人最后才知道规则变了。"
+	out := make([]string, 0, 2)
+	if lead := strings.TrimSpace(firstSentence(script)); lead != "" {
+		out = append(out, lead)
 	}
-	return []string{lead, "看懂资金上游的人先拿位置，观望的人最后才知道规则变了。", "答案先留着，窗口不会一直开着，现在就去补齐判断力。"}
+	if q := firstQuestion(script); q != "" && !containsString(out, q) {
+		out = append(out, q)
+	}
+	return out
+}
+
+// firstClause 取到第一个逗号/顿号/分号为止，超过 max 个字就在最后一个标点处截。
+func firstClause(text string, max int) string {
+	runes := []rune(strings.TrimSpace(text))
+	end := len(runes)
+	for i, r := range runes {
+		if r == '，' || r == ',' || r == '、' || r == '；' || r == '：' {
+			end = i
+			break
+		}
+	}
+	if end > max {
+		end = max
+		for i := max; i > 6; i-- {
+			if runes[i-1] == '，' || runes[i-1] == '、' || runes[i-1] == '。' {
+				end = i - 1
+				break
+			}
+		}
+	}
+	return strings.TrimRight(strings.TrimSpace(string(runes[:end])), "，,、；：。！？")
+}
+
+// firstQuestion 返回正文里第一个以问号结尾的句子（开头的反问最像标题）。
+func firstQuestion(script string) string {
+	text := strings.ReplaceAll(strings.TrimSpace(script), "\r\n", "\n")
+	start := 0
+	for i, r := range text {
+		switch r {
+		case '。', '！', '\n':
+			start = i + utf8.RuneLen(r)
+		case '？', '?':
+			q := strings.TrimSpace(text[start : i+utf8.RuneLen(r)])
+			if n := utf8.RuneCountInString(q); n >= 8 && n <= 60 {
+				return q
+			}
+			start = i + utf8.RuneLen(r)
+		}
+	}
+	return ""
 }
 
 func normalizeHashtag(raw string) string {
@@ -604,14 +711,14 @@ func normalizeHashtag(raw string) string {
 	return strings.ReplaceAll(tag, " ", "")
 }
 
-// pickHotTopics 收模型给的话题（不再卡白名单，垂直标签如 #楼市 #房贷 更利于
-// 精准流量池），不足 4 个时从热门池补齐，最多 5 个。
+// pickHotTopics 收模型给的话题（不卡白名单，垂直标签如 #楼市 #房贷 更利于
+// 精准流量池），不足 3 个时从热门池补齐，最多 4 个——话题堆太多反而稀释。
 func pickHotTopics(given []string, seed string) []string {
 	seen := map[string]bool{}
-	out := make([]string, 0, 5)
+	out := make([]string, 0, 4)
 	add := func(tag string) {
 		tag = normalizeHashtag(tag)
-		if tag == "" || tag == "#" || seen[tag] || len(out) >= 5 {
+		if tag == "" || tag == "#" || seen[tag] || len(out) >= 4 {
 			return
 		}
 		seen[tag] = true
@@ -620,7 +727,7 @@ func pickHotTopics(given []string, seed string) []string {
 	for _, tag := range given {
 		add(tag)
 	}
-	if len(out) >= 4 {
+	if len(out) >= 3 {
 		return out
 	}
 	start := 0
@@ -628,26 +735,46 @@ func pickHotTopics(given []string, seed string) []string {
 		sum := sha256.Sum256([]byte(seed))
 		start = int(sum[0]) % len(hotPublishingTopics)
 	}
-	for i := 0; len(out) < 4; i++ {
+	for i := 0; len(out) < 3; i++ {
 		add(hotPublishingTopics[(start+i)%len(hotPublishingTopics)])
 	}
 	return out
 }
 
+// descriptionMaxRunes 是描述正文（不含话题）的目标上限，提示词按 40 字要求；
+// descriptionHardRunes 是兜底截断线——超过才截，且只在标点处截，绝不切半句。
+const (
+	descriptionMaxRunes  = 40
+	descriptionHardRunes = 60
+)
+
 func clipDescriptionBody(text string) string {
 	body := strings.TrimSpace(trailingHashtagRun.ReplaceAllString(strings.TrimSpace(text), ""))
 	runes := []rune(body)
+	// 先按句号切：最多留两句，且第一句之后一旦超过目标长度就停在第一句。
 	sentences := 0
 	for i, r := range runes {
 		switch r {
 		case '。', '！', '？', '!', '?', '；', ';':
 			sentences++
-			if sentences == 2 {
-				return strings.TrimSpace(string(runes[:i+1]))
+			if sentences == 2 || i+1 >= descriptionMaxRunes {
+				runes = runes[:i+1]
+				return strings.TrimSpace(string(runes))
 			}
 		}
 	}
-	return body
+	if len(runes) <= descriptionHardRunes {
+		return body
+	}
+	// 一句话超过硬线：退到硬线之前最后一个逗号/顿号，补句号收口。
+	cut := descriptionHardRunes
+	for i := descriptionHardRunes; i > descriptionMaxRunes/2; i-- {
+		if runes[i-1] == '，' || runes[i-1] == '、' || runes[i-1] == ',' {
+			cut = i - 1
+			break
+		}
+	}
+	return strings.TrimSpace(string(runes[:cut])) + "。"
 }
 
 func withHotTopics(text string, topics []string) string {
@@ -670,14 +797,10 @@ func firstSentence(script string) string {
 	return strings.TrimSpace(text[:cut])
 }
 
+// clipRunes 截到 max 个字；不足 min 时原样返回（不再用「窗口来了」补字）。
 func clipRunes(text string, min, max int) string {
+	_ = min
 	runes := []rune(strings.TrimSpace(text))
-	if len(runes) > max {
-		runes = runes[:max]
-	}
-	for len(runes) < min {
-		runes = append(runes, []rune("窗口来了")...)
-	}
 	if len(runes) > max {
 		runes = runes[:max]
 	}
@@ -699,13 +822,8 @@ func uniqueFilled(given, fallback []string, min, max int) []string {
 	}
 	add(given)
 	add(fallback)
-	for i := 0; len(out) < min; i++ {
-		item := fmt.Sprintf("二创标题%d窗口", i+1)
-		if !seen[item] {
-			seen[item] = true
-			out = append(out, item)
-		}
-	}
+	// 凑不够 min 就少给：发布字段宁缺毋滥，不再生成「二创标题N窗口」这类占位。
+	_ = min
 	return out
 }
 

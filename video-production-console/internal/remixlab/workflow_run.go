@@ -13,11 +13,12 @@ import (
 )
 
 // CreateWorkflowExperiment 用当前工作流开跑：快照存进实验，运行按节点图执行。
-// 模型档取写手节点覆盖 > 模型配置预设槽1 > 全局二创设置；写手提示词取
-// 写手节点指定的库条目，空则用当前日产（active prompt）。
+// 模型档取 models 显式指定 > 写手节点覆盖 > 模型配置预设槽1 > 全局二创设置；
+// models 给多个时每个模型各占一个槽、各跑 runCount 次，同一篇原文并行出稿
+// 供快慢/质量对比。写手提示词取写手节点指定的库条目，空则用当前日产。
 // produceAccountID/auto 是生产段参数：账号决定定稿进哪个号的混剪；auto=true
-// 时跳过确认闸门直接一步到剪映草稿（要求已选账号且 runCount=1）。
-func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, runCount int, produceAccountID string, auto bool) (Experiment, error) {
+// 时跳过确认闸门直接一步到剪映草稿（要求已选账号且总运行数=1）。
+func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, runCount int, produceAccountID string, auto bool, models ...string) (Experiment, error) {
 	n := utf8.RuneCountInString(source)
 	if n < 1 || n > 20000 {
 		return Experiment{}, ErrInvalidSource
@@ -28,7 +29,23 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 	if runCount < 1 || runCount > 3 {
 		return Experiment{}, ErrInvalidRunCount
 	}
-	if err := validateProduceOptions(produceAccountID, auto, runCount); err != nil {
+	cleanModels := make([]string, 0, len(models))
+	seen := map[string]bool{}
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		cleanModels = append(cleanModels, m)
+	}
+	if len(cleanModels) > 4 {
+		return Experiment{}, ErrInvalidRunCount
+	}
+	if len(cleanModels) == 0 {
+		cleanModels = []string{""} // 一个槽，走默认档
+	}
+	if err := validateProduceOptions(produceAccountID, auto, runCount*len(cleanModels)); err != nil {
 		return Experiment{}, err
 	}
 	wf, err := s.WorkflowForAccount(produceAccountID)
@@ -73,9 +90,18 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 			in.ReasoningEffort = e
 		}
 	}
-	slot, err := s.resolveSlot(in, rt, preset)
-	if err != nil {
-		return Experiment{}, err
+	// 每个显式模型解析成一个槽；空字符串表示沿用上面算出的默认档。
+	slots := make([]resolvedSlot, 0, len(cleanModels))
+	for _, m := range cleanModels {
+		slotIn := in
+		if m != "" {
+			slotIn.Model = m
+		}
+		slot, err := s.resolveSlot(slotIn, rt, preset)
+		if err != nil {
+			return Experiment{}, err
+		}
+		slots = append(slots, slot)
 	}
 
 	// 写手提示词：节点指定 > 当前日产 > 编译默认。
@@ -115,38 +141,48 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	slotID := uuid.NewString()
-	slotRec := store.RemixLabSlotRecord{
-		ID:               slotID,
-		ExperimentID:     expID,
-		SortIndex:        0,
-		Label:            "工作流 · " + slot.Model,
-		BaseURL:          slot.BaseURL,
-		Model:            slot.Model,
-		ReasoningEffort:  slot.ReasoningEffort,
-		Pipeline:         "",
-		RunCount:         slot.RunCount,
-		APIKeyCiphertext: slot.APIKeyCiphertext,
-	}
-	runRecs := make([]store.RemixLabRunRecord, 0, runCount)
-	runViews := make([]RunView, 0, runCount)
-	for seq := 1; seq <= runCount; seq++ {
-		runID := uuid.NewString()
-		runRecs = append(runRecs, store.RemixLabRunRecord{
-			ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: seq,
-			Status: "queued", PromptID: prompt.ID, PromptStamp: prompt.Stamp, PromptName: prompt.Name,
+	slotRecs := make([]store.RemixLabSlotRecord, 0, len(slots))
+	slotViews := make([]SlotView, 0, len(slots))
+	runRecs := make([]store.RemixLabRunRecord, 0, runCount*len(slots))
+	runViews := make([]RunView, 0, runCount*len(slots))
+	for index, slot := range slots {
+		slotID := uuid.NewString()
+		slotRec := store.RemixLabSlotRecord{
+			ID:               slotID,
+			ExperimentID:     expID,
+			SortIndex:        index,
+			Label:            "工作流 · " + slot.Model,
+			BaseURL:          slot.BaseURL,
+			Model:            slot.Model,
+			ReasoningEffort:  slot.ReasoningEffort,
+			Pipeline:         "",
+			RunCount:         runCount,
+			APIKeyCiphertext: slot.APIKeyCiphertext,
+		}
+		slotRecs = append(slotRecs, slotRec)
+		slotViews = append(slotViews, SlotView{
+			ID: slotID, ExperimentID: expID, SortIndex: index, Label: slotRec.Label,
+			BaseURL: slot.BaseURL, Model: slot.Model, ReasoningEffort: slot.ReasoningEffort,
+			RunCount: runCount, APIKeyConfigured: slot.KeyConfigured,
 		})
-		runViews = append(runViews, RunView{
-			ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: seq,
-			Status: "queued", PromptID: prompt.ID, PromptStamp: prompt.Stamp, PromptName: prompt.Name,
-		})
+		for seq := 1; seq <= runCount; seq++ {
+			runID := uuid.NewString()
+			runRecs = append(runRecs, store.RemixLabRunRecord{
+				ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: seq,
+				Status: "queued", PromptID: prompt.ID, PromptStamp: prompt.Stamp, PromptName: prompt.Name,
+			})
+			runViews = append(runViews, RunView{
+				ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: seq,
+				Status: "queued", PromptID: prompt.ID, PromptStamp: prompt.Stamp, PromptName: prompt.Name,
+			})
+		}
 	}
-	if err := s.repo.CreateExperiment(ctx, expRec, []store.RemixLabSlotRecord{slotRec}, runRecs); err != nil {
+	if err := s.repo.CreateExperiment(ctx, expRec, slotRecs, runRecs); err != nil {
 		return Experiment{}, err
 	}
 	go s.drive(expID)
 
-	slog.Default().Info("remix lab workflow experiment created", "experiment_id", expID, "runs", runCount)
+	slog.Default().Info("remix lab workflow experiment created", "experiment_id", expID, "models", len(slots), "runs", len(runRecs))
 	return Experiment{
 		ID:          expID,
 		Title:       title,
@@ -156,11 +192,7 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		Workflow:    true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Slots: []SlotView{{
-			ID: slotID, ExperimentID: expID, SortIndex: 0, Label: slotRec.Label,
-			BaseURL: slot.BaseURL, Model: slot.Model, ReasoningEffort: slot.ReasoningEffort,
-			RunCount: slot.RunCount, APIKeyConfigured: slot.KeyConfigured,
-		}},
-		Runs: runViews,
+		Slots:       slotViews,
+		Runs:        runViews,
 	}, nil
 }

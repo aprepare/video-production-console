@@ -71,6 +71,69 @@ func TestReviewRemixDraftAppliesFix(t *testing.T) {
 	if !strings.Contains(string(v1Raw), "今天一次说明白") {
 		t.Fatalf("draft_v1.json should keep writer original, got: %s", string(v1Raw)[:120])
 	}
+
+	// 结论里自带审稿前后两版全字段，界面并排对照靠这个，不靠可能被手改的定稿。
+	reviewRaw, err := os.ReadFile(filepath.Join(dir, "review.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored ReviewRecord
+	if err := json.Unmarshal(reviewRaw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Before == nil || !strings.Contains(stored.Before.ContinuousScript, "今天一次说明白") {
+		t.Fatalf("review.json before missing writer script: %+v", stored.Before)
+	}
+	if stored.Revised == nil || !strings.Contains(stored.Revised.ContinuousScript, "掰开揉碎") {
+		t.Fatalf("review.json revised missing fix: %+v", stored.Revised)
+	}
+	if len(stored.Before.ShortTitles) != 3 || len(stored.Revised.Descriptions) != 3 || len(stored.Revised.Topics) != 2 {
+		t.Fatalf("both snapshots must carry publish fields: before=%+v revised=%+v", stored.Before, stored.Revised)
+	}
+}
+
+func TestReviewRemixDraftAdoptsPublishFieldOnlyFix(t *testing.T) {
+	dir := t.TempDir()
+	draftJSON := reviewerTestDraft()
+	var draft remixDraft
+	if err := json.Unmarshal([]byte(draftJSON), &draft); err != nil {
+		t.Fatal(err)
+	}
+	revised := draft
+	revised.ShortTitles = []string{"三口人一户", "房贷这笔账", "钱往哪放"}
+	revised.Descriptions = []string{"一户三口人，房贷怎么算才不亏？", "家里那笔钱今年往哪放。"}
+	reply, _ := json.Marshal(map[string]any{
+		"verdict": "fixed",
+		"summary": "正文没问题，只改了短标题和描述。",
+		"issues": []map[string]string{
+			{"where": "板标题", "problem": "规范7：通用口号", "fix": "改成正文里的具体物"},
+			{"where": "描述一", "problem": "规范7：没有具体钩子", "fix": "带上数字"},
+		},
+		"revised": revised,
+	})
+	client := &reviewerFakeClient{reply: string(reply)}
+	outcome := ReviewRemixDraft(ReviewOptions{
+		Client: client, Model: "m", Source: "原文", DraftJSON: draftJSON, OutputDir: dir, Round: 1,
+	})
+	if outcome.Record.Verdict != "fixed" {
+		t.Fatalf("verdict = %q, want fixed (err=%q)", outcome.Record.Verdict, outcome.Record.Error)
+	}
+	var got remixDraft
+	if err := json.Unmarshal([]byte(outcome.RevisedJSON), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ContinuousScript != draft.ContinuousScript {
+		t.Fatal("script must stay untouched when only publish fields were fixed")
+	}
+	if got.ShortTitles[0] != "三口人一户" || len(got.Descriptions) != 2 {
+		t.Fatalf("publish field fixes not adopted: %+v", got)
+	}
+	if outcome.Record.Revised == nil || outcome.Record.Revised.ShortTitles[0] != "三口人一户" {
+		t.Fatalf("record.revised must carry fixed publish fields: %+v", outcome.Record.Revised)
+	}
+	if outcome.Record.Before == nil || outcome.Record.Before.ShortTitles[0] != "板标题" {
+		t.Fatalf("record.before must keep writer publish fields: %+v", outcome.Record.Before)
+	}
 }
 
 func TestReviewRemixDraftPassKeepsOriginal(t *testing.T) {
@@ -115,15 +178,48 @@ func TestReviewRemixDraftRejectsWholesaleRewrite(t *testing.T) {
 }
 
 func TestReviewRemixDraftUnparsableReplyBecomesError(t *testing.T) {
+	dir := t.TempDir()
 	client := &reviewerFakeClient{reply: "我审完了，没问题。"}
 	outcome := ReviewRemixDraft(ReviewOptions{
-		Client: client, Model: "m", Source: "原文", DraftJSON: reviewerTestDraft(), OutputDir: t.TempDir(),
+		Client: client, Model: "m", Source: "原文", DraftJSON: reviewerTestDraft(), OutputDir: dir,
 	})
 	if outcome.Record.Verdict != "error" {
 		t.Fatalf("verdict = %q, want error", outcome.Record.Verdict)
 	}
 	if outcome.RevisedJSON != "" {
 		t.Fatal("unparsable reply must keep original draft")
+	}
+	// 解析失败必须留现场，否则永远查不出模型回了什么。
+	raw, err := os.ReadFile(filepath.Join(dir, "review_reply_raw.txt"))
+	if err != nil || string(raw) != "我审完了，没问题。" {
+		t.Fatalf("raw reply not persisted: %q, %v", string(raw), err)
+	}
+	if !strings.Contains(outcome.Record.Error, "review_reply_raw.txt") {
+		t.Fatalf("error should point to raw artifact: %q", outcome.Record.Error)
+	}
+}
+
+// 思考模型的常见烂法：JSON 前带说明文字、字符串里带裸换行。都要能解析。
+func TestParseReviewerReplyRepairsControlCharsAndPreamble(t *testing.T) {
+	withNewlines := "{\"verdict\": \"fixed\",\n\"summary\": \"改了一处\",\n\"issues\": [],\n" +
+		"\"revised\": {\"continuous_script\": \"第一段。\n\n第二段带\t制表符。\"}}"
+	reply, err := parseReviewerReply(withNewlines)
+	if err != nil {
+		t.Fatalf("raw newlines in string: %v", err)
+	}
+	if reply.Verdict != "fixed" || !strings.Contains(reply.Revised.ContinuousScript, "第二段") {
+		t.Fatalf("parsed reply: %+v", reply)
+	}
+
+	withPreamble := "好的，我按清单审完了，结论如下：\n\n" +
+		`{"verdict": "pass", "summary": "没有问题", "issues": [], "revised": {}}` +
+		"\n\n以上就是审稿结论。"
+	reply, err = parseReviewerReply(withPreamble)
+	if err != nil {
+		t.Fatalf("preamble text: %v", err)
+	}
+	if reply.Verdict != "pass" {
+		t.Fatalf("verdict = %q", reply.Verdict)
 	}
 }
 
@@ -153,5 +249,41 @@ func TestReviewRemixDraftSendsAnnotations(t *testing.T) {
 	user := client.requests[0].Messages[1].Content
 	if !strings.Contains(user, "开头第二句删掉") || !strings.Contains(user, "# 同行原文") {
 		t.Fatalf("user message missing annotations/source: %s", user[:200])
+	}
+}
+
+func TestDefaultReviewerPromptKeepsTopicCloseNotFollowHook(t *testing.T) {
+	prompt := DefaultReviewerPrompt()
+	if strings.Contains(prompt, "只许通用的关注引导") {
+		t.Fatal("reviewer must not rewrite a strong close into a follow-me hook")
+	}
+	// v3.7：必须有橱窗动作句；之后允许陪跑式关注，但不能是下期钩子或金句结尾。
+	if !strings.Contains(prompt, "必须有橱窗动作句") || !strings.Contains(prompt, "陪跑式关注") {
+		t.Fatal("reviewer must keep the action-sentence close and allow the companion follow line")
+	}
+	if !strings.Contains(prompt, "禁止改成「下一条讲xxx，关注我」") {
+		t.Fatal("reviewer must still forbid the follow-me hook")
+	}
+}
+
+func TestDefaultReviewerPromptFollowsSourceStructure(t *testing.T) {
+	prompt := DefaultReviewerPrompt()
+	// v3.8：互动段位置跟原文，不再写死腰部；转发指向不许删。
+	if strings.Contains(prompt, "中段应有一处互动") {
+		t.Fatal("reviewer must not force the interaction block into the middle")
+	}
+	for _, want := range []string{
+		"互动段位置跟原文走", "转给家里管钱的人",
+		"课尾以原文为准、清单只兜底", "三件事", "我在车里等你",
+		"字数硬上限480",
+		"让你听懂", "正文没来得及展开",
+		"十个人里八个\"全篇最多一次",
+		"命定留存句",
+		// v3.8.1：签名句机制留、句子换，不许整句照抄；暗号跟原文。
+		"签名句也不许整句照抄", "顺风顺水→一顺百顺",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("reviewer prompt missing rule %q", want)
+		}
 	}
 }

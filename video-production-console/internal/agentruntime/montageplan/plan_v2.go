@@ -168,6 +168,12 @@ type BrandTextV2 struct {
 	// hardcoded gold/white when present ([r,g,b] each 0..1).
 	Enabled bool      `json:"enabled"`
 	Color   []float64 `json:"color,omitempty"`
+	// Optional decor from the account style: FontType member name, stroke
+	// color, background color + alpha. Absent means the skill's defaults.
+	Font        string    `json:"font,omitempty"`
+	BorderColor []float64 `json:"border_color,omitempty"`
+	BgColor     []float64 `json:"bg_color,omitempty"`
+	BgAlpha     float64   `json:"bg_alpha,omitempty"`
 }
 
 type BoundaryLinesV2 struct {
@@ -457,12 +463,19 @@ func BuildV2(opts Options) error {
 	notes = append(notes, captionWarnings...)
 
 	style := planMontageStyle(ctx)
+	titleFont, titleBorder, titleBg, titleBgAlpha := brandTextDecor(style.TitleFont, style.TitleBorderColor, style.TitleBgColor, style.TitleBgAlpha)
+	subFont, subBorder, subBg, subBgAlpha := brandTextDecor(style.SubtitleFont, style.SubtitleBorderColor, style.SubtitleBgColor, style.SubtitleBgAlpha)
+	if style.KeywordsHidden {
+		// 关键词标注开关关闭：字幕全部平排，不写任何高亮 span。
+		hideKeywordSpans(captions.Items)
+		notes = append(notes, "keywords_hidden: caption keyword highlighting disabled by montage style")
+	}
 	bgm := bgmPlacement(ctx.resources.BGM)
 	if custom := ctx.manifest.NonSecretSettings.MontageBGM; custom != nil {
 		bgm = customBGMPlacement(*custom, style.BGMVolume)
-	} else if style.BGMVolume > 0 {
-		bgm["linear_volume"] = style.BGMVolume
 	}
+	// 内置曲目是整体验证过的（校验器锁死 linear_volume），样式里的音量
+	// 只对音乐库自选曲目生效；这里不再覆盖，避免 validate-plan 直接拦下任务。
 	workspace := filepath.Join(ctx.manifest.OutputDir, "workspace", ctx.manifest.JobID)
 	plan := ProductionPlanV2{
 		PlanVersion:      "2.0",
@@ -497,11 +510,13 @@ func BuildV2(opts Options) error {
 				Text: title, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
 				SizeMin: boardTextSize(len([]rune(title)), style.TitleSize), Y: style.TitleY, FullDuration: true,
 				Enabled: !style.TitleHidden, Color: hexToRGB(style.TitleColor),
+				Font: titleFont, BorderColor: titleBorder, BgColor: titleBg, BgAlpha: titleBgAlpha,
 			},
 			Subtitle: BrandTextV2{
 				Text: subtitle, CharsMin: boardTitleMinRunes, CharsMax: boardTitleMaxRunes,
 				SizeMin: boardTextSize(len([]rune(subtitle)), style.SubtitleSize), Y: style.SubtitleY, FullDuration: true,
 				Enabled: !style.SubtitleHidden, Color: hexToRGB(style.SubtitleColor),
+				Font: subFont, BorderColor: subBorder, BgColor: subBg, BgAlpha: subBgAlpha,
 			},
 			BoundaryLines: BoundaryLinesV2{
 				AssetWidthPx: 1080, AssetHeightPx: 6, TopY: 0.38, BottomY: -0.38, FullDuration: true,

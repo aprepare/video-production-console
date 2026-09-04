@@ -88,17 +88,22 @@ func DefaultWorkflow(overrides AgentPrompts) Workflow {
 		}
 		return fallback
 	}
+	// 情报 agent 默认钉在快模型上：节点模型留空时引擎会回落到写手模型，
+	// 换写手（如 opus）会把三路情报一起拖慢，所以这里显式写死。
+	const intelModel = "grok-4.6-fast"
 	return Workflow{
 		Version: 1,
 		Name:    "默认二创工作流",
 		Nodes: []WorkflowNode{
 			{ID: "source", Type: WorkflowNodeInput, Title: "对标原文", X: 0, Y: 190},
 			{ID: "hook", Type: WorkflowNodeAgent, Title: "钩子分析", X: 300, Y: 10, Config: WorkflowNodeConfig{
+				Model:        intelModel,
 				SystemPrompt: pickText(overrides.HookSystem, hook),
 				UserTemplate: "分析下面这篇口播的钩子与留人机制。\n\n# 原文\n{{source}}",
 				InjectTitle:  "钩子指纹｜复刻狠法，不复刻字面",
 			}},
 			{ID: "facts", Type: WorkflowNodeAgent, Title: "事实核查", X: 300, Y: 190, Config: WorkflowNodeConfig{
+				Model:        intelModel,
 				Channel:      "search",
 				SystemPrompt: pickText(overrides.FactsSearchSystem, factsSearch),
 				UserTemplate: "核查下面这篇口播的事实与数据。\n\n# 原文\n{{source}}",
@@ -106,10 +111,11 @@ func DefaultWorkflow(overrides AgentPrompts) Workflow {
 				InjectRule:   "正文数字只许用：原文已有的，或下面标「成立」/带来源的；标「已过时」的必须用最新值；新增数字口播时按 spoken_citation 带来源；标「查不到」「needs_verify」「low_confidence」的一律不进正文",
 			}},
 			{ID: "ammo", Type: WorkflowNodeAgent, Title: "弹药库", X: 300, Y: 370, Config: WorkflowNodeConfig{
+				Model:        intelModel,
 				SystemPrompt: pickText(overrides.AmmoSystem, ammo),
 				UserTemplate: "给下面这篇的二创改写备弹药。\n\n# 原文\n{{source}}",
 				InjectTitle:  "意象与现场弹药",
-				InjectRule:   "banned_imagery 是禁用清单必须避开；中心意象从 center_options 挑一个（自造更好的也行）；scenes 和 phrase_swaps 可用可不用",
+				InjectRule:   "banned_imagery 是禁用清单必须避开；center_options 为空就直说，不要硬造贯穿全文的中心意象；有值也只许用在它标明的那一段；scenes 为空就不要自己编人物现场；有值也只许改写原文已有的人，不许新编老周柜员；phrase_swaps 可用可不用",
 			}},
 			{ID: "writer", Type: WorkflowNodeWriter, Title: "写手", X: 600, Y: 190},
 			{ID: "selfcheck", Type: WorkflowNodeSelfcheck, Title: "机械自检", X: 880, Y: 190},

@@ -297,6 +297,11 @@ func (r *unknownCommitRepository) CreateWithBackground(_ context.Context, _ doma
 func (r *unknownCommitRepository) Get(context.Context, string) (domain.Account, error) {
 	return r.account, nil
 }
+
+func (r *unknownCommitRepository) UpdateOverrides(_ context.Context, _ string, overrides *domain.AccountOverrides, _ time.Time) (domain.Account, error) {
+	r.account.Overrides = overrides
+	return r.account, nil
+}
 func (r *unknownCommitRepository) Rename(context.Context, string, string, time.Time) (domain.Account, error) {
 	return r.account, nil
 }

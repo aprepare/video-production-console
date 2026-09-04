@@ -1,0 +1,1367 @@
+{
+ "tracks": [
+  {
+   "type": "text",
+   "name": "标题",
+   "segments": [
+    {
+     "material_id": "67e183fdf7604ce8a81c41d0823ffdbe",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.6666666666666667
+      },
+      "flip": {}
+     }
+    }
+   ]
+  },
+  {
+   "type": "text",
+   "name": "副标题",
+   "segments": [
+    {
+     "material_id": "032cc010fcd54af2bcfe56e71315b53e",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.49
+      },
+      "flip": {}
+     }
+    }
+   ]
+  },
+  {
+   "type": "text",
+   "name": "字幕",
+   "segments": [
+    {
+     "material_id": "922abf30c99a44a58eab47c7a4ad8bde",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "ce5939385985462dbbdf8d5e06258e5e",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "81a1f419021146ad9b1ce6499172d30d",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "8da640f333334c51a8a663e7bf02f647",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "9a6c99b6648c4a2d8b353651135c9cb2",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "7bb71d6e8ea8456c8d7110a1afd4d718",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "eae09a5bc81d489a9622460e1fd03869",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "87d2a97582634d279e2545ffd8a2776c",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "8a2ac32ad87b461ca7fdebdda93ca4a8",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "5c800fb974334e489daa3af4826f223c",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "5903d1265d7944b9936ac0e9723ae8db",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "13f5c68754a84a7b894933c02ae8d796",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "77ac3527e15c4891b701e88562ced386",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "a2858f3732b64d1fb621cce853ef9b03",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "6ad1ec322286484097771e06c38d7588",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "4a6810519a424a2eb28405efadea7982",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "0e9b238f26134e65b78571ceef65df90",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "916e8c8e86c34f92ab834edc99facd07",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "b5ef2d37118b46c6a59e6baf133497ff",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "47546f8ac8c54ebabaf5cbb562e4ef4a",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "917c8658544948d9a5f203e2f9400c1a",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "f7abcf0ff9a846d7b890f3f503171545",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "ee0b049aeb9843e8bf99889e7d6ff97b",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "1bfbc24123894cf5a07e33d016cedae8",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "340ad1b101ea4a8da815de0b6ff8a221",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "99eb87295e8d4db8a94f8f3f1a2eed48",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "d712acc144244517ab8cee0fc59e3a8b",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "07c40dcd18fc469d96a593547ae9df4f",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "e0eb8e3e996e488b82499b0c8742e366",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "e3caea695db74e649411c627764739ca",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "0afbef462f8640bd899fe2b40f995f47",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "d255ab0b38224ef794d5b3f153cf7c60",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "d05097f988304c41acb9a30fc5e9a4fb",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "b889a5c1232843a38be674d680c293d4",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "ceb81144898142b7b71f562220913a5b",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "c17986cbc74d4b64a0d1dac968b6ed94",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "dcd02a16a90a405e96bf76aa75e4fbbe",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "20b5d83472db47b8b5956c95093e189a",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "1e01a3890ec64e7683cb8c7c7a12c2ce",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    },
+    {
+     "material_id": "042d1be123d94d5da214599ac437e4fe",
+     "clip": {
+      "scale": {
+       "x": 1.0,
+       "y": 1.0
+      },
+      "transform": {
+       "x": 0.0,
+       "y": 0.0
+      },
+      "flip": {}
+     }
+    }
+   ]
+  }
+ ],
+ "materials": {
+  "texts": [
+   {
+    "id": "ce5939385985462dbbdf8d5e06258e5e",
+    "content": "{\"text\":\"你存在银行的钱\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "914FA676-9805-4139-88FD-BF2B6F23A442",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "a2858f3732b64d1fb621cce853ef9b03",
+    "content": "{\"text\":\"记录变现的体量\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "13F6C829-BB8A-4c61-914D-52673CE357E3",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "917c8658544948d9a5f203e2f9400c1a",
+    "content": "{\"text\":\"白纸黑字定下来的事\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,9]}]}",
+    "fonts": [
+     {
+      "id": "815B7ED1-52AE-4e2d-88C2-19AA04C9324B",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "1bfbc24123894cf5a07e33d016cedae8",
+    "content": "{\"text\":\"是多个国家级机构\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "F99438D6-9A5D-4594-AABA-574FCCC5B2B9",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "67e183fdf7604ce8a81c41d0823ffdbe",
+    "content": "{\"text\":\"9月1日，新规落地\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[1,0.85879999399185181,0.10199999809265137]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":15.699999809265137,\"range\":[0,9]}]}",
+    "fonts": [
+     {
+      "id": "8C5F25D4-F8C7-4dcc-9962-DCC23B6B8941",
+      "resource_id": "6740435892441190919",
+      "path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf"
+   },
+   {
+    "id": "eae09a5bc81d489a9622460e1fd03869",
+    "content": "{\"text\":\"下单划视频\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "30A54774-6A6C-44d2-9465-694DA0C9D4A7",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "20b5d83472db47b8b5956c95093e189a",
+    "content": "{\"text\":\"你就盯住三件事\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "D716C8EF-D7E3-47a5-A0CB-B51DA9868772",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "e0eb8e3e996e488b82499b0c8742e366",
+    "content": "{\"text\":\"只是试点摸索\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "188B2A13-84AC-4503-A4C7-3D4B14C8AF87",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "0e9b238f26134e65b78571ceef65df90",
+    "content": "{\"text\":\"这不是预测\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "B5317C75-F4EC-413f-B980-99340EE9643D",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "d255ab0b38224ef794d5b3f153cf7c60",
+    "content": "{\"text\":\"很多人一碰到\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "0A86538E-48DE-4141-BCE6-BE6C1F522016",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "ceb81144898142b7b71f562220913a5b",
+    "content": "{\"text\":\"觉得太远太新\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "DB45AF6A-7349-48fe-970E-313F218C8933",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "ee0b049aeb9843e8bf99889e7d6ff97b",
+    "content": "{\"text\":\"一个部门单独出的\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "748F6182-4850-45ad-B38E-66B833DA99DF",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "b5ef2d37118b46c6a59e6baf133497ff",
+    "content": "{\"text\":\"联合国家数据局\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "FF13A16D-08F8-44aa-B180-796FFDD3309A",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "d712acc144244517ab8cee0fc59e3a8b",
+    "content": "{\"text\":\"在数据领域是头一回\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,9]}]}",
+    "fonts": [
+     {
+      "id": "C16EBD79-ED7B-48f5-A011-4304895B222C",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "dcd02a16a90a405e96bf76aa75e4fbbe",
+    "content": "{\"text\":\"先别被四个字吓停\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "AA211255-2A4E-4c10-A610-6ACB012E9ED1",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "0afbef462f8640bd899fe2b40f995f47",
+    "content": "{\"text\":\"动三份文件\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "DC9E1648-812A-4749-AC18-0D511AAB1545",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "47546f8ac8c54ebabaf5cbb562e4ef4a",
+    "content": "{\"text\":\"已经发了文件\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "8459E66C-09AE-4599-AC54-EC3CDC60C11C",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "4a6810519a424a2eb28405efadea7982",
+    "content": "{\"text\":\"一份普通工龄工资\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "D2ED8E73-5334-4f7d-B98B-03CB17F6F9A6",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "340ad1b101ea4a8da815de0b6ff8a221",
+    "content": "{\"text\":\"协同推进\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,4]}]}",
+    "fonts": [
+     {
+      "id": "D3B76A51-5798-4e1e-A1AD-DDBEC8E34447",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "916e8c8e86c34f92ab834edc99facd07",
+    "content": "{\"text\":\"财政部\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,3]}]}",
+    "fonts": [
+     {
+      "id": "85598560-E1DF-4be3-95F3-29B39B093B73",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "99eb87295e8d4db8a94f8f3f1a2eed48",
+    "content": "{\"text\":\"层级之高覆盖面之广\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,9]}]}",
+    "fonts": [
+     {
+      "id": "646A9147-D98E-45d7-8F76-544C1A4EDB16",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "f7abcf0ff9a846d7b890f3f503171545",
+    "content": "{\"text\":\"而且不是\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,4]}]}",
+    "fonts": [
+     {
+      "id": "D3B613A8-9D9D-4c1c-BF2C-105F099B3790",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "d05097f988304c41acb9a30fc5e9a4fb",
+    "content": "{\"text\":\"数据资产\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,4]}]}",
+    "fonts": [
+     {
+      "id": "4887A208-433A-4c20-820B-D1E0ED8AB6FA",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "c17986cbc74d4b64a0d1dac968b6ed94",
+    "content": "{\"text\":\"跟自己八竿子打不着\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,9]}]}",
+    "fonts": [
+     {
+      "id": "E3048496-18F6-4742-8769-FED41FA9D4F6",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "032cc010fcd54af2bcfe56e71315b53e",
+    "content": "{\"styles\":[{\"bold\":false,\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[0.0,0.0,0.0]}}},\"italic\":false,\"range\":[0,7],\"size\":9.2,\"underline\":false,\"useLetterColor\":true}],\"text\":\"看懂的人先上车\"}",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/SystemFont/zh-hans.ttf",
+    "background_color": "#ffffff"
+   },
+   {
+    "id": "7bb71d6e8ea8456c8d7110a1afd4d718",
+    "content": "{\"text\":\"产生的那些行为\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "2ADBB40A-E905-4c60-AFCF-C816CA623C51",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "5c800fb974334e489daa3af4826f223c",
+    "content": "{\"text\":\"按资产来管了\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "A5552AF1-038B-4011-9A36-DD79C16A4228",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "07c40dcd18fc469d96a593547ae9df4f",
+    "content": "{\"text\":\"你想想一件事如果\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "7667455B-9C2E-4988-B6C1-3EE7030747F2",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "b889a5c1232843a38be674d680c293d4",
+    "content": "{\"text\":\"这四个字就停住了\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "9B6E18AE-688E-4e14-BBEF-C391399E4494",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "9a6c99b6648c4a2d8b353651135c9cb2",
+    "content": "{\"text\":\"你日常上网\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "494709FD-03F2-4719-A28B-9433E453B12F",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "5903d1265d7944b9936ac0e9723ae8db",
+    "content": "{\"text\":\"能登记能标价\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "E8B91B22-494A-4bba-B409-180F0159CA40",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "1e01a3890ec64e7683cb8c7c7a12c2ce",
+    "content": "{\"text\":\"第一\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,2]}]}",
+    "fonts": [
+     {
+      "id": "E1EA7E3C-B8BB-488d-A3F3-0946CF18DD7B",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "6ad1ec322286484097771e06c38d7588",
+    "content": "{\"text\":\"已经大过\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,4]}]}",
+    "fonts": [
+     {
+      "id": "E683E9E4-3B50-446e-95DA-70F5FC1529DD",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "922abf30c99a44a58eab47c7a4ad8bde",
+    "content": "{\"text\":\"9月1日新规落地\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "A473EF36-F63A-4299-B00E-333E48C5A6EE",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "042d1be123d94d5da214599ac437e4fe",
+    "content": "{\"text\":\"说得清算谁的\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,6]}]}",
+    "fonts": [
+     {
+      "id": "92DBB662-BEFC-44bc-969D-AFD3DB9D395F",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "e3caea695db74e649411c627764739ca",
+    "content": "{\"text\":\"不会一次性\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "A3594503-CEFF-4c1a-A02B-435D612380CB",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "8da640f333334c51a8a663e7bf02f647",
+    "content": "{\"text\":\"但从这天起\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "1B50C9EB-6CD0-4179-9B63-7957C64CFC01",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "8a2ac32ad87b461ca7fdebdda93ca4a8",
+    "content": "{\"text\":\"被国家正式\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "CFBB16F8-00E3-45ff-A479-31F35490E22C",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "81a1f419021146ad9b1ce6499172d30d",
+    "content": "{\"text\":\"还是你的\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,4]}]}",
+    "fonts": [
+     {
+      "id": "28AF1536-2EB7-4136-9D7E-B4CE96B37DC3",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "77ac3527e15c4891b701e88562ced386",
+    "content": "{\"text\":\"有人靠这类行为\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,7]}]}",
+    "fonts": [
+     {
+      "id": "3AA04583-CD41-4073-B368-CE40111BF598",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "87d2a97582634d279e2545ffd8a2776c",
+    "content": "{\"text\":\"问路发消息\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,5]}]}",
+    "fonts": [
+     {
+      "id": "0155EB78-7C85-4378-BC92-CFADE07EA0B6",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   },
+   {
+    "id": "13f5c68754a84a7b894933c02ae8d796",
+    "content": "{\"text\":\"产生的收益能分账\",\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"color\":[0,0,0]}}},\"font\":{\"path\":\"D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf\",\"id\":\"6740435892441190919\"},\"size\":20,\"useLetterColor\":true,\"range\":[0,8]}]}",
+    "fonts": [
+     {
+      "id": "4E8A01E3-5BA3-46e9-8EA6-28D5F5BFE494",
+      "resource_id": "6740435892441190919",
+      "category_id": "preset_5914019",
+      "category_name": "热门",
+      "path": "",
+      "effect_id": "6740435892441190919",
+      "title": "新青年体"
+     }
+    ],
+    "font_title": "新青年体",
+    "font_path": "D:/JianyingPro/11.1.0.14287/Resources/Font/新青年体.ttf",
+    "background_color": "#ffde00"
+   }
+  ],
+  "audios": [
+   {
+    "type": "extract_music",
+    "name": "14a11aae-615a-42a8-ba8b-757d681c520d.mp3"
+   },
+   {
+    "type": "music",
+    "name": "やわらかs'xな光"
+   },
+   {
+    "type": "music",
+    "name": "やわらかs'xな光"
+   }
+  ]
+ }
+}

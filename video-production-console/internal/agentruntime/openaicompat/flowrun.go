@@ -190,7 +190,8 @@ func runFlowAgents(mainClient ChatClient, opts Options, source, outputDir string
 			}
 		}
 		mu.Unlock()
-		user := renderFlowTemplate(node, source, upstream, spec)
+		user := resolveFlowFiles(renderFlowTemplate(node, source, upstream, spec), opts.IntelFileDir)
+		system := resolveFlowFiles(node.Config.SystemPrompt, opts.IntelFileDir)
 
 		started := time.Now()
 		outcome := intelAgentOutcome{Name: node.ID, Model: model}
@@ -199,7 +200,7 @@ func runFlowAgents(mainClient ChatClient, opts Options, source, outputDir string
 			ReasoningEffort: effort,
 			Stream:          true,
 			Messages: []Message{
-				{Role: "system", Content: node.Config.SystemPrompt},
+				{Role: "system", Content: system},
 				{Role: "user", Content: user},
 			},
 		})
@@ -318,6 +319,40 @@ func runFlowAgents(mainClient ChatClient, opts Options, source, outputDir string
 
 func flowNodeOutputFile(id string) string {
 	return fmt.Sprintf("node_output_%s.json", id)
+}
+
+// resolveFlowFiles 把 {{file:名字}} 占位符替换成 dir 下同名文件的内容，让
+// 素材库这类会持续追加的资料每次运行都读磁盘最新版。名字只取文件名部分，
+// 防止路径穿越；dir 为空或文件缺失时替换成说明文字，不拦运行。
+func resolveFlowFiles(text, dir string) string {
+	const marker = "{{file:"
+	var b strings.Builder
+	rest := text
+	for {
+		start := strings.Index(rest, marker)
+		if start < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		end := strings.Index(rest[start:], "}}")
+		if end < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		end += start
+		name := filepath.Base(strings.TrimSpace(rest[start+len(marker) : end]))
+		replacement := "（素材文件 " + name + " 未配置）"
+		if dir != "" && name != "" && name != "." {
+			if raw, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+				replacement = strings.TrimSpace(string(raw))
+			} else {
+				replacement = "（素材文件 " + name + " 读取失败，忽略该部分）"
+			}
+		}
+		b.WriteString(rest[:start])
+		b.WriteString(replacement)
+		rest = rest[end+2:]
+	}
 }
 
 // renderFlowTemplate 渲染 agent 节点的用户消息：支持 {{source}} 和

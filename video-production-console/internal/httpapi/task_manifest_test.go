@@ -23,6 +23,7 @@ import (
 	"video-production-console/internal/codex"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
+	"video-production-console/internal/remixlab"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
@@ -671,6 +672,36 @@ func TestTaskManifestPreparerWritesEnhancedRemixManifest(t *testing.T) {
 	}
 	if manifest.NonSecretSettings.RemixPromptStyle != "rewrite" {
 		t.Fatalf("default remix style=%q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+}
+
+func TestTaskManifestPreparerInjectsAdoptedPrompt(t *testing.T) {
+	db, accountID, projectID, root := setupManifestTask(t, true)
+	if _, err := (remixlab.Store{DataRoot: root}).AdoptPrompt("bone_flesh"); err != nil {
+		t.Fatal(err)
+	}
+	preparer := &taskManifestPreparer{projects: store.NewProjectRepository(db.db), assets: store.NewAssetRepository(db.db), settings: manifestTestSettings{runtime: consoleSettings.Runtime{PublicSettings: domain.PublicSettings{DataRoot: root, MaxCodexConcurrency: 2, RemixPromptStyle: "copy"}}}, skills: manifestTestSkills{snapshot: domain.SkillSnapshot{ID: uuid.NewString(), Name: "finance-viral-remix"}}}
+	task := domain.CodexTask{ID: uuid.NewString(), ProjectID: &projectID, AccountID: accountID, Action: domain.ActionRemixStandard, Type: "remix"}
+	if err := preparer.Prepare(context.Background(), task, TaskManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "projects", projectID, "tasks", task.ID, "task_manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codex.TaskManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.NonSecretSettings.RemixPromptStyle != "rewrite" {
+		t.Fatalf("adopted prompt must force rewrite style, got %q", manifest.NonSecretSettings.RemixPromptStyle)
+	}
+	if !strings.Contains(manifest.NonSecretSettings.RemixSystemPrompt, "骨肉分离") {
+		t.Fatalf("missing adopted system prompt: %q", manifest.NonSecretSettings.RemixSystemPrompt)
+	}
+	if strings.TrimSpace(manifest.NonSecretSettings.RemixUserPrompt) == "" {
+		t.Fatal("adopted user prompt missing")
 	}
 }
 

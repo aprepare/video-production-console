@@ -393,6 +393,82 @@ func TestResolveRuntimeMovieSkillUsesTrustedDraftScripts(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeAcceptsInPlaceSkillPatch(t *testing.T) {
+	taskID := "984c42ec-67b8-4d3f-99e3-d3d7a4b66205"
+	base := t.TempDir()
+	manifest := filepath.Join(base, "task_manifest.json")
+	output := filepath.Join(base, "output")
+	workspace := filepath.Join(output, "workspace", taskID)
+	profile := filepath.Join(base, "machine-profile.json")
+	python := filepath.Join(base, "python.exe")
+	jianyingRoot := filepath.Join(base, "jianying")
+	skillRoot := filepath.Join(base, "installed-skill")
+	script := filepath.Join(skillRoot, "scripts", "run_montage_job.py")
+	lockModule := filepath.Join(skillRoot, "scripts", "jianying_concurrency_lock.py")
+	for _, directory := range []string{workspace, jianyingRoot, filepath.Dir(script)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		profile: "{}", python: "python", script: "original script", lockModule: "lock",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifestData, err := json.Marshal(map[string]any{
+		"task_id": taskID, "job_id": taskID, "output_dir": output,
+		"non_secret_settings": map[string]any{"draft_display_name": "readable", "machine_profile_path": profile},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalHash, _ := hashFile(script)
+	lockHash, _ := hashFile(lockModule)
+	profileHash, _ := hashFile(profile)
+	runtime, err := WithTrustedReconciliationSkill(TrustedRuntime{
+		MachineProfilePath: profile, MachineProfileSHA256: profileHash, PythonBinary: python, JianyingRoot: jianyingRoot,
+	}, domain.SkillSnapshot{Name: "jianying-montage-draft", Path: skillRoot, Files: []domain.SkillFileSnapshot{
+		{Path: "scripts/run_montage_job.py", SHA256: originalHash},
+		{Path: "scripts/jianying_concurrency_lock.py", SHA256: lockHash},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("patched after task snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(base, "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,color,status,created_at,updated_at) VALUES('account','a','#fff','active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO skill_snapshots(id,name,path,sha256,files_json,modified_at,created_at) VALUES('bound','jianying-montage-draft',?,'snapshot',?, ?,?)`, skillRoot, `[{"path":"scripts/run_montage_job.py","sha256":"`+originalHash+`"}]`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO codex_tasks(id,account_id,type,skill_name,action,status,completion_phase,transport,prompt_snapshot,skill_snapshot_id,manifest_path,created_at) VALUES(?,'account','montage','jianying-montage-draft',?,'completed','plaintext_ready','legacy_exec','prompt','bound',?,?)`, taskID, domain.ActionMontageExecute, manifest, now); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &Coordinator{tasks: store.NewTaskRepository(db), runtime: runtime}
+	request, err := coordinator.resolveRuntime(domain.RegistrationAttempt{
+		TaskID: taskID, ManifestPath: manifest, WorkspacePath: workspace,
+	})
+	if err != nil {
+		t.Fatalf("in-place skill patch must not block registration: %v", err)
+	}
+	if !samePath(request.ScriptPath, script) {
+		t.Fatalf("script=%q, want live installed %q", request.ScriptPath, script)
+	}
+}
+
 func TestCoordinatorCloseRejectsNewJobsAndDrainsAcceptedJobs(t *testing.T) {
 	coordinator := &Coordinator{queue: make(chan registrationJob, 8)}
 	var consumed atomic.Int32

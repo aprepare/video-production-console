@@ -45,6 +45,32 @@ export function unwrapImportedScript(raw: string): UnwrappedImport {
   }
 }
 
+// applyBoardTitles 把导入框里填的主/副标题并进 writer JSON 的 short_titles——
+// 混剪背景板正是取 short_titles[0]/[1] 当主/副标题。两个都没填就原样返回；
+// 粘贴的是 JSON 时保留其余发布字段，只把填写的标题顶到 short_titles 最前。
+export function applyBoardTitles(raw: string, title: string, subtitle: string): string {
+  const typed = [title.trim(), subtitle.trim()].filter((item) => item !== "");
+  if (typed.length === 0) return raw;
+  const text = stripCodeFence(raw.trim());
+  if (!text.startsWith("{")) {
+    return JSON.stringify({ continuous_script: text, short_titles: typed });
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return raw;
+  try {
+    const draft = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const existing = Array.isArray(draft.short_titles)
+      ? draft.short_titles.filter((item): item is string =>
+        typeof item === "string" && item.trim() !== "" && !typed.includes(item.trim()))
+      : [];
+    draft.short_titles = [...typed, ...existing];
+    return JSON.stringify(draft);
+  } catch {
+    return raw;
+  }
+}
+
 function stripCodeFence(raw: string) {
   let text = raw.trim();
   if (!text.startsWith("```")) return text;

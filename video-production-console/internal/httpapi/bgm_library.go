@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -50,6 +51,28 @@ func bgmIndexPath(dataRoot string) string {
 	return filepath.Join(dataRoot, bgmlibrary.IndexFileName)
 }
 
+// effectiveFFmpeg is the configured ffmpeg, else the copy bundled under
+// <data root>/tools/ffmpeg, else whatever "ffmpeg" resolves to on PATH.
+func effectiveFFmpeg(runtime consoleSettings.Runtime) string {
+	if path := strings.TrimSpace(runtime.FFmpegPath); path != "" {
+		return path
+	}
+	bundled := filepath.Join(runtime.DataRoot, "tools", "ffmpeg", "ffmpeg.exe")
+	if stat, err := os.Stat(bundled); err == nil && !stat.IsDir() {
+		return bundled
+	}
+	return ""
+}
+
+// effectiveBGMDir is the configured BGM directory, or <data root>/bgm when
+// the operator never set one, so BGM import works without a settings trip.
+func effectiveBGMDir(runtime consoleSettings.Runtime) string {
+	if dir := strings.TrimSpace(runtime.BGMDir); dir != "" {
+		return dir
+	}
+	return filepath.Join(runtime.DataRoot, "bgm")
+}
+
 func bgmView(dir string, index bgmlibrary.Index, note string) bgmLibraryView {
 	view := bgmLibraryView{Dir: dir, Tracks: make([]bgmTrackView, 0, len(index.Tracks)), Note: note}
 	for _, track := range index.Tracks {
@@ -68,7 +91,7 @@ func (h *bgmLibraryHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	index := bgmlibrary.LoadIndex(bgmIndexPath(runtime.DataRoot))
-	writeJSON(w, http.StatusOK, bgmView(runtime.BGMDir, index, ""))
+	writeJSON(w, http.StatusOK, bgmView(effectiveBGMDir(runtime), index, ""))
 }
 
 func (h *bgmLibraryHandler) rescan(w http.ResponseWriter, r *http.Request) {
@@ -77,8 +100,9 @@ func (h *bgmLibraryHandler) rescan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Settings are not available.")
 		return
 	}
-	if strings.TrimSpace(runtime.BGMDir) == "" {
-		writeError(w, http.StatusConflict, "bgm_dir_not_configured", "请先在设置里填写 BGM 目录。")
+	bgmDir := effectiveBGMDir(runtime)
+	if err := os.MkdirAll(bgmDir, 0o755); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "bgm_dir_unwritable", "BGM 目录不可用："+err.Error())
 		return
 	}
 	if !h.rescanMu.TryLock() {
@@ -88,7 +112,7 @@ func (h *bgmLibraryHandler) rescan(w http.ResponseWriter, r *http.Request) {
 	defer h.rescanMu.Unlock()
 	// The scan may run for minutes on a large directory; it must not die
 	// with the HTTP request context, so it gets its own lifetime.
-	index, err := bgmlibrary.Rescan(context.Background(), runtime.BGMDir, runtime.FFmpegPath, bgmIndexPath(runtime.DataRoot))
+	index, err := bgmlibrary.Rescan(context.Background(), bgmDir, effectiveFFmpeg(runtime), bgmIndexPath(runtime.DataRoot))
 	note := ""
 	if err != nil {
 		if len(index.Tracks) == 0 {
@@ -97,5 +121,5 @@ func (h *bgmLibraryHandler) rescan(w http.ResponseWriter, r *http.Request) {
 		}
 		note = err.Error()
 	}
-	writeJSON(w, http.StatusOK, bgmView(runtime.BGMDir, index, note))
+	writeJSON(w, http.StatusOK, bgmView(bgmDir, index, note))
 }

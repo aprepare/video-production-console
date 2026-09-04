@@ -188,6 +188,14 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		writer.Error = failure
 		failure = "" // 失败原因只挂最早断掉的节点
 	}
+	// 写手用时：运行日志里 writer 事件（首稿）+ 自检返工各轮的耗时累计。
+	if events := readRunLogEvents(read("remix_run.json"), "writer"); len(events) > 0 {
+		for _, ev := range events {
+			if ms, ok := ev["ms"].(float64); ok {
+				writer.Millis += int64(ms)
+			}
+		}
+	}
 	view.Stages = append(view.Stages, at(writer))
 
 	// —— 机械自检 ——（轮次和判定从运行日志取；阈值=默认+快照节点覆盖）
@@ -326,7 +334,7 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 			if pos, ok := nodePos[ids.final]; ok {
 				finalX, finalY = pos[0], pos[1]
 			}
-			appendProductionStages(&view, rec, workflow.Production, ids.final, finalX, finalY, run.ContinuousScript)
+			appendProductionStages(&view, rec, workflow.Production, ids.final, finalX, finalY, run.ContinuousScript, run.PackageJSON)
 		}
 	}
 	return view, nil
@@ -334,7 +342,7 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 
 // appendProductionStages 把生产段节点接在定稿之后。节点状态由生产记录的
 // status+step 推导：跑过的 ok、当前步 running/failed、没到的 missing。
-func appendProductionStages(view *RunStagesView, rec store.RemixLabProductionRecord, prod remixproducer.Config, finalID string, finalX, finalY float64, script string) {
+func appendProductionStages(view *RunStagesView, rec store.RemixLabProductionRecord, prod remixproducer.Config, finalID string, finalX, finalY float64, script, packageJSON string) {
 	type produceStep struct {
 		id, step, title string
 		taskID          string
@@ -375,18 +383,24 @@ func appendProductionStages(view *RunStagesView, rec store.RemixLabProductionRec
 		current = -1
 	}
 
-	minX, maxY := finalX, finalY
+	maxY := finalY
 	for _, stage := range view.Stages {
-		if stage.X < minX {
-			minX = stage.X
-		}
 		if stage.Y > maxY {
 			maxY = stage.Y
 		}
 	}
+	// 用户在设计画布拖过的生产节点位置优先；没拖过的默认横排从定稿正下方
+	// 开始（确认闸门贴着定稿，连线不斜穿画布），与设计画布的默认一致。
+	posOf := func(id string, defX, defY float64) (float64, float64) {
+		if pos, ok := prod.NodePositions[id]; ok && (pos.X != 0 || pos.Y != 0) {
+			return pos.X, pos.Y
+		}
+		return defX, defY
+	}
+	gateX, gateY := posOf("produce-gate", finalX, maxY+240)
 	gate := RunStageView{
 		ID: "produce-gate", Kind: "gate", Title: "确认二创",
-		X: minX, Y: maxY + 240,
+		X: gateX, Y: gateY,
 		Extra: map[string]any{"production": true, "account_id": rec.AccountID, "auto": rec.Auto},
 	}
 	if trimmed := strings.TrimSpace(script); trimmed != "" {
@@ -410,9 +424,10 @@ func appendProductionStages(view *RunStagesView, rec store.RemixLabProductionRec
 
 	prev := "produce-gate"
 	for i, step := range steps {
+		stepX, stepY := posOf(step.id, finalX+230*float64(i+1), maxY+240)
 		stage := RunStageView{
 			ID: step.id, Kind: "produce", Title: step.title,
-			X: minX + 230*float64(i+1), Y: maxY + 240,
+			X: stepX, Y: stepY,
 			System: step.system,
 			Extra:  map[string]any{"production": true, "production_step": step.step},
 		}
@@ -452,6 +467,64 @@ func appendProductionStages(view *RunStagesView, rec store.RemixLabProductionRec
 		view.Edges = append(view.Edges, [2]string{prev, step.id})
 		prev = step.id
 	}
+
+	// —— 发布 ——：草稿出来后在画布上复制发布文案、确认已发布（状态由
+	// httpapi 层按项目 stage 补成 ok）。
+	publishX, publishY := posOf("produce-publish", finalX+230*float64(len(steps)+1), maxY+240)
+	publish := RunStageView{
+		ID: "produce-publish", Kind: "produce", Title: "发布",
+		X: publishX, Y: publishY,
+		Extra: map[string]any{"production": true, "production_step": "publish"},
+	}
+	if rec.ProjectID != "" {
+		publish.Extra["project_id"] = rec.ProjectID
+	}
+	if copyExtra := publishingCopyExtra(packageJSON); copyExtra != nil {
+		publish.Extra["publishing"] = copyExtra
+	}
+	if rec.Status == "completed" {
+		publish.Status = "waiting"
+		publish.Extra["desc"] = "剪映草稿已生成：复制发布文案，视频发出后点确认已发布。"
+	} else {
+		publish.Status = "missing"
+	}
+	view.Stages = append(view.Stages, publish)
+	view.Edges = append(view.Edges, [2]string{prev, "produce-publish"})
+}
+
+// publishingCopyExtra 从定稿发布包里取发布文案（描述、短标题、话题），给
+// 发布节点的检视器展示复制按钮。
+func publishingCopyExtra(packageJSON string) map[string]any {
+	trimmed := strings.TrimSpace(packageJSON)
+	if trimmed == "" {
+		return nil
+	}
+	var pkg struct {
+		Titles       []string `json:"titles"`
+		ShortTitles  []string `json:"short_titles"`
+		Descriptions []string `json:"descriptions"`
+		Topics       []string `json:"topics"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &pkg); err != nil {
+		return nil
+	}
+	out := map[string]any{}
+	if len(pkg.Titles) > 0 {
+		out["titles"] = pkg.Titles
+	}
+	if len(pkg.ShortTitles) > 0 {
+		out["short_titles"] = pkg.ShortTitles
+	}
+	if len(pkg.Descriptions) > 0 {
+		out["descriptions"] = pkg.Descriptions
+	}
+	if len(pkg.Topics) > 0 {
+		out["topics"] = pkg.Topics
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // stageNodeIDs 是骨干节点在图里的实际ID：工作流按快照，固定管线用内置名。

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -82,8 +83,8 @@ func (r *AccountRepository) CreateWithBackground(ctx context.Context, account do
 		}
 	}()
 	_, err = conn.ExecContext(ctx, `INSERT INTO accounts
-        (id, name, background_asset_id, color, status, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, 'active', ?, ?)`,
+        (id, name, background_asset_id, color, status, overrides, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 'active', '', ?, ?)`,
 		account.ID, account.Name, account.Color, account.CreatedAt, account.UpdatedAt)
 	if err != nil {
 		return CommitNotCommitted, classifyAccountError(err)
@@ -102,7 +103,7 @@ func (r *AccountRepository) CreateWithBackground(ctx context.Context, account do
 }
 
 func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.created_at, a.updated_at
+	rows, err := r.db.QueryContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.overrides, a.created_at, a.updated_at
 		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id ORDER BY a.created_at, a.id`)
 	if err != nil {
 		return nil, fmt.Errorf("list accounts: %w", err)
@@ -123,7 +124,7 @@ func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) 
 }
 
 func (r *AccountRepository) Get(ctx context.Context, id string) (domain.Account, error) {
-	account, err := scanAccount(r.db.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.created_at, a.updated_at
+	account, err := scanAccount(r.db.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path, a.color, a.status, a.overrides, a.created_at, a.updated_at
 		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id WHERE a.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Account{}, ErrAccountNotFound
@@ -167,7 +168,7 @@ func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID str
 		}
 	}()
 	account, err = scanAccount(conn.QueryRowContext(ctx, `SELECT a.id, a.name, a.background_asset_item_id, v.path,
-        a.color, a.status, a.created_at, a.updated_at
+        a.color, a.status, a.overrides, a.created_at, a.updated_at
 		FROM accounts a LEFT JOIN asset_items i ON i.id=a.background_asset_item_id LEFT JOIN asset_versions v ON v.id=i.current_version_id WHERE a.id = ?`, accountID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Account{}, CommitNotCommitted, ErrAccountNotFound
@@ -199,6 +200,30 @@ func (r *AccountRepository) ReplaceBackground(ctx context.Context, accountID str
 	return account, CommitCommitted, nil
 }
 
+// UpdateOverrides 覆盖账号级制作配置；传 nil 或零值表示清除、回落全局设置。
+func (r *AccountRepository) UpdateOverrides(ctx context.Context, id string, overrides *domain.AccountOverrides, updatedAt time.Time) (domain.Account, error) {
+	raw := ""
+	if !overrides.IsZero() {
+		encoded, err := json.Marshal(overrides)
+		if err != nil {
+			return domain.Account{}, fmt.Errorf("encode account overrides: %w", err)
+		}
+		raw = string(encoded)
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE accounts SET overrides = ?, updated_at = ? WHERE id = ?`, raw, updatedAt, id)
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("update account overrides: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("read overrides update result: %w", err)
+	}
+	if count == 0 {
+		return domain.Account{}, ErrAccountNotFound
+	}
+	return r.Get(ctx, id)
+}
+
 func (r *AccountRepository) Deactivate(ctx context.Context, id string, updatedAt time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE accounts SET status = 'inactive', updated_at = ? WHERE id = ?`, updatedAt, id)
 	if err != nil {
@@ -220,10 +245,20 @@ type accountScanner interface {
 
 func scanAccount(scanner accountScanner) (domain.Account, error) {
 	var account domain.Account
+	var overridesRaw string
 	err := scanner.Scan(&account.ID, &account.Name, &account.BackgroundAssetID, &account.BackgroundPath, &account.Color,
-		&account.Status, &account.CreatedAt, &account.UpdatedAt)
+		&account.Status, &overridesRaw, &account.CreatedAt, &account.UpdatedAt)
 	if err != nil {
 		return domain.Account{}, err
+	}
+	if strings.TrimSpace(overridesRaw) != "" {
+		var overrides domain.AccountOverrides
+		if err := json.Unmarshal([]byte(overridesRaw), &overrides); err != nil {
+			return domain.Account{}, fmt.Errorf("decode account overrides: %w", err)
+		}
+		if !overrides.IsZero() {
+			account.Overrides = &overrides
+		}
 	}
 	return account, nil
 }

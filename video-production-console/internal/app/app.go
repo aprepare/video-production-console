@@ -121,6 +121,12 @@ func New(options Options) *App {
 		accounts := httpapi.NewAccountsHandler(options.DB, assetService)
 		mux.Handle("/api/accounts", accounts)
 		mux.Handle("/api/accounts/", accounts)
+		if options.Settings != nil {
+			// AI 短片：分镜 → 生图 → 图生视频 → 配音 → 剪映草稿。
+			aiShorts := httpapi.NewAIShortsHandler(options.Config.DataRoot, options.Settings, store.NewAccountRepository(options.DB))
+			mux.Handle("/api/ai-shorts", aiShorts)
+			mux.Handle("/api/ai-shorts/", aiShorts)
+		}
 		var models httpapi.TaskModelResolver
 		if options.Settings != nil {
 			models = options.Settings
@@ -176,6 +182,9 @@ func New(options Options) *App {
 			bgmHandler := httpapi.NewBGMLibraryHandler(options.Settings)
 			mux.Handle("/api/bgm-library", bgmHandler)
 			mux.Handle("/api/bgm-library/", bgmHandler)
+			draftsHandler := httpapi.NewJianyingDraftsHandler(options.Settings)
+			mux.Handle("/api/jianying-drafts", draftsHandler)
+			mux.Handle("/api/jianying-drafts/", draftsHandler)
 		}
 		if options.Skills != nil {
 			skillsHandler := httpapi.NewSkillsHandler(options.Skills)
@@ -205,7 +214,7 @@ func New(options Options) *App {
 				remixLabSvc.SetProducer(producer)
 				resumeProductions = producer.ResumeAll
 			}
-			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo))
+			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
 		}
 
 		if options.Scheduler != nil {

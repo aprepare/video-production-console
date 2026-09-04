@@ -20,6 +20,7 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/montage"
 	"video-production-console/internal/publishing"
+	"video-production-console/internal/remixlab"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
@@ -204,12 +205,34 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 			return err
 		}
 		settings.RemixPromptStyle = style
+		switch task.Action {
+		case domain.ActionRemixStandard, domain.ActionRemixEnhanced, domain.ActionRemixFromTopic:
+			if active, ok, err := (remixlab.Store{DataRoot: runtime.DataRoot}).GetActive(); err == nil && ok && strings.TrimSpace(active.System) != "" {
+				settings.RemixSystemPrompt = active.System
+				settings.RemixUserPrompt = active.User
+				settings.RemixPromptStamp = active.Stamp
+				settings.RemixPromptStyle = "rewrite"
+			}
+		}
 	}
 	if task.Type == "image_video" {
 		settings.MixPreset = "image_video"
 	}
 	if task.Action == domain.ActionMontagePlan || task.Action == domain.ActionMontageExecute {
-		style := runtime.MontageStyle.Normalized()
+		styleSource := runtime.MontageStyle
+		// 账号配了专属混剪样式就整体替换全局样式：矩阵账号靠字体、颜色、BGM
+		// 的差异拉开画面指纹，避免多号同模板被平台查重连坐。
+		if projectPtr != nil {
+			if account, accErr := store.NewAccountRepository(p.db).Get(ctx, project.AccountID); accErr == nil {
+				if account.Overrides != nil && account.Overrides.MontageStyle != nil {
+					styleSource = *account.Overrides.MontageStyle
+				}
+			} else {
+				logging.LoggerFrom(ctx).Warn("account overrides unavailable, using global montage style",
+					"task_id", task.ID, "account_id", project.AccountID, "error", accErr)
+			}
+		}
+		style := styleSource.Normalized()
 		settings.MontageStyle = &style
 		if style.BGMID != "" && style.BGMID != domain.BuiltinBGMID {
 			bgm, bgmErr := resolveMontageBGM(runtime.DataRoot, style)

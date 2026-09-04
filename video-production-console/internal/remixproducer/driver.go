@@ -43,10 +43,18 @@ const (
 	DefaultMontagePrompt  = "执行风景混剪，产出可编辑的剪映草稿。"
 )
 
+// NodePosition 是生产节点在画布上的位置（用户拖动后随工作流保存）。
+type NodePosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
 // Config 是生产段在工作流里的可编辑配置（存在工作流 JSON 的 production 字段，
 // 随实验快照冻结）。
 type Config struct {
 	CaptionsDisabled bool     `json:"captions_disabled,omitempty"`
+	// NodePositions 生产节点的画布位置覆盖（key 是 produce-* 节点 ID）。
+	NodePositions map[string]NodePosition `json:"node_positions,omitempty"`
 	SpokenPrompt     string   `json:"spoken_prompt,omitempty"`
 	CaptionsPrompt   string   `json:"captions_prompt,omitempty"`
 	MontagePrompt    string   `json:"montage_prompt,omitempty"`
@@ -394,12 +402,17 @@ func (d *Driver) stepSpoken(ctx context.Context, rec *store.RemixLabProductionRe
 			_ = errMsg
 		}
 	}
+	// 切句是机械活，默认低思考强度：高强度只会让每块多想几分钟，不会切得更好。
+	spokenEffort := strings.TrimSpace(cfg.SpokenEffort)
+	if spokenEffort == "" {
+		spokenEffort = "low"
+	}
 	taskID, err := d.createTask(ctx, rec.ProjectID, withTaskModel(map[string]string{
 		"account_id": rec.AccountID,
 		"type":       "remix",
 		"action":     "remix.spoken_lines",
 		"prompt":     cfg.EffectiveSpokenPrompt(),
-	}, cfg.SpokenModel, cfg.SpokenEffort))
+	}, cfg.SpokenModel, spokenEffort))
 	if err != nil {
 		return err
 	}
@@ -451,9 +464,12 @@ func (d *Driver) keywordsHidden(ctx context.Context) bool {
 }
 
 func (d *Driver) stepNarration(ctx context.Context, rec *store.RemixLabProductionRecord, cfg Config) error {
-	ready, err := d.narrationReady(ctx, rec.ProjectID)
-	if err == nil && ready {
-		return nil
+	// 单步重做（口播/配音）会置 ForceNarration：无视已就绪的旧配音重新生成。
+	if !rec.ForceNarration {
+		ready, err := d.narrationReady(ctx, rec.ProjectID)
+		if err == nil && ready {
+			return nil
+		}
 	}
 	var payload io.Reader
 	if ov := cfg.narrationOverride(); len(ov) > 0 {
@@ -479,6 +495,7 @@ func (d *Driver) stepNarration(ctx context.Context, rec *store.RemixLabProductio
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	switch {
 	case resp.StatusCode == http.StatusCreated:
+		rec.ForceNarration = false
 		return nil
 	case resp.StatusCode == http.StatusConflict && strings.Contains(string(raw), "narration_in_progress"):
 		// 别处已在配音（比如重试撞上没退场的旧请求）：轮询等它出结果。
@@ -486,6 +503,7 @@ func (d *Driver) stepNarration(ctx context.Context, rec *store.RemixLabProductio
 		for time.Now().Before(deadline) {
 			time.Sleep(5 * time.Second)
 			if ready, err := d.narrationReady(ctx, rec.ProjectID); err == nil && ready {
+				rec.ForceNarration = false
 				return nil
 			}
 		}

@@ -90,8 +90,8 @@ test("leaving batch mode opens a project again", () => {
   expect(props.onOpenProject).toHaveBeenCalledWith(projects[0]);
 });
 
-test("header 进化台 button opens the remix lab", () => {
+test("header 文案创作台 button opens the remix lab", () => {
   const { props } = renderHome();
-  fireEvent.click(screen.getByRole("button", { name: "进化台" }));
+  fireEvent.click(screen.getByRole("button", { name: "文案创作台" }));
   expect(props.onOpenRemixLab).toHaveBeenCalledOnce();
 });

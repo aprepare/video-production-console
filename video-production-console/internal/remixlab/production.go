@@ -23,6 +23,7 @@ var (
 	ErrProductionDone            = errors.New("production already completed")
 	ErrRunNotProducible          = errors.New("run is not producible")
 	ErrInvalidAutoProduce        = errors.New("auto produce requires account and run_count=1")
+	ErrProductionStepInvalid     = errors.New("production step is not redoable")
 )
 
 // ProductionLauncher 由 remixproducer.Driver 实现；接口隔离避免依赖倒挂。
@@ -160,6 +161,60 @@ func (s *Service) StartProduction(ctx context.Context, runID, accountID string) 
 		}
 	default:
 		return getErr
+	}
+	s.producer.Launch(runID)
+	return nil
+}
+
+// RedoProductionStep 在画布上重做某个生产步骤：从该步起清掉任务 ID 续跑到
+// 草稿。重做口播会连带重标关键词、强制重新配音、重出草稿；重做配音会重出
+// 草稿；重做混剪只出一份新草稿（旧草稿保留）。运行中不允许重做。
+func (s *Service) RedoProductionStep(ctx context.Context, runID, step string) error {
+	if s.producer == nil {
+		return ErrProductionUnavailable
+	}
+	rec, err := s.repo.GetProduction(ctx, runID)
+	if err != nil {
+		return err
+	}
+	switch rec.Status {
+	case "running":
+		return ErrProductionActive
+	case "completed", "failed":
+	default:
+		// waiting_confirm：什么都还没生产，没有可重做的步骤。
+		return ErrRunNotProducible
+	}
+	if strings.TrimSpace(rec.ProjectID) == "" || strings.TrimSpace(rec.AccountID) == "" {
+		return ErrRunNotProducible
+	}
+	switch step {
+	case remixproducer.StepSpoken:
+		rec.SpokenTaskID, rec.CaptionTaskID, rec.MontageTaskID = "", "", ""
+		rec.ForceNarration = true
+	case remixproducer.StepCaptions:
+		exp, _, _, expErr := s.repo.GetExperiment(ctx, rec.ExperimentID)
+		if expErr != nil {
+			return expErr
+		}
+		if remixproducer.ParseConfig(exp.WorkflowJSON).CaptionsDisabled {
+			return ErrProductionStepInvalid
+		}
+		rec.CaptionTaskID, rec.MontageTaskID = "", ""
+	case remixproducer.StepNarration:
+		rec.MontageTaskID = ""
+		rec.ForceNarration = true
+	case remixproducer.StepMontage:
+		rec.MontageTaskID = ""
+	default:
+		return ErrProductionStepInvalid
+	}
+	rec.Step = step
+	rec.Status = "running"
+	rec.Error = ""
+	rec.UpdatedAt = s.now()
+	if err := s.repo.UpdateProduction(ctx, rec); err != nil {
+		return err
 	}
 	s.producer.Launch(runID)
 	return nil

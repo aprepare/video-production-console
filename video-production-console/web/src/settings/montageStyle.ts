@@ -22,6 +22,7 @@ export const montageStyleDefaults: Required<MontageStyle> = {
   plain_size: 17,
   keyword_size: 23,
   keyword_color: "#FF1515",
+  keywords_hidden: false,
   title_hidden: false,
   title_size: 16,
   title_color: "#FFDB1A",
@@ -32,7 +33,29 @@ export const montageStyleDefaults: Required<MontageStyle> = {
   subtitle_y: 0.49,
   bgm_id: "builtin",
   bgm_volume: 0.2512,
+  // 扩展装饰字段：空/0/false = 沿用策略默认（后端 omitempty 不落库）。
+  caption_border_color: "",
+  caption_border_width: 0,
+  caption_border_hidden: false,
+  caption_bg_color: "",
+  caption_bg_alpha: 0,
+  keyword_border_color: "",
+  title_font: "",
+  title_border_color: "",
+  title_bg_color: "",
+  title_bg_alpha: 0,
+  subtitle_font: "",
+  subtitle_border_color: "",
+  subtitle_bg_color: "",
+  subtitle_bg_alpha: 0,
 };
+
+/** 字体下拉：内置常用列表 + 当前值（草稿导入的字体可能不在列表里）。 */
+export function fontOptions(current: string): string[] {
+  const list: string[] = [...montageFonts];
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
 
 // The backend omits zero-value fields when serializing, so absent keys fall
 // back to the defaults above; the merged object is always sent back complete.

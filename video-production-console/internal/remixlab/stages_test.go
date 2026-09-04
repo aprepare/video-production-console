@@ -21,7 +21,7 @@ func TestAppendProductionStagesSkipsDisabledCaptions(t *testing.T) {
 		ProjectID: "proj-9", SpokenTaskID: "task-spoken",
 	}
 	prod := remixproducer.Config{CaptionsDisabled: true, MontagePrompt: "自定义混剪提示词"}
-	appendProductionStages(&view, rec, prod, "final", 0, 0, "")
+	appendProductionStages(&view, rec, prod, "final", 0, 0, "", "")
 
 	byID := map[string]RunStageView{}
 	for _, stage := range view.Stages {
@@ -42,9 +42,46 @@ func TestAppendProductionStagesSkipsDisabledCaptions(t *testing.T) {
 	if byID["produce-montage"].System != "自定义混剪提示词" {
 		t.Fatalf("montage prompt override: %+v", byID["produce-montage"])
 	}
-	// 边应当是 final→gate→project→spoken→narration→montage 共 5 条
-	if len(view.Edges) != 5 {
+	// 发布节点：生产未完成时等待中。
+	if byID["produce-publish"].Status != "missing" {
+		t.Fatalf("publish should wait: %+v", byID["produce-publish"])
+	}
+	// 边应当是 final→gate→project→spoken→narration→montage→publish 共 6 条
+	if len(view.Edges) != 6 {
 		t.Fatalf("edges = %d (%v)", len(view.Edges), view.Edges)
+	}
+}
+
+// 生产完成后：发布节点亮成待确认，并带上定稿包里的发布文案。
+func TestAppendProductionStagesPublishNode(t *testing.T) {
+	view := RunStagesView{}
+	rec := store.RemixLabProductionRecord{
+		Status: "completed", Step: "done",
+		ProjectID: "proj-9", SpokenTaskID: "task-spoken", MontageTaskID: "task-montage",
+	}
+	pkg := `{"titles":["主题"],"short_titles":["板","副"],"descriptions":["描述一"],"topics":["#楼市"]}`
+	appendProductionStages(&view, rec, remixproducer.Config{CaptionsDisabled: true}, "final", 0, 0, "", pkg)
+
+	byID := map[string]RunStageView{}
+	for _, stage := range view.Stages {
+		byID[stage.ID] = stage
+	}
+	publish := byID["produce-publish"]
+	if publish.Status != "waiting" {
+		t.Fatalf("publish should await confirm: %+v", publish)
+	}
+	copyExtra, ok := publish.Extra["publishing"].(map[string]any)
+	if !ok {
+		t.Fatalf("publishing copy missing: %+v", publish.Extra)
+	}
+	if titles, _ := copyExtra["short_titles"].([]string); len(titles) != 2 {
+		t.Fatalf("short titles: %+v", copyExtra)
+	}
+	if descs, _ := copyExtra["descriptions"].([]string); len(descs) != 1 {
+		t.Fatalf("descriptions: %+v", copyExtra)
+	}
+	if publish.Extra["project_id"] != "proj-9" {
+		t.Fatalf("project id: %+v", publish.Extra)
 	}
 }
 

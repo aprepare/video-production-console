@@ -10,6 +10,7 @@ import {
   type RemixLabReviewRecord,
   type RemixLabRunView,
 } from "./api";
+import { ReviewCompare, ReviewIssueList, resolveReviewVersions, reviewVerdictLabel, reviewVerdictTone } from "./ReviewCompare";
 
 type AccountOption = { id: string; name: string; status: string };
 type ProjectOption = { id: string; title: string };
@@ -95,45 +96,13 @@ function parseReview(json: string): RemixLabReviewRecord | null {
   }
 }
 
-function parseDraftScript(json: string): string {
-  const raw = (json ?? "").trim();
-  if (!raw) return "";
-  try {
-    const parsed = JSON.parse(raw) as { continuous_script?: string };
-    return typeof parsed.continuous_script === "string" ? parsed.continuous_script.trim() : "";
-  } catch {
-    return "";
-  }
+/** 审稿前后两版：结论里的快照优先，老运行退回 draft_v1 留档 + 入库定稿。 */
+function reviewVersionsOf(run: RemixLabRunView) {
+  return resolveReviewVersions(parseReview(run.review_json), run.draft_v1_json, parsePackage(run));
 }
 
 function runeCount(text: string): number {
   return [...text].length;
-}
-
-function reviewVerdictLabel(verdict: string): string {
-  switch (verdict) {
-    case "pass":
-      return "审稿通过";
-    case "fixed":
-      return "审稿已修订";
-    case "skipped":
-      return "审稿跳过";
-    case "error":
-      return "审稿失败";
-    default:
-      return `审稿：${verdict}`;
-  }
-}
-
-function reviewVerdictTone(verdict: string): string {
-  switch (verdict) {
-    case "pass":
-      return "ok";
-    case "fixed":
-      return "live";
-    default:
-      return "warn";
-  }
 }
 
 export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpenFlow, onProduce }: RunWorkbenchProps) {
@@ -143,7 +112,8 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
   const [saving, setSaving] = useState(false);
   const [comment, setComment] = useState(run.comment);
   const [reworking, setReworking] = useState(false);
-  const [compareOpen, setCompareOpen] = useState(true);
+  // 审稿真改过才默认展开对照；没改动时两版一样，摊开只是占地方。
+  const [compareOpen, setCompareOpen] = useState(() => reviewVersionsOf(run).after !== null);
   const [importOpen, setImportOpen] = useState(false);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [importAccountID, setImportAccountID] = useState("");
@@ -205,13 +175,18 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
   );
 
   const review = parseReview(run.review_json);
-  const v1Script = parseDraftScript(run.draft_v1_json);
-  const hasCompare = Boolean(v1Script) && v1Script !== pkg.continuous_script.trim();
+  const versions = reviewVersionsOf(run);
+  const hasCompare = versions.before !== null;
   const staleExternal = externalKey !== loadedKey && dirty;
 
   const update = (patch: Partial<RemixLabPackageInput>) => {
     setPkg((current) => ({ ...current, ...patch }));
     setDirty(true);
+  };
+
+  const adoptVersion = (patch: Partial<RemixLabPackageInput>) => {
+    update(patch);
+    onMessage("已回填到当前定稿，满意就点「保存修改」。");
   };
 
   const updateListItem = (field: ListField, index: number, value: string) => {
@@ -481,17 +456,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
             审稿结论：{review.summary || review.error || reviewVerdictLabel(review.verdict)}
           </summary>
           {review.error ? <p className="remix-lab-run__error">{review.error}</p> : null}
-          {(review.issues?.length ?? 0) > 0 ? (
-            <ol className="remix-lab-review__issues">
-              {review.issues?.map((issue, index) => (
-                <li key={index}>
-                  <strong>{issue.problem}</strong>
-                  {issue.where ? <span className="remix-lab-review__where">「{issue.where}」</span> : null}
-                  {issue.fix ? <p>{issue.fix}</p> : null}
-                </li>
-              ))}
-            </ol>
-          ) : null}
+          <ReviewIssueList review={review} />
         </details>
       ) : null}
 
@@ -588,7 +553,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
               onClick={() => setCompareOpen((open) => !open)}
             >
               <Columns2 size={14} strokeWidth={2} />
-              {compareOpen ? "收起初稿对照" : "对照写手初稿"}
+              {compareOpen ? "收起审稿对照" : "对照审稿前后"}
             </button>
           ) : null}
         </div>
@@ -597,13 +562,19 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         </span>
       </div>
 
-      <div className={hasCompare && compareOpen ? "remix-lab-workbench__versions remix-lab-workbench__versions--split" : "remix-lab-workbench__versions"}>
-        {hasCompare && compareOpen ? (
-          <div className="remix-lab-workbench__pane remix-lab-workbench__pane--v1">
-            <h4>写手初稿（审稿前 · 只读）</h4>
-            <pre className="remix-lab-run__script">{v1Script}</pre>
+      {hasCompare && compareOpen && versions.before ? (
+        <section className="remix-lab-workbench__compare" aria-label="审稿前后对照">
+          <div className="remix-lab-workbench__pane">
+            <h4>审稿前后对照（正文 · 短标题 · 视频描述 · 话题）</h4>
+            <p className="remix-lab-muted remix-lab-pkg__hint">
+              审稿改过的字段两栏并列，没动的只显示一遍。哪版顺眼就点「用这版」回填到下面的定稿，再保存。
+            </p>
           </div>
-        ) : null}
+          <ReviewCompare before={versions.before} after={versions.after} current={pkg} onAdopt={adoptVersion} />
+        </section>
+      ) : null}
+
+      <div className="remix-lab-workbench__versions">
         <div className="remix-lab-workbench__pane">
           <h4>当前定稿（可编辑）</h4>
           <textarea
@@ -622,6 +593,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
           hint: "第1条会印在视频板面当主标题、第2条当副标题（都不超过15字）。",
         })}
         {renderListEditor("descriptions", "视频描述", { rows: 2 })}
+        {renderListEditor("topics", "话题", { hint: "第1个是 #财经/#经济/#理财 之一，其余用正文里出现过的名词。" })}
       </div>
 
       {run.error_message ? <p className="remix-lab-run__error">{run.error_message}</p> : null}

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type PublicSettings struct {
 	ListenAddr                  string       `json:"listen_addr"`
@@ -81,6 +84,7 @@ type MontageStyle struct {
 	PlainSize       float64 `json:"plain_size,omitempty"`   // non-keyword runs in keyword lines
 	KeywordSize     float64 `json:"keyword_size,omitempty"` // enlarged keyword runs
 	KeywordColor    string  `json:"keyword_color,omitempty"`
+	KeywordsHidden  bool    `json:"keywords_hidden,omitempty"` // true: captions render plain, no keyword highlighting
 	TitleHidden     bool    `json:"title_hidden,omitempty"`
 	TitleSize       float64 `json:"title_size,omitempty"`
 	TitleColor      string  `json:"title_color,omitempty"`
@@ -91,10 +95,99 @@ type MontageStyle struct {
 	SubtitleY       float64 `json:"subtitle_y,omitempty"`
 	BGMID           string  `json:"bgm_id,omitempty"` // "builtin" or a BGM library track ID
 	BGMVolume       float64 `json:"bgm_volume,omitempty"`
+
+	// 描边 / 底色 / 字体扩展：空值表示沿用 montage-style-policy 里验证过的默认，
+	// 与上面「零值=默认」的约定一致。这批字段主要由「从剪映草稿导入样式」回填。
+	CaptionBorderColor  string  `json:"caption_border_color,omitempty"`  // #RRGGBB
+	CaptionBorderWidth  float64 `json:"caption_border_width,omitempty"`  // 剪映 0-100 口径
+	CaptionBorderHidden bool    `json:"caption_border_hidden,omitempty"` // true: 字幕不描边
+	CaptionBgColor      string  `json:"caption_bg_color,omitempty"`      // #RRGGBB；空=无底色
+	CaptionBgAlpha      float64 `json:"caption_bg_alpha,omitempty"`      // 0..1；0 视为 1
+	KeywordBorderColor  string  `json:"keyword_border_color,omitempty"`
+	TitleFont           string  `json:"title_font,omitempty"`
+	TitleBorderColor    string  `json:"title_border_color,omitempty"`
+	TitleBgColor        string  `json:"title_bg_color,omitempty"`
+	TitleBgAlpha        float64 `json:"title_bg_alpha,omitempty"`
+	SubtitleFont        string  `json:"subtitle_font,omitempty"`
+	SubtitleBorderColor string  `json:"subtitle_border_color,omitempty"`
+	SubtitleBgColor     string  `json:"subtitle_bg_color,omitempty"`
+	SubtitleBgAlpha     float64 `json:"subtitle_bg_alpha,omitempty"`
+}
+
+// AccountOverrides 账号级制作差异化配置：矩阵账号靠它拉开画面与声音指纹，
+// 避免多号同模板被平台查重连坐。字段为空即回落全局设置。
+type AccountOverrides struct {
+	// MontageStyle 非 nil 时整体替换全局混剪样式；未填字段用内置默认，不再跟随全局。
+	MontageStyle *MontageStyle  `json:"montage_style,omitempty"`
+	Voice        *VoiceOverride `json:"voice,omitempty"`
+}
+
+// VoiceOverride 账号专属配音音色。只覆盖音色身份；API 密钥、语速等参数仍用全局设置。
+type VoiceOverride struct {
+	AuraSTDVoiceID      string `json:"aurastd_voice_id,omitempty"`
+	VolcSpeechSpeakerID string `json:"volc_speech_speaker_id,omitempty"`
+}
+
+// IsZero reports whether the overrides carry no effective configuration.
+func (o *AccountOverrides) IsZero() bool {
+	if o == nil {
+		return true
+	}
+	if o.MontageStyle != nil {
+		return false
+	}
+	return o.Voice == nil || (o.Voice.AuraSTDVoiceID == "" && o.Voice.VolcSpeechSpeakerID == "")
 }
 
 // BuiltinBGMID selects the historical verified Jianying BGM track.
 const BuiltinBGMID = "builtin"
+
+// KnownMontageFonts are pyJianYingDraft FontType member names the UI offers
+// and the draft builder is allowed to emit. Imported draft titles such as
+// "WenYue" are not in this set and must not be written into a production plan.
+var KnownMontageFonts = []string{
+	"新青年体",
+	"俪金黑",
+	"大字报",
+	"抖音美好体",
+	"汉仪英雄体",
+	"站酷酷黑体",
+	"宋体",
+	"圆体",
+	"毛笔行楷",
+	"台北黑体_Bold",
+}
+
+var knownMontageFontSet = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(KnownMontageFonts))
+	for _, name := range KnownMontageFonts {
+		out[name] = struct{}{}
+	}
+	return out
+}()
+
+// NormalizeMontageFont returns name when it is a FontType member the builder
+// can emit, otherwise "". Unknown imported titles (e.g. "WenYue") are dropped
+// so pyJianYingDraft does not abort the whole job.
+func NormalizeMontageFont(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if _, ok := knownMontageFontSet[name]; ok {
+		return name
+	}
+	return ""
+}
+
+// MontageCaptionFont is the caption/keyword font written into style_overrides.
+// Unknown names fall back to 新青年体 so spoken captions keep a verified face.
+func MontageCaptionFont(name string) string {
+	if normalized := NormalizeMontageFont(name); normalized != "" {
+		return normalized
+	}
+	return DefaultMontageStyle().CaptionFont
+}
 
 // DefaultMontageStyle mirrors the values that used to be hardcoded across
 // montage-style-policy.v2.json and run_montage_job.py.

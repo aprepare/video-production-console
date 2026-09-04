@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
 import { AccountSwitcher } from "../accounts/AccountSwitcher";
+import { AccountOverridesDialog } from "../accounts/AccountOverridesDialog";
 import { messageTone } from "../messageTone";
 import { ProjectCreateForm } from "../projects/ProjectCreateForm";
 import {
@@ -12,7 +13,7 @@ import {
   stageLabel,
   stages,
 } from "../projects/stages";
-import type { Account, Project, Theme } from "../types";
+import type { Account, MontageStyle, Project, Theme } from "../types";
 
 type RuntimeState = { Running: number; Limit: number; Queued: number };
 
@@ -36,6 +37,9 @@ type ConsoleHomeProps = {
   onNewAccountNameChange: (value: string) => void;
   accountBackgroundSelected: boolean;
   onAccountBackgroundChange: (file: File | null) => void;
+  api?: (path: string, init?: RequestInit) => Promise<Response>;
+  globalMontageStyle?: MontageStyle;
+  onAccountUpdated?: (account: Account) => void;
   newProject: string;
   onNewProjectChange: (value: string) => void;
   onCreateProject: (event: FormEvent) => void;
@@ -70,6 +74,9 @@ export function ConsoleHome({
   onNewAccountNameChange,
   accountBackgroundSelected,
   onAccountBackgroundChange,
+  api,
+  globalMontageStyle,
+  onAccountUpdated,
   newProject,
   onNewProjectChange,
   onCreateProject,
@@ -87,6 +94,7 @@ export function ConsoleHome({
   const urgent = tone === "danger";
   const [selecting, setSelecting] = useState(false);
   const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
+  const [configuringAccount, setConfiguringAccount] = useState<Account | null>(null);
   const visibleIDs = projects.map((project) => project.id);
   const selectedCount = selectedIDs.filter((id) => visibleIDs.includes(id)).length;
   const allSelected = visibleIDs.length > 0 && visibleIDs.every((id) => selectedIDs.includes(id));
@@ -151,7 +159,7 @@ export function ConsoleHome({
             </span>
           )}
           <button type="button" className="header-button" onClick={onOpenRemixLab}>
-            进化台
+            文案创作台
           </button>
           <button className="header-button" onClick={onOpenSettings}>
             设置
@@ -171,6 +179,7 @@ export function ConsoleHome({
           onCreate={onCreateAccount}
           newAccountName={newAccountName}
           onNewAccountNameChange={onNewAccountNameChange}
+          onConfigureAccount={api ? setConfiguringAccount : undefined}
           backgroundSelected={accountBackgroundSelected}
           onBackgroundChange={onAccountBackgroundChange}
         />
@@ -311,6 +320,15 @@ export function ConsoleHome({
           )}
         </main>
       </div>
+      {configuringAccount && api ? (
+        <AccountOverridesDialog
+          account={configuringAccount}
+          api={api}
+          globalStyle={globalMontageStyle}
+          onSaved={(updated) => onAccountUpdated?.(updated)}
+          onClose={() => setConfiguringAccount(null)}
+        />
+      ) : null}
     </>
   );
 }

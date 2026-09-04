@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="node" />
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -372,6 +372,62 @@ test("one-click waits for caption keywords before mixing so the draft gets annot
   expect(first.onMix).toHaveBeenCalledOnce();
 });
 
+test("one-click skips keywords and continues to narration when the keywords task fails to start", async () => {
+  const detail = fixture();
+  delete detail.assets.caption_keywords;
+  delete detail.assets.narration;
+  delete detail.assets.subtitle_srt;
+  delete detail.assets.mix_draft;
+  detail.project.stage = "assets";
+  detail.missing_assets = ["narration", "subtitle_srt"];
+  const props = workbenchProps(detail);
+  props.tasks = [];
+  props.onStartCaptionKeywords = vi.fn().mockResolvedValue(false);
+  render(<ProjectWorkbench {...props} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "一键生成到剪映草稿" }));
+  expect(props.onStartCaptionKeywords).toHaveBeenCalledOnce();
+
+  await waitFor(() => expect(props.onGenerateNarration).toHaveBeenCalledOnce());
+  expect(props.onMix).not.toHaveBeenCalled();
+});
+
+test("one-click waits for the project lock to clear before starting montage", () => {
+  const beforeNarration = fixture();
+  beforeNarration.assets.caption_keywords = asset("caption_keywords");
+  delete beforeNarration.assets.narration;
+  delete beforeNarration.assets.subtitle_srt;
+  delete beforeNarration.assets.mix_draft;
+  beforeNarration.project.stage = "assets";
+  beforeNarration.missing_assets = ["narration", "subtitle_srt"];
+  const first = workbenchProps(beforeNarration);
+  first.tasks = [];
+  const { rerender } = render(<ProjectWorkbench {...first} />);
+  fireEvent.click(screen.getByRole("button", { name: "一键生成到剪映草稿" }));
+  expect(first.onGenerateNarration).toHaveBeenCalledOnce();
+
+  // 配音资产已刷新为就绪，但 generate-narration 的项目锁还没放开：不能启动混剪。
+  const narrationDone = fixture();
+  narrationDone.assets.caption_keywords = asset("caption_keywords");
+  narrationDone.assets.narration = asset("narration");
+  narrationDone.assets.subtitle_srt = asset("subtitle_srt");
+  delete narrationDone.assets.mix_draft;
+  narrationDone.project.stage = "mixing";
+  narrationDone.missing_assets = ["mix_draft"];
+  const second = workbenchProps(narrationDone);
+  second.tasks = [];
+  second.pendingActions = ["generate-narration"];
+  second.onGenerateNarration = first.onGenerateNarration;
+  second.onMix = first.onMix;
+  rerender(<ProjectWorkbench {...second} />);
+  expect(first.onMix).not.toHaveBeenCalled();
+
+  // 锁放开后链条继续，混剪只启动一次。
+  const third = { ...second, pendingActions: [] as string[] };
+  rerender(<ProjectWorkbench {...third} />);
+  expect(first.onMix).toHaveBeenCalledOnce();
+});
+
 test("hides one-click produce after a mix draft is ready", () => {
   const detail = fixture();
   detail.assets.continuous_script = asset("continuous_script");
@@ -402,6 +458,7 @@ test("disables narration generation with a stated reason while the continuous sc
 
 test("marks narration and subtitle cards as generating while narration is pending", () => {
   const props = workbenchProps();
+  props.tasks = [];
   props.pendingActions = ["generate-narration"];
   const { container } = render(<ProjectWorkbench {...props} />);
 
@@ -415,6 +472,7 @@ test("marks narration and subtitle cards as generating while narration is pendin
 
 test("marks the spoken-script card as generating while spoken lines are pending", () => {
   const props = workbenchProps();
+  props.tasks = [];
   props.pendingActions = ["spoken-lines"];
   const { container } = render(<ProjectWorkbench {...props} />);
 
@@ -689,11 +747,29 @@ test("runs mixing from the single primary action when all formal inputs are read
   detail.assets.narration = asset("narration");
   detail.assets.subtitle_srt = asset("subtitle_srt");
   delete detail.assets.mix_draft;
-  const props = renderWorkbench(detail);
+  const props = workbenchProps(detail);
+  props.tasks = [];
+  render(<ProjectWorkbench {...props} />);
 
   fireEvent.click(screen.getByRole("button", { name: "开始风景混剪" }));
 
   expect(props.onMix).toHaveBeenCalledOnce();
+});
+
+test("disables the mixing action and marks the draft card while montage runs", () => {
+  const detail = fixture();
+  detail.assets.narration = asset("narration");
+  detail.assets.subtitle_srt = asset("subtitle_srt");
+  delete detail.assets.mix_draft;
+  const props = workbenchProps(detail);
+  props.tasks = [{ ...task, status: "running" }];
+  const { container } = render(<ProjectWorkbench {...props} />);
+
+  const mixing = screen.getByRole<HTMLButtonElement>("button", { name: "正在生成混剪草稿" });
+  expect(mixing.disabled).toBe(true);
+  fireEvent.click(mixing);
+  expect(props.onMix).not.toHaveBeenCalled();
+  expect(container.querySelectorAll(".project-asset--generating").length).toBeGreaterThan(0);
 });
 
 test("starts movie montage from the primary action in movie mode", () => {
@@ -702,6 +778,7 @@ test("starts movie montage from the primary action in movie mode", () => {
   detail.assets.subtitle_srt = asset("subtitle_srt");
   delete detail.assets.mix_draft;
   const props = workbenchProps(detail);
+  props.tasks = [];
   props.mixKind = "movie";
   render(<ProjectWorkbench {...props} />);
 
@@ -718,6 +795,7 @@ test("starts image-video mixing from the primary action in image-video mode", ()
   detail.assets.subtitle_srt = asset("subtitle_srt");
   delete detail.assets.mix_draft;
   const props = workbenchProps(detail);
+  props.tasks = [];
   props.mixKind = "image-video";
   props.onImageVideoMix = vi.fn();
   render(<ProjectWorkbench {...props} />);

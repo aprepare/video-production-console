@@ -12,6 +12,8 @@ type AccountSwitcherProps = {
   onNewAccountNameChange: (value: string) => void;
   backgroundSelected: boolean;
   onBackgroundChange: (file: File | null) => void;
+  /** 打开选中账号的制作配置（专属混剪样式、配音音色）。 */
+  onConfigureAccount?: (account: Account) => void;
 };
 
 export function AccountSwitcher({
@@ -25,7 +27,9 @@ export function AccountSwitcher({
   onNewAccountNameChange,
   backgroundSelected,
   onBackgroundChange,
+  onConfigureAccount,
 }: AccountSwitcherProps) {
+  const selectedAccount = accounts.find((item) => item.id === selectedAccountID);
   return (
     <aside>
       <nav className="account-nav" aria-labelledby="account-nav-title">
@@ -51,6 +55,17 @@ export function AccountSwitcher({
             </button>
           ))}
         </div>
+        {onConfigureAccount ? (
+          <button
+            type="button"
+            className="account-manage-toggle"
+            disabled={!selectedAccount}
+            title={selectedAccount ? `配置 ${selectedAccount.name} 的专属样式和音色` : "先选中一个账号"}
+            onClick={() => selectedAccount && onConfigureAccount(selectedAccount)}
+          >
+            账号配置{selectedAccount?.overrides ? " ·已定制" : ""}
+          </button>
+        ) : null}
         <button
           type="button"
           className="account-manage-toggle"

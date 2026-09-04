@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"video-production-console/internal/agentruntime/openaicompat"
@@ -159,7 +160,7 @@ func TestCreateWorkflowExperimentSnapshotsAndRuns(t *testing.T) {
 		GrokBaseURL: "http://g/v1", GrokAPIKey: "gk", GrokModel: "grok-4.6-fast",
 	}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
 
-	exp, err := svc.CreateWorkflowExperiment(t.Context(), "工作流实验原文一二三四五", 2, "", false)
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "工作流实验原文一二三四五", 2, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +204,8 @@ func TestCreateWorkflowExperimentSnapshotsAndRuns(t *testing.T) {
 	if agents != 3 {
 		t.Fatalf("agent stages = %d, want 3", agents)
 	}
-	// 二创段 9 条边 + 生产段 5 条（定稿→闸门→建项目→口播→配音→混剪；关键词默认关闭）
-	if len(view.Edges) != 14 {
+	// 二创段 9 条边 + 生产段 6 条（定稿→闸门→建项目→口播→配音→混剪→发布；关键词默认关闭）
+	if len(view.Edges) != 15 {
 		t.Fatalf("edges = %d", len(view.Edges))
 	}
 	if _, exists := byID["produce-captions"]; exists {
@@ -252,7 +253,7 @@ func TestRetryRunResumesAndInvalidatesNode(t *testing.T) {
 	}
 	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
 
-	exp, err := svc.CreateWorkflowExperiment(t.Context(), "断点重试实验原文一二三四五", 1, "", false)
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "断点重试实验原文一二三四五", 1, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +272,7 @@ func TestRetryRunResumesAndInvalidatesNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.RetryRun(t.Context(), runID, ""); err != nil {
+	if err := svc.RetryRun(t.Context(), runID, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	retried := waitExperimentTerminal(t, svc, exp.ID)
@@ -286,7 +287,7 @@ func TestRetryRunResumesAndInvalidatesNode(t *testing.T) {
 	}
 
 	// 已完成运行：指定 agent 节点重跑 → 该节点产物被作废
-	if err := svc.RetryRun(t.Context(), runID, "hook"); err != nil {
+	if err := svc.RetryRun(t.Context(), runID, "hook", ""); err != nil {
 		t.Fatal(err)
 	}
 	again := waitExperimentTerminal(t, svc, exp.ID)
@@ -301,12 +302,179 @@ func TestRetryRunResumesAndInvalidatesNode(t *testing.T) {
 	}
 
 	// 已完成且不带节点 → 拒绝
-	if err := svc.RetryRun(t.Context(), runID, ""); !errors.Is(err, ErrRunNotRetryable) {
+	if err := svc.RetryRun(t.Context(), runID, "", ""); !errors.Is(err, ErrRunNotRetryable) {
 		t.Fatalf("want ErrRunNotRetryable, got %v", err)
 	}
 	// 不存在的节点 → 拒绝
-	if err := svc.RetryRun(t.Context(), runID, "nonexist"); !errors.Is(err, ErrRunNotRetryable) {
+	if err := svc.RetryRun(t.Context(), runID, "nonexist", ""); !errors.Is(err, ErrRunNotRetryable) {
 		t.Fatalf("want ErrRunNotRetryable for unknown node, got %v", err)
+	}
+}
+
+// 开跑时显式选择的模型优先级最高，并落进槽位供整个实验（含重试）沿用。
+func TestCreateWorkflowExperimentModelOverride(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+
+	var mu sync.Mutex
+	gotModel := ""
+	runner := func(_ context.Context, opts openaicompat.Options) error {
+		mu.Lock()
+		gotModel = opts.Model
+		mu.Unlock()
+		dir := filepath.Dir(opts.OutputLastMessage)
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("选模型开跑成稿"), 0o644)
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "选模型开跑原文一二三四五", 1, "", false, "m-pick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Runs[0].Status != "completed" {
+		t.Fatalf("run status = %s", done.Runs[0].Status)
+	}
+	mu.Lock()
+	model := gotModel
+	mu.Unlock()
+	if model != "m-pick" {
+		t.Fatalf("runner model = %q, want m-pick", model)
+	}
+	_, slots, _, err := repo.GetExperiment(t.Context(), exp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slots[0].Model != "m-pick" {
+		t.Fatalf("slot model = %q, want m-pick", slots[0].Model)
+	}
+}
+
+// 多模型对比开跑：每个模型一个槽、各跑 runCount 次，全部并行；重复与空模型
+// 去掉；全自动混剪要求总运行数为 1。
+func TestCreateWorkflowExperimentMultiModel(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+
+	var mu sync.Mutex
+	seenModels := map[string]int{}
+	runner := func(_ context.Context, opts openaicompat.Options) error {
+		mu.Lock()
+		seenModels[opts.Model]++
+		mu.Unlock()
+		dir := filepath.Dir(opts.OutputLastMessage)
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("成稿 "+opts.Model), 0o644)
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "多模型对比原文一二三四五", 1, "", false, "m-fast", "m-slow", "m-fast", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exp.Slots) != 2 || len(exp.Runs) != 2 {
+		t.Fatalf("slots=%d runs=%d, want 2/2", len(exp.Slots), len(exp.Runs))
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Status != "completed" {
+		t.Fatalf("status = %s", done.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if seenModels["m-fast"] != 1 || seenModels["m-slow"] != 1 {
+		t.Fatalf("models run = %v", seenModels)
+	}
+
+	accountID := "8c232ac1-a2e2-424e-866e-77fe8be1195d"
+	if _, err := svc.CreateWorkflowExperiment(t.Context(), "全自动多模型原文一二三四五", 1, accountID, true, "m-fast", "m-slow"); !errors.Is(err, ErrInvalidAutoProduce) {
+		t.Fatalf("auto with two models must be rejected, got %v", err)
+	}
+}
+
+// 换模型重试：整体重试改槽位模型（写手链沿用新模型），指定 agent 节点重试
+// 改实验快照里该节点的模型；两处都持久化，后续重试不再回到坏模型。
+func TestRetryRunSwitchesModel(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+
+	var mu sync.Mutex
+	var models []string
+	attempt := 0
+	runner := func(_ context.Context, opts openaicompat.Options) error {
+		mu.Lock()
+		attempt++
+		n := attempt
+		models = append(models, opts.Model)
+		mu.Unlock()
+		dir := filepath.Dir(opts.OutputLastMessage)
+		if n == 1 {
+			envelope := `{"status":"failed","summary":"chat completions status 403: model_disabled"}`
+			return os.WriteFile(opts.OutputLastMessage, []byte(envelope), 0o644)
+		}
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("换模型后的成稿"), 0o644)
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixBaseURL: "http://x/v1", RemixModel: "m-dead", RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "换模型重试原文一二三四五", 1, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitExperimentTerminal(t, svc, exp.ID)
+	if failed.Runs[0].Status != "failed" {
+		t.Fatalf("first attempt should fail: %s", failed.Runs[0].Status)
+	}
+	runID := failed.Runs[0].ID
+
+	// 整体重试带新模型 → 槽位模型持久化，本次运行用新模型
+	if err := svc.RetryRun(t.Context(), runID, "", "m-fresh"); err != nil {
+		t.Fatal(err)
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Runs[0].Status != "completed" {
+		t.Fatalf("retry should complete: %s", done.Runs[0].Status)
+	}
+	mu.Lock()
+	gotModel := models[len(models)-1]
+	mu.Unlock()
+	if gotModel != "m-fresh" {
+		t.Fatalf("retry model = %q, want m-fresh", gotModel)
+	}
+	_, slots, _, err := repo.GetExperiment(t.Context(), exp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slots[0].Model != "m-fresh" {
+		t.Fatalf("slot model = %q, want m-fresh", slots[0].Model)
+	}
+
+	// 指定 agent 节点重试带新模型 → 快照里该节点模型更新
+	if err := svc.RetryRun(t.Context(), runID, "hook", "grok-next"); err != nil {
+		t.Fatal(err)
+	}
+	waitExperimentTerminal(t, svc, exp.ID)
+	expRec, _, _, err := repo.GetExperiment(t.Context(), exp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, ok := parseWorkflowJSON(expRec.WorkflowJSON)
+	if !ok {
+		t.Fatal("snapshot unparsable after node model switch")
+	}
+	for _, node := range wf.Nodes {
+		if node.ID == "hook" && node.Config.Model != "grok-next" {
+			t.Fatalf("hook node model = %q, want grok-next", node.Config.Model)
+		}
 	}
 }
 

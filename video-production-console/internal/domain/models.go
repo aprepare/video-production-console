@@ -76,6 +76,7 @@ type Account struct {
 	BackgroundPath    *string
 	Color             string
 	Status            string
+	Overrides         *AccountOverrides
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }

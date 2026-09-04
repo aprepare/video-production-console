@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/remixlab"
@@ -16,14 +17,24 @@ type scenicProjectLookup interface {
 	GetProject(context.Context, string) (domain.Project, error)
 }
 
+// taskLookup 给生产段节点补用时（口播/关键词/混剪各是一个 codex 任务）。
+type taskLookup interface {
+	Get(context.Context, string) (domain.CodexTask, error)
+}
+
 type remixLabHandler struct {
 	svc      *remixlab.Service
 	projects scenicProjectLookup
 	prompts  remixlab.Store
+	tasks    taskLookup
 }
 
-func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup) http.Handler {
+// NewRemixLabHandler 建创作台路由；可选传任务仓库，运行视图的生产节点据此显示用时。
+func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup, tasks ...taskLookup) http.Handler {
 	h := &remixLabHandler{svc: svc, projects: projects, prompts: remixlab.Store{DataRoot: svc.DataRoot()}}
+	if len(tasks) > 0 {
+		h.tasks = tasks[0]
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/remix-lab/defaults", h.defaults)
 	mux.HandleFunc("PUT /api/remix-lab/presets", h.savePresets)
@@ -37,6 +48,7 @@ func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup) htt
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/rework", h.rework)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/retry", h.retryRun)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/produce", h.produceRun)
+	mux.HandleFunc("POST /api/remix-lab/runs/{id}/produce/redo", h.redoProduceStep)
 	mux.HandleFunc("GET /api/remix-lab/productions/by-project/{projectID}", h.productionByProject)
 	mux.HandleFunc("GET /api/remix-lab/runs/{id}/stages", h.runStages)
 	mux.HandleFunc("GET /api/remix-lab/prompts", h.listPrompts)
@@ -52,6 +64,8 @@ func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup) htt
 	mux.HandleFunc("GET /api/remix-lab/workflow", h.getWorkflow)
 	mux.HandleFunc("PUT /api/remix-lab/workflow", h.putWorkflow)
 	mux.HandleFunc("POST /api/remix-lab/workflow/run", h.runWorkflow)
+	mux.HandleFunc("GET /api/remix-lab/published", h.listPublished)
+	mux.HandleFunc("PUT /api/remix-lab/published/{id}", h.putPublishedMetrics)
 	mux.HandleFunc("POST /api/remix-lab/agent/chat", h.agentChat)
 	mux.HandleFunc("GET /api/remix-lab/agent/last", h.getAgentLast)
 	mux.HandleFunc("GET /api/remix-lab/agent/history", h.getAgentHistory)
@@ -225,15 +239,18 @@ func (h *remixLabHandler) putWorkflow(w http.ResponseWriter, r *http.Request) {
 func (h *remixLabHandler) runWorkflow(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Source    string `json:"source"`
-		RunCount  int    `json:"run_count"`
-		AccountID string `json:"account_id"`
-		Auto      bool   `json:"auto"`
+		RunCount  int      `json:"run_count"`
+		AccountID string   `json:"account_id"`
+		Auto      bool     `json:"auto"`
+		Model     string   `json:"model"`
+		Models    []string `json:"models"` // 多模型对比开跑；与 model 合并
 	}
 	if err := decodeJSON(w, r, maxRemixLabRequestSize, &in); err != nil {
 		writeDecodeError(w, err, "invalid_remix_lab", "A valid run payload is required.")
 		return
 	}
-	exp, err := h.svc.CreateWorkflowExperiment(r.Context(), in.Source, in.RunCount, in.AccountID, in.Auto)
+	models := append([]string{in.Model}, in.Models...)
+	exp, err := h.svc.CreateWorkflowExperiment(r.Context(), in.Source, in.RunCount, in.AccountID, in.Auto, models...)
 	if err != nil {
 		writeRemixLabError(w, err)
 		return
@@ -257,6 +274,23 @@ func (h *remixLabHandler) produceRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
 }
 
+// redoProduceStep 单步重做：从指定生产步骤起清掉任务 ID 续跑到草稿（重做
+// 口播连带重配音重出草稿；重做混剪只出新草稿）。
+func (h *remixLabHandler) redoProduceStep(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Step string `json:"step"`
+	}
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_remix_lab", "A valid redo payload is required.")
+		return
+	}
+	if err := h.svc.RedoProductionStep(r.Context(), r.PathValue("id"), strings.TrimSpace(in.Step)); err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
+}
+
 func (h *remixLabHandler) productionByProject(w http.ResponseWriter, r *http.Request) {
 	link, err := h.svc.ProductionByProject(r.Context(), r.PathValue("projectID"))
 	if err != nil {
@@ -267,20 +301,58 @@ func (h *remixLabHandler) productionByProject(w http.ResponseWriter, r *http.Req
 }
 
 // retryRun 断点重试：失败运行整体重试（已有agent产物复用），或指定节点
-// 作废重跑，写手链路重做后自动续走后面的环节。
+// 作废重跑，写手链路重做后自动续走后面的环节。model 非空时先换模型再重试。
 func (h *remixLabHandler) retryRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		NodeID string `json:"node_id"`
+		Model  string `json:"model"`
 	}
 	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
 		writeDecodeError(w, err, "invalid_remix_lab", "A valid retry payload is required.")
 		return
 	}
-	if err := h.svc.RetryRun(r.Context(), r.PathValue("id"), in.NodeID); err != nil {
+	if err := h.svc.RetryRun(r.Context(), r.PathValue("id"), in.NodeID, in.Model); err != nil {
 		writeRemixLabError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
+}
+
+// listPublished 已发布文案库：出过草稿的成稿 + 手填成绩 + 项目是否已发布。
+func (h *remixLabHandler) listPublished(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.ListPublished(r.Context())
+	if err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	type publishedView struct {
+		remixlab.PublishedScript
+		Published bool `json:"published"`
+	}
+	out := make([]publishedView, 0, len(items))
+	for _, item := range items {
+		view := publishedView{PublishedScript: item}
+		if h.projects != nil && item.ProjectID != "" {
+			if project, err := h.projects.GetProject(r.Context(), item.ProjectID); err == nil {
+				view.Published = project.Stage == domain.StagePublished
+			}
+		}
+		out = append(out, view)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+func (h *remixLabHandler) putPublishedMetrics(w http.ResponseWriter, r *http.Request) {
+	var in remixlab.PublishedMetrics
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_remix_lab", "A valid metrics payload is required.")
+		return
+	}
+	if err := h.svc.SavePublishedMetrics(r.Context(), r.PathValue("id"), in); err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // runStages 返回一次运行的工作流分解（节点+连线+各阶段实际输入输出）。
@@ -290,7 +362,67 @@ func (h *remixLabHandler) runStages(w http.ResponseWriter, r *http.Request) {
 		writeRemixLabError(w, err)
 		return
 	}
+	h.decoratePublishStage(r.Context(), &view)
+	h.decorateProduceTiming(r.Context(), &view)
 	writeJSON(w, http.StatusOK, view)
+}
+
+// decorateProduceTiming 给带 task_id 的生产节点补用时：已结束的任务取
+// 开始→结束，运行中的取开始→现在。
+func (h *remixLabHandler) decorateProduceTiming(ctx context.Context, view *remixlab.RunStagesView) {
+	if h.tasks == nil {
+		return
+	}
+	for i := range view.Stages {
+		stage := &view.Stages[i]
+		if stage.Millis > 0 || stage.Extra == nil {
+			continue
+		}
+		taskID, _ := stage.Extra["task_id"].(string)
+		if strings.TrimSpace(taskID) == "" {
+			continue
+		}
+		task, err := h.tasks.Get(ctx, taskID)
+		if err != nil || task.StartedAt == nil {
+			continue
+		}
+		end := time.Now()
+		if task.FinishedAt != nil {
+			end = *task.FinishedAt
+		}
+		if ms := end.Sub(*task.StartedAt).Milliseconds(); ms > 0 {
+			stage.Millis = ms
+		}
+		if task.ModelName != "" && stage.Model == "" {
+			stage.Model = task.ModelName
+		}
+	}
+}
+
+// decoratePublishStage 按项目当前 stage 补全发布节点：已发布的项目把节点
+// 标成 ok（remixlab 服务不依赖项目仓库，所以在这层补）。
+func (h *remixLabHandler) decoratePublishStage(ctx context.Context, view *remixlab.RunStagesView) {
+	if h.projects == nil || view.Production == nil || strings.TrimSpace(view.Production.ProjectID) == "" {
+		return
+	}
+	for i := range view.Stages {
+		if view.Stages[i].ID != "produce-publish" {
+			continue
+		}
+		project, err := h.projects.GetProject(ctx, view.Production.ProjectID)
+		if err != nil {
+			return
+		}
+		if view.Stages[i].Extra == nil {
+			view.Stages[i].Extra = map[string]any{}
+		}
+		view.Stages[i].Extra["project_stage"] = string(project.Stage)
+		if project.Stage == domain.StagePublished {
+			view.Stages[i].Status = "ok"
+			view.Stages[i].Extra["published"] = true
+		}
+		return
+	}
 }
 
 // getAgentPrompts 返回四路agent（钩子/事实/弹药/审稿）系统提示词编辑视图。
@@ -376,6 +508,8 @@ func writeRemixLabError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_auto_produce", "全自动需要选好账号且运行次数为1。")
 	case errors.Is(err, remixlab.ErrProductionActive):
 		writeError(w, http.StatusConflict, "production_active", "生产已在进行中。")
+	case errors.Is(err, remixlab.ErrProductionStepInvalid):
+		writeError(w, http.StatusBadRequest, "production_step_invalid", "这个生产步骤不能重做。")
 	case errors.Is(err, remixlab.ErrProductionDone):
 		writeError(w, http.StatusConflict, "production_done", "这条运行已经生产完成，去项目里看草稿。")
 	case errors.Is(err, remixlab.ErrRunNotProducible):

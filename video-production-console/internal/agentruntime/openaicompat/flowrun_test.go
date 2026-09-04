@@ -94,3 +94,34 @@ func TestRunFlowAgentsSkipsInjectionForUnwiredAgent(t *testing.T) {
 		t.Fatalf("unwired agent must not inject: %s", intel)
 	}
 }
+
+func TestResolveFlowFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hook_library.json"), []byte("{\"entries\":[1,2]}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveFlowFiles("前缀 {{file:hook_library.json}} 后缀", dir)
+	if got != "前缀 {\"entries\":[1,2]} 后缀" {
+		t.Fatalf("resolved = %q", got)
+	}
+
+	// 路径穿越只取文件名部分。
+	got = resolveFlowFiles("{{file:../../hook_library.json}}", dir)
+	if !strings.Contains(got, "{\"entries\":[1,2]}") {
+		t.Fatalf("basename resolve failed: %q", got)
+	}
+
+	// 文件缺失与目录未配置都不拦运行，替换成说明文字。
+	if got = resolveFlowFiles("{{file:missing.json}}", dir); !strings.Contains(got, "读取失败") {
+		t.Fatalf("missing file note absent: %q", got)
+	}
+	if got = resolveFlowFiles("{{file:hook_library.json}}", ""); !strings.Contains(got, "未配置") {
+		t.Fatalf("empty dir note absent: %q", got)
+	}
+
+	// 没有占位符原样返回。
+	if got = resolveFlowFiles("普通文本", dir); got != "普通文本" {
+		t.Fatalf("plain text changed: %q", got)
+	}
+}

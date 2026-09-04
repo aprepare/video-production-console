@@ -94,6 +94,7 @@ type ProjectAssetsProps = {
   spokenLinesLive?: boolean;
   onStartCaptionKeywords?: () => void;
   captionKeywordsLive?: boolean;
+  montageLive?: boolean;
   onExportVideo?: (assetID: string) => void;
   videoExporting?: boolean;
   onGenerateNarration?: () => void;
@@ -114,6 +115,7 @@ export function ProjectAssets({
   spokenLinesLive = false,
   onStartCaptionKeywords,
   captionKeywordsLive = false,
+  montageLive = false,
   onExportVideo,
   videoExporting = false,
   onGenerateNarration,
@@ -169,7 +171,8 @@ export function ProjectAssets({
           const generating = (narrationGenerating
             && (definition.type === "narration" || definition.type === "subtitle_srt"))
             || (spokenGenerating && definition.type === "spoken_script")
-            || (captionKeywordsLive && definition.type === "caption_keywords");
+            || (captionKeywordsLive && definition.type === "caption_keywords")
+            || (montageLive && definition.type === "mix_draft");
           const state = assetState(asset, generating);
           const Icon = definition.icon;
           const isRegisteredDraft = definition.type === "mix_draft" && asset?.state === "ready";

@@ -289,6 +289,12 @@ func runeSentenceSpan(runes []rune, pos, width int) (int, int) {
 	return start, end
 }
 
+// courseTailStart 是卖课段允许开始的位置：正文前 65% 里不许出现课名。
+const courseTailStart = 0.65
+
+// collapseDuplicateCourseMentions 删掉落在正文前段（卖课段之前）的课名句：
+// 卖课只能在课尾。课尾内部课名可以出现几次（读心式课尾会点两三回名），
+// 这些一律保留；只有课尾里一次都没提、课名全在前段时才退回「只留第一次」。
 func collapseDuplicateCourseMentions(script string) (string, bool) {
 	runes := []rune(script)
 	idxs := courseNameIndexes(runes)
@@ -296,18 +302,23 @@ func collapseDuplicateCourseMentions(script string) (string, bool) {
 		return script, false
 	}
 	nameLen := len([]rune(canonicalCourse))
-	for k := len(idxs) - 1; k >= 1; k-- {
-		start, end := runeSentenceSpan(runes, idxs[k], nameLen)
-		if end-start > 120 {
-			start = idxs[k]
-			end = idxs[k] + nameLen
-			for end < len(runes) && runes[end] != '。' && runes[end] != '！' && runes[end] != '？' && runes[end] != '\n' {
-				end++
+	tailStart := int(float64(len(runes)) * courseTailStart)
+	if firstTail := firstIndexAtOrAfter(idxs, tailStart); firstTail >= 0 {
+		// 课尾里有课名：只删课尾之前的那些句子，课尾内部不动。
+		changed := false
+		for k := len(idxs) - 1; k >= 0; k-- {
+			if idxs[k] >= tailStart {
+				continue
 			}
-			if end < len(runes) {
-				end++
-			}
+			start, end := courseSentenceSpan(runes, idxs[k], nameLen)
+			runes = append(runes[:start], runes[end:]...)
+			changed = true
 		}
+		out := strings.TrimSpace(string(runes))
+		return out, changed && out != strings.TrimSpace(script)
+	}
+	for k := len(idxs) - 1; k >= 1; k-- {
+		start, end := courseSentenceSpan(runes, idxs[k], nameLen)
 		runes = append(runes[:start], runes[end:]...)
 		idxs = courseNameIndexes(runes)
 		if len(idxs) < 2 {
@@ -318,11 +329,40 @@ func collapseDuplicateCourseMentions(script string) (string, bool) {
 	return out, out != strings.TrimSpace(script)
 }
 
+// courseSentenceSpan 是要删掉的那一句的范围：句子太长时只删从课名到句末。
+func courseSentenceSpan(runes []rune, idx, nameLen int) (int, int) {
+	start, end := runeSentenceSpan(runes, idx, nameLen)
+	if end-start > 120 {
+		start = idx
+		end = idx + nameLen
+		for end < len(runes) && runes[end] != '。' && runes[end] != '！' && runes[end] != '？' && runes[end] != '\n' {
+			end++
+		}
+		if end < len(runes) {
+			end++
+		}
+	}
+	return start, end
+}
+
+func firstIndexAtOrAfter(idxs []int, at int) int {
+	for _, idx := range idxs {
+		if idx >= at {
+			return idx
+		}
+	}
+	return -1
+}
+
 func applyLocalCopyFixes(script string) (string, []string) {
-	notes := make([]string, 0, 3)
+	notes := make([]string, 0, 4)
 	script, stripped := stripCourseYear(script)
 	if stripped {
 		notes = append(notes, "课名去掉年份")
+	}
+	script, converted := chineseSmallNumbers(script)
+	if converted {
+		notes = append(notes, "修辞性小数字改汉字")
 	}
 	script, collapsed := collapseDuplicateCourseMentions(script)
 	if collapsed {
@@ -355,18 +395,23 @@ func inspectCopyIssues(script, source string) []string {
 		issues = append(issues, "课程名带了年份，必须改成《财富觉醒方法论》")
 	}
 	runes := []rune(script)
-	if n := len(courseNameIndexes(runes)); n >= 2 {
-		issues = append(issues, "卖课钩子出现了两次及以上，只保留全文最末一次收口")
+	tailStart := int(float64(len(runes)) * courseTailStart)
+	for _, idx := range courseNameIndexes(runes) {
+		if idx < tailStart {
+			issues = append(issues, "开头或中段出现课名，卖课只能放在课尾")
+			break
+		}
 	}
 	if idx := strings.Index(script, "主页橱窗"); idx >= 0 {
 		head := utf8.RuneCountInString(script[:idx])
-		if len(runes) > 0 && float64(head) < float64(len(runes))*0.65 {
+		if len(runes) > 0 && head < tailStart {
 			issues = append(issues, "开头或中段出现卖课入口，卖课只能放在全文最末")
 		}
 	}
 	if i := strings.Index(script, canonicalCourse); i >= 0 {
-		if utf8.RuneCountInString(script[i:]) > 280 {
-			issues = append(issues, "结尾卖课钩子过长，压缩到四五句：点橱窗、课名、五块钱、方向判断，然后停")
+		// 读心式课尾 320～480 字，课名之后留足空间；超过 600 字才算收不住。
+		if utf8.RuneCountInString(script[i:]) > 600 {
+			issues = append(issues, "结尾卖课段过长（课名之后超过600字），压回480字以内，逼单句要短促")
 		}
 	}
 	if len(runes) > 180 {

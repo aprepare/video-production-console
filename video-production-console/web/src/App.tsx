@@ -19,6 +19,7 @@ import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
+import { AiShortsPage } from "./ai-shorts/AiShortsPage";
 import {
   isShieldedProductionPath,
   visibleMontageKind,
@@ -101,6 +102,7 @@ function App() {
   const route = parseLocation(isShieldedProductionPath(rawPathname) ? "/projects" : rawPathname);
   const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
+  const aiShortsRoute = route.view === "ai-shorts";
   const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project";
   const montageRoute = route.view === "projects" || route.view === "project";
   const routedProjectID = route.view === "project" ? route.projectID : undefined;
@@ -569,6 +571,7 @@ function App() {
       || route.view === "image-videos"
       || route.view === "image-video"
       || route.view === "remix-lab"
+      || route.view === "ai-shorts"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -948,6 +951,16 @@ function App() {
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
+      ) : aiShortsRoute ? (
+        <AiShortsPage
+          api={api}
+          shortID={route.view === "ai-shorts" && "shortID" in route ? route.shortID : undefined}
+          onNavigate={navigate}
+          theme={theme}
+          onThemeChange={setTheme}
+          onOpenSettings={() => void settingsPanel.openDialog()}
+          onLogout={() => void logout()}
+        />
       ) : imageRoute ? (
         <>
           <header>

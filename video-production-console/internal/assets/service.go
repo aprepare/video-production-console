@@ -1044,6 +1044,16 @@ func (s *Service) ReconcileProjectAssets(ctx context.Context, db *sql.DB, logger
 			return nil
 		}
 		abs := filepath.Clean(path)
+		// projects/{id}/publishing_package.json 是导入发布包的旁挂文件，
+		// 不入资产表；混剪板题靠它取主/副标题，不能当孤儿清掉。
+		if e.Name() == "publishing_package.json" {
+			parent := filepath.Dir(abs)
+			if filepath.Clean(filepath.Dir(parent)) == root {
+				if _, parseErr := uuid.Parse(filepath.Base(parent)); parseErr == nil {
+					return nil
+				}
+			}
+		}
 		if refs[abs] && !strings.HasPrefix(e.Name(), ".upload-") {
 			return nil
 		}

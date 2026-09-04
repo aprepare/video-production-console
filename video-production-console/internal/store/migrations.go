@@ -1252,6 +1252,17 @@ CREATE TABLE remix_lab_productions (
     updated_at DATETIME NOT NULL
 );
 CREATE INDEX remix_lab_productions_experiment_idx ON remix_lab_productions(experiment_id);`,
+	// 生产段单步重做：重做口播/配音后需要无视已就绪的旧配音强制重新生成。
+	`ALTER TABLE remix_lab_productions ADD COLUMN force_narration INTEGER NOT NULL DEFAULT 0;`,
+	// 已发布文案库：每条成稿发出去之后手填播放/点赞/出单，复盘转化用。
+	`CREATE TABLE remix_lab_publish_metrics (
+    run_id TEXT PRIMARY KEY REFERENCES remix_lab_runs(id) ON DELETE CASCADE,
+    views INTEGER NOT NULL DEFAULT 0,
+    likes INTEGER NOT NULL DEFAULT 0,
+    orders INTEGER NOT NULL DEFAULT 0,
+    notes TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL
+);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

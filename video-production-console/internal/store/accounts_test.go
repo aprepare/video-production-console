@@ -10,6 +10,64 @@ import (
 	"video-production-console/internal/domain"
 )
 
+func TestAccountOverridesRoundTrip(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "accounts-overrides.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	accountID := uuid.NewString()
+	repo := NewAccountRepository(db)
+	state, err := repo.CreateWithBackground(ctx, domain.Account{ID: accountID, Name: "覆盖账号", Color: "#fff", CreatedAt: now, UpdatedAt: now}, NewBackground{ID: uuid.NewString(), Path: "bg.png", Filename: "bg.png", MIMEType: "image/png", Size: 1, SHA256: "one"})
+	if err != nil || state != CommitCommitted {
+		t.Fatalf("create state=%v err=%v", state, err)
+	}
+
+	created, err := repo.Get(ctx, accountID)
+	if err != nil || created.Overrides != nil {
+		t.Fatalf("new account should have nil overrides, got %+v err=%v", created.Overrides, err)
+	}
+
+	style := domain.MontageStyle{CaptionFont: "俪金黑", KeywordColor: "#00AAFF", KeywordsHidden: true, BGMID: "track-9"}
+	overrides := &domain.AccountOverrides{
+		MontageStyle: &style,
+		Voice:        &domain.VoiceOverride{AuraSTDVoiceID: "voice-ju-zhong-guan", VolcSpeechSpeakerID: "S_abc123"},
+	}
+	updated, err := repo.UpdateOverrides(ctx, accountID, overrides, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Overrides == nil || updated.Overrides.MontageStyle == nil || updated.Overrides.Voice == nil {
+		t.Fatalf("overrides not persisted: %+v", updated.Overrides)
+	}
+	if updated.Overrides.MontageStyle.CaptionFont != "俪金黑" || !updated.Overrides.MontageStyle.KeywordsHidden ||
+		updated.Overrides.MontageStyle.BGMID != "track-9" {
+		t.Fatalf("montage style mismatch: %+v", *updated.Overrides.MontageStyle)
+	}
+	if updated.Overrides.Voice.AuraSTDVoiceID != "voice-ju-zhong-guan" || updated.Overrides.Voice.VolcSpeechSpeakerID != "S_abc123" {
+		t.Fatalf("voice mismatch: %+v", *updated.Overrides.Voice)
+	}
+
+	listed, err := repo.List(ctx)
+	if err != nil || len(listed) != 1 || listed[0].Overrides == nil {
+		t.Fatalf("list should carry overrides, got %+v err=%v", listed, err)
+	}
+
+	cleared, err := repo.UpdateOverrides(ctx, accountID, &domain.AccountOverrides{}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Overrides != nil {
+		t.Fatalf("empty overrides should clear to nil, got %+v", cleared.Overrides)
+	}
+
+	if _, err := repo.UpdateOverrides(ctx, uuid.NewString(), overrides, now); err != ErrAccountNotFound {
+		t.Fatalf("missing account should return ErrAccountNotFound, got %v", err)
+	}
+}
+
 func TestAccountBackgroundUsesStableLogicalAssetAndReplacementInvalidatesDependents(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "accounts.db"))
 	if err != nil {

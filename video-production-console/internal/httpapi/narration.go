@@ -444,6 +444,16 @@ func (h *narrationHandler) registerAsset(ctx context.Context, projectID string, 
 // the credentials fresh on every call so a settings change takes effect without
 // a restart. Aura Studio is the default provider; Volcengine remains a fallback
 // when only those credentials are configured.
+// NewNarrationRequestBuilder 暴露按当前设置组配音请求的能力（音色、语速、账号覆盖），
+// 给 AI 短片这类不经过 HTTP 层直接调配音的调用方用。
+func NewNarrationRequestBuilder(runtime AssetRuntimeProvider) func(ctx context.Context, script string, voice *domain.VoiceOverride) (narration.ProduceRequest, error) {
+	handler := &narrationHandler{runtime: runtime}
+	return func(ctx context.Context, script string, voice *domain.VoiceOverride) (narration.ProduceRequest, error) {
+		req, _, err := handler.produceRequest(ctx, script, voice)
+		return req, err
+	}
+}
+
 func NewNarrationProducer(runtime AssetRuntimeProvider) func(context.Context, narration.ProduceRequest) (narration.Delivery, error) {
 	return func(ctx context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
 		if runtime == nil {

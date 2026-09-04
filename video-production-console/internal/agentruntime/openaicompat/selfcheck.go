@@ -264,15 +264,60 @@ func selfCheckRemixRewrite(client ChatClient, model, effort, system, user, sourc
 			note = appendCheckNote(note, "返工后再改："+strings.Join(moreLocal, "；")+"。")
 		}
 	}
+	// 锁词数字校对：年份写错是硬错，一轮定向返工后仍错就失败；原文数字漏掉
+	// 只补一轮，补不回来当警告交付（可能是口播化写法，交人工复核）。
+	lockIssues := checkLockNumbers(source, script)
+	if !lockIssues.empty() {
+		logEvent(map[string]any{"verdict": "lock_numbers", "foreign_years": lockIssues.ForeignYears, "missing": lockIssues.Missing})
+		resp, chatErr := client.Chat(ChatRequest{
+			Model:           strings.TrimSpace(model),
+			ReasoningEffort: effort,
+			Stream:          true,
+			Messages: []Message{
+				{Role: "system", Content: system},
+				{Role: "user", Content: user},
+				{Role: "assistant", Content: content},
+				{Role: "user", Content: buildLockNumberRepairPrompt(lockIssues)},
+			},
+		})
+		if chatErr == nil && len(resp.Choices) > 0 {
+			if retryDraft, parseErr := parseRemixDraft(resp.Choices[0].Message.Content); parseErr == nil && strings.TrimSpace(retryDraft.ContinuousScript) != "" {
+				retryScript, _ := applyLocalCopyFixes(retryDraft.ContinuousScript)
+				retryIssues := checkLockNumbers(source, retryScript)
+				retryStats := selfCheckMeasure(source, retryScript)
+				// 数字修好且没把连抄/篇幅改坏才采用。
+				if len(retryIssues.ForeignYears)+len(retryIssues.Missing) < len(lockIssues.ForeignYears)+len(lockIssues.Missing) &&
+					selfCheckScore(retryStats, limits) <= selfCheckScore(stats, limits) {
+					content = replaceDraftScript(resp.Choices[0].Message.Content, retryScript)
+					script = retryScript
+					stats = retryStats
+					lockIssues = retryIssues
+					note = appendCheckNote(note, "锁词数字已定向返工。")
+				}
+			}
+		}
+		logEvent(map[string]any{"verdict": "lock_numbers_after", "foreign_years": lockIssues.ForeignYears, "missing": lockIssues.Missing})
+		if lockIssues.hasForeign() {
+			return content, []string{"锁词数字错误：" + lockNumberSummary(lockIssues)}, appendCheckNote(note, "锁词校对不通过："+lockNumberSummary(lockIssues)),
+				fmt.Errorf("锁词数字错误：成稿出现原文没有的年份 %s，返工后仍未改正", strings.Join(lockIssues.ForeignYears, "、"))
+		}
+	}
 	summary := fmt.Sprintf("10字连抄重合 %d%%（上限 %d%%），篇幅 %.2f 倍（下限 %.2f）。",
 		stats.overlapPercent(), int(limits.MaxOverlap*100+0.5), stats.lenRatio, limits.MinLenRatio)
+	if len(lockIssues.Missing) > 0 {
+		summary += "锁词数字未全部出现（" + strings.Join(lockIssues.Missing, "、") + "），请人工核对。"
+	}
 	if rounds > 0 && firstPercent != stats.overlapPercent() {
 		summary = fmt.Sprintf("10字连抄重合 %d%%→%d%%（返工 %d 轮），篇幅 %.2f 倍。", firstPercent, stats.overlapPercent(), rounds, stats.lenRatio)
 	}
-	if stats.passes(limits) {
-		return content, nil, appendCheckNote(note, "自检通过："+summary), nil
+	var lockWarnings []string
+	if len(lockIssues.Missing) > 0 {
+		lockWarnings = []string{"锁词数字未全部出现：" + strings.Join(lockIssues.Missing, "、")}
 	}
-	warnings := selfCheckWarnings(stats)
+	if stats.passes(limits) {
+		return content, lockWarnings, appendCheckNote(note, "自检通过："+summary), nil
+	}
+	warnings := append(selfCheckWarnings(stats), lockWarnings...)
 	if stats.hardFails(limits) {
 		note = appendCheckNote(note, "自检不通过："+summary)
 		return content, warnings, note, fmt.Errorf("自检不通过：%s返工 %d 轮后仍超硬性上限（重合 %d%%、篇幅 %.2f 倍）", summary, rounds, stats.overlapPercent(), stats.lenRatio)
