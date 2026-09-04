@@ -2,10 +2,8 @@
 
 ## Existing changes
 
-- [ ] Commit Remix Lab full-stack changes together, including runtime, HTTP API, store, domain, web UI, tests, and generated `internal/webui/dist` assets.
-- [ ] Commit AI Shorts and Jianying draft workflow changes together, including `internal/aishorts`, `internal/jianyingdraft`, API handlers, scripts, web UI, and tests.
-- [ ] Commit local migration artifacts under `.tmp-rename` as a separately revertible checkpoint.
-- [ ] Commit experimental prompt/library HTML, JSON, Python, Chinese-script, and PNG assets as a separately revertible artifact checkpoint after confirming they are user files.
+- [x] Production baseline recorded in `75e4f5e` (`feat: checkpoint current production workflows`), covering production code, tests, frontend source, and `webui` dist; these cross-stack and generated artifacts remain one revertible production baseline.
+- [x] Local artifact baseline recorded in `0a72eda` (`chore: checkpoint local research and migration artifacts`), covering local research, migration, experiments, and media assets as an independent baseline.
 
 ## Next unified build
 
