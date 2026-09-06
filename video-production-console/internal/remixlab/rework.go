@@ -22,7 +22,7 @@ var (
 )
 
 // flowDownstreamArtifacts 是重试时必须作废的写手链路产物：写手及其后的环节
-// 永远重跑（自检硬失败说明旧稿不能要，配额失败说明根本没稿）；agent 节点的
+// 永远重跑；历史 reference_drafts 保留，agent 节点的
 // node_output_*.json 不在此列，留着的会被引擎断点复用。
 var flowDownstreamArtifacts = []string{
 	"model_raw.txt", "continuous_script.txt", "publishing_package.json",
@@ -41,6 +41,9 @@ func (s *Service) RetryRun(ctx context.Context, runID, nodeID, model string) err
 	}
 	nodeID = strings.TrimSpace(nodeID)
 	model = strings.TrimSpace(model)
+	if isManualDraft(run) {
+		return ErrRunNotRetryable
+	}
 	switch run.Status {
 	case "failed":
 		// 整体重试或指定节点都行
@@ -52,6 +55,10 @@ func (s *Service) RetryRun(ctx context.Context, runID, nodeID, model string) err
 		return ErrRunNotRetryable
 	}
 	exp, _, _, err := s.repo.GetExperiment(ctx, run.ExperimentID)
+	if err != nil {
+		return err
+	}
+	exp, err = s.effectiveRunExperiment(ctx, exp, run.ID)
 	if err != nil {
 		return err
 	}
@@ -81,7 +88,7 @@ func (s *Service) RetryRun(ctx context.Context, runID, nodeID, model string) err
 					if err != nil {
 						return err
 					}
-					if err := s.repo.UpdateExperimentWorkflowJSON(ctx, exp.ID, string(raw)); err != nil {
+					if err := s.repo.UpdateEffectiveWorkflow(ctx, run.ID, exp.ID, string(raw)); err != nil {
 						return err
 					}
 				}
@@ -127,7 +134,7 @@ type PackageInput struct {
 // 操作员的取舍是最终口径；只校验正文非空和板标题（short_titles[0]）在。
 func (s *Service) UpdateRunPackage(ctx context.Context, runID string, input PackageInput) error {
 	script := strings.TrimSpace(input.ContinuousScript)
-	if utf8.RuneCountInString(script) < 40 {
+	if script == "" {
 		return ErrInvalidPackage
 	}
 	cleaned := PackageInput{
@@ -174,7 +181,7 @@ func (s *Service) Rework(ctx context.Context, runID, annotations string) error {
 	if err != nil {
 		return err
 	}
-	if run.Status != "completed" || strings.TrimSpace(run.ContinuousScript) == "" {
+	if run.Status != "completed" || strings.TrimSpace(run.ContinuousScript) == "" || isManualDraft(run) {
 		return ErrRunNotReworkable
 	}
 	exp, slots, _, err := s.repo.GetExperiment(ctx, run.ExperimentID)
@@ -224,20 +231,52 @@ func (s *Service) Rework(ctx context.Context, runID, annotations string) error {
 
 func (s *Service) executeRework(exp store.RemixLabExperimentRecord, slot store.RemixLabSlotRecord, run store.RemixLabRunRecord, key, draftJSON, annotations string, round int) {
 	ctx := context.Background()
+	var snapshotErr error
+	exp, snapshotErr = s.effectiveRunExperiment(ctx, exp, run.ID)
+	if snapshotErr != nil {
+		run.Status = "failed"
+		run.ErrorMessage = snapshotErr.Error()
+		_ = s.repo.UpdateRun(ctx, run)
+		return
+	}
 	overrides, _ := (Store{DataRoot: s.dataRoot}).LoadAgentPrompts()
 	reviewerPrompt := overrides.ReviewerSystem
-	// 工作流实验的打回用快照里审稿节点的提示词，跟首轮口径一致。
+	var editorialRules *string
+	reviewerUser := ""
+	reviewerModel := slot.Model
+	reviewerEffort := slot.ReasoningEffort
+	reviewerTier := slot.ServiceTier
+	rt, rtErr := s.runtime.Runtime(ctx)
+	defaultModel, defaultEffort := s.remixDefaults(ctx, rt, rtErr)
+	// 工作流实验的打回用快照里审稿节点的提示词/模型，跟首轮口径一致。
 	if wf, ok := parseWorkflowJSON(exp.WorkflowJSON); ok {
-		if node := workflowReviewer(wf); node != nil && strings.TrimSpace(node.Config.SystemPrompt) != "" {
-			reviewerPrompt = node.Config.SystemPrompt
+		editorialRules = wf.EditorialRules
+		reviewerTier = ""
+		if node := workflowReviewer(wf); node != nil {
+			reviewerUser = node.Config.UserTemplate
+			reviewerTier = node.Config.ServiceTier
+			if strings.TrimSpace(node.Config.SystemPrompt) != "" {
+				reviewerPrompt = node.Config.SystemPrompt
+			}
+			reviewerModel = strings.TrimSpace(node.Config.Model)
+			if reviewerModel == "" {
+				reviewerModel = defaultModel
+			}
+			reviewerEffort = strings.TrimSpace(node.Config.ReasoningEffort)
+			if reviewerEffort == "" {
+				reviewerEffort = defaultEffort
+			}
 		}
 	}
 	outcome := openaicompat.ReviewRemixDraft(openaicompat.ReviewOptions{
 		BaseURL:         slot.BaseURL,
 		APIKey:          key,
-		Model:           slot.Model,
-		ReasoningEffort: slot.ReasoningEffort,
+		Model:           reviewerModel,
+		ReasoningEffort: reviewerEffort,
+		ServiceTier:     reviewerTier,
 		SystemPrompt:    reviewerPrompt,
+		EditorialRules:  editorialRules,
+		UserTemplate:    reviewerUser,
 		Source:          exp.SourceText,
 		DraftJSON:       draftJSON,
 		Annotations:     annotations,

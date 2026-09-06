@@ -7,19 +7,19 @@ import (
 	"strings"
 )
 
-// 锁词数字校对：原文里的年份、百分比、带单位的金额规模是锁词，成稿必须一个
-// 不少；成稿里冒出原文没有的年份（2026 写成 2025 这类）是硬错。只认阿拉伯
-// 数字写法，避免对汉字数字做猜测式匹配带来的误报。
+// 此处提供数字提取和基础对比；运行时由 checkLockNumbersWithFacts 决定
+// 哪些核准事实必须保留，以及哪些新增年份有依据。只匹配阿拉伯数字，避免猜测。
 
 var (
-	lockYearRe    = regexp.MustCompile(`(19|20)\d{2}年`)
+	lockYearRe    = regexp.MustCompile(`(?:19|20)\d{2}(?:年|(?:到|至|—|–|-)(?:19|20)\d{2}年|[-/.]\d{1,2})`)
+	yearDigitsRe  = regexp.MustCompile(`(?:19|20)\d{2}`)
 	lockPercentRe = regexp.MustCompile(`\d+(?:\.\d+)?[%％]`)
 	lockAmountRe  = regexp.MustCompile(`\d+(?:\.\d+)?(?:万亿|亿|万)`)
 )
 
 type lockNumberIssues struct {
 	ForeignYears []string // 成稿有、原文没有的年份
-	Missing      []string // 原文有、成稿没有的锁词数字
+	Missing      []string // 应保留但成稿未正确体现的数字
 }
 
 func (l lockNumberIssues) empty() bool {
@@ -34,6 +34,12 @@ func (l lockNumberIssues) hasForeign() bool {
 func lockNumberTokens(text string, re *regexp.Regexp) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range re.FindAllString(text, -1) {
+		if re == lockYearRe {
+			for _, year := range yearDigitsRe.FindAllString(m, -1) {
+				out[year+"年"] = true
+			}
+			continue
+		}
 		out[strings.ReplaceAll(m, "％", "%")] = true
 	}
 	return out
@@ -48,8 +54,7 @@ func sortedKeys(set map[string]bool) []string {
 	return keys
 }
 
-// checkLockNumbers 对照原文和成稿的锁词数字。金额允许小数位被口播化省略
-// （173.59万亿 → 173万亿 算出现），年份和百分比要求原样出现。
+// checkLockNumbers 对照原文和成稿的数字，允许等值单位换写，保留数值精度。
 func checkLockNumbers(source, draft string) lockNumberIssues {
 	var issues lockNumberIssues
 	srcYears, dstYears := lockNumberTokens(source, lockYearRe), lockNumberTokens(draft, lockYearRe)
@@ -63,14 +68,13 @@ func checkLockNumbers(source, draft string) lockNumberIssues {
 			issues.Missing = append(issues.Missing, y)
 		}
 	}
-	dstNorm := strings.ReplaceAll(draft, "％", "%")
 	for _, p := range sortedKeys(lockNumberTokens(source, lockPercentRe)) {
-		if !strings.Contains(dstNorm, p) {
+		if !hasNumericValue(draft, p) {
 			issues.Missing = append(issues.Missing, p)
 		}
 	}
 	for _, a := range sortedKeys(lockNumberTokens(source, lockAmountRe)) {
-		if strings.Contains(draft, a) || strings.Contains(draft, integerPartWithUnit(a)) {
+		if hasNumericValue(draft, a) {
 			continue
 		}
 		issues.Missing = append(issues.Missing, a)
@@ -96,11 +100,11 @@ func buildLockNumberRepairPrompt(issues lockNumberIssues) string {
 	b.WriteString("锁词数字校对不合格。只改数字相关的句子，其他内容一个字不动，按上一条回复相同的 JSON 结构返回完整结果：\n")
 	n := 1
 	for _, y := range issues.ForeignYears {
-		b.WriteString(fmt.Sprintf("%d. 成稿写了原文没有的年份「%s」，这是事实错误，改回原文对应的年份。\n", n, y))
+		b.WriteString(fmt.Sprintf("%d. 年份「%s」缺少原文或核查依据，只修相关句子；核准后保留对应年份，否则删去该新增时间，不猜年份。\n", n, y))
 		n++
 	}
 	for _, m := range issues.Missing {
-		b.WriteString(fmt.Sprintf("%d. 原文的锁词数字「%s」在成稿里没有出现，把它补回对应的那一句（原样写，不换说法）。\n", n, m))
+		b.WriteString(fmt.Sprintf("%d. 核准事实数值「%s」未正确体现，只修对应事实句，保留单位、对象和时间；不补回已删的修辞数字，也不复制核查说明。\n", n, m))
 		n++
 	}
 	return b.String()
@@ -112,7 +116,7 @@ func lockNumberSummary(issues lockNumberIssues) string {
 		parts = append(parts, "原文没有的年份："+strings.Join(issues.ForeignYears, "、"))
 	}
 	if len(issues.Missing) > 0 {
-		parts = append(parts, "原文数字未出现："+strings.Join(issues.Missing, "、"))
+		parts = append(parts, "核准事实数值未正确体现："+strings.Join(issues.Missing, "、"))
 	}
 	return strings.Join(parts, "；")
 }

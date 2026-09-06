@@ -113,10 +113,12 @@ test("root opens the workflow canvas and the header switches to image mode", asy
   render(<App />);
   expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
   await waitFor(() => expect(window.location.pathname).toBe("/"));
-  fireEvent.click(screen.getByRole("button", { name: "图文制作" }));
+  document.documentElement.scrollTop = 500;
+  fireEvent.click(screen.getByRole("link", { name: "图文制作" }));
   expect(window.location.pathname).toBe("/image-projects");
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "文案创作台" }));
+  expect(document.documentElement.scrollTop).toBe(0);
+  fireEvent.click(screen.getByRole("link", { name: "文案与混剪" }));
   expect(window.location.pathname).toBe("/");
   expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
 });
@@ -362,7 +364,7 @@ test("clicking a project pushes a durable project path", async () => {
   render(<App />);
   fireEvent.click(await screen.findByText(fixture.project.title));
 
-  expect(pushState).toHaveBeenCalledWith({}, "", `/projects/${routedProjectID}`);
+  await waitFor(() => expect(pushState).toHaveBeenCalledWith({}, "", `/projects/${routedProjectID}`));
   expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
   expect(await screen.findByRole("button", { name: "返回项目看板" })).toBeTruthy();
 });
@@ -376,10 +378,10 @@ test("production pages switch between scenic and image from the header", async (
   render(<App />);
   expect(await screen.findByRole("heading", { name: "文案创作台" })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "图文制作" }));
+  fireEvent.click(screen.getByRole("link", { name: "图文制作" }));
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "文案创作台" }));
+  fireEvent.click(screen.getByRole("link", { name: "文案与混剪" }));
   expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
 });
 
@@ -1253,13 +1255,13 @@ test("Escape closes a project with board history semantics and reopening does no
   render(<App />);
 
   fireEvent.click(await screen.findByText(fixture.project.title));
-  await screen.findByRole("button", { name: "返回项目看板" });
+  await screen.findByRole("heading", { name: "继续当前制作" });
   fireEvent.keyDown(window, { key: "Escape" });
 
   await waitFor(() => expect(window.location.pathname).toBe("/"));
   expect(screen.queryByRole("button", { name: "返回项目看板" })).toBeNull();
   fireEvent.click(screen.getByText(fixture.project.title));
-  expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
+  await waitFor(() => expect(window.location.pathname).toBe(`/projects/${routedProjectID}`));
   expect(pushState.mock.calls.map((call) => call[2])).toEqual([
     `/projects/${routedProjectID}`,
     "/",
@@ -1520,6 +1522,38 @@ test("tasks show their actual model and awaiting replies keep it read-only", asy
   expect(actualModel).toBeTruthy();
   expect(screen.queryByText("gpt-actual · max")).toBeNull();
   expect(actualModel.parentElement?.querySelector("input, select")).toBeNull();
+});
+
+test("task answers block duplicate requests and preserve text after a network failure", async () => {
+  const project = { id: routedProjectID, account_id: "account-1", title: "回答防重项目", stage: "script" };
+  const task = { id: "task-answer", project_id: routedProjectID, type: "remix", skill_name: "finance-viral-remix", status: "awaiting_input", created_at: "2026-09-05T00:00:00Z", messages: [{ id: "question-1", role: "assistant", content: "请补充修改要求", created_at: "2026-09-05T00:00:00Z", question_schema: '["请补充修改要求"]' }] };
+  let rejectAnswer: ((reason: Error) => void) | undefined;
+  let answers = 0;
+  window.history.replaceState({}, "", `/projects/${routedProjectID}?task=${task.id}`);
+  vi.stubGlobal("fetch", baseFetch((path, method) => {
+    if (path === "/api/projects") return json([project]);
+    if (path === `/api/projects/${routedProjectID}`) return json({ project, assets: {}, missing_assets: [] });
+    if (path === `/api/tasks?project_id=${routedProjectID}`) return json([task]);
+    if (path === `/api/tasks/${task.id}`) return json(task);
+    if (path === `/api/tasks/${task.id}/semantic-events?limit=20`) return json({ events: [] });
+    if (path === `/api/tasks/${task.id}/result`) return json({});
+    if (path === `/api/tasks/${task.id}/answer` && method === "POST") {
+      answers++;
+      return new Promise<Response>((_, reject) => { rejectAnswer = reject; });
+    }
+  }));
+  render(<App />);
+  const answer = await screen.findByRole("textbox", { name: "回答任务" });
+  fireEvent.change(answer, { target: { value: "保留这个回答" } });
+  const submit = screen.getByRole("button", { name: "发送回答" });
+  fireEvent.click(submit);
+  fireEvent.click(submit);
+  await waitFor(() => expect(answers).toBe(1));
+  expect((submit as HTMLButtonElement).disabled).toBe(true);
+  rejectAnswer?.(new Error("offline"));
+  await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+  expect((answer as HTMLTextAreaElement).value).toBe("保留这个回答");
+  expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toContain("任务回复失败");
 });
 
 test("a running task exposes a stop action and sends the cancellation request", async () => {

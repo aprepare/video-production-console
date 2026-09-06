@@ -1,3 +1,4 @@
+import "./task-detail.css";
 import { X } from "lucide-react";
 import type { DirectoryManifest, Task } from "../types";
 import {
@@ -25,6 +26,8 @@ import {
 
 type TaskDetailDialogProps = {
   task: Task;
+  actionPending?: boolean;
+  actionError?: string;
   projectTitle: string;
   timingNow: number;
   directoryManifest: DirectoryManifest | null;
@@ -47,6 +50,8 @@ type TaskDetailDialogProps = {
 
 export function TaskDetailDialog({
   task,
+  actionPending = false,
+  actionError = "",
   projectTitle,
   timingNow,
   directoryManifest,
@@ -100,7 +105,7 @@ export function TaskDetailDialog({
             <span aria-label="任务总耗时">总耗时 {formatDuration(elapsed)}</span>
           ) : null}
           {cancellableTaskStatuses.has(task.status) && (
-            <button className="secondary" onClick={() => onCancelTask(task)}>
+            <button className="secondary" disabled={actionPending} onClick={() => onCancelTask(task)}>
               停止任务
             </button>
           )}
@@ -174,11 +179,11 @@ export function TaskDetailDialog({
               </div>
             ) : null}
             {task.montage.can_retry_registration ? (
-              <button onClick={() => onRetryRegistration(task)}>只重试剪映登记</button>
+              <button disabled={actionPending} onClick={() => onRetryRegistration(task)}>只重试剪映登记</button>
             ) : null}
             {onRemakeMontage
               && ["completed", "failed", "cancelled"].includes(task.status) ? (
-              <button type="button" className="secondary" onClick={() => onRemakeMontage(task)}>
+              <button type="button" className="secondary" disabled={actionPending} onClick={() => onRemakeMontage(task)}>
                 重做混剪
               </button>
             ) : null}
@@ -292,6 +297,7 @@ export function TaskDetailDialog({
                   <button
                     type="button"
                     className="task-script-view__adopt"
+                    disabled={actionPending}
                     onClick={() => onAdoptScript(task)}
                   >
                     采用此稿为当前文案
@@ -319,6 +325,7 @@ export function TaskDetailDialog({
             ) : null}
           </details>
         ) : null}
+        {actionError ? <p className="warning" role="alert">{actionError}</p> : null}
         {task.error_message && <p className="warning">{task.error_message}</p>}
         {questions.length > 0 && (
           <section className="task-question">
@@ -330,18 +337,19 @@ export function TaskDetailDialog({
               className="task-answer-compose"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (answerInput.trim()) onAnswer(task, answerInput.trim());
+                if (!actionPending && answerInput.trim()) onAnswer(task, answerInput.trim());
               }}
             >
               <label htmlFor="task-answer-input">回答任务</label>
               <textarea
                 id="task-answer-input"
+                disabled={actionPending}
                 rows={3}
                 value={answerInput}
                 onChange={(event) => onAnswerInputChange(event.target.value)}
                 placeholder="在这里回答，任务会继续执行"
               />
-              <button disabled={!answerInput.trim()}>发送回答</button>
+              <button disabled={actionPending || !answerInput.trim()}>发送回答</button>
             </form>
           </section>
         )}

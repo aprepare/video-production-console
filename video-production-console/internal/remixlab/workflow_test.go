@@ -16,18 +16,18 @@ import (
 )
 
 func TestDefaultWorkflowIsValidAndAbsorbsOverrides(t *testing.T) {
-	wf := DefaultWorkflow(AgentPrompts{HookSystem: "自定义钩子规则"})
+	wf := DefaultWorkflow(AgentPrompts{HookSystem: "旧策划规则", ReviewerSystem: "自定义审稿规则"})
 	if err := ValidateWorkflow(wf); err != nil {
 		t.Fatal(err)
 	}
 	var hook *WorkflowNode
 	for i := range wf.Nodes {
-		if wf.Nodes[i].ID == "hook" {
+		if wf.Nodes[i].Type == WorkflowNodeReviewer {
 			hook = &wf.Nodes[i]
 		}
 	}
-	if hook == nil || hook.Config.SystemPrompt != "自定义钩子规则" {
-		t.Fatalf("hook override not absorbed: %+v", hook)
+	if hook == nil || hook.Config.SystemPrompt != "自定义审稿规则" {
+		t.Fatalf("reviewer override not absorbed: %+v", hook)
 	}
 	if !wf.Production.CaptionsDisabled {
 		t.Fatal("default workflow should hide the captions node")
@@ -49,6 +49,7 @@ func TestValidateWorkflowRejectsBrokenTopology(t *testing.T) {
 	}
 
 	cycle := DefaultWorkflow(AgentPrompts{})
+	cycle.Nodes = append(cycle.Nodes, WorkflowNode{ID: "ammo", Type: WorkflowNodeAgent, Title: "自定义表达", Config: WorkflowNodeConfig{SystemPrompt: "表达规则"}})
 	cycle.Edges = append(cycle.Edges, [2]string{"ammo", "hook"}, [2]string{"hook", "ammo"})
 	if err := ValidateWorkflow(cycle); !errors.Is(err, ErrInvalidWorkflow) {
 		t.Fatalf("cycle must fail, got %v", err)
@@ -62,6 +63,12 @@ func TestValidateWorkflowRejectsBrokenTopology(t *testing.T) {
 
 	// agent 链式依赖是合法的
 	chain := DefaultWorkflow(AgentPrompts{})
+	for i := range chain.Nodes {
+		if chain.Nodes[i].ID == "hook" {
+			chain.Nodes[i].Config.Role = ""
+		}
+	}
+	chain.Nodes = append(chain.Nodes, WorkflowNode{ID: "ammo", Type: WorkflowNodeAgent, Title: "自定义表达", Config: WorkflowNodeConfig{SystemPrompt: "表达规则"}})
 	chain.Edges = append(chain.Edges, [2]string{"hook", "ammo"})
 	if err := ValidateWorkflow(chain); err != nil {
 		t.Fatalf("agent chain should be valid: %v", err)
@@ -141,6 +148,105 @@ func TestAccountWorkflowFallsBackThenPersistsLatest(t *testing.T) {
 	}
 }
 
+func TestWorkflowWriterModelDoesNotBecomeReviewerDefault(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+	var got openaicompat.Options
+	runner := func(_ context.Context, opts openaicompat.Options) error {
+		got = opts
+		dir := filepath.Dir(opts.OutputLastMessage)
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("工作流成稿"), 0o644)
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{
+		RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixReasoningEffort: "low", RemixAPIKey: "sk-runtime",
+	}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	wf, err := svc.Workflow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range wf.Nodes {
+		if wf.Nodes[i].Type == WorkflowNodeWriter {
+			wf.Nodes[i].Config.Model = "claude-opus-4-6-thinking"
+			wf.Nodes[i].Config.ReasoningEffort = "high"
+		}
+	}
+	if _, err := svc.SaveWorkflowDefinition(wf); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "写手模型不应污染审稿原文一二三四五", 1, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Status != "completed" {
+		t.Fatalf("status=%s", done.Status)
+	}
+	if got.Model != "claude-opus-4-6-thinking" {
+		t.Fatalf("writer model=%q", got.Model)
+	}
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("writer effort=%q", got.ReasoningEffort)
+	}
+	if got.DefaultModel != "m-default" {
+		t.Fatalf("reviewer default model leaked writer: %q", got.DefaultModel)
+	}
+	if got.DefaultEffort != "low" {
+		t.Fatalf("reviewer default effort leaked writer: %q", got.DefaultEffort)
+	}
+}
+
+func TestCompareModelsOverrideWriterSlotOnly(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+	var got openaicompat.Options
+	runner := func(_ context.Context, opts openaicompat.Options) error {
+		got = opts
+		dir := filepath.Dir(opts.OutputLastMessage)
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("工作流成稿"), 0o644)
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{
+		RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixReasoningEffort: "low", RemixAPIKey: "sk-runtime",
+	}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "对标原文勾一个对比模型一二三四五", 1, "", false, "claude-opus-4-6-thinking")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Status != "completed" {
+		t.Fatalf("status=%s", done.Status)
+	}
+	if got.Model != "claude-opus-4-6-thinking" {
+		t.Fatalf("writer slot=%q", got.Model)
+	}
+	if got.DefaultModel != "m-default" {
+		t.Fatalf("勾对比模型不应改审稿默认档: %q", got.DefaultModel)
+	}
+	view, err := svc.RunStages(t.Context(), done.Runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]RunStageView{}
+	for _, stage := range view.Stages {
+		byID[stage.ID] = stage
+	}
+	if byID["writer"].Model != "claude-opus-4-6-thinking" {
+		t.Fatalf("writer stage model=%q", byID["writer"].Model)
+	}
+	if byID["review"].Model != "m-default" {
+		t.Fatalf("review stage must show default档 not compare model, got %q", byID["review"].Model)
+	}
+}
+
 func TestCreateWorkflowExperimentSnapshotsAndRuns(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
 	if err != nil {
@@ -201,11 +307,11 @@ func TestCreateWorkflowExperimentSnapshotsAndRuns(t *testing.T) {
 			t.Fatalf("hook stage should carry snapshot position: %+v", stage)
 		}
 	}
-	if agents != 3 {
-		t.Fatalf("agent stages = %d, want 3", agents)
+	if agents != 1 {
+		t.Fatalf("agent stages = %d, want 1", agents)
 	}
-	// 二创段 9 条边 + 生产段 6 条（定稿→闸门→建项目→口播→配音→混剪→发布；关键词默认关闭）
-	if len(view.Edges) != 15 {
+	// 二创段 4 条边 + 生产段 6 条（关键词默认关闭）。
+	if len(view.Edges) != 10 {
 		t.Fatalf("edges = %d", len(view.Edges))
 	}
 	if _, exists := byID["produce-captions"]; exists {
@@ -475,6 +581,75 @@ func TestRetryRunSwitchesModel(t *testing.T) {
 		if node.ID == "hook" && node.Config.Model != "grok-next" {
 			t.Fatalf("hook node model = %q, want grok-next", node.Config.Model)
 		}
+	}
+}
+
+func TestImportDraftCreatesCompletedRunWithoutRunner(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+	runner := func(context.Context, openaicompat.Options) error {
+		t.Fatal("import draft must not call the remix runner")
+		return nil
+	}
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), runner, nil, nil)
+
+	script := strings.Repeat("手工定稿正文。", 8)
+	exp, err := svc.ImportDraft(t.Context(), DraftInput{
+		PackageInput: PackageInput{ContinuousScript: script},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp.Status != "completed" || !exp.Workflow || len(exp.Runs) != 1 {
+		t.Fatalf("exp status=%s workflow=%v runs=%d", exp.Status, exp.Workflow, len(exp.Runs))
+	}
+	run := exp.Runs[0]
+	if run.Status != "completed" || run.ContinuousScript != script {
+		t.Fatalf("run=%+v", run)
+	}
+	if run.Production == nil || run.Production.Status != "waiting_confirm" {
+		t.Fatalf("production gate: %+v", run.Production)
+	}
+	var pkg PackageInput
+	if err := json.Unmarshal([]byte(run.PackageJSON), &pkg); err != nil {
+		t.Fatal(err)
+	}
+	if pkg.ContinuousScript != script || len(pkg.ShortTitles) == 0 {
+		t.Fatalf("package=%+v", pkg)
+	}
+
+	view, err := svc.RunStages(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]RunStageView{}
+	for _, stage := range view.Stages {
+		byID[stage.ID] = stage
+	}
+	for _, id := range []string{"source", "hook", "writer", "review"} {
+		if byID[id].Status != "skipped" {
+			t.Fatalf("%s status=%s, want skipped", id, byID[id].Status)
+		}
+	}
+	if byID["final"].Status != "ok" || !strings.Contains(byID["final"].Output, "手工定稿正文") {
+		t.Fatalf("final=%+v", byID["final"])
+	}
+	if pkg.ShortTitles[0] != boardTitleFromScript(script) {
+		t.Fatalf("auto board title=%q", pkg.ShortTitles[0])
+	}
+	if err := svc.Rework(t.Context(), run.ID, "开头再狠一点"); !errors.Is(err, ErrRunNotReworkable) {
+		t.Fatalf("manual draft must not rework: %v", err)
+	}
+	if err := svc.RetryRun(t.Context(), run.ID, "hook", ""); !errors.Is(err, ErrRunNotRetryable) {
+		t.Fatalf("manual draft must not retry: %v", err)
+	}
+
+	if _, err := svc.ImportDraft(t.Context(), DraftInput{PackageInput: PackageInput{ContinuousScript: ""}}); !errors.Is(err, ErrInvalidPackage) {
+		t.Fatalf("empty script: %v", err)
 	}
 }
 

@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   Account,
@@ -195,7 +196,7 @@ export function AccountOverridesDialog({ account, api, globalStyle, onSaved, onC
             <h2 id="account-overrides-title">账号制作配置 · {account.name}</h2>
             <p>给这个账号配置专属混剪样式和配音音色，和其他账号拉开内容指纹；留空即跟随全局设置。</p>
           </div>
-          <button type="button" className="source-script-dialog__close" aria-label="关闭账号配置" onClick={onClose}>×</button>
+          <button type="button" className="source-script-dialog__close" aria-label="关闭账号配置" onClick={onClose}><X size={20} aria-hidden="true" /></button>
         </header>
         <div className="account-overrides-body">
           <p className="account-overrides-section">配音音色</p>

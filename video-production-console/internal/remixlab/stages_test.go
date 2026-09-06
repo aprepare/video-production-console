@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"video-production-console/internal/agentruntime/openaicompat"
@@ -137,8 +138,8 @@ func TestRunStagesAssemblesMultiAgentPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 原文 + 三路情报 + 写手 + 自检 + 审稿 + 定稿 = 8 个节点
-	if view.Pipeline != "multi_agent" || len(view.Stages) != 8 {
+	// 原文 + 三路情报 + 写手 + 审稿 + 定稿 = 7 个节点
+	if view.Pipeline != "multi_agent" || len(view.Stages) != 7 {
 		t.Fatalf("pipeline=%s stages=%d", view.Pipeline, len(view.Stages))
 	}
 	byID := map[string]RunStageView{}
@@ -154,18 +155,17 @@ func TestRunStagesAssemblesMultiAgentPipeline(t *testing.T) {
 	if byID["facts"].Model != "grok-4.6-fast" {
 		t.Fatalf("facts stage model: %+v", byID["facts"])
 	}
+	if byID["facts"].Status != "failed" || !strings.Contains(byID["facts"].Error, "事实核查") {
+		t.Fatalf("empty fact output must not look successful: %+v", byID["facts"])
+	}
 	if byID["ammo"].Status != "failed" || byID["ammo"].Error != "ammo agent down" {
 		t.Fatalf("ammo stage: %+v", byID["ammo"])
 	}
 	if byID["writer"].System != "写手系统提示词" || byID["writer"].User != "写手用户提示词+情报包" {
 		t.Fatalf("writer prompts: %+v", byID["writer"])
 	}
-	if byID["selfcheck"].Status != "ok" {
-		t.Fatalf("selfcheck stage: %+v", byID["selfcheck"])
-	}
-	events, _ := byID["selfcheck"].Extra["events"].([]map[string]any)
-	if len(events) != 2 {
-		t.Fatalf("selfcheck events = %d", len(events))
+	if _, exists := byID["selfcheck"]; exists {
+		t.Fatal("retired gate displayed")
 	}
 	if byID["review"].Status != "ok" || byID["review"].Extra["verdict"] != "fixed" {
 		t.Fatalf("review stage: %+v", byID["review"])
@@ -177,8 +177,19 @@ func TestRunStagesAssemblesMultiAgentPipeline(t *testing.T) {
 	if err := json.Unmarshal([]byte(byID["final"].Output), &pkg); err != nil {
 		t.Fatalf("final output not json: %v", err)
 	}
-	if len(view.Edges) != 9 {
+	if len(view.Edges) != 8 {
 		t.Fatalf("edges = %d", len(view.Edges))
+	}
+	// A new planner-only run renders its own topology even if stale legacy files exist.
+	if err := os.WriteFile(filepath.Join(done.Runs[0].OutputDir, "intel_summary.json"), []byte(`{"planner_only":true,"agents":[{"name":"hook","model":"planner"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	newView, err := svc.RunStages(t.Context(), done.Runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newView.Stages) != 5 || len(newView.Edges) != 4 || newView.Stages[1].Title != "二创策划" {
+		t.Fatalf("planner-only view kept legacy nodes: stages=%d edges=%d title=%s", len(newView.Stages), len(newView.Edges), newView.Stages[1].Title)
 	}
 }
 
@@ -206,7 +217,7 @@ func TestRunStagesMarksFailureOnWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Stages) != 5 || len(view.Edges) != 4 {
+	if len(view.Stages) != 4 || len(view.Edges) != 3 {
 		t.Fatalf("stages=%d edges=%d", len(view.Stages), len(view.Edges))
 	}
 	byID := map[string]RunStageView{}

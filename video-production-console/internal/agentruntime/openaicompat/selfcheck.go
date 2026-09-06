@@ -165,7 +165,7 @@ func buildSelfCheckRepairPrompt(stats selfCheckStats, limits SelfCheckLimits) st
 		item++
 	}
 	if stats.lenRatio < limits.MinLenRatio {
-		fmt.Fprintf(&b, "%d. 成稿只有原文篇幅的 %.2f 倍，低于下限 %.2f 倍。把讲得薄的信息节点各自扩写三到四句口播，补够篇幅；不许压缩或删掉其他段落来凑。\n",
+		fmt.Fprintf(&b, "%d. 成稿只有原文篇幅的 %.2f 倍，低于下限 %.2f 倍。对照上文原文，优先补回被过度压缩或遗漏的关键论据、对照、递进铺垫、留人和互动承接，重新组织说法。只在有材料支撑的位置展开，不按每段固定句数填充；不编新数字、人物回忆、场景或结果，不重复空话凑字。保留已有有效开头和课尾；原文缺乏依据的承诺不为凑篇幅补回。\n",
 			item, stats.lenRatio, limits.MinLenRatio)
 	}
 	b.WriteString("清单之外的句子保持原样，不要整篇重写。\n")
@@ -264,9 +264,10 @@ func selfCheckRemixRewrite(client ChatClient, model, effort, system, user, sourc
 			note = appendCheckNote(note, "返工后再改："+strings.Join(moreLocal, "；")+"。")
 		}
 	}
-	// 锁词数字校对：年份写错是硬错，一轮定向返工后仍错就失败；原文数字漏掉
-	// 只补一轮，补不回来当警告交付（可能是口播化写法，交人工复核）。
-	lockIssues := checkLockNumbers(source, script)
+	// 锁词数字校对只要求保留已核实且未标为可省略的数字。
+	// 无依据年份或核实数字缺失经一轮定向返工仍未解决时，保留稿件并标记失败。
+	facts := string(loadEditorialContext(outputDir).Facts)
+	lockIssues := checkLockNumbersWithFacts(source, script, facts)
 	if !lockIssues.empty() {
 		logEvent(map[string]any{"verdict": "lock_numbers", "foreign_years": lockIssues.ForeignYears, "missing": lockIssues.Missing})
 		resp, chatErr := client.Chat(ChatRequest{
@@ -283,7 +284,7 @@ func selfCheckRemixRewrite(client ChatClient, model, effort, system, user, sourc
 		if chatErr == nil && len(resp.Choices) > 0 {
 			if retryDraft, parseErr := parseRemixDraft(resp.Choices[0].Message.Content); parseErr == nil && strings.TrimSpace(retryDraft.ContinuousScript) != "" {
 				retryScript, _ := applyLocalCopyFixes(retryDraft.ContinuousScript)
-				retryIssues := checkLockNumbers(source, retryScript)
+				retryIssues := checkLockNumbersWithFacts(source, retryScript, facts)
 				retryStats := selfCheckMeasure(source, retryScript)
 				// 数字修好且没把连抄/篇幅改坏才采用。
 				if len(retryIssues.ForeignYears)+len(retryIssues.Missing) < len(lockIssues.ForeignYears)+len(lockIssues.Missing) &&
@@ -297,27 +298,20 @@ func selfCheckRemixRewrite(client ChatClient, model, effort, system, user, sourc
 			}
 		}
 		logEvent(map[string]any{"verdict": "lock_numbers_after", "foreign_years": lockIssues.ForeignYears, "missing": lockIssues.Missing})
-		if lockIssues.hasForeign() {
+		if !lockIssues.empty() {
 			return content, []string{"锁词数字错误：" + lockNumberSummary(lockIssues)}, appendCheckNote(note, "锁词校对不通过："+lockNumberSummary(lockIssues)),
-				fmt.Errorf("锁词数字错误：成稿出现原文没有的年份 %s，返工后仍未改正", strings.Join(lockIssues.ForeignYears, "、"))
+				fmt.Errorf("锁词数字错误：%s，返工后仍未改正", lockNumberSummary(lockIssues))
 		}
 	}
 	summary := fmt.Sprintf("10字连抄重合 %d%%（上限 %d%%），篇幅 %.2f 倍（下限 %.2f）。",
 		stats.overlapPercent(), int(limits.MaxOverlap*100+0.5), stats.lenRatio, limits.MinLenRatio)
-	if len(lockIssues.Missing) > 0 {
-		summary += "锁词数字未全部出现（" + strings.Join(lockIssues.Missing, "、") + "），请人工核对。"
-	}
 	if rounds > 0 && firstPercent != stats.overlapPercent() {
 		summary = fmt.Sprintf("10字连抄重合 %d%%→%d%%（返工 %d 轮），篇幅 %.2f 倍。", firstPercent, stats.overlapPercent(), rounds, stats.lenRatio)
 	}
-	var lockWarnings []string
-	if len(lockIssues.Missing) > 0 {
-		lockWarnings = []string{"锁词数字未全部出现：" + strings.Join(lockIssues.Missing, "、")}
-	}
 	if stats.passes(limits) {
-		return content, lockWarnings, appendCheckNote(note, "自检通过："+summary), nil
+		return content, nil, appendCheckNote(note, "自检通过："+summary), nil
 	}
-	warnings := append(selfCheckWarnings(stats), lockWarnings...)
+	warnings := selfCheckWarnings(stats)
 	if stats.hardFails(limits) {
 		note = appendCheckNote(note, "自检不通过："+summary)
 		return content, warnings, note, fmt.Errorf("自检不通过：%s返工 %d 轮后仍超硬性上限（重合 %d%%、篇幅 %.2f 倍）", summary, rounds, stats.overlapPercent(), stats.lenRatio)

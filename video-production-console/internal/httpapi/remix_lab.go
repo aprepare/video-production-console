@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"video-production-console/internal/agentruntime/openaicompat"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/remixlab"
 	"video-production-console/internal/store"
@@ -47,6 +48,8 @@ func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup, tas
 	mux.HandleFunc("PUT /api/remix-lab/runs/{id}/package", h.putPackage)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/rework", h.rework)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/retry", h.retryRun)
+	mux.HandleFunc("GET /api/remix-lab/runs/{id}/rerun-options", h.rerunOptions)
+	mux.HandleFunc("POST /api/remix-lab/runs/{id}/rerun", h.rerun)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/produce", h.produceRun)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/produce/redo", h.redoProduceStep)
 	mux.HandleFunc("GET /api/remix-lab/productions/by-project/{projectID}", h.productionByProject)
@@ -62,8 +65,11 @@ func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup, tas
 	mux.HandleFunc("GET /api/remix-lab/agent-prompts", h.getAgentPrompts)
 	mux.HandleFunc("PUT /api/remix-lab/agent-prompts", h.putAgentPrompts)
 	mux.HandleFunc("GET /api/remix-lab/workflow", h.getWorkflow)
+	mux.HandleFunc("GET /api/remix-lab/workflow-prompts", h.getWorkflowPrompts)
+	mux.HandleFunc("PUT /api/remix-lab/workflow-prompts", h.putWorkflowPrompts)
 	mux.HandleFunc("PUT /api/remix-lab/workflow", h.putWorkflow)
 	mux.HandleFunc("POST /api/remix-lab/workflow/run", h.runWorkflow)
+	mux.HandleFunc("POST /api/remix-lab/workflow/import-draft", h.importDraft)
 	mux.HandleFunc("GET /api/remix-lab/published", h.listPublished)
 	mux.HandleFunc("PUT /api/remix-lab/published/{id}", h.putPublishedMetrics)
 	mux.HandleFunc("POST /api/remix-lab/agent/chat", h.agentChat)
@@ -93,6 +99,7 @@ func (h *remixLabHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 type remixLabSlotPOST struct {
+	ServiceTier     string `json:"service_tier"`
 	BaseURL         string `json:"base_url"`
 	Model           string `json:"model"`
 	APIKey          string `json:"api_key"`
@@ -124,6 +131,7 @@ func (h *remixLabHandler) savePresets(w http.ResponseWriter, r *http.Request) {
 			Model:           slot.Model,
 			APIKey:          slot.APIKey,
 			ReasoningEffort: slot.ReasoningEffort,
+			ServiceTier:     slot.ServiceTier,
 			Pipeline:        slot.Pipeline,
 			RunCount:        slot.RunCount,
 			PresetIndex:     slot.PresetIndex,
@@ -150,6 +158,7 @@ func (h *remixLabHandler) create(w http.ResponseWriter, r *http.Request) {
 			Model:           slot.Model,
 			APIKey:          slot.APIKey,
 			ReasoningEffort: slot.ReasoningEffort,
+			ServiceTier:     slot.ServiceTier,
 			Pipeline:        slot.Pipeline,
 			RunCount:        slot.RunCount,
 			PresetIndex:     slot.PresetIndex,
@@ -238,7 +247,7 @@ func (h *remixLabHandler) putWorkflow(w http.ResponseWriter, r *http.Request) {
 // runWorkflow 用当前工作流开跑一个实验（可带生产账号与全自动开关）。
 func (h *remixLabHandler) runWorkflow(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Source    string `json:"source"`
+		Source    string   `json:"source"`
 		RunCount  int      `json:"run_count"`
 		AccountID string   `json:"account_id"`
 		Auto      bool     `json:"auto"`
@@ -256,6 +265,21 @@ func (h *remixLabHandler) runWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, exp)
+}
+
+// importDraft 跳过二创：把已有成稿直接落成定稿运行，停在确认闸门。
+func (h *remixLabHandler) importDraft(w http.ResponseWriter, r *http.Request) {
+	var in remixlab.DraftInput
+	if err := decodeJSON(w, r, maxRemixLabRequestSize, &in); err != nil {
+		writeDecodeError(w, err, "invalid_remix_lab", "A valid draft payload is required.")
+		return
+	}
+	exp, err := h.svc.ImportDraft(r.Context(), in)
+	if err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, exp)
 }
 
 // produceRun 确认闸门放行 / 生产失败续跑：定稿进混剪链路（建项目→口播→配音→混剪）。
@@ -302,6 +326,29 @@ func (h *remixLabHandler) productionByProject(w http.ResponseWriter, r *http.Req
 
 // retryRun 断点重试：失败运行整体重试（已有agent产物复用），或指定节点
 // 作废重跑，写手链路重做后自动续走后面的环节。model 非空时先换模型再重试。
+func (h *remixLabHandler) rerunOptions(w http.ResponseWriter, r *http.Request) {
+	options, err := h.svc.RerunOptions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, options)
+}
+
+func (h *remixLabHandler) rerun(w http.ResponseWriter, r *http.Request) {
+	var in remixlab.RerunInput
+	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_remix_lab", "A valid rerun payload is required.")
+		return
+	}
+	result, err := h.svc.Rerun(r.Context(), r.PathValue("id"), in)
+	if err != nil {
+		writeRemixLabError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
 func (h *remixLabHandler) retryRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		NodeID string `json:"node_id"`
@@ -494,10 +541,14 @@ func writeRemixLabError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "run_not_reworkable", "只有已完成的运行才能编辑或打回重做。")
 	case errors.Is(err, remixlab.ErrRunNotRetryable):
 		writeError(w, http.StatusConflict, "run_not_retryable", "失败的运行可整体重试；已完成的运行要指定重跑哪个agent节点。")
+	case errors.Is(err, store.ErrRemixLabActive):
+		writeError(w, http.StatusConflict, "experiment_active", "当前项目仍有文案生成中，请完成后再开始新一轮。")
+	case errors.Is(err, remixlab.ErrInvalidRerun):
+		writeError(w, http.StatusBadRequest, "invalid_rerun", "请填写写手、审稿模型，并选择有效的推理强度和速度模式。")
 	case errors.Is(err, remixlab.ErrInvalidAnnotations):
 		writeError(w, http.StatusBadRequest, "invalid_remix_lab", "打回必须附批注，且不超过2000字。")
 	case errors.Is(err, remixlab.ErrInvalidPackage):
-		writeError(w, http.StatusBadRequest, "invalid_remix_lab", "正文不能为空（至少40字），且第1条短标题（板标题）必填。")
+		writeError(w, http.StatusBadRequest, "invalid_remix_lab", "正文不能为空，且第1条短标题（板标题）必填。")
 	case errors.Is(err, remixlab.ErrInvalidAgentPrompts):
 		writeError(w, http.StatusBadRequest, "invalid_remix_lab", "单条Agent提示词不能超过2万字。")
 	case errors.Is(err, remixlab.ErrInvalidWorkflow):
@@ -522,6 +573,7 @@ func writeRemixLabError(w http.ResponseWriter, err error) {
 		errors.Is(err, remixlab.ErrInvalidSlots),
 		errors.Is(err, remixlab.ErrInvalidPrompts),
 		errors.Is(err, remixlab.ErrInvalidRunCount),
+		errors.Is(err, openaicompat.ErrInvalidServiceTier),
 		errors.Is(err, remixlab.ErrMissingModel),
 		errors.Is(err, remixlab.ErrInvalidComment),
 		errors.Is(err, remixlab.ErrAgentModel),

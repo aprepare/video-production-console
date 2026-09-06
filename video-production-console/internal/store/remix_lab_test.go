@@ -140,6 +140,14 @@ func TestUpdateRunCommentDoesNotChangeStatusOrScript(t *testing.T) {
 	if got.Status != "completed" || got.ContinuousScript != "keep-me" || got.Comment != "批注" || got.TitlesJSON != `["a"]` {
 		t.Fatalf("got=%+v", got)
 	}
+	// A background runner still holds the pre-comment record.
+	if err := repo.UpdateRun(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.GetRun(t.Context(), run.ID)
+	if err != nil || got.Comment != "批注" {
+		t.Fatalf("stale runner overwrote comment: %+v, %v", got, err)
+	}
 	exp2, _, _, err := repo.GetExperiment(t.Context(), exp.ID)
 	if err != nil || exp2.Status != "completed" {
 		t.Fatalf("exp=%+v err=%v", exp2, err)

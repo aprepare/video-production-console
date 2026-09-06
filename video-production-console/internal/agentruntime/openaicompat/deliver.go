@@ -275,7 +275,7 @@ func recoverRemixDraftFromBrokenJSON(text string) (remixDraft, bool) {
 		script, ok = extractBrokenJSONStringField(text, "script")
 	}
 	script = strings.TrimSpace(script)
-	if !ok || utf8.RuneCountInString(script) < 40 {
+	if !ok || script == "" {
 		return remixDraft{}, false
 	}
 	return remixDraft{
@@ -310,7 +310,7 @@ func extractBrokenJSONStringField(text, key string) (string, bool) {
 	}
 	if end < 0 {
 		script := strings.TrimSpace(unescapeJSONString(body))
-		if utf8.RuneCountInString(script) < 40 {
+		if script == "" {
 			return "", false
 		}
 		return script, true
@@ -396,7 +396,6 @@ func remixDeliverableArtifacts(outputDir string, abs func(string) string) []map[
 		{"viral_analysis.json", "viral_analysis", "Viral mechanism analysis"},
 		{"structure_design.json", "structure_design", "Remix structure design"},
 		{"publishing_package.json", "publishing_package", "Publishing titles, descriptions, topics, and CTA"},
-		{"self_check.json", "self_check", "Editorial and contract self-check"},
 		{"remix_run.json", "remix_run", "Remix model run log"},
 		{"model_raw.txt", "model_raw", "Raw model remix response"},
 	}
@@ -464,7 +463,7 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 		return err
 	}
 	script := strings.TrimSpace(draft.ContinuousScript)
-	if script == "" || utf8.RuneCountInString(script) < 40 {
+	if script == "" {
 		return fmt.Errorf("model returned no usable remix script")
 	}
 	if isAskModeRefusal(script) {
@@ -478,20 +477,12 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 		return err
 	}
 	if err := writeJSONFile(filepath.Join(outputDir, "structure_design.json"), map[string]any{
-		"locked_topic": "同一条爆款机器换说法，不换题",
-		"kept": []string{"开场钩子", "历史证明", "故意不说完的答案", "上车催促"},
-		"changed": []string{"换说法", "可加料"}, "topic_drift": false,
+		"editorial_mode": "human_review", "policy_version": EditorialPolicyVersion,
+		"note": "成稿与发布字段保留模型输出，内容效果由用户评阅。",
 	}); err != nil {
 		return err
 	}
 	if err := writeJSONFile(filepath.Join(outputDir, "publishing_package.json"), pkg); err != nil {
-		return err
-	}
-	if err := writeJSONFile(filepath.Join(outputDir, "self_check.json"), map[string]any{
-		"action": action, "wire_action": "standard", "input_roles": []string{"primary_source"},
-		"generated": []string{"continuous_script.txt", "viral_analysis.json", "structure_design.json", "publishing_package.json", "self_check.json"},
-		"checks": []string{"console wrote files; model only supplied copy"},
-	}); err != nil {
 		return err
 	}
 	scriptPath := filepath.Join(outputDir, "continuous_script.txt")
@@ -590,33 +581,28 @@ func writeKeywordsDeliverable(outputDir, taskID, modelText string, lines []strin
 	return writeJSONFile(filepath.Join(outputDir, "result.json"), envelope)
 }
 
-// publishingPackageFromDraft 整理发布包：备选标题不再凑数（模型给几条留几条，
-// 最多 3 条，不给就空）；描述 2～3 条、短促有钩子、末尾直接带话题；话题 3～4 个。
+// publishingPackageFromDraft 只封装模型字段，不截短、补写、替换话题或凑数。
 func publishingPackageFromDraft(draft remixDraft, script string) map[string]any {
-	titles := uniqueFilled(draft.Titles, nil, 0, 3)
-	if len(titles) > 3 {
-		titles = titles[:3]
+	list := func(items []string) []string {
+		if items == nil {
+			return []string{}
+		}
+		return items
 	}
-	short := uniqueFilled(draft.ShortTitles, shortTitleFallbacks(script), 3, 3)
-	if len(short) > 3 {
-		short = short[:3]
-	}
-	descriptions := uniqueFilled(draft.Descriptions, descriptionFallbacks(script), 2, 3)
-	if len(descriptions) > 3 {
-		descriptions = descriptions[:3]
-	}
-	topics := pickHotTopics(draft.Topics, script)
-	for i, description := range descriptions {
-		descriptions[i] = withHotTopics(clipDescriptionBody(description), topics)
+	titles, short := list(draft.Titles), list(draft.ShortTitles)
+	descriptions, topics := list(draft.Descriptions), list(draft.Topics)
+	description := ""
+	if len(descriptions) > 0 {
+		description = descriptions[0]
 	}
 	top := []map[string]any{}
-	for i := 0; i < 3 && i < len(titles); i++ {
-		top = append(top, map[string]any{"rank": i + 1, "title": titles[i], "reason": "保留原稿钩子与未解问题。"})
+	for i, title := range titles {
+		top = append(top, map[string]any{"rank": i + 1, "title": title})
 	}
 	return map[string]any{
 		"titles": titles, "top_titles": top, "short_titles": short,
-		"descriptions": descriptions, "description": descriptions[0],
-		"topics": topics, "cta": "",
+		"descriptions": descriptions, "description": description,
+		"topics": topics, "cta": draft.CTA,
 	}
 }
 

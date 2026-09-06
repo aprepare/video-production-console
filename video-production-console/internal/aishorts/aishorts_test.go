@@ -146,7 +146,7 @@ func TestFallbackBorrowsScenesFromHints(t *testing.T) {
 }
 
 func TestSplitOverlongShotsKeepsScene(t *testing.T) {
-	shots := []Shot{{Narration: strings.Repeat("一二三四五六七八九十，", 4), Scene: "桌上的文件", Subject: "文件"}}
+	shots := []Shot{{Narration: strings.Repeat("一二三四五六七八九十，", 8), Scene: "桌上的文件", Subject: "文件"}}
 	got := splitOverlongShots(shots)
 	if len(got) < 2 {
 		t.Fatalf("overlong shot not split: %+v", got)
@@ -163,19 +163,19 @@ func TestImagePromptCompactAndPeopleRuleConditional(t *testing.T) {
 	if strings.Contains(noPeople, "中老年") {
 		t.Fatalf("people rule must not be attached when no person in scene:\n%s", noPeople)
 	}
-	if !strings.Contains(noPeople, "不要出现任何人物") {
-		t.Fatalf("no-people rule missing when scene has no person:\n%s", noPeople)
+	if strings.Contains(noPeople, "不要出现任何人物") {
+		t.Fatalf("automatic blanket ban must not be attached:\n%s", noPeople)
 	}
-	if n := len([]rune(noPeople)); n > 260 {
+	if n := len([]rune(noPeople)); n > 400 {
 		t.Fatalf("prompt too long (%d runes):\n%s", n, noPeople)
 	}
-	for _, want := range []string{"禁止任何文字", "国徽", "电影感写实", "16:9"} {
+	for _, want := range []string{"禁止任何文字", "国徽", "现实生活纪实摄影", "16:9"} {
 		if !strings.Contains(noPeople, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, noPeople)
 		}
 	}
 	withPeople := explainerImagePrompt(Shot{StyleKey: "documentary", Subject: "看手机的中年男人", Scene: "一位五十多岁的中国男人低头看手机"})
-	if !strings.Contains(withPeople, "中国中老年人") {
+	if !strings.Contains(withPeople, "中国成年人") {
 		t.Fatalf("people rule missing when scene has a person:\n%s", withPeople)
 	}
 }
@@ -404,8 +404,8 @@ func TestExplainerVideoPromptUsesMotionAtNormalSpeed(t *testing.T) {
 	if !strings.Contains(p, "手把三份文件依次翻开") || !strings.Contains(p, "正常速度") || strings.Contains(p, "轻微") {
 		t.Fatalf("prompt = %s", p)
 	}
-	if !strings.Contains(explainerVideoPrompt(Shot{}), "翻开文件") {
-		t.Fatal("empty motion must fall back to a concrete default action")
+	if !strings.Contains(explainerVideoPrompt(Shot{}), "没有人物时不新增人物或手") || strings.Contains(explainerVideoPrompt(Shot{}), "翻开文件") {
+		t.Fatal("empty motion must preserve the actual scene rather than invent a hand action")
 	}
 }
 
@@ -494,7 +494,7 @@ func TestFinishGenerationWaitsForOtherRunningShot(t *testing.T) {
 
 func TestExplainerImagePromptContentBeforeStyle(t *testing.T) {
 	p := explainerImagePrompt(Shot{StyleKey: "poster", Subject: "银行柜台前排队的中年人", Scene: "老式银行柜台前排队的人", Narration: "存银行的钱在缩水。"})
-	for _, want := range []string{"主体：银行柜台前排队的中年人", "老式银行柜台", "厚涂", "禁止任何文字", "乱码", "中国中老年人"} {
+	for _, want := range []string{"主体：银行柜台前排队的中年人", "老式银行柜台", "厚涂", "禁止任何文字", "乱码", "中国成年人"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, p)
 		}
@@ -509,7 +509,7 @@ func TestExplainerImagePromptContentBeforeStyle(t *testing.T) {
 	if strings.Index(p, "老式银行柜台") > strings.Index(p, "厚涂") {
 		t.Fatal("scene must come before the style block")
 	}
-	if !strings.Contains(explainerImagePrompt(Shot{StyleKey: "nope", Subject: "兜底"}), "电影感写实") {
+	if !strings.Contains(explainerImagePrompt(Shot{StyleKey: "nope", Subject: "兜底"}), "现实生活纪实摄影") {
 		t.Fatal("unknown style must fall back to documentary")
 	}
 }

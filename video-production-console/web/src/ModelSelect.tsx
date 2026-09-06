@@ -77,8 +77,8 @@ export function ModelMultiSelect({
       </span>
       <p className="model-multi-hint">
         {value.length
-          ? `将同时启动 ${value.length} 个任务：${value.join("、")}`
-          : `不勾选则用默认模型（${inheritedLabel}）生成一份`}
+          ? `将同时启动 ${value.length} 路写手：${value.join("、")}。审稿不随这里改。`
+          : `不勾选则用默认写手（${inheritedLabel}）生成一份`}
       </p>
     </div>
   );

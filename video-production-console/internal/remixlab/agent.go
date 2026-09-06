@@ -761,7 +761,7 @@ type 只能是：
 - delete_prompt：payload 含 id
 - start_experiment：payload 含 source, prompt_ids, slots（slots 每项 model，可选 base_url/api_key/reasoning_effort/run_count）
 - set_active_prompt：payload 含 id
-- update_workflow：payload 含 workflow（完整工作流 JSON）。以用户消息里的【当前工作流】为底稿整体修改后提交：加/删 agent 节点、改节点的 system_prompt/user_template/model/channel/inject_title、调 edges 连线都用这一种。骨干链固定 input→…→writer→selfcheck→(reviewer)→output 不能拆；agent 节点只能接在 input/agent 之后、汇入 writer 或别的 agent；新节点 id 用小写英文；坐标 x/y 参考同列节点错开摆
+- update_workflow：payload 含 workflow（完整工作流 JSON）。以用户消息里的【当前工作流】为底稿整体修改后提交：加/删 agent 节点、改节点的 system_prompt/user_template/model/channel/inject_title、调 edges 连线都用这一种。骨干链为 input→…→writer→(reviewer)→output；机械审查已停用，不添加 selfcheck；agent 节点只能接在 input/agent 之后、汇入 writer 或别的 agent；新节点 id 用小写英文；坐标 x/y 参考同列节点错开摆
 一轮最多两条 proposals；update_workflow 因为 payload 大，单独占一轮，别和其他提案混发，避免 JSON 写不完被截断。
 没有要确认的动作时 proposals 为空数组。
 reply 用中文，短，先说你依据了哪条历史批注或成稿、动了图里哪几个节点。不要复述历史实验全文，不要把思考过程写进 reply。整份 JSON 必须完整可解析。`

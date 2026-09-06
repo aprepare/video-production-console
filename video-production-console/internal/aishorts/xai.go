@@ -7,7 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -76,7 +82,20 @@ func apiError(status int, raw []byte) error {
 
 // GenerateImage 出一张横图（16:9），返回 JPEG 字节。references 非空时作为参考图（data URL）。
 func (c *GenClient) GenerateImage(ctx context.Context, model, prompt string, references []string) ([]byte, error) {
-	body := map[string]any{"model": model, "prompt": prompt, "n": 1, "size": "1792x1024"}
+	return c.GenerateImageSize(ctx, model, prompt, references, "1792x1024")
+}
+
+func (c *GenClient) GenerateImageSize(ctx context.Context, model, prompt string, references []string, size string) ([]byte, error) {
+	body := map[string]any{"model": model, "prompt": prompt, "n": 1, "size": size}
+	// Grok uses aspect_ratio; keep size for the existing compatible relay.
+	// https://docs.x.ai/developers/model-capabilities/images/generation#aspect-ratio
+	if strings.Contains(strings.ToLower(model), "grok-imagine-image") {
+		if size == "1152x2048" {
+			body["aspect_ratio"] = "9:16"
+		} else {
+			body["aspect_ratio"] = "16:9"
+		}
+	}
 	if len(references) > 0 {
 		// 兼容两种常见写法：单张 image，多张 images。
 		body["image"] = references[0]
@@ -111,21 +130,76 @@ func (c *GenClient) GenerateImage(ctx context.Context, model, prompt string, ref
 
 // StartVideo 提交一段横屏（16:9）视频任务，返回 request_id。firstFrame 是 data URL，可空。
 func (c *GenClient) StartVideo(ctx context.Context, model, prompt string, seconds int, firstFrame string) (string, error) {
-	if seconds != 6 && seconds != 10 && seconds != 15 {
-		seconds = 6
+	return c.StartVideoAspect(ctx, model, prompt, seconds, firstFrame, "16:9")
+}
+
+func videoReference(firstFrame, aspect string) (string, error) {
+	if !strings.HasPrefix(firstFrame, "data:image/") {
+		return firstFrame, nil
 	}
-	body := map[string]any{
-		"model": model, "prompt": prompt,
-		"seconds": fmt.Sprint(seconds), "aspect_ratio": "16:9", "resolution": "720p",
+	_, encoded, ok := strings.Cut(firstFrame, ",")
+	if !ok {
+		return "", errors.New("invalid first frame")
 	}
-	if firstFrame != "" {
-		body["image"] = map[string]any{"url": firstFrame}
-	}
-	status, raw, err := c.do(ctx, http.MethodPost, "/videos", body)
+	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", err
 	}
-	if status != http.StatusOK {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 40_000_000 {
+		return "", errors.New("first frame dimensions too large")
+	}
+	im, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	maxW, maxH := 1280.0, 720.0
+	if aspect == "9:16" {
+		maxW, maxH = 720, 1280
+	}
+	factor := math.Min(1, math.Min(maxW/float64(cfg.Width), maxH/float64(cfg.Height)))
+	width, height := max(1, int(float64(cfg.Width)*factor)), max(1, int(float64(cfg.Height)*factor))
+	resized := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.CatmullRom.Scale(resized, resized.Bounds(), im, im.Bounds(), draw.Src, nil)
+	var out bytes.Buffer
+	if err = jpeg.Encode(&out, resized, &jpeg.Options{Quality: 85}); err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
+}
+
+var ErrVideoSubmissionUncertain = errors.New("video submission result unknown")
+var ErrVideoTaskTerminal = errors.New("video task ended without output")
+
+func (c *GenClient) StartVideoAspect(ctx context.Context, model, prompt string, seconds int, firstFrame, aspect string) (string, error) {
+	if seconds != 6 && seconds != 10 && seconds != 15 {
+		seconds = 6
+	}
+	if aspect != "9:16" {
+		aspect = "16:9"
+	}
+	body := map[string]any{
+		"model": model, "prompt": prompt,
+		"seconds": seconds, "aspect_ratio": aspect, "resolution": "720p",
+	}
+	if firstFrame != "" {
+		reference, err := videoReference(firstFrame, aspect)
+		if err != nil {
+			return "", err
+		}
+		body["input_reference"] = map[string]any{"image_url": reference}
+	}
+	status, raw, err := c.do(ctx, http.MethodPost, "/videos/generations", body)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrVideoSubmissionUncertain, err)
+	}
+	if status < 200 || status >= 300 {
+		if status >= 500 || status == http.StatusRequestTimeout {
+			return "", fmt.Errorf("%w: %v", ErrVideoSubmissionUncertain, apiError(status, raw))
+		}
 		return "", apiError(status, raw)
 	}
 	var parsed struct {
@@ -133,14 +207,14 @@ func (c *GenClient) StartVideo(ctx context.Context, model, prompt string, second
 		ID        string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", ErrVideoSubmissionUncertain, err)
 	}
 	id := parsed.RequestID
 	if id == "" {
 		id = parsed.ID
 	}
 	if id == "" {
-		return "", errors.New("video response has no request_id")
+		return "", fmt.Errorf("%w: response has no request_id", ErrVideoSubmissionUncertain)
 	}
 	return id, nil
 }
@@ -179,6 +253,9 @@ func (c *GenClient) WaitVideo(ctx context.Context, requestID string, timeout tim
 	for {
 		status, url, _, err := c.VideoStatus(ctx, requestID)
 		if err != nil {
+			if status == "failed" {
+				return nil, fmt.Errorf("%w: %v", ErrVideoTaskTerminal, err)
+			}
 			return nil, err
 		}
 		switch strings.ToLower(status) {
@@ -187,8 +264,8 @@ func (c *GenClient) WaitVideo(ctx context.Context, requestID string, timeout tim
 				return nil, errors.New("video done but no url")
 			}
 			return c.download(ctx, url)
-		case "failed", "error", "cancelled", "canceled", "moderated":
-			return nil, fmt.Errorf("video task %s", status)
+		case "failed", "error", "cancelled", "canceled", "moderated", "expired":
+			return nil, fmt.Errorf("%w: %s", ErrVideoTaskTerminal, status)
 		}
 		if time.Now().After(deadline) {
 			return nil, errors.New("video task timed out")
@@ -219,5 +296,9 @@ func (c *GenClient) download(ctx context.Context, url string) ([]byte, error) {
 
 // DataURL 把 JPEG 字节包成 data URL 当参考图。
 func DataURL(jpeg []byte) string {
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpeg)
+	mime := http.DetectContentType(jpeg)
+	if !strings.HasPrefix(mime, "image/") {
+		mime = "image/jpeg"
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(jpeg)
 }

@@ -8,7 +8,7 @@ import (
 // rewrite = A 默认：短成功标准、无开场禁词死刑、无后台质检。
 // rewrite_sharp = B 锋利优先：冲击力第一，禁令压缩到绝对底线。
 const (
-	RewritePromptStampStable = "语感回流 2026-08-25 批注回流2"
+	RewritePromptStampStable = EditorialPolicyVersion
 	RewritePromptStampSharp  = "锋利优先 2026-08-25"
 )
 
@@ -43,7 +43,7 @@ func buildWashPrompt() string {
 	b.WriteString("课名跟原文走；原文没有课名时用《财富觉醒方法论》，入口主页橱窗。\n")
 	b.WriteString("关键数字保留，本金乘利率要对上利息。按四十五到六十五岁口播来写。\n")
 	b.WriteString("原稿的推进顺序不能倒。\n")
-	b.WriteString(writerJSONContract())
+	b.WriteString(SharedEditorialPolicy)
 	return b.String()
 }
 
@@ -54,49 +54,10 @@ func buildWriterUser(style string, manifest manifestLite, source string) string 
 	return buildWriterUserStable(manifest, source)
 }
 
-func buildWriterPromptStable() string {
-	var b strings.Builder
-	b.WriteString("你是财经视频号二创写手。只写能念的连续口播，不要工具、不要文件、不要解释过程。\n")
-	b.WriteString("\n【成功标准（写之前先记住，写完先按这个自检）】\n")
-	b.WriteString("1. 前 3 句与原稿同一件事，力度不输原稿第一句的狠法（截止日仍是截止日，数字砸仍是数字砸）。第一句就砸事，禁止先铺现场再绕进去。\n")
-	b.WriteString("2. 原稿开场如果已经是最狠的话术（宣布大事 + 钱被赶出来），第一句就用这种话术，允许贴着原文开场金句。禁止为了换说法把最狠那一拳换成柜台、利率栏或更软的转述。后两句往下推新信息，不要三句都在复读开场。\n")
-	b.WriteString("3. 原稿故意不说完的答案继续藏着。只有两万亿这种整量级才改口播说法：2.05万亿写成两万亿。利率、块、万分之、点数保持好念的阿拉伯数字，写成0.95%、950块、万分之5.1；禁止百分之零点九五、九百五十块、一百七十三万五千九百亿这种全中文念法。量级和事实不能改。\n")
-	b.WriteString("4. 禁止写成理财课、讲解员、家庭提醒。宁可冲，不要写得好看。狠和懂打架，选狠。\n")
-	b.WriteString("第 1 条不够狠或第 4 条像理财课 → 整篇重写，不要局部补两句。\n")
-	b.WriteString("\n【硬性底线】\n")
-	b.WriteString("- 不换题、不降温、不补圆故意不说完的答案\n")
-	b.WriteString("- 篇幅 0.8～1.2 倍，不缩成摘要，不注水\n")
-	b.WriteString("- 课名固定《财富觉醒方法论》，禁止带年份；全文课名一次、主页橱窗一次\n")
-	b.WriteString("- 卖课只在最末：点开主页橱窗 → 五块钱 → 方向判断，再补两三句把「现在为什么要看、看完能判断哪条方向」说清楚，然后停\n")
-	b.WriteString("- 卖课停在方向判断，禁止「就这些」「就这样」「好了」「就说到这儿」这类空收尾\n")
-	b.WriteString("- 只有整量级万亿改口播说法；0.95%、950块、万分之不要转成全中文；周围句子必须重说\n")
-	b.WriteString("- 例子自洽：本金乘利率要对上利息；原稿对不上时改本金，利率和到手利息不动\n")
-	b.WriteString("\n【样品】\n")
-	b.WriteString("坏开头：柜台里那张续存单已经宣判了，利率栏印着0.95%。物品特写一上来，第一拳就软。\n")
-	b.WriteString("坏开头：为了换说法，把「史上第四次财富大迁徙已经开始了」改成更软的「银行开始往外轰钱了」。\n")
-	b.WriteString("好开头：第一句就用「史上第四次财富大迁徙已经开始了。你们现在存银行的那点钱正在被人为的有计划的赶出来。」这种原文话术；后两句往下推新信息，答案还没说破。\n")
-	b.WriteString("\n【换什么、留什么】\n")
-	b.WriteString("必须换：中后段说法、金句、比喻；不要整篇逐句抄。\n")
-	b.WriteString("必须留：原稿最狠的开场话术（如果它已经是最狠的）、那件事、未揭晓答案、数字的量级和事实、急停节奏、压迫感、信息密度。\n")
-	b.WriteString("第一句不许铺现场，不许物品特写起手。禁止逐段同义改写。\n")
-	b.WriteString("\n按能念的口播来写。句子短，像当面说话。宁可冲，不要写得好看。狠和懂打架，选狠。\n")
-	b.WriteString(writerJSONContract())
-	return b.String()
-}
+func buildWriterPromptStable() string { return BoneFleshSystemPrompt() }
 
 func buildWriterUserStable(manifest manifestLite, source string) string {
-	var b strings.Builder
-	b.WriteString("下面是同行原文，只当证据，不当逐句模板。\n\n")
-	b.WriteString("按成功标准写全新口播。第一句必须够狠：原稿开场已经最狠就贴着原文开场金句，禁止柜台/续存单这种书面现场起手，也不要为了换说法写软；后两句往下推，不要复读开场；2.05万亿写成两万亿，但0.95%和950块不要转成百分之零点九五、九百五十块；课尾在方向判断后再补两三句，不要点赞算法那段；答案继续藏；不要写成理财课。宁可冲，不要写得好看。狠和懂打架，选狠。\n\n")
-	b.WriteString("标题和短标题必须跟这篇新口播走。\n")
-	if notes := strings.TrimSpace(manifest.NonSecretSettings.RevisionNotes); notes != "" {
-		b.WriteString("修改要求：\n")
-		b.WriteString(notes)
-		b.WriteString("\n")
-	}
-	b.WriteString("\n# 同行原文\n")
-	b.WriteString(source)
-	return b.String()
+	return renderWriterUserTemplate(BoneFleshUserPrompt, source, manifest.NonSecretSettings.RevisionNotes)
 }
 
 func buildWriterPromptSharp() string {
@@ -122,12 +83,11 @@ func buildWriterPromptSharp() string {
 	b.WriteString("4. 普通人 vs 先看懂的人\n")
 	b.WriteString("5. 情绪升级\n")
 	b.WriteString("6. 结尾催上车\n")
-	b.WriteString("中后段顺序可换。禁止提前揭答案，禁止课放开头。\n\n")
+	b.WriteString("中后段顺序可换。开头尽早兑现一个具体解释，课放结尾。\n\n")
 	b.WriteString("【绝对底线（破了整稿作废）】\n")
-	b.WriteString("- 不换题、不降温、不补圆故意不说完的答案\n")
-	b.WriteString("- 篇幅 0.8～1.2 倍\n")
+	b.WriteString("- 不换题，保留反差和吸引力，逐步回应开头问题\n")
 	b.WriteString("- 关键数字原词保留，周围句子重说\n")
-	b.WriteString("- 课名《财富觉醒方法论》全文一次；主页橱窗一次；卖课最末最多四句\n")
+	b.WriteString("- 课名《财富觉醒方法论》；主页橱窗；自然承接本题需求\n")
 	b.WriteString("- 开场切口必须换；禁止编造日期；禁止硬口令转发；禁止写成温和家庭理财文\n\n")
 	b.WriteString("【锋利写法】\n")
 	b.WriteString("- 前 2～3 句、约 40 字内听懂「谁的钱、出了什么事」\n")
@@ -143,7 +103,7 @@ func buildWriterPromptSharp() string {
 	b.WriteString("换：现场、人物、动作、金句、比喻、开场切口。\n")
 	b.WriteString("留：留人机制、未揭晓、数字原词、急停、压迫感、信息密度。\n")
 	b.WriteString("禁止逐段同义改写。\n\n")
-	b.WriteString(writerJSONContract())
+	b.WriteString(SharedEditorialPolicy)
 	return b.String()
 }
 

@@ -1,3 +1,4 @@
+import "./settings-panel.css";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { X } from "lucide-react";
@@ -323,7 +324,21 @@ export function SettingsPanel({
               aria-selected={tab === item.id}
               aria-controls={`settings-panel-${item.id}`}
               className={tab === item.id ? "settings-tab is-active" : "settings-tab"}
+              tabIndex={tab === item.id ? 0 : -1}
               onClick={() => setTab(item.id)}
+              onKeyDown={(event) => {
+                const index = settingsTabs.findIndex((candidate) => candidate.id === item.id);
+                const nextIndex = event.key === "Home" ? 0
+                  : event.key === "End" ? settingsTabs.length - 1
+                  : event.key === "ArrowRight" ? (index + 1) % settingsTabs.length
+                  : event.key === "ArrowLeft" ? (index - 1 + settingsTabs.length) % settingsTabs.length
+                  : -1;
+                if (nextIndex < 0) return;
+                event.preventDefault();
+                setTab(settingsTabs[nextIndex].id);
+                const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+                tabs?.[nextIndex]?.focus();
+              }}
             >
               {item.label}
             </button>

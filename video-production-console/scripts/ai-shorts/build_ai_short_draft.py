@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 
 import pyJianYingDraft as draft
@@ -41,7 +42,50 @@ def read_json(path: Path):
 
 
 def write_json(path: Path, value) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+KEYWORD_COLORS = {"number": "#FFD166", "concept": "#FFD166", "risk": "#FF9A8B"}
+
+
+class KeywordTextSegment(draft.TextSegment):
+    """真正的字幕富文本；词组和正文同一个素材，剪映中仍可逐字修改。"""
+    def __init__(self, text, timerange, *, keywords=None, **kwargs):
+        super().__init__(text, timerange, **kwargs)
+        self.keywords = keywords or []
+
+    def export_material(self):
+        material = super().export_material()
+        content = json.loads(material["content"])
+        base = content["styles"][0]
+        colors = [None] * len(self.text)
+        for word in sorted(self.keywords, key=lambda w: len(w.get("text", "")), reverse=True):
+            token = word.get("text", "")
+            if not token:
+                continue
+            pos = 0
+            while (pos := self.text.find(token, pos)) >= 0:
+                end = pos + len(token)
+                if all(c is None for c in colors[pos:end]):
+                    colors[pos:end] = [KEYWORD_COLORS.get(word.get("kind"), "#FFD166")] * len(token)
+                pos = end
+        styles = []
+        start = 0
+        while start < len(colors):
+            end = start + 1
+            while end < len(colors) and colors[end] == colors[start]:
+                end += 1
+            part = deepcopy(base)
+            part["range"] = [start, end]
+            if colors[start]:
+                part["fill"]["content"]["solid"]["color"] = list(hex_rgb(colors[start]))
+            styles.append(part)
+            start = end
+        content["styles"] = styles or [base]
+        material["content"] = json.dumps(content, ensure_ascii=False)
+        return material
 
 
 def stop_jianying() -> None:
@@ -71,6 +115,7 @@ def hex_rgb(value: str):
 
 # 图片镜的推拉平移：(起始缩放, 结束缩放, 起始 x 偏移, 结束 x 偏移)。幅度小，中老年看着不晕。
 CAMERA_MOVES = {
+    "still": (1.0, 1.0, 0.0, 0.0),
     "zoom_in": (1.03, 1.10, 0.0, 0.0),
     "zoom_out": (1.10, 1.03, 0.0, 0.0),
     "pan_left": (1.06, 1.06, 0.015, -0.015),
@@ -78,8 +123,13 @@ CAMERA_MOVES = {
 }
 
 
-def add_camera_move(segment, move: str, duration: int) -> None:
+def add_camera_move(segment, move: str, duration: int, strength="standard", cover=1.0) -> None:
+    if strength == "none":
+        move = "still"
     scale_from, scale_to, x_from, x_to = CAMERA_MOVES.get(move, CAMERA_MOVES["zoom_in"])
+    factor = 0.5 if strength == "gentle" else 1.0
+    scale_from, scale_to = (cover * (1 + (s - 1) * factor) for s in (scale_from, scale_to))
+    x_from, x_to = x_from * factor, x_to * factor
     segment.add_keyframe(draft.KeyframeProperty.uniform_scale, 0, scale_from)
     segment.add_keyframe(draft.KeyframeProperty.uniform_scale, duration, scale_to)
     segment.add_keyframe(draft.KeyframeProperty.position_x, 0, x_from)
@@ -93,6 +143,7 @@ WINDOW_H = 730
 INSET_BASE = 1.20
 # 推拉：在 1.20～1.26 之间，横移 ±0.02（混剪 image_motion 边界：scale 1.18～1.30，pan ≤0.03）。
 INSET_MOVES = {
+    "still": (1.20, 1.20, 0.0, 0.0),
     "zoom_in": (1.20, 1.26, 0.0, 0.02),
     "zoom_out": (1.26, 1.20, 0.0, -0.02),
     "pan_left": (1.23, 1.23, 0.02, -0.02),
@@ -101,8 +152,13 @@ INSET_MOVES = {
 NARRATION_VOLUME = 1.7783  # +5 dB，混剪同款
 
 
-def add_inset_move(segment, move: str, duration: int) -> None:
+def add_inset_move(segment, move: str, duration: int, strength="standard") -> None:
+    if strength == "none":
+        move = "still"
     scale_from, scale_to, x_from, x_to = INSET_MOVES.get(move, INSET_MOVES["zoom_in"])
+    if strength == "gentle":
+        scale_from, scale_to = (INSET_BASE + (s-INSET_BASE)*0.5 for s in (scale_from,scale_to))
+        x_from, x_to = x_from*0.5,x_to*0.5
     segment.add_keyframe(draft.KeyframeProperty.uniform_scale, 0, scale_from)
     segment.add_keyframe(draft.KeyframeProperty.uniform_scale, duration, scale_to)
     if x_from != x_to:
@@ -158,9 +214,11 @@ def build(job: dict) -> dict:
     parent.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex
     workspace = parent / job_id
-    if workspace.exists():
-        shutil.rmtree(workspace)
-    portrait = (job.get("layout") or "") == "portrait_inset"
+    layout = job.get("layout") or "landscape"
+    inset = layout == "portrait_inset"
+    full = layout == "portrait_full"
+    portrait = inset or full
+    visual = job.get("visual_settings") or {}
     if portrait:
         script = draft.DraftFolder(str(parent)).create_draft(job_id, PORTRAIT_W, PORTRAIT_H, 30, allow_replace=False)
     else:
@@ -173,43 +231,59 @@ def build(job: dict) -> dict:
     # 画面轨：每镜一段。视频镜：角色镜声轨全开（角色在里面说话），旁白镜片段比配音长就截、
     # 比配音短就放慢速度铺满，声轨压低只留环境音。图片镜：一张图铺满这镜，用关键帧做推拉平移。
     video_track = script.append_track(draft.TrackSpec(draft.TrackType.video, "画面"))
-    first_visual = True
-    for shot in shots:
+    dissolve = visual.get("transition") == "fade"
+    # A single editable visual track; native transitions belong to the outgoing clip.
+    visual_shots = [shot for shot in shots if us(shot["end_s"]) > us(shot["start_s"])]
+    fades = []
+    for i, shot in enumerate(visual_shots):
+        outgoing = us(shot["end_s"]) - us(shot["start_s"])
+        next_duration = us(visual_shots[i+1]["end_s"]) - us(visual_shots[i+1]["start_s"]) if i+1 < len(visual_shots) else 0
+        contiguous = i+1 < len(visual_shots) and us(shot["end_s"]) == us(visual_shots[i+1]["start_s"])
+        fades.append(min(us(0.30), outgoing//4, next_duration//4) if dissolve and contiguous else 0)
+    for index, shot in enumerate(visual_shots):
         start = us(shot["start_s"])
-        duration = us(shot["end_s"]) - start
-        if duration <= 0:
-            continue  # 零长片段不上轨，否则会和下一段重叠
+        base_duration = us(shot["end_s"]) - start
+        duration = base_duration
         image_path = (shot.get("image") or "").strip()
         if image_path:
             material = draft.VideoMaterial(image_path)
             kwargs = {"source_timerange": draft.Timerange(0, duration), "volume": 0}
-            if portrait:
+            if inset:
                 kwargs["clip_settings"] = draft.ClipSettings(scale_x=INSET_BASE, scale_y=INSET_BASE)
             segment = draft.VideoSegment(material, draft.Timerange(start, duration), **kwargs)
-            if portrait:
-                # 不加转场：pyJianYingDraft 内置的叠化会让剪映重新整理 Cache\effect，
-                # 把混剪机器模板里登记的转场缓存路径顶掉（实测过一次）。硬切 + 推拉足够。
-                add_inset_move(segment, shot.get("camera_move") or "", duration)
+            if inset:
+                # Keep the inset camera motion independent of the native transition.
+                add_inset_move(segment, shot.get("camera_move") or "", duration, visual.get("motion_strength", "standard"))
             else:
-                add_camera_move(segment, shot.get("camera_move") or "", duration)
-            script.add_segment(segment, video_track)
-            first_visual = False
-            continue
-        material = draft.VideoMaterial(str(shot["video"]))
-        src_dur = int(getattr(material, "duration", 0) or 0)
-        kwargs = {"volume": float(shot.get("video_volume", 0) or 0)}
-        if src_dur and src_dur >= duration:
-            kwargs["source_timerange"] = draft.Timerange(0, duration)
-        elif src_dur:
-            kwargs["source_timerange"] = draft.Timerange(0, src_dur)
-            kwargs["speed"] = round(src_dur / duration, 4)
-        if portrait:
-            kwargs["clip_settings"] = draft.ClipSettings(scale_x=INSET_BASE, scale_y=INSET_BASE)
-        script.add_segment(draft.VideoSegment(material, draft.Timerange(start, duration), **kwargs), video_track)
-        first_visual = False
+                cover = 1.0
+                if full:
+                    from PIL import Image
+                    with Image.open(image_path) as im:
+                        ratio = im.width / im.height
+                    cover = max(ratio / (9/16), (9/16) / ratio)
+                add_camera_move(segment, shot.get("camera_move") or "", duration, visual.get("motion_strength", "standard"), cover)
+        else:
+            material = draft.VideoMaterial(str(shot["video"]))
+            src_dur = int(getattr(material, "duration", 0) or 0)
+            kwargs = {"volume": float(shot.get("video_volume", 0) or 0)}
+            if src_dur and src_dur >= duration:
+                kwargs["source_timerange"] = draft.Timerange(0, duration)
+            elif src_dur:
+                kwargs["source_timerange"] = draft.Timerange(0, src_dur)
+                kwargs["speed"] = src_dur / duration
+            if inset:
+                kwargs["clip_settings"] = draft.ClipSettings(scale_x=INSET_BASE, scale_y=INSET_BASE)
+            elif full:
+                ratio = float(material.width) / max(1, material.height)
+                cover = max(ratio / (9/16), (9/16) / ratio)
+                kwargs["clip_settings"] = draft.ClipSettings(scale_x=cover, scale_y=cover)
+            segment = draft.VideoSegment(material, draft.Timerange(start, duration), **kwargs)
+        if fades[index]:
+            segment.add_transition(draft.TransitionType.叠化, duration=fades[index])
+        script.add_segment(segment, video_track)
 
     # 背景框（竖版）：账号背景图挖窗后盖在画面上，铺满全片。
-    if portrait:
+    if inset:
         frame_path = make_frame((brand.get("background") or "").strip(), workspace / "generated_visuals")
         frame_track = script.append_track(draft.TrackSpec(draft.TrackType.video, "背景框架"))
         frame_material = draft.VideoMaterial(frame_path)
@@ -295,6 +369,8 @@ def build(job: dict) -> dict:
     prev_end = 0
     caption = brand.get("caption") or {}
     for cap in job.get("captions") or []:
+        if portrait and not visual.get("caption_enabled", True):
+            break
         start = max(prev_end, us(cap["start_s"]))
         end = us(cap["end_s"])
         if end <= start:
@@ -303,13 +379,13 @@ def build(job: dict) -> dict:
             # 一条字幕 = 一个完整分句，小字号、自动折行，最多两行；行宽留 0.86 给底色块边距。
             kwargs = {
                 "style": draft.TextStyle(
-                    size=float(caption.get("size") or 9), color=hex_rgb(caption.get("color") or "#FFFFFF"),
-                    bold=True, align=1, auto_wrapping=True, max_line_width=0.86,
+                    size=float(visual.get("caption_size") or caption.get("size") or (12 if full else 9)), color=hex_rgb(caption.get("color") or "#FFFFFF"),
+                    bold=True, align=1, auto_wrapping=True, max_line_width=0.80 if full else 0.86,
                 ),
                 # 窗口底边在 y=-0.38；字幕压在窗口内侧下沿。
-                "clip_settings": draft.ClipSettings(transform_y=-0.30),
+                "clip_settings": draft.ClipSettings(transform_y={"lower":-0.56,"middle":0.0,"window":-0.30}.get(visual.get("caption_position"), -0.56 if full else -0.30)),
             }
-            if caption.get("bg_color"):
+            if caption.get("bg_color") and not full:
                 kwargs["background"] = draft.TextBackground(
                     color=str(caption["bg_color"]), alpha=float(caption.get("bg_alpha") or 0.92), style=1, round_radius=0.12,
                 )
@@ -325,10 +401,26 @@ def build(job: dict) -> dict:
             }
             if f := font_of(style.get("caption_font", "新青年体")):
                 kwargs["font"] = f
-        script.add_segment(draft.TextSegment(cap["text"], draft.Timerange(start, end - start), **kwargs), cap_track)
+        words = cap.get("keywords") if portrait and visual.get("keywords_enabled", False) else []
+        script.add_segment(KeywordTextSegment(cap["text"], draft.Timerange(start, end - start), keywords=words, **kwargs), cap_track)
         prev_end = end
 
+    if portrait and visual.get("annotation_enabled", False):
+        note_track = script.append_track(draft.TrackSpec(draft.TrackType.text, "重点标注"))
+        for shot in shots:
+            text = (shot.get("annotation") or "").strip()
+            if not text:
+                continue
+            start = us(shot["start_s"])
+            duration = min(us(3), us(shot["end_s"])-start)
+            if duration > 0:
+                script.add_segment(draft.TextSegment(text, draft.Timerange(start, duration),
+                    style=draft.TextStyle(size=12, bold=True, color=hex_rgb("#FFD166"), align=1, auto_wrapping=True, max_line_width=0.8),
+                    clip_settings=draft.ClipSettings(transform_y=0.54),
+                    border=draft.TextBorder(color=(0,0,0),width=40)),note_track)
+
     script.save()
+    write_json(workspace / "visual_manifest.json", job)
     meta_path = workspace / "draft_meta_info.json"
     meta = read_json(meta_path)
     meta["draft_name"] = job["draft_name"]
@@ -396,6 +488,7 @@ def main() -> int:
     job = read_json(Path(sys.argv[1]))
     try:
         built = build(job)
+        print("AI_SHORT_STAGE:导入剪映", file=sys.stderr, flush=True)
         target = register(job, built)
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))

@@ -20,7 +20,7 @@ func TestRewritePromptStamp(t *testing.T) {
 	if RewritePromptStamp != RewritePromptStampStable {
 		t.Fatalf("stamp=%q want %q", RewritePromptStamp, RewritePromptStampStable)
 	}
-	if RewritePromptStampStable != "语感回流 2026-08-25 批注回流2" {
+	if RewritePromptStampStable != EditorialPolicyVersion {
 		t.Fatalf("stable stamp=%q", RewritePromptStampStable)
 	}
 	if RewritePromptStampSharp != "锋利优先 2026-08-25" {
@@ -46,70 +46,34 @@ func TestAssemblePromptUsesCopyMaterials(t *testing.T) {
 
 func TestWriterPromptForbidsLineByLineParaphrase(t *testing.T) {
 	system := buildWriterPrompt(PromptStyleRewrite)
-	for _, want := range []string{
-		"成功标准",
-		"前 3 句与原稿同一件事",
-		"力度不输原稿第一句的狠法",
-		"第一句就砸事",
-		"第一句不许铺现场",
-		"宁可冲",
-		"允许贴着原文开场金句",
-		"禁止为了换说法把最狠那一拳",
-		"故意不说完的答案继续藏着",
-		"只有两万亿这种整量级才改口播说法",
-		"两万亿",
-		"2.05万亿",
-		"0.95%",
-		"950块",
-		"百分之零点九五",
-		"禁止写成理财课",
-		"狠和懂打架，选狠",
-		"整篇重写",
-		"财富觉醒方法论",
-		"本金乘利率",
-		"改本金",
-		"坏开头",
-		"好开头",
-		"禁止逐段同义改写",
-		"#数据资产",
-		"3到4个",
-		"必须从这篇口播长出来",
-		"再补两三句",
-		"禁止带年份",
-		"禁止「就这些」",
-		"就说到这儿",
-	} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("system missing %q", want)
+	if !strings.Contains(system, SharedEditorialPolicy) || strings.Count(system, EditorialPolicyVersion) != 1 {
+		t.Fatal("writer must share one policy")
+	}
+	for _, bad := range []string{"2.05万亿写成两万亿", "狠和懂打架，选狠", "好开头：", "全文课名一次"} {
+		if strings.Contains(system, bad) {
+			t.Fatalf("stale rule: %s", bad)
 		}
 	}
-	for _, forbid := range []string{
-		"语感指纹",
-		"40 字内",
-		"谁的钱、出了什么事",
-		"锚点",
-		"换锚",
-		"2万亿",
-		"50到77万亿",
-		"第N个难题",
-		"中老年听得懂",
-		"前 2～3 句",
-		"第三次换锚",
-		"一百七十万亿",
-		"第三个锚故意不说完",
-		"方便面被外卖抢走",
-		"河的上游",
-		"rewrite 还必须带 machine",
-		"原稿的推进顺序不能倒",
-	} {
-		if strings.Contains(system, forbid) {
-			t.Fatalf("rewrite prompt must not contain %q", forbid)
-		}
+	user := buildWriterUser(PromptStyleRewrite, manifestLite{}, "法拍房原文")
+	if !strings.Contains(user, "法拍房原文") || strings.Contains(user, "{{SOURCE}}") || len([]rune(user)) > 120 {
+		t.Fatal("user template must stay short and interpolate source")
 	}
-	user := buildWriterUser(PromptStyleRewrite, manifestLite{}, "法拍房快堆到四十万套")
-	if !strings.Contains(user, "不当逐句模板") || !strings.Contains(user, "标题和短标题必须跟这篇新口播走") || !strings.Contains(user, "第一句必须够狠") || !strings.Contains(user, "贴着原文开场金句") || !strings.Contains(user, "法拍房快堆到四十万套") || strings.Contains(user, "先抽语感指纹") || strings.Contains(user, "四十岁") || strings.Contains(user, "只换说法和加料，不换题") {
-		t.Fatalf("user=%q", user)
+}
+
+func currentPublishFixture(t *testing.T) string {
+	t.Helper()
+	draft, err := parseRemixDraft(remixJSON)
+	if err != nil {
+		t.Fatal(err)
 	}
+	draft.Titles = []string{}
+	draft.Descriptions = []string{"人民币第三次换锚，变化在哪里？", "资金流向发生了什么变化？"}
+	draft.Topics = []string{"#财经", "#人民币", "#资金流向"}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 func TestWriterPromptSharpEmphasizesImpact(t *testing.T) {
@@ -189,7 +153,7 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	last := filepath.Join(root, "output-last-message.json")
 
 	copyStub := &stubCopyClient{hooks: "钩子A", scripts: "脚本B"}
-	client := &textClient{content: remixJSON}
+	client := &textClient{content: currentPublishFixture(t)}
 	if err := Run(Options{
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
@@ -208,7 +172,7 @@ func TestRunWritesEnvelopeFromModelText(t *testing.T) {
 	if len(copyStub.calls) != 0 {
 		t.Fatalf("default rewrite must not call copy: %#v", copyStub.calls)
 	}
-	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, "成功标准") || !strings.Contains(client.last.Messages[0].Content, "狠和懂打架，选狠") || strings.Contains(client.last.Messages[1].Content, "钩子A") {
+	if len(client.last.Messages) != 2 || !strings.Contains(client.last.Messages[0].Content, SharedEditorialPolicy) || strings.Contains(client.last.Messages[1].Content, "钩子A") {
 		t.Fatalf("default rewrite must use stable writer prompt: %#v", client.last.Messages)
 	}
 	body, err := os.ReadFile(last)
@@ -338,7 +302,7 @@ func TestRunCopyStyleUsesAssemblePrompt(t *testing.T) {
 	}
 }
 
-func TestRunCopyStillRunsQualityGate(t *testing.T) {
+func TestRunCopySkipsMechanicalQualityGate(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
@@ -368,19 +332,19 @@ func TestRunCopyStillRunsQualityGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logRaw), "quality_failed") {
-		t.Fatalf("copy style must still run overlap QC, log=%s", logRaw)
+	if strings.Contains(string(logRaw), "quality_failed") {
+		t.Fatalf("copy style must skip overlap QC, log=%s", logRaw)
 	}
 	env, err := os.ReadFile(last)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(env), `"failed"`) {
-		t.Fatalf("copy high-overlap draft must fail QC: %s", env)
+	if !strings.Contains(string(env), `"completed"`) {
+		t.Fatalf("copy high-overlap draft must remain available for manual review: %s", env)
 	}
 }
 
-func TestRunSharpStillRunsQualityGate(t *testing.T) {
+func TestRunSharpSkipsMechanicalQualityGate(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
@@ -409,15 +373,15 @@ func TestRunSharpStillRunsQualityGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logRaw), "quality_failed") {
-		t.Fatalf("rewrite_sharp must still run overlap QC, log=%s", logRaw)
+	if strings.Contains(string(logRaw), "quality_failed") {
+		t.Fatalf("rewrite_sharp must skip overlap QC, log=%s", logRaw)
 	}
 	env, err := os.ReadFile(last)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(env), `"failed"`) {
-		t.Fatalf("rewrite_sharp high-overlap draft must fail QC: %s", env)
+	if !strings.Contains(string(env), `"completed"`) {
+		t.Fatalf("rewrite_sharp high-overlap draft must remain available for manual review: %s", env)
 	}
 }
 
@@ -462,7 +426,7 @@ const selfCheckTestSource = "9月1日之后，你存银行的钱还是你的，�
 // selfCheckCleanScript 同一批事实全部换说法，只保留锁词，篇幅不低于原文。
 const selfCheckCleanScript = "再过几天，一条新规矩就落地了：你天天刷手机留下的那些痕迹，从此算你名下的家当。财政部跟国家数据局联手发了三份文件，头一份定类别，什么样的痕迹归哪一类写得明明白白；第二份办登记，每一条都记上主人的名字；第三份分收益，卖出去的钱里头写清楚有你的份。搁在过去，这三件事没有一件办得成：归属不明，价钱不定，赚了钱也轮不到你。乱到什么程度？同一批痕迹，甲公司开口就是100万，乙公司摇头说不值钱，银行两边都不敢认账，谁也拿不出全国通行的尺子。往后不一样了，所有数据统一分类、统一编号、统一入库，随便哪家有资质的机构一查号码，来历、主人、身价全都清清楚楚。还有不少人一碰到新词就往后缩，觉得自己弄不懂干脆不碰，结果眼睁睁看着别人先动手。去我主页橱窗看《财富觉醒方法论》。"
 
-func TestRunRewriteSelfCheckRepairsCopiedDraft(t *testing.T) {
+func TestRunRewriteLeavesCopyDecisionToUser(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
@@ -483,44 +447,42 @@ func TestRunRewriteSelfCheckRepairsCopiedDraft(t *testing.T) {
 	if err := Run(Options{
 		ManifestPath: manifestPath, SkillRoot: skillRoot, OutputLastMessage: last,
 		BaseURL: "http://example.invalid/v1", APIKey: "test-key",
-		Client: client,
+		Client: client, Model: "chosen-model", ReasoningEffort: "high", ServiceTier: "priority",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 2 {
-		t.Fatalf("照抄稿必须触发一轮自检返工, requests=%d", len(client.requests))
+	if len(client.requests) != 1 {
+		t.Fatalf("机械自检不得触发返工, requests=%d", len(client.requests))
 	}
-	repair := client.requests[1]
-	if len(repair.Messages) != 4 {
-		t.Fatalf("返工请求必须带完整对话链: %#v", repair.Messages)
-	}
-	if !strings.Contains(repair.Messages[3].Content, "自检") || !strings.Contains(repair.Messages[3].Content, "换说法") {
-		t.Fatalf("返工提示必须列出撞车片段: %s", repair.Messages[3].Content)
+	for _, req := range client.requests {
+		if req.ServiceTier != "priority" || req.Model != "chosen-model" || req.ReasoningEffort != "high" {
+			t.Fatalf("writer/repair Fast settings changed: %+v", req)
+		}
 	}
 	got, err := os.ReadFile(filepath.Join(outputDir, "continuous_script.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "乙公司摇头") || strings.Contains(string(got), "干一辈子活") {
-		t.Fatalf("必须交付返工后的干净稿: %s", got)
+	if string(got) != copied {
+		t.Fatalf("必须保留写手稿: %s", got)
 	}
 	logRaw, err := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logRaw), "self_check") || !strings.Contains(string(logRaw), "quality_passed") {
+	if strings.Contains(string(logRaw), "self_check") || strings.Contains(string(logRaw), "quality_passed") {
 		t.Fatalf("run log=%s", logRaw)
 	}
 	env, err := os.ReadFile(last)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(env), `"completed"`) || !strings.Contains(string(env), "自检") {
+	if !strings.Contains(string(env), `"completed"`) || strings.Contains(string(env), "自检") {
 		t.Fatalf("envelope=%s", env)
 	}
 }
 
-func TestRunRewriteSelfCheckFailsWhenRepairKeepsCopying(t *testing.T) {
+func TestRunRewriteDoesNotFailOnOverlap(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skill")
 	_ = os.MkdirAll(skillRoot, 0o755)
@@ -548,11 +510,11 @@ func TestRunRewriteSelfCheckFailsWhenRepairKeepsCopying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(env), `"failed"`) || !strings.Contains(string(env), "自检不通过") {
-		t.Fatalf("返工无改善且超硬性上限必须失败: %s", env)
+	if !strings.Contains(string(env), `"completed"`) || strings.Contains(string(env), "自检不通过") {
+		t.Fatalf("重合率不再拦截交付: %s", env)
 	}
 	logRaw, _ := os.ReadFile(filepath.Join(outputDir, "remix_run.json"))
-	if !strings.Contains(string(logRaw), "quality_failed") {
+	if strings.Contains(string(logRaw), "quality_failed") {
 		t.Fatalf("run log=%s", logRaw)
 	}
 }
@@ -647,7 +609,7 @@ func TestRunUsesOverrideSystemAndUserPrompts(t *testing.T) {
 		},
 	})
 	_ = os.WriteFile(manifestPath, raw, 0o644)
-	client := &textClient{content: remixJSON}
+	client := &textClient{content: currentPublishFixture(t)}
 	if err := Run(Options{
 		ManifestPath:      manifestPath,
 		SkillRoot:         skillRoot,
@@ -662,7 +624,7 @@ func TestRunUsesOverrideSystemAndUserPrompts(t *testing.T) {
 	if len(client.last.Messages) != 2 {
 		t.Fatalf("messages=%d", len(client.last.Messages))
 	}
-	if client.last.Messages[0].Content != "OVERRIDE-SYSTEM-PROMPT" {
+	if !strings.Contains(client.last.Messages[0].Content, "OVERRIDE-SYSTEM-PROMPT") || !strings.Contains(client.last.Messages[0].Content, SharedEditorialPolicy) {
 		t.Fatalf("system=%q", client.last.Messages[0].Content)
 	}
 	if !strings.Contains(client.last.Messages[1].Content, "OVERRIDE-USER") || !strings.Contains(client.last.Messages[1].Content, "对标原文在这里。") {
@@ -708,7 +670,7 @@ func TestRunWritesSpokenScriptFromContinuousInput(t *testing.T) {
 	}
 }
 
-const remixJSON = `{"continuous_script":"又一批人要发财了，人民币第三次换锚已经开始。前两波是美元外贸和土地房子，旧锚死了，利率下来，一百七十万亿存款在找出路。第三个锚先不说完，现在就上车。","titles":["人民币第三次换锚来了","下一批先富的人在哪","旧锚退潮钱去哪","一百七十万亿在找出口","第三个锚先不说完","窗口不会一直开着","看懂资金方向先上车","别只盯着工资存款"],"short_titles":["第三次换锚来了","钱会流向哪里","下一批赢家是谁","窗口不会等人","现在就上车吧"],"descriptions":["前两次换锚分别推高了外贸和房子。 #人民币 #财富趋势 #经济周期","看懂资金上游的人先拿位置。 #资金流向 #财富觉醒 #趋势判断","答案先留着，窗口不会一直开着。 #宏观经济 #资产趋势 #时代机会"],"topics":["#人民币","#财富趋势","#资金流向"],"cta":"关掉干扰，现在就去主页橱窗看《财富觉醒方法论》。"}`
+const remixJSON = `{"continuous_script":"又一批人要发财了，人民币第三次换锚已经开始。前两波是美元外贸和土地房子，旧锚死了，利率下来，一百七十万亿存款在找出路。第三个锚先不说完，现在就上车。","titles":["人民币第三次换锚来了","下一批先富的人在哪","旧锚退潮钱去哪","一百七十万亿在找出口","第三个锚先不说完","窗口不会一直开着","看懂资金方向先上车","别只盯着工资存款"],"short_titles":["第三次换锚来了","钱会流向哪里呢","下一批赢家是谁"],"descriptions":["前两次换锚分别推高了外贸和房子。 #人民币 #财富趋势 #经济周期","看懂资金上游的人先拿位置。 #资金流向 #财富觉醒 #趋势判断","答案先留着，窗口不会一直开着。 #宏观经济 #资产趋势 #时代机会"],"topics":["#人民币","#财富趋势","#资金流向"],"cta":"关掉干扰，现在就去主页橱窗看《财富觉醒方法论》。"}`
 
 type textClient struct {
 	content  string

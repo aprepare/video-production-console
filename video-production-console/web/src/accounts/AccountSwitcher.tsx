@@ -1,3 +1,4 @@
+import "./account-switcher.css";
 import type { FormEvent } from "react";
 import type { Account } from "../types";
 

@@ -37,6 +37,7 @@ type RuntimeProvider interface {
 
 type SlotInput struct {
 	BaseURL, Model, APIKey, ReasoningEffort string
+	ServiceTier                             string
 	// Pipeline：""/"single" 单模型写手；"multi_agent" 三路情报agent+写手。
 	Pipeline    string
 	RunCount    int
@@ -52,6 +53,7 @@ type DefaultsView struct {
 }
 
 type PresetSlotView struct {
+	ServiceTier      string `json:"service_tier,omitempty"`
 	BaseURL          string `json:"base_url"`
 	Model            string `json:"model"`
 	ReasoningEffort  string `json:"reasoning_effort"`
@@ -62,11 +64,12 @@ type PresetSlotView struct {
 }
 
 type Experiment struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	SourceText  string    `json:"source_text"`
-	PromptStamp string    `json:"prompt_stamp"`
-	Status      string    `json:"status"`
+	AccountID   string `json:"account_id"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	SourceText  string `json:"source_text"`
+	PromptStamp string `json:"prompt_stamp"`
+	Status      string `json:"status"`
 	// Workflow 为 true 表示按工作流快照执行的实验。
 	Workflow  bool       `json:"workflow"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -76,6 +79,7 @@ type Experiment struct {
 }
 
 type SlotView struct {
+	ServiceTier      string `json:"service_tier,omitempty"`
 	ID               string `json:"id"`
 	ExperimentID     string `json:"experiment_id"`
 	SortIndex        int    `json:"sort_index"`
@@ -89,27 +93,27 @@ type SlotView struct {
 }
 
 type RunView struct {
-	ID               string     `json:"id"`
-	ExperimentID     string     `json:"experiment_id"`
-	SlotID           string     `json:"slot_id"`
-	RunIndex         int        `json:"run_index"`
-	Status           string     `json:"status"`
-	PromptID         string     `json:"prompt_id"`
-	PromptStamp      string     `json:"prompt_stamp"`
-	PromptName       string     `json:"prompt_name"`
-	ContinuousScript string     `json:"continuous_script"`
-	TitlesJSON       string     `json:"titles_json"`
-	PackageJSON      string     `json:"package_json"`
-	DraftV1JSON      string     `json:"draft_v1_json"`
-	ReviewJSON       string     `json:"review_json"`
+	ID               string `json:"id"`
+	ExperimentID     string `json:"experiment_id"`
+	SlotID           string `json:"slot_id"`
+	RunIndex         int    `json:"run_index"`
+	Status           string `json:"status"`
+	PromptID         string `json:"prompt_id"`
+	PromptStamp      string `json:"prompt_stamp"`
+	PromptName       string `json:"prompt_name"`
+	ContinuousScript string `json:"continuous_script"`
+	TitlesJSON       string `json:"titles_json"`
+	PackageJSON      string `json:"package_json"`
+	DraftV1JSON      string `json:"draft_v1_json"`
+	ReviewJSON       string `json:"review_json"`
 	// Production 生产段状态（确认闸门/建项目/口播/配音/混剪）；无则未触发。
-	Production   *ProductionView `json:"production,omitempty"`
-	ErrorMessage string          `json:"error_message"`
-	Comment          string     `json:"comment"`
-	OutputDir        string     `json:"output_dir"`
-	AdoptedProjectID string     `json:"adopted_project_id"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
+	Production       *ProductionView `json:"production,omitempty"`
+	ErrorMessage     string          `json:"error_message"`
+	Comment          string          `json:"comment"`
+	OutputDir        string          `json:"output_dir"`
+	AdoptedProjectID string          `json:"adopted_project_id"`
+	StartedAt        *time.Time      `json:"started_at,omitempty"`
+	FinishedAt       *time.Time      `json:"finished_at,omitempty"`
 }
 
 // Service validates remix-lab experiments, resolves slot keys, and drives runners.

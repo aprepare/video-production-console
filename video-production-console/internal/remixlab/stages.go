@@ -19,7 +19,7 @@ import (
 
 type RunStageView struct {
 	ID     string `json:"id"`
-	Kind   string `json:"kind"`   // input / agent / gate / output
+	Kind   string `json:"kind"` // input / agent / gate / output
 	Title  string `json:"title"`
 	Status string `json:"status"` // ok / failed / skipped / missing
 	// X/Y 是画布坐标：工作流运行取快照里的节点位置；固定管线为 0（前端用内置布局）。
@@ -38,11 +38,13 @@ type RunStageView struct {
 }
 
 type RunStagesView struct {
-	RunID    string         `json:"run_id"`
-	Pipeline string         `json:"pipeline"`
-	Status   string         `json:"status"`
-	Stages   []RunStageView `json:"stages"`
-	Edges    [][2]string    `json:"edges"`
+	ReferenceDrafts []openaicompat.ReferenceDraft `json:"reference_drafts,omitempty"`
+	ReferenceError  string                        `json:"reference_error,omitempty"`
+	RunID           string                        `json:"run_id"`
+	Pipeline        string                        `json:"pipeline"`
+	Status          string                        `json:"status"`
+	Stages          []RunStageView                `json:"stages"`
+	Edges           [][2]string                   `json:"edges"`
 	// Production 生产段总览（画布确认按钮/重试按钮据此渲染）。
 	Production *ProductionView `json:"production,omitempty"`
 }
@@ -55,6 +57,10 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		return RunStagesView{}, err
 	}
 	exp, slots, _, err := s.repo.GetExperiment(ctx, run.ExperimentID)
+	if err != nil {
+		return RunStagesView{}, err
+	}
+	exp, err = s.effectiveRunExperiment(ctx, exp, run.ID)
 	if err != nil {
 		return RunStagesView{}, err
 	}
@@ -83,11 +89,19 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 	}
 
 	view := RunStagesView{RunID: run.ID, Pipeline: slot.Pipeline, Status: run.Status}
+	view.ReferenceDrafts, err = openaicompat.ReadReferenceDrafts(dir)
+	if err != nil {
+		view.ReferenceError = err.Error()
+	}
 	workflow, hasWorkflow := parseWorkflowJSON(exp.WorkflowJSON)
 	if hasWorkflow {
 		view.Pipeline = "workflow"
 	}
 	multiAgent := !hasWorkflow && slot.Pipeline == "multi_agent"
+	var intelMetadata struct {
+		PlannerOnly bool `json:"planner_only"`
+	}
+	_ = json.Unmarshal([]byte(read("intel_summary.json")), &intelMetadata)
 	nodePos := map[string][2]float64{}
 	if hasWorkflow {
 		for _, node := range workflow.Nodes {
@@ -106,7 +120,7 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 	source := read("source.txt")
 	view.Stages = append(view.Stages, at(RunStageView{
 		ID: ids.source, Kind: "input", Title: "对标原文",
-		Status: okOr(source != "", "missing"),
+		Status: presentOrSkipped(source != "", run.Status),
 		Output: source,
 		Extra:  map[string]any{"chars": utf8.RuneCountInString(source)},
 	}))
@@ -124,18 +138,23 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 				System: node.Config.SystemPrompt,
 				User:   node.Config.UserTemplate,
 				Output: read("node_output_" + node.ID + ".json"),
-				Extra:  map[string]any{"channel": node.Config.Channel},
+				Extra:  map[string]any{"channel": node.Config.Channel, "role": node.Config.Role},
 			}
 			if outcome, ok := outcomes[node.ID]; ok {
 				stage.Model = outcome.Model
 				stage.Millis = outcome.Millis
 				stage.Error = outcome.Error
 			}
+			if (node.ID == "facts" || strings.Contains(node.Config.SystemPrompt, "source_facts")) && stage.Output != "" && stage.Error == "" {
+				stage.Error = openaicompat.FactsReadinessProblem(stage.Output)
+			}
 			switch {
 			case stage.Error != "":
 				stage.Status = "failed"
 			case stage.Output != "":
 				stage.Status = "ok"
+			case run.Status == "completed":
+				stage.Status = "skipped"
 			default:
 				stage.Status = "missing"
 			}
@@ -154,6 +173,9 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 				stage.Millis = outcome.Millis
 				stage.Error = outcome.Error
 			}
+			if id == "facts" && stage.Output != "" && stage.Error == "" {
+				stage.Error = openaicompat.FactsReadinessProblem(stage.Output)
+			}
 			switch {
 			case stage.Error != "":
 				stage.Status = "failed"
@@ -164,11 +186,15 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 			}
 			return stage
 		}
-		view.Stages = append(view.Stages,
-			intelStage("hook", "钩子分析", "hook_analysis.json", "hook_system", prompts.Prompts.HookSystem),
-			intelStage("facts", "事实核查", "facts_research.json", "facts_search_system", prompts.Prompts.FactsSearchSystem),
-			intelStage("ammo", "弹药库", "imagery_ammo.json", "ammo_system", prompts.Prompts.AmmoSystem),
-		)
+		if intelMetadata.PlannerOnly {
+			view.Stages = append(view.Stages, intelStage("hook", "二创策划", "hook_analysis.json", "hook_system", prompts.Prompts.HookSystem))
+		} else {
+			view.Stages = append(view.Stages,
+				intelStage("hook", "钩子分析", "hook_analysis.json", "hook_system", prompts.Prompts.HookSystem),
+				intelStage("facts", "事实核查", "facts_research.json", "facts_search_system", prompts.Prompts.FactsSearchSystem),
+				intelStage("ammo", "弹药库", "imagery_ammo.json", "ammo_system", prompts.Prompts.AmmoSystem),
+			)
+		}
 	}
 
 	// —— 写手 ——（提示词是当次运行落盘的原文，含注入的情报包）
@@ -180,15 +206,21 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		System:    read("prompt_system.txt"),
 		User:      read("prompt_user.txt"),
 		Output:    writerRaw,
-		Status:    okOr(writerRaw != "", "missing"),
 		Extra:     map[string]any{"prompt_name": run.PromptName, "prompt_stamp": run.PromptStamp},
 	}
-	if writer.Status == "missing" && failure != "" {
+	switch {
+	case writerRaw != "":
+		writer.Status = "ok"
+	case failure != "":
 		writer.Status = "failed"
 		writer.Error = failure
 		failure = "" // 失败原因只挂最早断掉的节点
+	case run.Status == "completed":
+		writer.Status = "skipped"
+	default:
+		writer.Status = "missing"
 	}
-	// 写手用时：运行日志里 writer 事件（首稿）+ 自检返工各轮的耗时累计。
+	// 写手用时取运行日志中的首稿事件。
 	if events := readRunLogEvents(read("remix_run.json"), "writer"); len(events) > 0 {
 		for _, ev := range events {
 			if ms, ok := ev["ms"].(float64); ok {
@@ -197,58 +229,6 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		}
 	}
 	view.Stages = append(view.Stages, at(writer))
-
-	// —— 机械自检 ——（轮次和判定从运行日志取；阈值=默认+快照节点覆盖）
-	checkEvents := readRunLogEvents(read("remix_run.json"), "self_check")
-	overlapMax, overlapHard, lenMin, lenHard, maxRounds := openaicompat.SelfCheckDefaults()
-	if hasWorkflow {
-		for _, node := range workflow.Nodes {
-			if node.Type != WorkflowNodeSelfcheck {
-				continue
-			}
-			cfg := node.Config
-			if cfg.OverlapMaxPct > 0 {
-				overlapMax = cfg.OverlapMaxPct
-			}
-			if cfg.OverlapHardPct > 0 {
-				overlapHard = cfg.OverlapHardPct
-			}
-			if cfg.LenMinRatio > 0 {
-				lenMin = cfg.LenMinRatio
-			}
-			if cfg.LenHardRatio > 0 {
-				lenHard = cfg.LenHardRatio
-			}
-			if cfg.MaxRounds > 0 {
-				maxRounds = cfg.MaxRounds
-			}
-			break
-		}
-	}
-	check := RunStageView{
-		ID: ids.selfcheck, Kind: "gate", Title: "机械自检",
-		Extra: map[string]any{
-			"events": checkEvents,
-			"limits": map[string]any{
-				"overlap_max_pct": overlapMax, "overlap_hard_pct": overlapHard,
-				"len_min_ratio": lenMin, "len_hard_ratio": lenHard, "max_rounds": maxRounds,
-			},
-		},
-	}
-	switch {
-	case len(checkEvents) == 0:
-		check.Status = "missing"
-	case lastVerdict(checkEvents) == "hard_fail":
-		check.Status = "failed"
-	default:
-		check.Status = "ok"
-	}
-	if check.Status != "failed" && failure != "" && writerRaw != "" && read("continuous_script.txt") == "" {
-		check.Status = "failed"
-		check.Error = failure
-		failure = ""
-	}
-	view.Stages = append(view.Stages, at(check))
 
 	// —— 审稿终审 ——（工作流没有审稿节点时不出现在图上）
 	if ids.review != "" {
@@ -259,9 +239,20 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 			}
 		}
 		reviewRaw := read("review.json")
+		reviewModel := ""
+		if hasWorkflow {
+			if node := workflowReviewer(workflow); node != nil {
+				reviewModel = strings.TrimSpace(node.Config.Model)
+			}
+		}
+		if reviewModel == "" {
+			if rt, rtErr := s.runtime.Runtime(ctx); rtErr == nil {
+				reviewModel, _ = s.remixDefaults(ctx, rt, nil)
+			}
+		}
 		review := RunStageView{
 			ID: ids.review, Kind: "agent", Title: "审稿终审",
-			Model:     slot.Model,
+			Model:     reviewModel,
 			PromptKey: "reviewer_system",
 			System:    reviewSystem,
 			Output:    reviewRaw,
@@ -314,15 +305,17 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 	switch {
 	case hasWorkflow:
 		view.Edges = workflow.Edges
+	case multiAgent && intelMetadata.PlannerOnly:
+		view.Edges = [][2]string{{"source", "hook"}, {"hook", "writer"}, {"writer", "review"}, {"review", "final"}}
 	case multiAgent:
 		view.Edges = [][2]string{
 			{"source", "hook"}, {"source", "facts"}, {"source", "ammo"},
 			{"hook", "writer"}, {"facts", "writer"}, {"ammo", "writer"},
-			{"writer", "selfcheck"}, {"selfcheck", "review"}, {"review", "final"},
+			{"writer", "review"}, {"review", "final"},
 		}
 	default:
 		view.Edges = [][2]string{
-			{"source", "writer"}, {"writer", "selfcheck"}, {"selfcheck", "review"}, {"review", "final"},
+			{"source", "writer"}, {"writer", "review"}, {"review", "final"},
 		}
 	}
 
@@ -529,11 +522,11 @@ func publishingCopyExtra(packageJSON string) map[string]any {
 
 // stageNodeIDs 是骨干节点在图里的实际ID：工作流按快照，固定管线用内置名。
 type stageNodeIDs struct {
-	source, writer, selfcheck, review, final string
+	source, writer, review, final string
 }
 
 func resolveStageIDs(w Workflow, hasWorkflow bool) stageNodeIDs {
-	ids := stageNodeIDs{source: "source", writer: "writer", selfcheck: "selfcheck", review: "review", final: "final"}
+	ids := stageNodeIDs{source: "source", writer: "writer", review: "review", final: "final"}
 	if !hasWorkflow {
 		return ids
 	}
@@ -544,8 +537,6 @@ func resolveStageIDs(w Workflow, hasWorkflow bool) stageNodeIDs {
 			ids.source = node.ID
 		case WorkflowNodeWriter:
 			ids.writer = node.ID
-		case WorkflowNodeSelfcheck:
-			ids.selfcheck = node.ID
 		case WorkflowNodeReviewer:
 			ids.review = node.ID
 		case WorkflowNodeOutput:
@@ -611,11 +602,16 @@ func lastVerdict(events []map[string]any) string {
 	return ""
 }
 
-func okOr(ok bool, fallback string) string {
-	if ok {
+// presentOrSkipped：已完成运行缺产物视为跳过（手工定稿没跑该步），
+// 进行中或缺产物仍是 missing，不是引擎显式 skip。
+func presentOrSkipped(has bool, runStatus string) string {
+	if has {
 		return "ok"
 	}
-	return fallback
+	if runStatus == "completed" {
+		return "skipped"
+	}
+	return "missing"
 }
 
 func firstNonBlank(values ...string) string {

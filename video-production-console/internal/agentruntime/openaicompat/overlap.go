@@ -3,6 +3,7 @@ package openaicompat
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -236,11 +237,14 @@ func repairSourceOverlap(client ChatClient, model, checkModel, effort, system, u
 
 const canonicalCourse = "财富觉醒方法论"
 
+// 只处理紧邻课程名的旧商品标记，保留正文中的年份和白银话题。
+var courseYearPrefix = regexp.MustCompile(`2026年?[ \t　]*财富觉醒方法论`)
+var courseEditionSuffix = regexp.MustCompile(`财富觉醒方法论[ \t　]*(?:（[ \t　]*白银版[ \t　]*）|\([ \t　]*白银版[ \t　]*\)|白银版)`)
+
 func stripCourseYear(text string) (string, bool) {
 	orig := text
-	text = strings.ReplaceAll(text, "《2026财富觉醒方法论》", "《财富觉醒方法论》")
-	text = strings.ReplaceAll(text, "2026财富觉醒方法论", "财富觉醒方法论")
-	text = strings.ReplaceAll(text, "叫2026财富觉醒方法论", "叫《财富觉醒方法论》")
+	text = courseYearPrefix.ReplaceAllString(text, canonicalCourse)
+	text = courseEditionSuffix.ReplaceAllString(text, canonicalCourse)
 	return text, text != orig
 }
 
@@ -358,7 +362,7 @@ func applyLocalCopyFixes(script string) (string, []string) {
 	notes := make([]string, 0, 4)
 	script, stripped := stripCourseYear(script)
 	if stripped {
-		notes = append(notes, "课名去掉年份")
+		notes = append(notes, "统一课程名称，去掉年份与版本")
 	}
 	script, converted := chineseSmallNumbers(script)
 	if converted {
@@ -471,9 +475,15 @@ func hardCopyIssue(issue string) bool {
 
 func replaceDraftScript(raw, script string) string {
 	text := strings.TrimSpace(stripCodeFence(raw))
-	if strings.HasPrefix(text, "{") {
+	extracted := text
+	if !strings.HasPrefix(extracted, "{") {
+		if objText := extractJSONObject(extracted); objText != "" {
+			extracted = objText
+		}
+	}
+	if strings.HasPrefix(extracted, "{") {
 		var obj map[string]json.RawMessage
-		if json.Unmarshal([]byte(text), &obj) == nil {
+		if json.Unmarshal([]byte(extracted), &obj) == nil {
 			b, err := json.Marshal(script)
 			if err == nil {
 				obj["continuous_script"] = b
@@ -481,6 +491,12 @@ func replaceDraftScript(raw, script string) string {
 					return string(out)
 				}
 			}
+		}
+	}
+	if draft, err := parseRemixDraft(raw); err == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
+		draft.ContinuousScript = script
+		if out, err := json.Marshal(draft); err == nil {
+			return string(out)
 		}
 	}
 	return script

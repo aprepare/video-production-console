@@ -17,7 +17,7 @@ export function ProductionRail({ currentStage }: ProductionRailProps) {
       style={{ "--rail-progress": `${Math.max(currentIndex, 0) * 25}%` } as CSSProperties}
     >
       <div className="production-rail__heading">
-        <span>PRODUCTION ROUTE</span>
+        <span>生产进度</span>
         <strong>{String(currentIndex + 1).padStart(2, "0")} <small>/ 05</small></strong>
       </div>
       <div className="production-rail__stages">
@@ -36,7 +36,7 @@ export function ProductionRail({ currentStage }: ProductionRailProps) {
               <span className="production-rail__copy">
                 <span className="production-rail__label">{stage.label}</span>
                 <span className="production-rail__state">
-                  {state === "complete" ? "已完成" : state === "current" ? "正在制作" : "待开始"}
+                  {state === "complete" ? "已完成" : state === "current" ? (currentStage === "published" ? "已确认发布" : currentStage === "review" ? "待人工确认" : "当前阶段") : "待开始"}
                 </span>
               </span>
             </div>

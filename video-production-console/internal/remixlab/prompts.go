@@ -118,57 +118,23 @@ func promptWash() PromptTemplate {
 }
 
 func sharedHardFloor() string {
-	return `【硬性底线——与生产定稿一致】
-- 不换题、不降温、不补圆原文故意不说完的答案，不收成家庭理财课
-- 关键数字必须原词留下，禁止「很多」「心惊的数」「差不多」
-- 课名固定《财富觉醒方法论》（原文另有课名时跟原文），入口主页橱窗
-- 篇幅约 0.8～1.2 倍；原稿推进顺序不能倒
-- 【中老年听得懂】听的人 45–65 岁；开场禁止：锚点、换锚、换毛、货币、结汇、印钞、认知、红利、风口、阶层、史诗级、逻辑、趋势、下半场
-- 禁止按「第N个难题」对照译文；中间必须换切口（现场/人物/一个动作）
-- 禁止写成理财课、讲解员腔。宁可冲，不要写得好看。`
+	return openaicompat.EditorialWritingRules
 }
 
 func sharedJSONContract() string {
 	return `只返回一个 JSON 对象，不要 Markdown。字段：continuous_script, titles, short_titles, descriptions, topics, cta。
 continuous_script 必须是完整连续口播正文。
-titles 8到12条。short_titles 恰好3条、每条最多15个字、不要#：第1条当视频板面主标题、第2条当副标题、第3条备选。descriptions 恰好3条，每条40到70个字。topics 4到5个带#的话题：第1个用大流量池标签（#财经 #经济 这类），其余贴这条视频的垂直内容（如 #楼市 #房贷 #家庭理财 #存钱），贴内容比蹭热门重要。cta 一句留人话术，不许催付款。`
+titles 留空数组。short_titles 恰好3条、每条6到15个字、不要#：第1条当视频板面主标题、第2条当副标题、第3条备选，分别对应三种不同钩子。descriptions 2到3条，每条不超过40个字，各带一个具体钩子，不写#话题。topics 3到4个带#的话题：第1个从 #财经 #经济 #理财 中选取，其余为正文出现的具体名词。cta 写课尾橱窗动作句。`
 }
 
 func promptBoneFlesh() PromptTemplate {
-	sys := `你是财经视频号二创写手。只写能念的连续口播，不要工具、不要文件、不要解释过程。
-
-【核心方法：骨肉分离】
-爆款 = 骨架（结构）+ 皮肉（表达）。只借用骨架，不借原文句子。
-
-【第一步：先在心里拆骨架（不要输出拆解过程）】
-1. 黄金3秒钩子类型：问题式 / 反常识 / 结果先行 / 人群圈定 / 数字砸 / 截止日——选一个类型复用，不复用原句
-2. 冲突或误区：原稿靠什么制造「出事了」的感觉
-3. 证明逻辑：哪些数字/历史已经灵过
-4. 未揭晓答案：故意不说完的那一点
-5. 情绪升级与课尾催上车
-
-【第二步：换皮肉重写】
-- 前 3 句必须同一件事、力度不输原稿；第一句就砸事
-- 开场切口必须换词换现场，但钩子类型可与原稿同类
-- 中后段说法、金句、比喻必须换；禁止逐段同义改写
-
-` + sharedHardFloor() + `
-
-` + sharedJSONContract()
-
-	user := `按「骨肉分离」写全新口播：只借骨架，皮肉全换。前 3 句钩子类型可同类，句子必须新。答案继续藏。标题跟新口播走。
-{{NOTES}}
-# 同行原文
-{{SOURCE}}`
-
 	return PromptTemplate{
-		ID:          "bone_flesh",
-		Name:        "骨肉分离",
-		Description: "先抽结构骨架再换表达。适合「仿写不像」时强制换说法、保留爆款逻辑。",
+		ID: "bone_flesh", Name: "骨肉分离",
+		Description: "短开头、持续推进、祝福互动与自然课尾；可借鉴多模型完整参考稿。",
 		Style:       openaicompat.PromptStyleRewrite,
-		Stamp:       "骨肉分离 2026-08-25",
-		System:      sys,
-		User:        user,
+		Stamp:       openaicompat.EditorialPolicyVersion,
+		System:      openaicompat.BoneFleshSystemPrompt(),
+		User:        openaicompat.BoneFleshUserPrompt,
 		Builtin:     true,
 	}
 }

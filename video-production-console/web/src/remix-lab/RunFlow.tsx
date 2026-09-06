@@ -1,15 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Background,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import { FixedFlowSteps, type FixedFlowStep } from "./FixedFlowSteps";
 import { BookOpenText, Clapperboard, FileText, Gauge, PenLine, ScanSearch, Stamp, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -24,8 +14,9 @@ import {
   type RemixLabRunStagesView,
 } from "./api";
 import { ReviewCompare, ReviewIssueList, resolveReviewVersions, reviewVerdictLabel, reviewVerdictTone } from "./ReviewCompare";
+import { ReferenceDrafts } from "./ReferenceDrafts";
 
-// n8n 式运行工作流：节点=管线阶段，点节点在右侧看该步实际输入输出。
+// 固定运行步骤：点选阶段查看该步的实际输入输出。
 // RunFlowPanel 是可复用面板：live=true 时每 2.5 秒轮询刷新（详情页内嵌，
 // 跑的过程中节点逐个亮起）；RunFlow 是完成后的全量检视弹窗。
 
@@ -38,15 +29,15 @@ type RunFlowPanelProps = {
   onMessage: (text: string) => void;
   /** 提供后，失败节点的检视器出现「重试并续跑」按钮（agent节点传ID，其余整体重试）。
    *  model 非空时先换模型再重试（agent 节点改快照，其余改槽位主模型）。 */
-  onRetryNode?: (nodeID: string, model?: string) => void;
+  onRetryNode?: (nodeID: string, model?: string) => void | Promise<unknown>;
   /** run 状态变化回调（live 轮询时告诉宿主跑完了没）。 */
   onStatusChange?: (status: string) => void;
   /** 生产段状态回调（宿主渲染确认闸门按钮/进度）。 */
   onProductionChange?: (production: RemixLabProduction | null) => void;
   /** 生产节点失败时的续跑回调。 */
-  onRetryProduce?: () => void;
+  onRetryProduce?: () => void | Promise<unknown>;
   /** 确认二创后开始混剪。 */
-  onConfirmProduce?: () => void;
+  onConfirmProduce?: () => void | Promise<unknown>;
 };
 
 type RunFlowProps = {
@@ -56,9 +47,9 @@ type RunFlowProps = {
   onClose: () => void;
   onEditAgentPrompts: () => void;
   onMessage: (text: string) => void;
-  onRetryNode?: (nodeID: string, model?: string) => void;
-  onRetryProduce?: () => void;
-  onConfirmProduce?: () => void;
+  onRetryNode?: (nodeID: string, model?: string) => void | Promise<unknown>;
+  onRetryProduce?: () => void | Promise<unknown>;
+  onConfirmProduce?: () => void | Promise<unknown>;
 };
 
 const STAGE_ICONS: Record<string, LucideIcon> = {
@@ -86,14 +77,6 @@ const KIND_ICONS: Record<string, LucideIcon> = {
   produce: Clapperboard,
 };
 
-const KIND_LABEL: Record<string, string> = {
-  input: "输入",
-  agent: "AGENT",
-  gate: "闸门",
-  output: "产出",
-  produce: "混剪",
-};
-
 function statusLabel(status: string, live: boolean): string {
   switch (status) {
     case "ok":
@@ -113,66 +96,6 @@ function statusLabel(status: string, live: boolean): string {
   }
 }
 
-// 固定管线（旧运行没有坐标）的内置布局。
-function stagePosition(id: string, multiAgent: boolean): { x: number; y: number } {
-  if (multiAgent) {
-    const grid: Record<string, [number, number]> = {
-      source: [0, 190],
-      hook: [300, 10],
-      facts: [300, 190],
-      ammo: [300, 370],
-      writer: [600, 190],
-      selfcheck: [880, 190],
-      review: [1160, 190],
-      final: [1440, 190],
-    };
-    const [x, y] = grid[id] ?? [0, 0];
-    return { x, y };
-  }
-  const line: Record<string, number> = { source: 0, writer: 300, selfcheck: 600, review: 880, final: 1160 };
-  return { x: line[id] ?? 0, y: 140 };
-}
-
-type StageNodeData = { stage: RemixLabRunStage; live: boolean };
-
-function StageNode({ data, selected }: NodeProps & { data: StageNodeData }) {
-  const stage = data.stage;
-  const Icon = STAGE_ICONS[stage.id] ?? KIND_ICONS[stage.kind] ?? FileText;
-  const pendingLive = data.live && stage.status === "missing";
-  const pulsing = pendingLive || stage.status === "running" || stage.status === "waiting";
-  return (
-    <div
-      className={[
-        "run-flow-node",
-        `run-flow-node--${stage.status}`,
-        pendingLive ? "run-flow-node--pending" : "",
-        selected ? "run-flow-node--selected" : "",
-      ].join(" ")}
-    >
-      <Handle type="target" position={Position.Left} className="run-flow-handle" />
-      <div className="run-flow-node__head">
-        <span className="run-flow-node__icon" aria-hidden="true">
-          <Icon size={15} strokeWidth={2} />
-        </span>
-        <div className="run-flow-node__titles">
-          <small>{KIND_LABEL[stage.kind] ?? stage.kind}</small>
-          <strong>{stage.title}</strong>
-        </div>
-        <span
-          className={`run-flow-dot run-flow-dot--${stage.status}${pulsing ? " run-flow-dot--pulse" : ""}`}
-          title={statusLabel(stage.status, data.live)}
-        />
-      </div>
-      <div className="run-flow-node__meta">
-        {stage.model ? <span>{shortModel(stage.model)}</span> : null}
-        {stage.ms ? <span>{(stage.ms / 1000).toFixed(1)}s</span> : null}
-        <span>{statusLabel(stage.status, data.live)}</span>
-      </div>
-      <Handle type="source" position={Position.Right} className="run-flow-handle" />
-    </div>
-  );
-}
-
 function shortModel(model: string): string {
   const base = model.trim().split("/").pop() || model;
   return base.length > 20 ? base.slice(0, 18) + "…" : base;
@@ -187,8 +110,6 @@ function prettyOutput(raw: string | undefined): string {
     return text;
   }
 }
-
-const nodeTypes = { stage: StageNode };
 
 /** 审稿节点抽屉：结论 + 逐条 issue + 审稿前/审稿后全字段对照（只读，采用去改稿工作台）。 */
 function ReviewStageSection({ output, draftV1 }: { output: string; draftV1: string }) {
@@ -502,6 +423,7 @@ type ProduceDetail = {
 
 export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onMessage, onRetryNode, onStatusChange, onProductionChange, onRetryProduce, onConfirmProduce }: RunFlowPanelProps) {
   const [view, setView] = useState<RemixLabRunStagesView | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [selectedID, setSelectedID] = useState<string>("");
   // 换模型重试：失败节点检视器里的可选输入，切换选中节点时清空。
   const [retryModel, setRetryModel] = useState("");
@@ -512,9 +434,28 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
   const [productionActive, setProductionActive] = useState(false);
   const [keywordsDraft, setKeywordsDraft] = useState<string | null>(null);
   const [spokenDraft, setSpokenDraft] = useState<string | null>(null);
+  const requestLock = useRef(false);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const submitRequest = async (action: () => void | Promise<unknown>) => {
+    if (requestLock.current) return;
+    requestLock.current = true;
+    setRequestBusy(true);
+    try { await action(); } catch (error) { onMessage(error instanceof Error ? error.message : "请求失败，请重试。"); }
+    finally { requestLock.current = false; setRequestBusy(false); }
+  };
   const [exportingDraft, setExportingDraft] = useState("");
   const autoSelected = useRef(false);
   const lastStatus = useRef("");
+  const lastFailure = useRef("");
+
+  useEffect(() => {
+    autoSelected.current = false;
+    lastStatus.current = "";
+    lastFailure.current = "";
+    setView(null);
+    setLoadError("");
+    setSelectedID("");
+  }, [runID]);
 
   useEffect(() => {
     setRetryModel("");
@@ -527,26 +468,31 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
         const next = await fetchRemixLabRunStages(api, runID);
         if (cancelled) return;
         setView(next);
+        setLoadError("");
         setProductionActive((next.production?.status ?? "") === "running");
         if (next.status !== lastStatus.current) {
           lastStatus.current = next.status;
           onStatusChange?.(next.status);
         }
         onProductionChange?.(next.production ?? null);
-        // 非实时模式（完成后检视）默认选中第一个出问题的节点，没有就选定稿。
-        if (!live && !autoSelected.current) {
+        // 首次载入聚焦当前断点/运行阶段；后续刷新保留操作员选择。
+        if (!autoSelected.current) {
           autoSelected.current = true;
-          const firstBad = next.stages.find((stage) => stage.status === "failed");
-          setSelectedID(firstBad?.id ?? "final");
+          const active = next.stages.find((stage) => stage.status === "failed")
+            ?? next.stages.find((stage) => stage.status === "running");
+          setSelectedID(active?.id ?? next.stages.find((stage) => stage.id === "final")?.id
+            ?? next.stages.find((stage) => stage.id === "source")?.id ?? next.stages[0]?.id ?? "");
+        } else if (live && next.status === "failed" && lastFailure.current !== next.status) {
+          const failed = next.stages.find((stage) => stage.status === "failed");
+          if (failed) setSelectedID(failed.id);
         }
-        // 实时模式跑失败时自动选中断点，方便直接点重试。
-        if (live && next.status === "failed" && !autoSelected.current) {
-          autoSelected.current = true;
-          const firstBad = next.stages.find((stage) => stage.status === "failed");
-          if (firstBad) setSelectedID(firstBad.id);
-        }
+        lastFailure.current = next.status;
       } catch (error) {
-        if (!cancelled) onMessage(error instanceof Error ? error.message : "工作流分解读取失败。");
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "工作流分解读取失败。";
+          setLoadError(message);
+          onMessage(message);
+        }
       }
     };
     void load();
@@ -563,35 +509,27 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
     };
   }, [api, runID, live, productionActive, refreshTick, onMessage, onStatusChange, onProductionChange]);
 
-  const multiAgent = view?.pipeline === "multi_agent";
-  const hasPositions = (view?.stages ?? []).some((stage) => (stage.x ?? 0) !== 0 || (stage.y ?? 0) !== 0);
-  const nodes: Node[] = useMemo(
-    () =>
-      (view?.stages ?? []).map((stage) => ({
-        id: stage.id,
-        type: "stage",
-        position: hasPositions
-          ? { x: stage.x ?? 0, y: stage.y ?? 0 }
-          : stagePosition(stage.id, Boolean(multiAgent)),
-        data: { stage, live },
-        selected: stage.id === selectedID,
-      })),
-    [view, multiAgent, selectedID, hasPositions, live],
-  );
-  const edges: Edge[] = useMemo(
-    () =>
-      (view?.edges ?? []).map(([from, to]) => ({
-        id: `${from}-${to}`,
-        source: from,
-        target: to,
-        animated: live,
-        style: { strokeWidth: 1.6 },
-      })),
-    [view, live],
-  );
+  const steps: FixedFlowStep[] = useMemo(() => {
+    const rank = (stage: RemixLabRunStage) => {
+      if (stage.kind === "produce" || stage.id.startsWith("produce-")) return 7;
+      if (stage.id === "source" || stage.kind === "input") return 0;
+      if (stage.id === "writer") return 2;
+      if (stage.id === "selfcheck") return 3;
+      if (stage.id === "review") return 4;
+      if (stage.id === "final") return 5;
+      return 1;
+    };
+    return [...(view?.stages ?? [])].sort((a, b) => rank(a) - rank(b)).map((stage) => ({
+      id: stage.id,
+      title: stage.title,
+      subtitle: [stage.model ? shortModel(stage.model) : "", stage.ms ? `${(stage.ms / 1000).toFixed(1)}s` : ""].filter(Boolean).join(" · "),
+      status: stage.status,
+      icon: STAGE_ICONS[stage.id] ?? KIND_ICONS[stage.kind] ?? FileText,
+      group: rank(stage) === 7 ? "produce" : "create",
+    }));
+  }, [view]);
 
   const selected = view?.stages.find((stage) => stage.id === selectedID) ?? null;
-  const checkEvents = (selected?.extra?.events as Array<Record<string, unknown>> | undefined) ?? [];
 
   // 生产节点选中时按需拉实况：任务状态 + 该步实际产物（口播稿/字幕关键词/SRT），
   // 以及项目阶段、配音音频与剪映草稿资产（试听/导出/发布按钮据此渲染）。
@@ -787,8 +725,12 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
     }
   };
 
+  const exportLock = useRef(false);
   const startExport = async (assetID: string) => {
-    if (exportingDraft) return;
+    if (exportingDraft || exportLock.current) return;
+    exportLock.current = true;
+    setBusyAction("export");
+    try {
     const response = await api(`/api/assets/${assetID}/export-video`, { method: "POST" });
     if (!response.ok) {
       onMessage(
@@ -802,6 +744,8 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
     }
     onMessage("已开始控制剪映导出视频，期间请不要操作鼠标键盘。");
     setExportingDraft(assetID);
+    } catch (error) { onMessage(error instanceof Error ? error.message : "导出启动失败。"); }
+    finally { exportLock.current = false; setBusyAction(""); }
   };
 
   const openDraftDirectory = async (assetID: string) => {
@@ -837,37 +781,29 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
   };
 
   return (
-    <div className="run-flow-body">
-      <div className="run-flow-canvas">
-        {view ? (
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodeClick={(_, node) => setSelectedID(node.id)}
-            fitView
-            fitViewOptions={{ padding: 0.18 }}
-            minZoom={0.3}
-            maxZoom={1.6}
-            nodesConnectable={false}
-            deleteKeyCode={null}
-          >
-            <Background gap={22} size={1.4} />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-        ) : (
-          <p className="remix-lab-muted run-flow-loading">正在读取工作流分解…</p>
-        )}
-      </div>
+    <div className="fixed-flow-workspace">
+      {view ? (
+        <FixedFlowSteps steps={steps} selectedID={selectedID} onSelect={setSelectedID} label="运行步骤" />
+      ) : loadError ? (
+        <div className="run-flow-loading" role="alert">
+          <p className="remix-lab-run__error">{loadError}</p>
+          <button type="button" className="header-button" onClick={() => { setLoadError(""); bumpRefresh(); }}>
+            重新读取步骤
+          </button>
+        </div>
+      ) : (
+        <p className="remix-lab-muted run-flow-loading">正在读取工作流分解…</p>
+      )}
       {selected ? (
         <aside
           className={
             selected.prompt_key === "reviewer_system" && selected.output
-              ? "run-flow-inspector run-flow-inspector--wide"
-              : "run-flow-inspector"
+              ? "run-flow-inspector run-flow-inspector--wide fixed-flow-details"
+              : "run-flow-inspector fixed-flow-details"
           }
           aria-label={`${selected.title}详情`}
         >
+          {view ? <ReferenceDrafts key={runID} drafts={view.reference_drafts??[]} error={view.reference_error} onMessage={onMessage}/> : null}
           <header>
             <h3>{selected.title}</h3>
             <span className={`remix-lab-seal remix-lab-seal--${selected.status === "ok" ? "ok" : selected.status === "failed" ? "danger" : "idle"}`}>
@@ -967,13 +903,13 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
                 </section>
               ) : null}
               {onRetryProduce && selected.status === "failed" ? (
-                <button type="button" className="remix-lab-start" onClick={onRetryProduce}>
+                <button type="button" className="remix-lab-start" disabled={requestBusy} onClick={() => void submitRequest(onRetryProduce)}>
                   重试生产并续跑（已完成的步骤不重做）
                 </button>
               ) : null}
               {selected.id === "produce-gate" && selected.status === "waiting" ? (
                 onConfirmProduce ? (
-                  <button type="button" className="remix-lab-start" onClick={onConfirmProduce}>
+                  <button type="button" className="remix-lab-start" disabled={requestBusy} onClick={() => void submitRequest(onConfirmProduce)}>
                     确认开始混剪
                   </button>
                 ) : (
@@ -1042,7 +978,7 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
                   <button
                     type="button"
                     className="remix-lab-start"
-                    disabled={Boolean(exportingDraft)}
+                    disabled={Boolean(exportingDraft) || busyAction === "export"}
                     onClick={() => void startExport(produceDetail.draftAssetID ?? "")}
                   >
                     {exportingDraft ? "正在导出…" : "导出视频"}
@@ -1093,7 +1029,7 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
               <button
                 type="button"
                 className="remix-lab-start"
-                onClick={() => onRetryNode(selected.kind === "agent" ? selected.id : "", retryModel.trim() || undefined)}
+                disabled={requestBusy} onClick={() => void submitRequest(() => onRetryNode(selected.kind === "agent" ? selected.id : "", retryModel.trim() || undefined))}
               >
                 {selected.kind === "agent" ? "重试此节点并续跑" : "从断点重试（已跑完的agent不重跑）"}
                 {retryModel.trim() ? " · 换用新模型" : ""}
@@ -1111,33 +1047,6 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
                 </button>
               )}
             </div>
-          ) : null}
-
-          {selected.kind === "gate" && selected.extra?.limits != null ? (
-            <section>
-              <h4>本次生效阈值</h4>
-              <p className="run-flow-inspector__meta">
-                {(() => {
-                  const limits = selected.extra.limits as Record<string, unknown>;
-                  return `连抄 ≤${String(limits.overlap_max_pct)}%（硬上限 ${String(limits.overlap_hard_pct)}%）· 篇幅 ≥${String(limits.len_min_ratio)}倍（硬下限 ${String(limits.len_hard_ratio)}）· 最多返工 ${String(limits.max_rounds)} 轮`;
-                })()}
-              </p>
-              <p className="remix-lab-muted">在设计画布点机械自检节点可以按篇调整这些阈值。</p>
-            </section>
-          ) : null}
-          {selected.kind === "gate" && checkEvents.length > 0 ? (
-            <section>
-              <h4>自检轮次</h4>
-              <ul className="run-flow-inspector__events">
-                {checkEvents.map((event, index) => (
-                  <li key={index}>
-                    第{String(event.round ?? index)}轮 · {String(event.verdict ?? "")}
-                    {event.overlap_pct != null ? ` · 连抄${String(event.overlap_pct)}%` : ""}
-                    {event.len_ratio != null ? ` · 篇幅${String(event.len_ratio)}倍` : ""}
-                  </li>
-                ))}
-              </ul>
-            </section>
           ) : null}
 
           {selected.kind === "output" && selected.output ? (
@@ -1162,7 +1071,7 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
             <section>
               <h4>
                 {selected.kind === "produce"
-                  ? "任务提示词（设计画布的生产节点可改）"
+                  ? "任务提示词（设计步骤中的生产环节可改）"
                   : `系统提示词${selected.prompt_key === "writer" ? "（本次运行实际发送）" : ""}`}
               </h4>
               <pre className="run-flow-inspector__code">{selected.system_prompt}</pre>

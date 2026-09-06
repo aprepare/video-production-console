@@ -57,7 +57,7 @@ func buildStoryboard(chat openaicompat.ChatClient, model string, short *Short) e
 	resp, err := chat.Chat(openaicompat.ChatRequest{
 		Model:           model,
 		Stream:          true,
-		ReasoningEffort: "low",
+		ReasoningEffort: reasoningOf(short.TextReasoningEffort),
 		Messages: []openaicompat.Message{
 			{Role: "system", Content: storyboardSystemPrompt},
 			{Role: "user", Content: "旁白：\n" + strings.TrimSpace(short.Story)},

@@ -28,7 +28,7 @@ func TestAgentPromptsDefaultViewAndOverrideRoundTrip(t *testing.T) {
 	if view.Overridden["hook_system"] || view.Overridden["reviewer_system"] {
 		t.Fatalf("fresh store must not be overridden: %+v", view.Overridden)
 	}
-	if !strings.Contains(view.Prompts.HookSystem, "钩子分析师") {
+	if !strings.Contains(view.Prompts.HookSystem, "二创策划") {
 		t.Fatalf("effective hook prompt should be builtin default, got: %.40s", view.Prompts.HookSystem)
 	}
 	if view.Prompts.ReviewerSystem != view.Defaults.ReviewerSystem {

@@ -5,7 +5,7 @@ import { QuickGenerateForm } from "./QuickGenerateForm";
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 const defaults = {
   defaultRatio: "3:4" as const,
@@ -110,4 +110,13 @@ describe("QuickGenerateForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "高级手动模式" }));
     expect(onAdvancedMode).toHaveBeenCalledTimes(1);
   });
+});
+
+test("keeps creation script across page unmount", () => {
+  const props = { api: vi.fn(), ...defaults, onCreated: vi.fn(), onAdvancedMode: vi.fn() };
+  const view = render(<QuickGenerateForm {...props} />);
+  fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "离开页面仍保留" } });
+  view.unmount();
+  render(<QuickGenerateForm {...props} />);
+  expect((screen.getByLabelText("最终文案") as HTMLTextAreaElement).value).toBe("离开页面仍保留");
 });

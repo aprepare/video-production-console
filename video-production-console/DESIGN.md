@@ -1,26 +1,29 @@
 ---
 name: Video Production Console
-version: 1
+version: 2
 colors:
-  canvas: "#f3f6f8"
+  navigation: "#14243b"
+  canvas: "#f4f7fb"
   surface: "#ffffff"
-  surfaceMuted: "#eaf0f4"
-  text: "#17283a"
-  textMuted: "#647587"
-  border: "#d7e0e7"
-  accent: "#147d69"
+  surfaceMuted: "#edf2f7"
+  text: "#203148"
+  textMuted: "#61738a"
+  border: "#dfe7f1"
+  accent: "#087fa4"
   warning: "#b47418"
   danger: "#b44747"
   info: "#4d7896"
 typography:
-  family: 'Inter, "SF Pro Text", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+  family: '"Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif'
+  display: '"Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif'
+  mono: '"Cascadia Code", Consolas, monospace'
   bodySize: 14px
   bodyLineHeight: 1.6
 spacing: [4, 8, 12, 16, 24, 32, 48]
 radius:
   small: 10px
-  medium: 14px
-  large: 20px
+  medium: 12px
+  large: 16px
 breakpoints:
   mobile: 640px
   tablet: 900px
@@ -37,7 +40,7 @@ layers:
 
 ## 定位
 
-专业、本地优先的视频生产工具。使用冷灰画布、白色内容面和深蓝灰文字，青绿色只用于主动作与完成状态；界面应克制、清晰，避免大面积深色压迫、装饰性渐变抢占内容层级和卡片无限嵌套。
+专业、本地优先的视频生产工具。深蓝灰固定导航、明亮工作区、青蓝主操作与当前阶段。全局导航统一为文案与混剪、图文制作、AI短片；设置、主题与退出只在导航中出现。页面呈现当前状态、已有产物和下一步，不将生成草稿表述为已发布。
 
 ## 规则
 
@@ -50,6 +53,9 @@ layers:
 - 工作台通过 `--workbench-*` 语义别名消费全局 token，不维护第二套独立色板。
 
 ## 响应式
+
+- 全局导航：桌面208px，761–1180px收至80px，760px以下改为112px高的顶部导航；内容按照剩余可用空间布局。
+- 动效150–220ms，用于交互反馈与状态切换，遵循减弱动态效果偏好。
 
 - `< 640px`：移动单栏，固定主动作需预留 safe-area 和正文底部空间。
 - `640–899px`：单主栏，辅助信息折叠或进入抽屉。

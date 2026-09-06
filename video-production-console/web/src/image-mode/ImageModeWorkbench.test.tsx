@@ -10,7 +10,7 @@ const item = { id: "i1", project_id: "p", sequence: 1, role: "cover", source_tex
 const candidates = Array.from({ length: 5 }, (_, i) => ({ position: i + 1, title: `Title ${i + 1}`, description: `Description ${i + 1}` }));
 const detail = (publishing_candidates = candidates) => ({ project, items: [item], publishing_candidates });
 const listResponse = (path: string, init?: RequestInit) => path === "/api/image-projects" && !init?.method ? json([]) : undefined;
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 describe("ImageModeWorkbench", () => {
   test("defaults and preview/create payload include reasoning_effort and image_count", async () => {
@@ -247,4 +247,26 @@ describe("ImageModeWorkbench", () => {
     const api = vi.fn(async (path: string, init?: RequestInit) => path === "/api/image-projects/p" ? json(detail()) : path === "/api/image-projects" && !init?.method ? json([]) : json({}));
     render(<ImageModeWorkbench api={api} initialProjectID="p" />); await screen.findByRole("article"); const button = screen.getAllByRole("button").find((b) => b.textContent?.includes("标题") || b.textContent?.includes("鏍囬"))!; fireEvent.click(button); await screen.findByRole("dialog"); fireEvent.click(screen.getByRole("button", { name: /保存当前候选/ })); await waitFor(() => expect(api.mock.calls.some(([p, i]) => String(p).includes("publishing-candidates/1") && i?.method === "PATCH")).toBe(true)); expect(api.mock.calls.some(([p, i]) => String(p).endsWith("publishing-candidates/select") && i?.method === "POST")).toBe(true);
   });
+});
+test("shows list failure separately from empty state and retries without losing creation text", async () => {
+  let failed = true;
+  const api = vi.fn(async () => failed ? json({}, 503) : json([project]));
+  render(<ImageModeWorkbench api={api} />);
+  fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "保留的创作草稿" } });
+  const retry = await screen.findByRole("button", { name: "重试读取项目列表" });
+  expect(screen.queryByText("还没有图文项目。")).toBeNull();
+  failed = false;
+  fireEvent.click(retry);
+  await screen.findByRole("button", { name: /Project/ });
+  expect((screen.getByLabelText("最终文案") as HTMLTextAreaElement).value).toBe("保留的创作草稿");
+});
+test("keeps advanced creation script and title across navigation", () => {
+  const api = async () => json([]);
+  const view = render(<ImageModeWorkbench api={api} mode="advanced" />);
+  fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "高级草稿" } });
+  fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "未提交名称" } });
+  view.unmount();
+  render(<ImageModeWorkbench api={api} mode="advanced" />);
+  expect((screen.getByLabelText("最终文案") as HTMLTextAreaElement).value).toBe("高级草稿");
+  expect((screen.getByLabelText("项目名称") as HTMLInputElement).value).toBe("未提交名称");
 });

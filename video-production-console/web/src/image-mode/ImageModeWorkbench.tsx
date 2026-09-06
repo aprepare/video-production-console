@@ -51,6 +51,10 @@ const concurrencyOptions = Array.from({ length: 18 }, (_, index) => index + 1);
 const attemptOptions = [1, 2, 3, 4];
 const phaseOrder = ["planning", "prompting", "imaging", "completed"] as const;
 
+const projectStatusLabels: Record<string, string> = { draft: "待生成", ready: "图片就绪", generating: "生成中", running: "生成中", completed: "已完成", failed: "生成失败", interrupted: "已中断", pending: "等待生成", planning: "分析文案中", prompting: "生成提示词中", imaging: "生成图片中" };
+function readCreationDraft() {
+  try { return JSON.parse(sessionStorage.getItem("console:image-advanced-draft") || "{}") as { title?: string; script?: string }; } catch { return {}; }
+}
 function clampAttempts(value: number) {
   if (!Number.isFinite(value) || value < 1 || value > 4) return 2;
   return value;
@@ -108,6 +112,7 @@ export function ImageModeWorkbench({
   onAdvancedMode,
 }: Props) {
   const [projects, setProjects] = useState<ImageProject[]>([]);
+  const [listState, setListState] = useState("loading");
   const [detail, setDetail] = useState<ImageProjectDetail | null>(null);
   const [previewItem, setPreviewItem] = useState<ImageProjectItem | null>(null);
   const [segments, setSegments] = useState<DraftSegment[]>([]);
@@ -115,8 +120,12 @@ export function ImageModeWorkbench({
   const [selectedPublishing, setSelectedPublishing] = useState(1);
   const [publishingOpen, setPublishingOpen] = useState(false);
   const [plannerModel, setPlannerModel] = useState("");
-  const [title, setTitle] = useState("");
-  const [script, setScript] = useState("");
+  const [creationDraft] = useState(readCreationDraft);
+  const [title, setTitle] = useState(creationDraft.title ?? "");
+  const [script, setScript] = useState(creationDraft.script ?? "");
+  useEffect(() => {
+    try { if (title || script) sessionStorage.setItem("console:image-advanced-draft", JSON.stringify({ title, script })); else sessionStorage.removeItem("console:image-advanced-draft"); } catch { /* Preserve in-memory editing if storage is unavailable. */ }
+  }, [title, script]);
   const [count, setCount] = useState(0);
   const [ratio, setRatio] = useState<ImageProject["ratio"]>(defaultRatio);
   const [style, setStyle] = useState(defaultStyle);
@@ -189,17 +198,19 @@ export function ImageModeWorkbench({
   }, [previewItem]);
 
   const refreshList = useCallback(async (signal?: AbortSignal) => {
+    setListState("loading");
     try {
       const response = await api("/api/image-projects", signal ? { signal } : undefined);
       if (!response.ok) throw new Error("list failed");
       const loaded = await response.json() as ImageProject[];
+      setListState("ready");
       setProjects((current) => {
         const currentIDs = new Set(current.map((project) => project.id));
         return [...current, ...loaded.filter((project) => !currentIDs.has(project.id))];
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      setMessage("图文项目读取失败，请稍后重试。");
+      setListState("error");
     }
   }, [api]);
 
@@ -372,6 +383,9 @@ export function ImageModeWorkbench({
       setDetail(next);
       setProjects((current) => [next.project, ...current.filter((item) => item.id !== next.project.id)]);
       setSegments([]);
+      setTitle("");
+      setScript("");
+      try { sessionStorage.removeItem("console:image-advanced-draft"); } catch { /* Storage may be disabled. */ }
       setMessage("分段已确认，提示词已生成；最终文案不会二创。");
     } catch {
       setMessage("确认分段后生成提示词失败。请检查分段是否覆盖原文，以及文本模型是否可用。");
@@ -668,12 +682,13 @@ export function ImageModeWorkbench({
   const projectList = (
     <section className="image-project-list" aria-labelledby="image-project-list-title">
       <h2 id="image-project-list-title">已有图文项目</h2>
+      {listState === "loading" ? <p role="status">正在读取项目列表…</p> : listState === "error" ? <div role="alert"><p>图文项目列表读取失败，已填写的文案会保留。</p><button type="button" onClick={() => void refreshList()}>重试读取项目列表</button></div> : null}
       {sortedProjects.length ? sortedProjects.map((project) => (
         <button type="button" key={project.id} disabled={Boolean(busy)} onClick={() => void openProject(project)}>
           <strong>{project.title}</strong>
-          <span>{project.image_count} 张 · {project.ratio} · {project.status}</span>
+          <span>{project.image_count} 张 · {project.ratio} · {projectStatusLabels[project.status] ?? "处理中"}</span>
         </button>
-      )) : <p>还没有图文项目。</p>}
+      )) : listState === "ready" ? <p>还没有图文项目。粘贴定稿后开始制作。</p> : null}
     </section>
   );
 

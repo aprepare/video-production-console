@@ -1,28 +1,12 @@
+import { FixedFlowSteps, type FixedFlowStep } from "./FixedFlowSteps";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  addEdge,
-  Background,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  useEdgesState,
-  useNodesState,
-  useReactFlow,
-  type Connection,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import type { Edge, Node } from "@xyflow/react";
 import {
   BookOpenText,
   Clapperboard,
   FileText,
   FolderPlus,
   Gauge,
-  LayoutGrid,
   Maximize2,
   Minimize2,
   PenLine,
@@ -38,10 +22,12 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
   fetchRemixLabWorkflow,
+  importRemixLabDraft,
   produceRemixLabRun,
   retryRemixLabRun,
   saveRemixLabWorkflow,
   type RemixLabApi,
+  type RemixLabDefaults,
   type RemixLabExperiment,
   type RemixLabProduction,
   type RemixLabPrompt,
@@ -51,26 +37,30 @@ import {
 } from "./api";
 import { RunFlowPanel } from "./RunFlow";
 import { ModelMultiSelect } from "../ModelSelect";
-
-// 设计态画布：工作流是可编辑的资产——拖节点、连线、点节点在抽屉里改
-// 模型和提示词，保存后下次开跑生效。骨干链（原文→写手→自检→审稿→定稿）
-// 固定，agent 情报节点可以随意增删和改连线。
+import { FastModeButton } from "./FastModeButton";
+import { RerunDialog } from "./RerunDialog";
+import { RoleModelsDialog } from "./RoleModelsDialog";
+import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 
 type WorkflowCanvasProps = {
+  modelDefaults?: RemixLabDefaults | null;
+  onOpenConnections?: () => void;
+  defaultServiceTier?: string;
   api: RemixLabApi;
   prompts: RemixLabPrompt[];
   onMessage: (text: string) => void;
   onEditAgentPrompts: () => void;
   runWorkflow: (source: string, runCount: number, accountID: string, auto: boolean, models: string[]) => Promise<RemixLabExperiment>;
-  /** 工作流被外部改动（智能体提案确认）后父级递增，画布重新拉取。 */
+  /** 工作流被外部改动（智能体提案确认）后父级递增，步骤列表重新拉取。 */
   refreshToken: number;
   /** 当前账号：读写该账号最新一版工作流；空=全局默认。 */
   accountID?: string;
   onAccountIDChange?: (accountID: string) => void;
-  /** 历史项目/实验详情：把已有运行摊回画布，继续确认和混剪。 */
+  /** 历史项目/实验详情：把已有运行打开运行步骤，继续确认和混剪。 */
   resumeExperiment?: RemixLabExperiment | null;
   onEditPackage?: (runID: string, experimentID: string) => void;
   onLeaveRun?: () => void;
+  onRerunCreated?: (experiment: RemixLabExperiment) => void;
 };
 
 type AccountOption = { id: string; name: string; status: string };
@@ -78,11 +68,14 @@ type AccountOption = { id: string; name: string; status: string };
 // 运行页签文字：多模型对比时带上模型名，否则只有「运行 N」区分不开。
 function liveRunTabs(exp: RemixLabExperiment): LiveRunState["runs"] {
   const modelBySlot = new Map(exp.slots.map((slot) => [slot.id, slot.model]));
+  const slotByID = new Map(exp.slots.map((slot) => [slot.id, slot]));
   const multiModel = new Set(exp.runs.map((run) => run.slot_id)).size > 1;
   return exp.runs.map((run) => ({
     id: run.id,
     run_index: run.run_index,
-    label: multiModel
+    label: slotByID.get(run.slot_id)?.label?.startsWith("重跑")
+      ? `第 ${(slotByID.get(run.slot_id)?.sort_index ?? 0) + 1} 轮 · ${modelBySlot.get(run.slot_id)}`
+      : multiModel
       ? `${modelBySlot.get(run.slot_id) || "模型"}${exp.runs.filter((r) => r.slot_id === run.slot_id).length > 1 ? ` · ${run.run_index}` : ""}`
       : `运行 ${run.run_index}`,
   }));
@@ -112,14 +105,14 @@ const PRODUCE_STEP_LABEL: Record<string, string> = {
 
 const NODE_TYPE_META: Record<string, { label: string; Icon: LucideIcon }> = {
   input: { label: "输入", Icon: FileText },
-  agent: { label: "AGENT", Icon: ScanSearch },
+  agent: { label: "前置情报", Icon: ScanSearch },
   writer: { label: "写手", Icon: PenLine },
-  selfcheck: { label: "闸门", Icon: Gauge },
+  selfcheck: { label: "规则检查", Icon: Gauge },
   reviewer: { label: "审稿", Icon: Stamp },
   output: { label: "产出", Icon: BookOpenText },
 };
 
-// 生产段（定稿之后）在设计画布上的节点定义：顺序固定，字幕关键词可删，
+// 定稿之后的固定制作步骤；字幕关键词可关闭，
 // 口播/字幕/混剪三步的任务提示词可改（存进工作流的 production 配置）。
 const PRODUCTION_DEFAULT_PROMPTS: Record<string, string> = {
   "produce-spoken": "按一句一行、每行不超过九个字，把当前连续文案切成口播稿。",
@@ -136,6 +129,13 @@ function normalizeProduction(raw?: RemixLabWorkflowProduction): RemixLabWorkflow
 
 function optionalNumberValue(value: number | undefined): string {
   return value === undefined || Number.isNaN(value) ? "" : String(value);
+}
+
+function firstLineTitle(text: string): string {
+  const line = text.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+  const runes = [...line];
+  if (runes.length === 0) return "手工定稿";
+  return runes.length > 24 ? runes.slice(0, 24).join("") : line;
 }
 
 type ProdPromptKey = "spoken_prompt" | "captions_prompt" | "montage_prompt";
@@ -178,94 +178,6 @@ function prodIcon(id: string): LucideIcon {
 
 type CanvasNodeData = { wfNode: RemixLabWorkflowNode };
 
-type ProdNodeData = { spec: ProdNodeSpec; customPrompt: boolean };
-
-function ProdDesignNode({ data, selected }: NodeProps & { data: ProdNodeData }) {
-  const Icon = prodIcon(data.spec.id);
-  return (
-    <div
-      className={[
-        "run-flow-node",
-        "run-flow-node--design",
-        "run-flow-node--produce",
-        selected ? "run-flow-node--selected" : "",
-      ].join(" ")}
-    >
-      <Handle type="target" position={Position.Left} className="run-flow-handle" />
-      <Handle type="target" position={Position.Bottom} id="from-final" className="run-flow-handle" />
-      <div className="run-flow-node__head">
-        <span className="run-flow-node__icon" aria-hidden="true">
-          <Icon size={15} strokeWidth={2} />
-        </span>
-        <div className="run-flow-node__titles">
-          <small>{data.spec.kindLabel}</small>
-          <strong>{data.spec.title}</strong>
-        </div>
-      </div>
-      <div className="run-flow-node__meta">
-        {data.spec.promptKey ? <span>{data.customPrompt ? "自定义提示词" : "默认提示词"}</span> : null}
-      </div>
-      <Handle type="source" position={Position.Right} className="run-flow-handle" />
-    </div>
-  );
-}
-
-function DesignNode({ data, selected }: NodeProps & { data: CanvasNodeData }) {
-  const wfNode = data.wfNode;
-  const meta = NODE_TYPE_META[wfNode.type] ?? NODE_TYPE_META.agent;
-  return (
-    <div
-      className={[
-        "run-flow-node",
-        "run-flow-node--design",
-        selected ? "run-flow-node--selected" : "",
-      ].join(" ")}
-    >
-      <Handle type="target" position={Position.Left} className="run-flow-handle" />
-      <div className="run-flow-node__head">
-        <span className="run-flow-node__icon" aria-hidden="true">
-          <meta.Icon size={15} strokeWidth={2} />
-        </span>
-        <div className="run-flow-node__titles">
-          <small>{meta.label}</small>
-          <strong>{wfNode.title}</strong>
-        </div>
-      </div>
-      <div className="run-flow-node__meta">
-        {wfNode.config.model ? <span>{wfNode.config.model}</span> : null}
-        {wfNode.config.channel === "search" ? <span>搜索通道</span> : null}
-        {wfNode.type === "writer" ? <span>{wfNode.config.prompt_id ? `提示词 ${wfNode.config.prompt_id}` : "跟随日产提示词"}</span> : null}
-        {wfNode.type === "agent" && wfNode.config.system_prompt ? (
-          <span>{[...wfNode.config.system_prompt].length} 字提示词</span>
-        ) : null}
-        {wfNode.type === "output" ? <span>定稿后接下排混剪</span> : null}
-      </div>
-      <Handle type="source" position={Position.Right} className="run-flow-handle" />
-      {wfNode.type === "output" ? (
-        <Handle type="source" position={Position.Top} id="to-produce" className="run-flow-handle" />
-      ) : null}
-    </div>
-  );
-}
-
-const nodeTypes = { wfNode: DesignNode, prodNode: ProdDesignNode };
-
-function FitViewAfterLayout({ token }: { token: string }) {
-  const { fitView } = useReactFlow();
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (!cancelled) void fitView({ padding: 0.22, duration: 0 });
-    }, 80);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [fitView, token]);
-  return null;
-}
-
 type CanvasSnap = {
   nodes: Node[];
   edges: Edge[];
@@ -294,21 +206,39 @@ function toRfEdges(workflow: RemixLabWorkflow): Edge[] {
   }));
 }
 
-export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun, onRerunCreated, modelDefaults, onOpenConnections, defaultServiceTier = "" }: WorkflowCanvasProps) {
   const [meta, setMeta] = useState<{ version: number; name: string }>({ version: 1, name: "默认二创工作流" });
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
-  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [rfNodes, setRfNodes] = useState<Node[]>([]);
+  const [rfEdges, setRfEdges] = useState<Edge[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [prodCfg, setProdCfg] = useState<RemixLabWorkflowProduction>({});
+  const [editorialRules, setEditorialRules] = useState<string | undefined>(undefined);
   const [selectedID, setSelectedID] = useState("");
-  const [source, setSource] = useState("");
+  const sourceKey = `remix-lab:source:${accountIDProp || "default"}`;
+  const [source, setSourceValue] = useState(() => {
+    try { return window.sessionStorage.getItem(sourceKey) || ""; } catch { return ""; }
+  });
+  const setSource = (value: string) => {
+    setSourceValue(value);
+    try { window.sessionStorage.setItem(sourceKey, value); } catch { /* Storage may be unavailable. */ }
+  };
+  useEffect(() => {
+    try { setSourceValue(window.sessionStorage.getItem(sourceKey) || ""); } catch { setSourceValue(""); }
+  }, [sourceKey]);
+  const [draftScript, setDraftScript] = useState("");
+  const [draftBoardTitle, setDraftBoardTitle] = useState("");
+  const [draftSubtitle, setDraftSubtitle] = useState("");
+  const [importing, setImporting] = useState(false);
   const [runCount, setRunCount] = useState(1);
   // 对比开跑：勾选多个模型时每个模型各出一稿并行跑；空 = 用写手节点/默认档。
   const [compareModels, setCompareModels] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [liveRun, setLiveRun] = useState<LiveRunState | null>(null);
+  const [rerunID, setRerunID] = useState("");
+  const [modelWorkflow, setModelWorkflow] = useState<RemixLabWorkflow | null>(null);
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [runStatus, setRunStatus] = useState("queued");
   const [production, setProduction] = useState<RemixLabProduction | null>(null);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
@@ -325,10 +255,10 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
   const prodRef = useRef<RemixLabWorkflowProduction>({});
+  const editorialRulesRef = useRef<string | undefined>(undefined);
   const historyRef = useRef<CanvasSnap[]>([]);
   const futureRef = useRef<CanvasSnap[]>([]);
   const lastHistAt = useRef(0);
-  const draggingHist = useRef(false);
   const savingRef = useRef(false);
   const pendingSave = useRef(false);
   const skipHist = useRef(false);
@@ -344,7 +274,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
         if (cancelled) return;
         setAccounts(all.filter((account) => account.status !== "inactive"));
       } catch {
-        // 账号列表拉不到不拦画布：开跑时再提示
+        // 账号列表拉不到不拦页面：开跑时再提示
       }
     })();
     return () => {
@@ -388,6 +318,8 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
         setRfNodes(toRfNodes(workflow));
         setRfEdges(toRfEdges(workflow));
         setProdCfg(normalizeProduction(workflow.production));
+        setEditorialRules(workflow.editorial_rules);
+        setSelectedID(workflow.nodes.find((node) => node.type === "input")?.id || workflow.nodes[0]?.id || "");
         setLoaded(true);
         setDirty(false);
         historyRef.current = [];
@@ -407,17 +339,24 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   useEffect(() => {
     if (!resumeExperiment?.runs.length) return;
     const runs = liveRunTabs(resumeExperiment);
+    let savedRunID = "";
+    try { savedRunID = window.sessionStorage.getItem(`remix-lab:active-run:${resumeExperiment.id}`) || ""; } catch { /* optional preference */ }
     const keep = liveRun?.experimentID === resumeExperiment.id && runs.some((run) => run.id === liveRun.activeRunID)
       ? liveRun.activeRunID
-      : runs[0].id;
+      : runs.find(run => run.id === savedRunID)?.id || runs[0].id;
     const active = resumeExperiment.runs.find((run) => run.id === keep) ?? resumeExperiment.runs[0];
     setLiveRun({ experimentID: resumeExperiment.id, runs, activeRunID: keep });
-    setSource(resumeExperiment.source_text);
+    setSourceValue(resumeExperiment.source_text);
     setRunStatus(active.status);
-    if (active.production) setProduction(active.production);
+    setProduction(active.production ?? null);
     // liveRun 只用来保住当前选中的 run，不放进依赖以免轮询把选中冲掉。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeExperiment]);
+
+  useEffect(() => {
+    if (!liveRun) return;
+    try { window.sessionStorage.setItem(`remix-lab:active-run:${liveRun.experimentID}`, liveRun.activeRunID); } catch { /* optional preference */ }
+  }, [liveRun?.experimentID, liveRun?.activeRunID]);
 
   // 闸门上选的混剪账号只决定这一稿进哪个号，不切换页面的账号/工作流。
   // 默认跟这一稿自己的账号（运行记录里的）或页面当前账号；都没有就留空让人选。
@@ -425,7 +364,11 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   const [gateAccountID, setGateAccountID] = useState("");
   const gateDefaultKey = useRef("");
   useEffect(() => {
-    if (production?.status !== "waiting_confirm") return;
+    if (production?.status !== "waiting_confirm") {
+      gateDefaultKey.current = "";
+      setGateAccountID("");
+      return;
+    }
     const key = `${liveRun?.activeRunID ?? ""}|${production.account_id}|${accountID}`;
     if (gateDefaultKey.current === key) return;
     gateDefaultKey.current = key;
@@ -437,6 +380,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   nodesRef.current = rfNodes;
   edgesRef.current = rfEdges;
   prodRef.current = prodCfg;
+  editorialRulesRef.current = editorialRules;
 
   const beginHistory = useCallback((force = false) => {
     if (skipHist.current) return;
@@ -491,60 +435,26 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
     return found ? (found.data as CanvasNodeData).wfNode : null;
   }, [rfNodes, selectedID]);
 
-  // 生产段伪节点：单独排在二创图下方。顺序固定、连线不可改、不入库为
-  // workflow.nodes；可以拖动排版，位置存进 production.node_positions。
   const prodSpecs = useMemo(
     () => productionNodeSpecs(Boolean(prodCfg.captions_disabled)),
     [prodCfg.captions_disabled],
   );
-  // 拖动中的临时位置（拖完落进 prodCfg 后清掉，撤销时不残留）。
-  const [prodPosDraft, setProdPosDraft] = useState<Record<string, { x: number; y: number }>>({});
-  const prodPosDraftRef = useRef<Record<string, { x: number; y: number }>>({});
-  // 一键整理后递增，触发画布重新 fitView。
-  const [layoutTick, setLayoutTick] = useState(0);
-  const prodNodes: Node[] = useMemo(() => {
-    const design = rfNodes.filter((node) => (node.data as CanvasNodeData).wfNode?.type);
-    const final = design.find((node) => (node.data as CanvasNodeData).wfNode?.type === "output");
-    if (!final || design.length === 0) return [];
-    const maxY = Math.max(...design.map((node) => node.position.y));
-    return prodSpecs.map((spec, index) => ({
-      id: spec.id,
-      type: "prodNode",
-      // 默认横排从定稿正下方开始，确认闸门贴着定稿，连线不再斜穿画布。
-      position:
-        prodPosDraft[spec.id] ??
-        prodCfg.node_positions?.[spec.id] ?? { x: final.position.x + 230 * index, y: maxY + 240 },
-      data: {
-        spec,
-        customPrompt: Boolean(spec.promptKey && String(prodCfg[spec.promptKey] ?? "").trim()),
-      },
-      connectable: false,
-      selected: selectedID === spec.id,
-    }));
-  }, [rfNodes, prodSpecs, prodCfg, prodPosDraft, selectedID]);
-  const prodEdges: Edge[] = useMemo(() => {
-    const final = rfNodes.find((node) => (node.data as CanvasNodeData).wfNode?.type === "output");
-    if (!final || prodSpecs.length === 0) return [];
-    const edges: Edge[] = [
-      {
-        id: "produce-edge-from-final",
-        source: final.id,
-        sourceHandle: "to-produce",
-        target: prodSpecs[0].id,
-        targetHandle: "from-final",
-        style: { strokeWidth: 1.6, strokeDasharray: "6 4" },
-      },
-    ];
-    for (let i = 0; i + 1 < prodSpecs.length; i++) {
-      edges.push({
-        id: `produce-edge-${i}`,
-        source: prodSpecs[i].id,
-        target: prodSpecs[i + 1].id,
-        style: { strokeWidth: 1.6, strokeDasharray: "6 4" },
-      });
-    }
-    return edges;
+  // 固定展示顺序不改变保存的工作流、依赖关系或旧版位置数据。
+  const steps = useMemo<FixedFlowStep[]>(() => {
+    const order: Record<string, number> = { input: 0, agent: 1, writer: 2, selfcheck: 3, reviewer: 4, output: 5 };
+    const create = rfNodes.map((node) => (node.data as CanvasNodeData).wfNode)
+      .sort((a, b) => (order[a.type] ?? 1) - (order[b.type] ?? 1))
+      .map((node): FixedFlowStep => ({
+        id: node.id, title: node.title, group: "create",
+        icon: NODE_TYPE_META[node.type]?.Icon || ScanSearch,
+        subtitle: String(node.config.model || (node.type === "input" ? "粘贴原文或导入定稿" : NODE_TYPE_META[node.type]?.label || "步骤配置")),
+      }));
+    return [...create, ...prodSpecs.map((spec): FixedFlowStep => ({
+      id: spec.id, title: spec.title, group: "produce", icon: prodIcon(spec.id),
+      subtitle: spec.promptKey ? "提示词与执行设置" : spec.id === "produce-gate" ? "检查文案后开始" : spec.id === "produce-publish" ? "导出后确认发布" : "制作设置",
+    }))];
   }, [rfNodes, prodSpecs]);
+
   const selectedProdSpec = useMemo(
     () => prodSpecs.find((spec) => spec.id === selectedID) ?? null,
     [prodSpecs, selectedID],
@@ -564,46 +474,6 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
     setDirty(true);
   }, [beginHistory]);
 
-  // 一键整理：骨干链（原文→写手→自检→[审稿]→定稿）横排一行，agent 情报节点
-  // 在原文和写手之间纵列，生产排清掉拖动过的位置、回到定稿下方默认横排。
-  // 列位按实际存在的骨干节点紧凑排列：删掉审稿后定稿会补上来，不留空档。
-  const tidyLayout = useCallback(() => {
-    beginHistory(true);
-    const nodes = nodesRef.current;
-    const presentTypes = new Set(nodes.map((node) => (node.data as CanvasNodeData).wfNode.type));
-    const backboneOrder = ["input", "writer", "selfcheck", "reviewer", "output"].filter((type) =>
-      presentTypes.has(type),
-    );
-    const columnX: Record<string, number> = {};
-    backboneOrder.forEach((type, index) => {
-      // 原文固定在 0，写手从 600 起（中间留给 agent 纵列），之后每列 +280。
-      columnX[type] = type === "input" ? 0 : 600 + 280 * (index - 1);
-    });
-    const agentIDs = nodes
-      .filter((node) => (node.data as CanvasNodeData).wfNode.type === "agent")
-      .map((node) => node.id);
-    const agentStartY = 190 - ((Math.max(agentIDs.length, 1) - 1) * 180) / 2;
-    const positions: Record<string, { x: number; y: number }> = {};
-    nodes.forEach((node) => {
-      const wfNode = (node.data as CanvasNodeData).wfNode;
-      const agentIndex = agentIDs.indexOf(node.id);
-      if (agentIndex >= 0) {
-        positions[node.id] = { x: 300, y: Math.round(agentStartY + 180 * agentIndex) };
-      } else if (columnX[wfNode.type] !== undefined) {
-        positions[node.id] = { x: columnX[wfNode.type], y: 190 };
-      }
-    });
-    setRfNodes((current) =>
-      current.map((node) => (positions[node.id] ? { ...node, position: positions[node.id] } : node)),
-    );
-    if (prodRef.current.node_positions) {
-      patchProd({ node_positions: undefined });
-    }
-    setDirty(true);
-    setLayoutTick((tick) => tick + 1);
-    onMessage("已整理布局：骨干链一行、agent 纵列、混剪排回到定稿下方。");
-  }, [beginHistory, patchProd, setRfNodes, onMessage]);
-
   const patchNode = useCallback(
     (id: string, patch: (wfNode: RemixLabWorkflowNode) => RemixLabWorkflowNode) => {
       beginHistory();
@@ -617,32 +487,6 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
       setDirty(true);
     },
     [beginHistory, setRfNodes],
-  );
-
-  const onConnect = useCallback(
-    (connection: Connection) => {
-      if (!connection.source || !connection.target || connection.source === connection.target) return;
-      if (connection.source.startsWith("produce-") || connection.target.startsWith("produce-")) {
-        onMessage("生产链（确认闸门→建项目→口播→配音→混剪→发布）顺序固定，不能改连线；字幕关键词节点可在抽屉里删除。");
-        return;
-      }
-      const sourceNode = rfNodes.find((node) => node.id === connection.source);
-      const targetNode = rfNodes.find((node) => node.id === connection.target);
-      if (!sourceNode || !targetNode) return;
-      const sourceType = (sourceNode.data as CanvasNodeData).wfNode.type;
-      const targetType = (targetNode.data as CanvasNodeData).wfNode.type;
-      const allowed =
-        (sourceType === "input" || sourceType === "agent") &&
-        (targetType === "agent" || targetType === "writer");
-      if (!allowed) {
-        onMessage("只能把原文/agent 连到 agent 或写手；骨干链（写手→自检→审稿→定稿）是固定的。");
-        return;
-      }
-      beginHistory(true);
-      setRfEdges((current) => addEdge({ ...connection, id: `${connection.source}->${connection.target}`, style: { strokeWidth: 1.6 } }, current));
-      setDirty(true);
-    },
-    [beginHistory, rfNodes, setRfEdges, onMessage],
   );
 
   const removeNode = (id: string) => {
@@ -662,6 +506,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   const buildWorkflow = (): RemixLabWorkflow => ({
     version: meta.version,
     name: meta.name,
+    editorial_rules: editorialRulesRef.current,
     nodes: nodesRef.current.map((node) => ({
       ...(node.data as CanvasNodeData).wfNode,
       x: Math.round(node.position.x),
@@ -696,10 +541,44 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
   };
   saveRef.current = save;
 
+  const openModels = async () => {
+    if (savingRef.current) { onMessage("正在保存工作流，请稍后打开模型配置。"); return; }
+    if (dirty && !await save()) return;
+    pendingConfig.current = null;
+    setModelWorkflow(buildWorkflow());
+  };
+
+  const openPromptEditor = async () => {
+    if (savingRef.current) {
+      onMessage("正在保存工作流，请稍后编辑二创提示词。");
+      return;
+    }
+    if (dirty && !await save()) return;
+    pendingConfig.current = null;
+    setPromptEditorOpen(true);
+  };
+
+  const saveModels = async (workflow: RemixLabWorkflow) => {
+    const saved = await saveRemixLabWorkflow(api, workflow, accountIDProp ?? accountID);
+    const nextNodes = toRfNodes(saved);
+    nodesRef.current = nextNodes;
+    setRfNodes(nextNodes);
+    setRfEdges(toRfEdges(saved));
+    setProdCfg(normalizeProduction(saved.production));
+    setEditorialRules(saved.editorial_rules);
+    edgesRef.current = toRfEdges(saved);
+    prodRef.current = normalizeProduction(saved.production);
+    editorialRulesRef.current = saved.editorial_rules;
+    setMeta({version:saved.version, name:saved.name});
+    pendingConfig.current = null;
+    setDirty(false);
+    onMessage("模型配置已保存，下次新建或重新生成时使用。");
+  };
+
   const start = async () => {
     if (starting) return;
     if (!source.trim()) {
-      onMessage("先把对标原文贴进原文节点。");
+      onMessage("先在对标原文步骤粘贴完整文案。");
       return;
     }
     if (dirty) {
@@ -709,7 +588,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
     setStarting(true);
     try {
       const created = await runWorkflow(source.trim(), runCount, accountID, autoProduce, compareModels);
-      // 不跳页：画布原地切到运行视图，节点逐个亮起。
+      // 原地切到运行视图，实时显示每个步骤的进度。
       setLiveRun({
         experimentID: created.id,
         runs: liveRunTabs(created),
@@ -725,13 +604,66 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
     }
   };
 
+  const importDraft = async () => {
+    if (importing) return;
+    const script = draftScript.trim();
+    if (!script) {
+      onMessage("请填写定稿正文。");
+      return;
+    }
+    if (dirty) {
+      const ok = await save();
+      if (!ok) return;
+    }
+    setImporting(true);
+    try {
+      const board = draftBoardTitle.trim() || firstLineTitle(script);
+      const shortTitles = [board, draftSubtitle.trim()].filter(Boolean);
+      const created = await importRemixLabDraft(api, {
+        continuous_script: script,
+        titles: [],
+        short_titles: shortTitles,
+        descriptions: [],
+        topics: [],
+        cta: "",
+        account_id: accountID,
+      });
+      setLiveRun({
+        experimentID: created.id,
+        runs: liveRunTabs(created),
+        activeRunID: created.runs[0]?.id ?? "",
+      });
+      setRunStatus("completed");
+      setProduction(created.runs[0]?.production ?? null);
+      setSelectedID("");
+      onMessage("已导入定稿，确认后开始混剪。");
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "定稿导入失败。");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const pendingConfig = useRef<{ workflow: ReturnType<typeof buildWorkflow>; owner: string } | null>(null);
   useEffect(() => {
     if (!dirty || !loaded || liveRun) return;
+    const snapshot = { workflow: buildWorkflow(), owner: accountIDProp || accountID };
+    pendingConfig.current = snapshot;
     const timer = window.setTimeout(() => {
-      void saveRef.current();
+      void saveRef.current().then(ok => {
+        if (ok && pendingConfig.current === snapshot) pendingConfig.current = null;
+      });
     }, 500);
     return () => window.clearTimeout(timer);
   }, [dirty, rfNodes, rfEdges, prodCfg, loaded, liveRun]);
+
+  useEffect(() => () => {
+    const pending = pendingConfig.current;
+    pendingConfig.current = null;
+    if (pending) void saveRemixLabWorkflow(api, pending.workflow, pending.owner).catch(error => {
+      onMessage(error instanceof Error ? error.message : "工作流保存失败。");
+    });
+  }, [api, accountIDProp]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -770,7 +702,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
     try {
       await produceRemixLabRun(api, liveRun.activeRunID, chosen);
       setProduction((current) => (current ? { ...current, status: "running" } : current));
-      onMessage("已放行：建项目 → 口播稿 → 配音 → 混剪，全程在图上看进度。");
+      onMessage("已放行：建项目 → 口播稿 → 配音 → 混剪，在步骤列表查看进度。");
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "开始混剪失败。");
     } finally {
@@ -780,8 +712,10 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
 
   // 断点重试：agent 节点传ID（作废重跑），其余整体重试（缓存复用）。
   // model 非空时先换模型再重试，同实验后续重试沿用新模型。
+  const retryLock = useRef(false);
   const retryLiveRun = async (nodeID: string, model?: string) => {
-    if (!liveRun) return;
+    if (!liveRun || retryLock.current) return;
+    retryLock.current = true;
     try {
       await retryRemixLabRun(api, liveRun.activeRunID, nodeID || undefined, model);
       setRunStatus("running");
@@ -794,17 +728,22 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
       );
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "重试提交失败。");
-    }
+    } finally { retryLock.current = false; }
   };
 
   return (
-    <ReactFlowProvider>
-    <div className={fullscreen ? "wf-designer wf-designer--fullscreen" : "wf-designer"}>
+    <div className={fullscreen ? "wf-designer wf-designer--fixed wf-designer--fullscreen" : "wf-designer wf-designer--fixed"}>
       <div className="wf-designer__toolbar">
         <div className="wf-designer__title">
           <strong>{meta.name}</strong>
         </div>
         <div className="wf-designer__actions">
+          {loaded ? (
+            <button type="button" className="header-button" onClick={() => void openPromptEditor()}>
+              编辑二创提示词
+            </button>
+          ) : null}
+          {loaded ? <button type="button" className="header-button" onClick={() => void openModels()}>模型配置</button> : null}
           {!liveRun ? (
             <>
               <button
@@ -828,16 +767,6 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
               >
                 <Redo2 size={14} strokeWidth={2} />
                 重做
-              </button>
-              <button
-                type="button"
-                className="header-button remix-lab-icon-btn"
-                onClick={tidyLayout}
-                aria-label="一键整理"
-                title="自动排版：骨干链一行、agent 纵列、混剪排归位（可撤销）"
-              >
-                <LayoutGrid size={14} strokeWidth={2} />
-                一键整理
               </button>
             </>
           ) : null}
@@ -898,18 +827,20 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
               : null}
             <span className="remix-lab-muted">
               {production?.status === "waiting_confirm"
-                ? "二创定稿已出：先改稿或直接确认，混剪在下排节点推进。"
+                ? "二创定稿已出：先改稿或直接确认，混剪进度在制作步骤中显示。"
                 : production?.status === "failed"
-                  ? "点红色混剪节点看原因，可重试续跑。"
+                  ? "点失败的混剪步骤查看原因，可重试续跑。"
                   : production?.status === "completed"
-                    ? "剪映草稿已生成：混剪节点可导出视频，发布节点复制文案、确认发布。"
+                    ? "剪映草稿已生成：混剪步骤可导出视频，发布步骤可复制文案、确认发布。"
                     : runStatus === "failed"
-                      ? "点红色节点看原因，检视器里可以重试并续跑。"
+                      ? "点失败的步骤查看原因，在详情中重试并续跑。"
                       : runStatus === "completed"
                         ? "二创跑完了：点确认二创看文案，确认后开始混剪。"
-                        : "节点跑完一个亮一个，点节点看它的实时输出。"}
+                        : "步骤状态实时更新，点击即可查看该步的输出。"}
             </span>
             <div className="wf-designer__live-actions">
+              <button type="button" className="header-button" disabled={runStatus === "queued" || runStatus === "running"}
+                onClick={() => setRerunID(liveRun.activeRunID)}>重新生成文案</button>
               {production?.status === "waiting_confirm" ? (
                 <>
                   <label className="wf-live-account">
@@ -936,14 +867,14 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
                     type="button"
                     className="remix-lab-start"
                     disabled={confirming}
-                    onClick={() => void produceLiveRun()}
+                    onClick={() => produceLiveRun()}
                   >
                     {confirming ? "放行中…" : "确认开始混剪"}
                   </button>
                 </>
               ) : null}
               {production?.status === "failed" ? (
-                <button type="button" className="remix-lab-start" disabled={confirming} onClick={() => void produceLiveRun()}>
+                <button type="button" className="remix-lab-start" disabled={confirming} onClick={() => produceLiveRun()}>
                   重试生产
                 </button>
               ) : null}
@@ -984,114 +915,67 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
               api={api}
               runID={liveRun.activeRunID}
               live={(runStatus !== "completed" && runStatus !== "failed") || production?.status === "running"}
-              onEditAgentPrompts={onEditAgentPrompts}
+              onEditAgentPrompts={() => void openPromptEditor()}
               onMessage={onMessage}
-              onRetryNode={(nodeID, model) => void retryLiveRun(nodeID, model)}
+              onRetryNode={(nodeID, model) => retryLiveRun(nodeID, model)}
               onStatusChange={setRunStatus}
               onProductionChange={setProduction}
-              onRetryProduce={() => void produceLiveRun()}
-              onConfirmProduce={() => void produceLiveRun()}
+              onRetryProduce={() => produceLiveRun()}
+              onConfirmProduce={() => produceLiveRun()}
             />
           </div>
         </div>
       ) : null}
 
+      {modelWorkflow ? <RoleModelsDialog workflow={modelWorkflow} defaults={modelDefaults}
+        ownerLabel={accounts.find(account => account.id === (accountIDProp ?? accountID))?.name || "当前工作流"}
+        onClose={() => setModelWorkflow(null)} onSave={saveModels}
+        onConnections={onOpenConnections ? () => { setModelWorkflow(null); onOpenConnections(); } : undefined} /> : null}
+      {promptEditorOpen ? (
+        <WorkflowPromptEditor
+          api={api}
+          accountID={accountIDProp ?? accountID}
+          ownerLabel={accounts.find(account => account.id === (accountIDProp ?? accountID))?.name || "当前工作流"}
+          onClose={() => setPromptEditorOpen(false)}
+          onSaved={(result) => {
+            const saved = result.workflow;
+            const nextNodes = toRfNodes(saved);
+            const nextEdges = toRfEdges(saved);
+            const nextProd = normalizeProduction(saved.production);
+            nodesRef.current = nextNodes;
+            edgesRef.current = nextEdges;
+            prodRef.current = nextProd;
+            editorialRulesRef.current = saved.editorial_rules;
+            setRfNodes(nextNodes);
+            setRfEdges(nextEdges);
+            setProdCfg(nextProd);
+            setEditorialRules(saved.editorial_rules);
+            setMeta({ version: saved.version, name: saved.name });
+            setSelectedID((current) => saved.nodes.some((node) => node.id === current) ? current : "");
+            setDirty(false);
+            pendingConfig.current = null;
+            historyRef.current = [];
+            futureRef.current = [];
+            setHistTick((tick) => tick + 1);
+            setPromptEditorOpen(false);
+            onMessage("二创提示词已保存，后续新跑和重新二创使用新配置。");
+          }}
+        />
+      ) : null}
+      {rerunID ? <RerunDialog key={rerunID} api={api} runID={rerunID} onClose={() => setRerunID("")} onCreated={result => {
+        setRerunID("");
+        setLiveRun({experimentID: result.experiment.id, runs: liveRunTabs(result.experiment), activeRunID: result.run_id});
+        setRunStatus("queued"); setProduction(null);
+        onRerunCreated?.(result.experiment);
+        onMessage("新一轮文案已开始，旧稿保留在当前项目的运行页签中。");
+      }} /> : null}
       {!liveRun ? (
       <>
-      <div className="wf-designer__body">
-        <div className="wf-designer__canvas">
-          {loaded ? (
-            <ReactFlow
-              nodes={[...rfNodes, ...prodNodes]}
-              edges={[...rfEdges, ...prodEdges]}
-              nodeTypes={nodeTypes}
-              onNodesChange={(changes) => {
-                // 生产节点：只接受拖动，拖完把位置写进 production.node_positions
-                //（随自动保存入库，实跑画布同样按这个位置摆）。
-                for (const change of changes) {
-                  if (change.type !== "position" || !String(change.id).startsWith("produce-")) continue;
-                  const id = String(change.id);
-                  if (change.position) {
-                    prodPosDraftRef.current = {
-                      ...prodPosDraftRef.current,
-                      [id]: { x: change.position.x, y: change.position.y },
-                    };
-                    setProdPosDraft(prodPosDraftRef.current);
-                  }
-                  if (change.dragging === false) {
-                    const pos = change.position ?? prodPosDraftRef.current[id];
-                    if (pos) {
-                      patchProd({
-                        node_positions: {
-                          ...(prodRef.current.node_positions ?? {}),
-                          [id]: { x: Math.round(pos.x), y: Math.round(pos.y) },
-                        },
-                      });
-                    }
-                    const next = { ...prodPosDraftRef.current };
-                    delete next[id];
-                    prodPosDraftRef.current = next;
-                    setProdPosDraft(next);
-                  }
-                }
-                const designChanges = changes.filter(
-                  (change) => !("id" in change && String(change.id).startsWith("produce-")),
-                );
-                if (designChanges.length === 0) return;
-                if (
-                  !draggingHist.current &&
-                  designChanges.some((change) => change.type === "position" && change.dragging === true)
-                ) {
-                  beginHistory(true);
-                  draggingHist.current = true;
-                }
-                onNodesChange(designChanges);
-                if (designChanges.some((change) => change.type === "position" && change.dragging === false)) {
-                  draggingHist.current = false;
-                  setDirty(true);
-                }
-              }}
-              onEdgesChange={(changes) => {
-                if (
-                  changes.some(
-                    (change) => change.type === "remove" && !change.id.startsWith("produce-edge-"),
-                  )
-                ) {
-                  beginHistory(true);
-                  setDirty(true);
-                }
-                onEdgesChange(changes);
-              }}
-              onConnect={onConnect}
-              onNodeClick={(_, node) => setSelectedID(node.id)}
-              onPaneClick={() => setSelectedID("")}
-              fitView
-              fitViewOptions={{ padding: 0.22 }}
-              minZoom={0.25}
-              onlyRenderVisibleElements={false}
-              maxZoom={1.6}
-              deleteKeyCode={["Delete", "Backspace"]}
-              onBeforeDelete={async ({ nodes, edges }) => {
-                // 键盘删除只允许删设计边；节点走抽屉里的删除按钮（防误删骨干），
-                // 生产链的虚线边不可删。
-                const keptEdges = edges.filter((edge) => !edge.id.startsWith("produce-edge-"));
-                if (nodes.length > 0) return { nodes: [], edges: keptEdges };
-                return { nodes, edges: keptEdges };
-              }}
-            >
-              <Background gap={22} size={1.4} />
-              <Controls showInteractive={false} />
-              <FitViewAfterLayout
-                token={loaded ? `${rfNodes.map((node) => node.id).join(",")}|${prodNodes.map((node) => node.id).join(",")}|layout-${layoutTick}` : ""}
-              />
-            </ReactFlow>
-          ) : (
-            <p className="remix-lab-muted run-flow-loading">正在读取工作流…</p>
-          )}
-        </div>
-
+      <div className="wf-designer__body fixed-flow-workspace fixed-flow-workspace--setup">
+        {loaded ? <FixedFlowSteps steps={steps} selectedID={selectedID} onSelect={setSelectedID} /> : <p className="remix-lab-muted run-flow-loading">正在读取工作流…</p>}
+        {!selectedNode && !selectedProdSpec ? <div className="fixed-flow-empty"><strong>选择一个步骤</strong><span>查看设置、输入内容或准备开始制作。</span></div> : null}
         {selectedNode ? (
-          <aside className="run-flow-inspector wf-designer__drawer" aria-label={`${selectedNode.title}配置`}>
+          <aside className="run-flow-inspector wf-designer__drawer fixed-flow-details" aria-label={`${selectedNode.title}配置`}>
             <header>
               <h3>{selectedNode.title}</h3>
               <button
@@ -1112,7 +996,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
             {selectedNode.type === "agent" || selectedNode.type === "reviewer" ? (
               <>
                 <label className="wf-field">
-                  节点名
+                  步骤名称
                   <input
                     aria-label="节点名"
                     value={selectedNode.title}
@@ -1147,6 +1031,13 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
                     }
                   />
                 </label>
+                <FastModeButton
+                  label={`${selectedNode.title} Fast 加速模式`}
+                  value={selectedNode.config.service_tier}
+                  onChange={(service_tier) => patchNode(selectedNode.id, (node) => ({
+                    ...node, config: { ...node.config, service_tier },
+                  }))}
+                />
                 {selectedNode.type === "agent" ? (
                   <label className="wf-field">
                     通道
@@ -1271,9 +1162,36 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
                     }
                   />
                 </label>
+                <label className="wf-field">
+                  思考强度
+                  <select
+                    aria-label="写手思考强度"
+                    value={selectedNode.config.reasoning_effort ?? ""}
+                    onChange={(event) =>
+                      patchNode(selectedNode.id, (wfNode) => ({
+                        ...wfNode,
+                        config: { ...wfNode.config, reasoning_effort: event.target.value },
+                      }))
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((option) => (
+                      <option key={option || "default"} value={option}>
+                        {option || "跟随默认模型档"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <p className="remix-lab-muted">
-                  连进写手的 agent 输出会按图拼成【情报包】注入上下文；机械自检（10字连抄+篇幅）内置在写手环节。
+                  写手直接阅读原文，成稿交给审稿模型；篇幅与最终取舍由你审查。这里的模型设置只用于写手。
                 </p>
+                <FastModeButton
+                  label="写手 Fast 加速模式"
+                  value={selectedNode.config.service_tier}
+                  inheritedValue={defaultServiceTier}
+                  onChange={(service_tier) => patchNode(selectedNode.id, (node) => ({
+                    ...node, config: { ...node.config, service_tier },
+                  }))}
+                />
               </>
             ) : null}
 
@@ -1309,7 +1227,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
                     </label>
                   ) : null}
                   <div className="wf-field wf-designer__compare">
-                    <span>对比模型（不勾 = 用写手节点配置；勾多个 = 各出一稿并行）</span>
+                    <span>对比写手模型（勾选多个模型，每个模型各出一稿；审稿沿用已有设置）</span>
                     <ModelMultiSelect
                       value={compareModels}
                       onChange={(next) => {
@@ -1358,104 +1276,58 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
                 </div>
               </>
             ) : null}
-            {selectedNode.type === "selfcheck" ? (
+            {selectedNode.type === "output" ? (
               <>
                 <p className="remix-lab-muted">
-                  出稿闸门：与原文连续10字重合、篇幅比例超标时自动回炉写手返工；返工用尽仍超硬性线则判失败。留空（0）用默认值。
+                  已有成稿可直接贴进来，跳过前面的二创；导入后停在确认闸门，再接下排混剪。
                 </p>
                 <label className="wf-field">
-                  连抄触发上限 %（默认20，超过就返工）
+                  定稿正文
+                  <textarea
+                    aria-label="定稿正文"
+                    rows={12}
+                    value={draftScript}
+                    onChange={(event) => setDraftScript(event.target.value)}
+                    placeholder="把讨论好的二创文案整篇贴进来"
+                  />
+                </label>
+                <p className="remix-lab-muted">
+                  {draftScript.trim() ? `${[...draftScript.trim()].length} 字` : "还没填"}
+                </p>
+                <label className="wf-field">
+                  板标题（空则用正文第一句）
                   <input
-                    aria-label="连抄触发上限"
-                    type="number"
-                    min={0}
-                    max={60}
-                    value={selectedNode.config.overlap_max_pct ?? 0}
-                    onChange={(event) =>
-                      patchNode(selectedNode.id, (wfNode) => ({
-                        ...wfNode,
-                        config: { ...wfNode.config, overlap_max_pct: Math.max(0, Math.trunc(Number(event.target.value) || 0)) },
-                      }))
-                    }
+                    aria-label="板标题"
+                    value={draftBoardTitle}
+                    onChange={(event) => setDraftBoardTitle(event.target.value)}
+                    placeholder="混剪板面主标题"
                   />
                 </label>
                 <label className="wf-field">
-                  连抄硬上限 %（默认30，返工后仍超直接判失败）
+                  副标题
                   <input
-                    aria-label="连抄硬上限"
-                    type="number"
-                    min={0}
-                    max={80}
-                    value={selectedNode.config.overlap_hard_pct ?? 0}
-                    onChange={(event) =>
-                      patchNode(selectedNode.id, (wfNode) => ({
-                        ...wfNode,
-                        config: { ...wfNode.config, overlap_hard_pct: Math.max(0, Math.trunc(Number(event.target.value) || 0)) },
-                      }))
-                    }
+                    aria-label="副标题"
+                    value={draftSubtitle}
+                    onChange={(event) => setDraftSubtitle(event.target.value)}
                   />
                 </label>
-                <label className="wf-field">
-                  篇幅下限倍数（默认0.8，短于原文这个比例就补写）
-                  <input
-                    aria-label="篇幅下限"
-                    type="number"
-                    step={0.05}
-                    min={0}
-                    max={1.5}
-                    value={selectedNode.config.len_min_ratio ?? 0}
-                    onChange={(event) =>
-                      patchNode(selectedNode.id, (wfNode) => ({
-                        ...wfNode,
-                        config: { ...wfNode.config, len_min_ratio: Math.max(0, Number(event.target.value) || 0) },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="wf-field">
-                  篇幅硬下限倍数（默认0.65，返工后仍短判失败）
-                  <input
-                    aria-label="篇幅硬下限"
-                    type="number"
-                    step={0.05}
-                    min={0}
-                    max={1.5}
-                    value={selectedNode.config.len_hard_ratio ?? 0}
-                    onChange={(event) =>
-                      patchNode(selectedNode.id, (wfNode) => ({
-                        ...wfNode,
-                        config: { ...wfNode.config, len_hard_ratio: Math.max(0, Number(event.target.value) || 0) },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="wf-field">
-                  最多返工轮数（默认2，可填1-4）
-                  <input
-                    aria-label="返工轮数"
-                    type="number"
-                    min={0}
-                    max={4}
-                    value={selectedNode.config.max_rounds ?? 0}
-                    onChange={(event) =>
-                      patchNode(selectedNode.id, (wfNode) => ({
-                        ...wfNode,
-                        config: { ...wfNode.config, max_rounds: Math.max(0, Math.trunc(Number(event.target.value) || 0)) },
-                      }))
-                    }
-                  />
-                </label>
-                <p className="remix-lab-muted">连抄的度量口径（连续10个内容字与原文一致计一处）固定不可改。</p>
+                <div className="wf-designer__drawer-run">
+                  <button
+                    type="button"
+                    className="remix-lab-start remix-lab-icon-btn"
+                    disabled={importing || !draftScript.trim()}
+                    onClick={() => void importDraft()}
+                  >
+                    {importing ? "导入中…" : "作为定稿导入"}
+                  </button>
+                </div>
               </>
-            ) : null}
-            {selectedNode.type === "output" ? (
-              <p className="remix-lab-muted">定稿后接下排混剪：确认二创 → 建项目 → 口播 → 配音 → 剪映草稿 → 发布。</p>
             ) : null}
           </aside>
         ) : null}
 
         {selectedProdSpec ? (
-          <aside className="run-flow-inspector wf-designer__drawer" aria-label={`${selectedProdSpec.title}配置`}>
+          <aside className="run-flow-inspector wf-designer__drawer fixed-flow-details" aria-label={`${selectedProdSpec.title}配置`}>
             <header>
               <h3>{selectedProdSpec.title}</h3>
               <button
@@ -1625,13 +1497,13 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
               </button>
             ) : null}
             {selectedProdSpec.id === "produce-gate" ? (
-              <p className="remix-lab-muted">二创定稿出来后，在这个节点确认文案并开始混剪。对标原文勾选「全自动到草稿」时会跳过这步。</p>
+              <p className="remix-lab-muted">二创定稿出来后，在这一步确认文案并开始混剪。对标原文勾选「全自动到草稿」时会跳过这步。</p>
             ) : null}
             {selectedProdSpec.id === "produce-project" ? (
-              <p className="remix-lab-muted">确认后自动在所选账号下建项目并写入定稿，不用离开这张图。</p>
+              <p className="remix-lab-muted">确认后自动在所选账号下建项目并写入定稿，进度和结果都在当前页面查看。</p>
             ) : null}
             {selectedProdSpec.id === "produce-publish" ? (
-              <p className="remix-lab-muted">剪映草稿出来后，在这个节点复制视频描述和短标题，视频发出后点确认已发布。</p>
+              <p className="remix-lab-muted">剪映草稿出来后，在这一步复制视频描述和短标题，视频发出后点确认已发布。</p>
             ) : null}
           </aside>
         ) : null}
@@ -1639,6 +1511,5 @@ export function WorkflowCanvas({ api, prompts, onMessage, onEditAgentPrompts, ru
       </>
       ) : null}
     </div>
-    </ReactFlowProvider>
   );
 }

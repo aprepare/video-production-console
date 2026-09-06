@@ -65,13 +65,14 @@ func (s *Store) Get(id string) (*Short, error) {
 // normalizeLegacy 把早期记录拉到当前约定。只改内存对象，下次 Save 时才落盘。
 func normalizeLegacy(short *Short) {
 	if short.IsExplainer() {
-		// 财经解说现在全片只用一套项目级画风，并且固定纯图片。
+		if short.VisualSettings == nil {
+			short.VisualSettings = legacyVisualSettings()
+		}
+		// 单画风沿用旧规则，混合策略保留每镜选择；已生成视频保留。
 		short.Style = StyleByKey(strings.TrimSpace(short.Style)).Key
 		for i := range short.Shots {
-			short.Shots[i].StyleKey = short.Style
-			short.Shots[i].Hero = false
-			short.Shots[i].VideoPath, short.Shots[i].VideoStatus = "", ShotPending
-			short.Shots[i].VideoRequestID, short.Shots[i].VideoPrompt = "", ""
+			short.Shots[i].StyleKey = resolvedShotStyle(short.Style, short.Shots[i].StyleKey)
+			short.Shots[i].Hero = short.NeedsVideo(short.Shots[i])
 		}
 	} else if s := strings.TrimSpace(short.Style); s == "" || s == legacyStylePrompt {
 		short.Style = DefaultStylePrompt

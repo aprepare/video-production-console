@@ -51,6 +51,7 @@ type ChatRequest struct {
 	Tools           []ToolSpec `json:"tools,omitempty"`
 	Stream          bool       `json:"stream,omitempty"`
 	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
+	ServiceTier     string     `json:"service_tier,omitempty"`
 	MaxTokens       int        `json:"max_tokens,omitempty"`
 }
 

@@ -16,7 +16,7 @@ func TestListLibraryDefaultsToCatalog(t *testing.T) {
 	if len(list) != len(Catalog()) {
 		t.Fatalf("len=%d want %d", len(list), len(Catalog()))
 	}
-	if list[0].ID != "elder_stable" || !strings.Contains(list[0].System, "成功标准") {
+	if list[0].ID != "elder_stable" || !strings.Contains(list[0].System, openaicompat.SharedEditorialPolicy) {
 		t.Fatalf("elder_stable=%+v", list[0])
 	}
 	if list[0].Stamp != openaicompat.RewritePromptStampStable {

@@ -2222,3 +2222,40 @@
   margin: 0.85rem 0 0;
   padding-left: 1.1rem;
 }
+
+/* Production control: the stage rail leads into action, deliverables and execution. */
+.project-workbench { --workbench-teal-dark: var(--ds-accent); --workbench-teal-soft: color-mix(in srgb, var(--ds-accent) 9%, var(--ds-surface)); font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; gap: 16px; padding: 20px 24px; }
+.project-workbench .workbench-masthead { padding-bottom: 12px; min-height: 64px; }
+.project-workbench .production-rail { min-height: 88px; flex-basis: 88px; border-radius: 12px; box-shadow: none; }
+.project-workbench .production-rail__heading { border-left: 3px solid var(--ds-accent); }
+.project-workbench .production-rail__line { top: 28px; }
+.project-workbench .production-rail__stage--current .production-rail__node { color: white; border-color: var(--ds-accent); background: var(--ds-accent); box-shadow: 0 0 0 4px var(--workbench-teal-soft); }
+.project-workbench .production-rail__stage--current .production-rail__label, .project-workbench .production-rail__stage--current .production-rail__state { color: var(--ds-accent); }
+.project-workbench .primary-action-panel { border-top: 3px solid var(--ds-accent); }
+.project-workbench .primary-action-panel__stage { color: var(--ds-text-muted); font-size: 13px; }
+.project-workbench .primary-action-panel__title { color: var(--ds-text); font-size: 22px; line-height: 1.4; }
+.project-workbench .workbench-grid { gap: 16px; }
+.project-workbench :is(.project-asset:hover, .project-asset--inherited) { background: var(--ds-surface-muted); border-color: var(--ds-border); }
+.project-workbench :is(.workbench-icon-button, .project-asset button, .active-task-summary button):hover { color: var(--ds-accent); border-color: var(--ds-accent); background: var(--workbench-teal-soft); }
+.project-workbench :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 3px; }
+.project-workbench .project-asset__meta { font-size: 11px; }
+@media (min-width: 760px) and (max-width: 1400px) {
+  .project-workbench .workbench-grid { grid-template-columns: minmax(220px, .85fr) minmax(0, 1.4fr); grid-template-rows: auto auto; grid-template-areas: "action assets" "task assets"; overflow-y: auto; }
+  .project-workbench .workbench-grid--review { grid-template-areas: "action review" "task assets"; }
+}
+@media (max-width: 759px) {
+  .project-workbench { height: auto; min-height: calc(100dvh - 72px); overflow: visible; padding: 16px 12px 90px; gap: 12px; }
+  .project-workbench .workbench-masthead { grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; }
+  .project-workbench .production-rail { display: block; min-height: 114px; flex-basis: auto; }
+  .project-workbench .production-rail__heading { display: flex; flex-direction: row; justify-content: space-between; align-items: center; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--ds-border); }
+  .project-workbench .production-rail__heading strong { font-size: 13px; margin: 0; }
+  .project-workbench .production-rail__stages { grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: start; gap: 0; padding: 8px 4px; }
+  .project-workbench .production-rail__stage { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 5px; text-align: center; }
+  .project-workbench .production-rail__copy { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .project-workbench .production-rail__line { top: 23px; left: 10%; right: 10%; bottom: auto; width: auto; height: 2px; }
+  .project-workbench .production-rail__line > span { width: var(--rail-progress); height: 100%; }
+  .project-workbench .production-rail__label { font-size: 11px; }
+  .project-workbench .production-rail__state { font-size: 9px; }
+  .project-workbench .workbench-grid, .project-workbench .workbench-grid--review { display: flex; flex-direction: column; overflow: visible; }
+  .project-workbench .workbench-grid > * { flex: none; min-width: 0; max-height: none; overflow: visible; }
+}

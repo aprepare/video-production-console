@@ -151,7 +151,7 @@ func TestReviewRemixDraftPassKeepsOriginal(t *testing.T) {
 	}
 }
 
-func TestReviewRemixDraftRejectsWholesaleRewrite(t *testing.T) {
+func TestReviewRemixDraftKeepsShortRevisionForHumanChoice(t *testing.T) {
 	dir := t.TempDir()
 	reply, _ := json.Marshal(map[string]any{
 		"verdict": "fixed",
@@ -163,11 +163,11 @@ func TestReviewRemixDraftRejectsWholesaleRewrite(t *testing.T) {
 	outcome := ReviewRemixDraft(ReviewOptions{
 		Client: client, Model: "m", Source: "原文", DraftJSON: reviewerTestDraft(), OutputDir: dir, Round: 2,
 	})
-	if outcome.Record.Verdict != "error" {
-		t.Fatalf("verdict = %q, want error", outcome.Record.Verdict)
+	if outcome.Record.Verdict != "fixed" {
+		t.Fatalf("verdict = %q, want fixed", outcome.Record.Verdict)
 	}
-	if outcome.RevisedJSON != "" {
-		t.Fatalf("wholesale rewrite must be discarded, got: %s", outcome.RevisedJSON)
+	if outcome.RevisedJSON == "" {
+		t.Fatalf("short revision must be preserved, got: %s", outcome.RevisedJSON)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "review_round_2.json")); err != nil {
 		t.Fatalf("missing round artifact: %v", err)
@@ -230,7 +230,7 @@ func TestReviewRemixDraftUsesSystemOverride(t *testing.T) {
 		Client: client, Model: "m", Source: "原文", DraftJSON: reviewerTestDraft(),
 		OutputDir: t.TempDir(), SystemPrompt: "自定义审稿规则：只查课尾。",
 	})
-	if len(client.requests) != 1 || client.requests[0].Messages[0].Content != "自定义审稿规则：只查课尾。" {
+	if len(client.requests) != 1 || !strings.Contains(client.requests[0].Messages[0].Content, "自定义审稿规则：只查课尾。") || !strings.Contains(client.requests[0].Messages[0].Content, SharedEditorialPolicy) {
 		t.Fatalf("system override not applied: %+v", client.requests[0].Messages[0].Content[:40])
 	}
 }
@@ -252,38 +252,16 @@ func TestReviewRemixDraftSendsAnnotations(t *testing.T) {
 	}
 }
 
-func TestDefaultReviewerPromptKeepsTopicCloseNotFollowHook(t *testing.T) {
+func TestDefaultReviewerPromptUsesSharedCourseAndEditingRules(t *testing.T) {
 	prompt := DefaultReviewerPrompt()
-	if strings.Contains(prompt, "只许通用的关注引导") {
-		t.Fatal("reviewer must not rewrite a strong close into a follow-me hook")
-	}
-	// v3.7：必须有橱窗动作句；之后允许陪跑式关注，但不能是下期钩子或金句结尾。
-	if !strings.Contains(prompt, "必须有橱窗动作句") || !strings.Contains(prompt, "陪跑式关注") {
-		t.Fatal("reviewer must keep the action-sentence close and allow the companion follow line")
-	}
-	if !strings.Contains(prompt, "禁止改成「下一条讲xxx，关注我」") {
-		t.Fatal("reviewer must still forbid the follow-me hook")
-	}
-}
-
-func TestDefaultReviewerPromptFollowsSourceStructure(t *testing.T) {
-	prompt := DefaultReviewerPrompt()
-	// v3.8：互动段位置跟原文，不再写死腰部；转发指向不许删。
-	if strings.Contains(prompt, "中段应有一处互动") {
-		t.Fatal("reviewer must not force the interaction block into the middle")
-	}
-	for _, want := range []string{
-		"互动段位置跟原文走", "转给家里管钱的人",
-		"课尾以原文为准、清单只兜底", "三件事", "我在车里等你",
-		"字数硬上限480",
-		"让你听懂", "正文没来得及展开",
-		"十个人里八个\"全篇最多一次",
-		"命定留存句",
-		// v3.8.1：签名句机制留、句子换，不许整句照抄；暗号跟原文。
-		"签名句也不许整句照抄", "顺风顺水→一顺百顺",
-	} {
+	for _, want := range []string{SharedEditorialPolicy, "只修有证据的问题", "禁止整篇重写", "where", "课程资料", "关注理由", "祝福互动"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("reviewer prompt missing rule %q", want)
+			t.Fatalf("missing %q", want)
+		}
+	}
+	for _, old := range []string{"原样照搬前两三句", "命定留存句", "小数最多留一位", "年份、百分比、金额与原文逐个核对，写错的改回原文"} {
+		if strings.Contains(prompt, old) {
+			t.Fatalf("stale conflicting rule %q", old)
 		}
 	}
 }

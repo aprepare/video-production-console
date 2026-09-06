@@ -23,6 +23,7 @@ type RemixLabExperimentRecord struct {
 }
 
 type RemixLabSlotRecord struct {
+	ServiceTier                                                                string
 	ID, ExperimentID, Label, BaseURL, Model, ReasoningEffort, APIKeyCiphertext string
 	// Pipeline 为空走单模型写手；"multi_agent" 先跑三路情报agent再写。
 	Pipeline            string
@@ -64,9 +65,9 @@ func (r *RemixLabRepository) CreateExperiment(ctx context.Context, exp RemixLabE
 	}
 	for _, slot := range slots {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO remix_lab_slots(id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			slot.ID, slot.ExperimentID, slot.SortIndex, slot.Label, slot.BaseURL, slot.Model, slot.ReasoningEffort, slot.RunCount, slot.APIKeyCiphertext, slot.Pipeline,
+			INSERT INTO remix_lab_slots(id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline, service_tier)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			slot.ID, slot.ExperimentID, slot.SortIndex, slot.Label, slot.BaseURL, slot.Model, slot.ReasoningEffort, slot.RunCount, slot.APIKeyCiphertext, slot.Pipeline, slot.ServiceTier,
 		); err != nil {
 			return fmt.Errorf("insert remix lab slot: %w", err)
 		}
@@ -123,7 +124,7 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 	}
 
 	slotRows, err := r.db.QueryContext(ctx, `
-		SELECT id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline
+		SELECT id, experiment_id, sort_index, label, base_url, model, reasoning_effort, run_count, api_key_ciphertext, pipeline, service_tier
 		FROM remix_lab_slots WHERE experiment_id=? ORDER BY sort_index, id`, id)
 	if err != nil {
 		return RemixLabExperimentRecord{}, nil, nil, err
@@ -132,7 +133,7 @@ func (r *RemixLabRepository) GetExperiment(ctx context.Context, id string) (Remi
 	slots := make([]RemixLabSlotRecord, 0)
 	for slotRows.Next() {
 		var slot RemixLabSlotRecord
-		if err := slotRows.Scan(&slot.ID, &slot.ExperimentID, &slot.SortIndex, &slot.Label, &slot.BaseURL, &slot.Model, &slot.ReasoningEffort, &slot.RunCount, &slot.APIKeyCiphertext, &slot.Pipeline); err != nil {
+		if err := slotRows.Scan(&slot.ID, &slot.ExperimentID, &slot.SortIndex, &slot.Label, &slot.BaseURL, &slot.Model, &slot.ReasoningEffort, &slot.RunCount, &slot.APIKeyCiphertext, &slot.Pipeline, &slot.ServiceTier); err != nil {
 			return RemixLabExperimentRecord{}, nil, nil, err
 		}
 		slots = append(slots, slot)
@@ -192,6 +193,8 @@ func (r *RemixLabRepository) GetRun(ctx context.Context, id string) (RemixLabRun
 }
 
 func (r *RemixLabRepository) UpdateRun(ctx context.Context, run RemixLabRunRecord) error {
+	// Comments belong to UpdateRunComment. A runner holds an older snapshot and
+	// must not overwrite operator annotations when persisting progress/results.
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -200,11 +203,11 @@ func (r *RemixLabRepository) UpdateRun(ctx context.Context, run RemixLabRunRecor
 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE remix_lab_runs SET
-			status=?, continuous_script=?, titles_json=?, error_message=?, comment=?,
+			status=?, continuous_script=?, titles_json=?, error_message=?,
 			output_dir=?, adopted_project_id=?, started_at=?, finished_at=?,
 			package_json=?, draft_v1_json=?, review_json=?
 		WHERE id=?`,
-		run.Status, run.ContinuousScript, run.TitlesJSON, run.ErrorMessage, run.Comment,
+		run.Status, run.ContinuousScript, run.TitlesJSON, run.ErrorMessage,
 		run.OutputDir, run.AdoptedProjectID, run.StartedAt, run.FinishedAt,
 		run.PackageJSON, run.DraftV1JSON, run.ReviewJSON, run.ID,
 	)
@@ -264,13 +267,13 @@ type RemixLabPublishMetrics struct {
 
 // RemixLabPublishedRow 是文案库一行：成稿 + 所属实验/账号/项目 + 成绩。
 type RemixLabPublishedRow struct {
-	Run          RemixLabRunRecord
-	Experiment   RemixLabExperimentRecord
-	SlotModel    string
-	ProjectID    string
-	AccountID    string
-	ProducedAt   time.Time
-	Metrics      *RemixLabPublishMetrics
+	Run        RemixLabRunRecord
+	Experiment RemixLabExperimentRecord
+	SlotModel  string
+	ProjectID  string
+	AccountID  string
+	ProducedAt time.Time
+	Metrics    *RemixLabPublishMetrics
 }
 
 // ListPublishedRows 返回所有已经出过剪映草稿的成稿（生产段 completed），

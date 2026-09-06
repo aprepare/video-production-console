@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,17 +15,25 @@ import (
 	"github.com/google/uuid"
 
 	"video-production-console/internal/agentruntime/openaicompat"
+	"video-production-console/internal/security"
 )
 
 func now() time.Time { return time.Now().UTC() }
 
 // Runtime 是服务每次动手时需要的连接信息，由调用方从设置里现取，改设置不用重启。
 type Runtime struct {
-	BaseURL      string
-	APIKey       string
-	Models       Models
-	JianyingRoot string
-	FFprobePath  string
+	BaseURL          string
+	APIKey           string
+	ImageBaseURL     string
+	ImageAPIKey      string
+	VideoBaseURL     string
+	VideoAPIKey      string
+	ImageConcurrency int
+	VideoConcurrency int
+	MediaResolved    bool
+	Models           Models
+	JianyingRoot     string
+	FFprobePath      string
 }
 
 // BrandKit 是一条短片进剪映时借用混剪那套"账号包装"：9:16 背景框、BGM、音效、字幕样式。
@@ -64,6 +73,7 @@ type RuntimeProvider func(ctx context.Context) (Runtime, error)
 // Service 编排一条短片的全部步骤；长任务在后台 goroutine 里跑，进度写回 Store，
 // 前端轮询 Get 就能看到每张卡的状态变化。
 type Service struct {
+	media    *mediaSettingsStore
 	store    *Store
 	runtime  RuntimeProvider
 	assemble Assembler
@@ -72,10 +82,8 @@ type Service struct {
 	busy     sync.Map
 	shotBusy sync.Map
 	// 生图并发上限（中转站允许 20 张同时出）和生视频并发上限（任务型接口，别压太多）。
-	concurrency      int
-	videoConcurrency int
-	imageSem         chan struct{}
-	videoSem         chan struct{}
+	imageGate generationLimiter
+	videoGate generationLimiter
 }
 
 // Assembler 负责配音 + 剪映草稿，由 assemble.go 实现；抽成接口方便测试替换。
@@ -95,13 +103,13 @@ type AssembleResult struct {
 	DraftName     string
 	DurationS     float64
 	ShotTimes     [][2]float64
+	Captions      []CaptionCue
 }
 
 func NewService(dataRoot string, runtime RuntimeProvider, assembler Assembler) *Service {
 	return &Service{
+		media: &mediaSettingsStore{path: filepath.Join(dataRoot, "ai-short-media-settings.json"), protector: security.NewSecretProtector()},
 		store: &Store{DataRoot: dataRoot}, runtime: runtime, assemble: assembler,
-		concurrency: 20, videoConcurrency: 6,
-		imageSem: make(chan struct{}, 20), videoSem: make(chan struct{}, 6),
 	}
 }
 
@@ -110,7 +118,15 @@ func (s *Service) Store() *Store { return s.store }
 // Create 建一条短片：只存文案，不拆分镜（拆分镜是独立步骤，方便改完文案再拆）。
 // mode 为 fable（寓言动画，文案 20～1500 字）或 explainer（财经解说，文案可到 6000 字）。
 // textModel 是拆分镜用的模型，空则用默认；segmentModel 是解说模式分大段用的模型，空则机械切。
-func (s *Service) Create(accountID, mode, title, story, headline, style, textModel, segmentModel string) (*Short, error) {
+func (s *Service) Create(accountID, mode, title, story, headline, style, textModel, segmentModel, imageModel string, visual ...*VisualSettings) (*Short, error) {
+	return s.CreateWithReasoning(accountID, mode, title, story, headline, style, textModel, segmentModel, imageModel, "", visual...)
+}
+
+func (s *Service) CreateWithReasoning(accountID, mode, title, story, headline, style, textModel, segmentModel, imageModel, effort string, visual ...*VisualSettings) (*Short, error) {
+	if err := validateReasoning(effort); err != nil {
+		return nil, err
+	}
+
 	story = strings.TrimSpace(story)
 	if mode != ModeExplainer {
 		mode = ModeFable
@@ -123,6 +139,9 @@ func (s *Service) Create(accountID, mode, title, story, headline, style, textMod
 		return nil, fmt.Errorf("文案需要 20～%d 字", maxRunes)
 	}
 	if mode == ModeExplainer {
+		if strings.TrimSpace(style) == "" {
+			style = financeEditorial
+		}
 		style = StyleByKey(strings.TrimSpace(style)).Key
 	} else if strings.TrimSpace(style) == "" {
 		style = DefaultStylePrompt
@@ -133,9 +152,17 @@ func (s *Service) Create(accountID, mode, title, story, headline, style, textMod
 	short := &Short{
 		ID: uuid.NewString(), AccountID: strings.TrimSpace(accountID), Mode: mode, Title: strings.TrimSpace(title),
 		Headline: strings.TrimSpace(headline), Story: story, Style: strings.TrimSpace(style),
-		TextModel: strings.TrimSpace(textModel), SegmentModel: strings.TrimSpace(segmentModel),
+		TextReasoningEffort: strings.TrimSpace(effort), TextModel: strings.TrimSpace(textModel), SegmentModel: strings.TrimSpace(segmentModel), ImageModel: strings.TrimSpace(imageModel),
 		Status: StatusDraft, Characters: []Character{}, Shots: []Shot{},
 		CreatedAt: now(), UpdatedAt: now(),
+	}
+	if short.IsExplainer() {
+		short.VisualSettings = DefaultVisualSettings()
+		if len(visual) > 0 {
+			if err := applyVisualSettings(short, visual[0]); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := s.store.Save(short); err != nil {
 		return nil, err
@@ -143,13 +170,75 @@ func (s *Service) Create(accountID, mode, title, story, headline, style, textMod
 	return short, nil
 }
 
-func (s *Service) Get(id string) (*Short, error) { return s.store.Get(id) }
-func (s *Service) List() ([]*Short, error)       { return s.store.List() }
-func (s *Service) Delete(id string) error        { return s.store.Delete(id) }
+func (s *Service) Get(id string) (*Short, error) {
+	short, err := s.store.Get(id)
+	if err != nil || (short.Status != StatusGenerating && short.Status != StatusAssembling) || !s.tryLock(id) {
+		return short, err
+	}
+	defer s.unlock(id)
+	return s.store.Update(id, func(x *Short) error {
+		if x.Status != StatusGenerating && x.Status != StatusAssembling {
+			return nil
+		}
+		x.Status, x.Error = StatusFailed, "上次任务已中断，可续跑未完成的镜头；已有素材和视频任务编号已保留。"
+		for i := range x.Shots {
+			if x.Shots[i].ImageStatus == ShotRunning {
+				x.Shots[i].ImageStatus = ShotFailed
+			}
+			if x.Shots[i].VideoStatus == ShotRunning {
+				x.Shots[i].VideoStatus = ShotFailed
+			}
+		}
+		return nil
+	})
+}
+func (s *Service) List() ([]*Short, error) {
+	items, err := s.store.List()
+	if err != nil {
+		return nil, err
+	}
+	for i, item := range items {
+		if item.Status == StatusGenerating || item.Status == StatusAssembling {
+			items[i], err = s.Get(item.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return items, nil
+}
+func (s *Service) Delete(id string) error { return s.store.Delete(id) }
 
 // UpdateText 改文案/金句/画风/模型（重拆分镜前用）。textModel/segmentModel 传 nil 表示不改，传空串表示改回默认。
-func (s *Service) UpdateText(id, title, story, headline, style string, textModel, segmentModel *string) (*Short, error) {
+func (s *Service) UpdateText(id, title, story, headline, style string, textModel, segmentModel, imageModel *string, visual ...*VisualSettings) (*Short, error) {
+	return s.UpdateTextWithReasoning(id, title, story, headline, style, textModel, segmentModel, imageModel, nil, visual...)
+}
+
+func (s *Service) UpdateTextWithReasoning(id, title, story, headline, style string, textModel, segmentModel, imageModel, effort *string, visual ...*VisualSettings) (*Short, error) {
+	if effort != nil {
+		if err := validateReasoning(*effort); err != nil {
+			return nil, err
+		}
+	}
+
+	if !s.tryLock(id) {
+		return nil, ErrBusy
+	}
+	defer s.unlock(id)
 	return s.store.Update(id, func(short *Short) error {
+		if effort != nil {
+			short.TextReasoningEffort = strings.TrimSpace(*effort)
+		}
+		oldStory, oldHeadline, oldStyle := short.Story, short.Headline, short.Style
+		oldLayout := ""
+		if short.VisualSettings != nil {
+			oldLayout = short.VisualSettings.Layout
+		}
+		if len(visual) > 0 {
+			if err := applyVisualSettings(short, visual[0]); err != nil {
+				return err
+			}
+		}
 		if strings.TrimSpace(title) != "" {
 			short.Title = strings.TrimSpace(title)
 		}
@@ -162,11 +251,11 @@ func (s *Service) UpdateText(id, title, story, headline, style string, textModel
 				nextStyle := StyleByKey(strings.TrimSpace(style)).Key
 				if nextStyle != short.Style {
 					short.Style = nextStyle
-					// 画风是全片级约束。切换后旧图不能混用，全部退回待生成。
+					// 切换项目策略后重新解析每镜画风，旧图保留并标为需要重生。
 					for i := range short.Shots {
 						shot := &short.Shots[i]
-						shot.StyleKey = nextStyle
-						shot.ImagePath, shot.ImageStatus = "", ShotPending
+						shot.StyleKey = resolvedShotStyle(nextStyle, shot.StyleKey)
+						shot.ImageStale = shot.ImagePath != ""
 						shot.VideoPath, shot.VideoStatus, shot.VideoRequestID = "", ShotPending, ""
 						shot.Hero, shot.VideoPrompt, shot.Error = false, "", ""
 					}
@@ -184,29 +273,77 @@ func (s *Service) UpdateText(id, title, story, headline, style string, textModel
 		if segmentModel != nil {
 			short.SegmentModel = strings.TrimSpace(*segmentModel)
 		}
+		if imageModel != nil {
+			short.ImageModel = strings.TrimSpace(*imageModel)
+		}
 		fillAllPrompts(short, false)
+		if oldStory != short.Story || oldHeadline != short.Headline || oldStyle != short.Style {
+			markDraftStale(short)
+		}
+		if short.IsExplainer() && oldStory != short.Story && len(short.Shots) > 0 {
+			short.StoryboardStale = true
+		}
+		if short.VisualSettings != nil && oldLayout != short.VisualSettings.Layout {
+			for i := range short.Shots {
+				short.Shots[i].ImageStale = short.Shots[i].ImagePath != ""
+			}
+		}
 		return nil
 	})
 }
 
 // ShotPatch 是改一镜时可选的字段，空值表示不改（Hero 用指针区分）。
 type ShotPatch struct {
-	Scene, Motion, Narration, Speaker string
-	Seconds                           int
-	StyleKey, Subject                 string
-	Hero                              *bool
+	Scene, Motion, Narration, Speaker                 string
+	Seconds                                           int
+	StyleKey, Subject                                 string
+	Hero                                              *bool
+	VisualIntent, SubjectType, CameraMove, Annotation *string
+	Keywords                                          *[]ShotKeyword
 }
 
 // UpdateShot 改某镜的画面/动作/台词/说话人（改画面后通常要重生这一镜；改说话人只影响配音）。
 func (s *Service) UpdateShot(id string, index int, patch ShotPatch) (*Short, error) {
+	if !s.tryLock(id) {
+		return nil, ErrBusy
+	}
+	defer s.unlock(id)
 	scene, motion, narration, speaker, seconds := patch.Scene, patch.Motion, patch.Narration, patch.Speaker, patch.Seconds
 	return s.store.Update(id, func(short *Short) error {
 		if index < 0 || index >= len(short.Shots) {
 			return errors.New("shot index out of range")
 		}
 		shot := &short.Shots[index]
+		oldPrompt := shot.ImagePrompt
 		if short.IsExplainer() {
-			shot.StyleKey = StyleByKey(short.Style).Key
+			if patch.SubjectType != nil {
+				if !validSubjectType(*patch.SubjectType) {
+					return errors.New("画面主体类型无效")
+				}
+				shot.SubjectType = *patch.SubjectType
+			}
+			if patch.CameraMove != nil {
+				if !validCameraMove(*patch.CameraMove) {
+					return errors.New("镜头运动类型无效")
+				}
+				shot.CameraMove = *patch.CameraMove
+			}
+			if patch.VisualIntent != nil {
+				shot.VisualIntent = strings.TrimSpace(*patch.VisualIntent)
+			}
+			if patch.Annotation != nil {
+				shot.Annotation = strings.TrimSpace(*patch.Annotation)
+			}
+			if patch.Keywords != nil {
+				shot.Keywords = append([]ShotKeyword{}, (*patch.Keywords)...)
+			}
+			if short.Style == financeEditorial && strings.TrimSpace(patch.StyleKey) != "" {
+				if !editorialShotStyle(strings.TrimSpace(patch.StyleKey)) {
+					return errors.New("混合画风仅支持纸张拼贴或微缩模型")
+				}
+				shot.StyleKey = strings.TrimSpace(patch.StyleKey)
+			}
+			shot.StyleKey = resolvedShotStyle(short.Style, shot.StyleKey)
 			if s := strings.TrimSpace(patch.Subject); s != "" {
 				shot.Subject = s
 			}
@@ -219,6 +356,11 @@ func (s *Service) UpdateShot(id string, index int, patch ShotPatch) (*Short, err
 			shot.Motion = strings.TrimSpace(motion)
 		}
 		if strings.TrimSpace(narration) != "" {
+			if strings.TrimSpace(narration) != shot.Narration {
+				for i := range short.Shots {
+					short.Shots[i].StartS, short.Shots[i].EndS = 0, 0
+				}
+			}
 			shot.Narration = strings.TrimSpace(narration)
 		}
 		if speaker = strings.TrimSpace(speaker); speaker != "" {
@@ -242,6 +384,10 @@ func (s *Service) UpdateShot(id string, index int, patch ShotPatch) (*Short, err
 			}
 		}
 		fillShotPrompts(short, index)
+		if short.IsExplainer() && oldPrompt != shot.ImagePrompt && shot.ImagePath != "" {
+			shot.ImageStale = true
+		}
+		markDraftStale(short)
 		return nil
 	})
 }
@@ -305,10 +451,11 @@ func (s *Service) clients(ctx context.Context) (Runtime, *GenClient, openaicompa
 	if err != nil {
 		return Runtime{}, nil, nil, err
 	}
-	if strings.TrimSpace(rt.BaseURL) == "" || strings.TrimSpace(rt.APIKey) == "" {
-		return Runtime{}, nil, nil, errors.New("二创接口地址或密钥未配置")
+	rt, err = s.mediaRuntime(rt)
+	if err != nil {
+		return Runtime{}, nil, nil, err
 	}
-	gen := &GenClient{BaseURL: rt.BaseURL, APIKey: rt.APIKey}
+	gen := &GenClient{BaseURL: rt.ImageBaseURL, APIKey: rt.ImageAPIKey}
 	chat := &openaicompat.HTTPChatClient{BaseURL: rt.BaseURL, APIKey: rt.APIKey}
 	return rt, gen, chat, nil
 }
@@ -343,7 +490,12 @@ func (s *Service) Storyboard(ctx context.Context, id string) (*Short, error) {
 	return s.store.Update(id, func(x *Short) error {
 		x.Headline, x.Characters, x.Shots = short.Headline, short.Characters, short.Shots
 		x.Status, x.Error = StatusStoryboard, ""
-		x.NarrationPath, x.SRTPath, x.DraftPath, x.DraftName, x.DurationS = "", "", "", "", 0
+		if x.IsExplainer() {
+			markDraftStale(x)
+			x.StoryboardStale = false
+		} else {
+			x.NarrationPath, x.SRTPath, x.DraftPath, x.DraftName, x.DurationS = "", "", "", "", 0
+		}
 		fillAllPrompts(x, false)
 		return nil
 	})
@@ -360,6 +512,10 @@ func (s *Service) GenerateAll(id string) error {
 		s.unlock(id)
 		return err
 	}
+	if short.StoryboardStale {
+		s.unlock(id)
+		return errors.New("文案已更新，请先重新拆分镜")
+	}
 	if len(short.Shots) == 0 {
 		s.unlock(id)
 		return errors.New("先拆分镜")
@@ -375,13 +531,22 @@ func (s *Service) GenerateAll(id string) error {
 		}
 		// 解说模式：配音 + 逐字对齐和生图并行跑，组装时命中缓存，省 2～4 分钟。
 		if pre, ok := s.assemble.(NarrationPrewarmer); ok && short.IsExplainer() {
-			go pre.PrewarmNarration(ctx, rt, short, s.store.AssetDir(id))
+			if short.VisualSettings == nil || short.VisualSettings.OpeningVideoSeconds == 0 {
+				go pre.PrewarmNarration(ctx, rt, short, s.store.AssetDir(id))
+			}
+		}
+		if err := s.prepareOpeningTimeline(ctx, rt, id); err != nil {
+			s.fail(id, err)
+			return
 		}
 		if err := s.generateCharacters(ctx, rt, gen, id); err != nil {
 			s.fail(id, err)
 			return
 		}
-		s.generateShots(ctx, rt, gen, id, nil)
+		if err := s.generateShots(ctx, rt, gen, id, nil); err != nil {
+			s.fail(id, err)
+			return
+		}
 		s.finishGeneration(id)
 	}()
 	return nil
@@ -396,6 +561,24 @@ func (s *Service) RegenerateShot(id string, index int, stage string) error {
 	if index < 0 || index >= len(short.Shots) {
 		return errors.New("shot index out of range")
 	}
+	if stage != "image" && stage != "video" {
+		return errors.New("生成阶段无效")
+	}
+	if stage == "video" && !short.NeedsVideo(short.Shots[index]) {
+		return errors.New("请先启用开场AI视频，且选择开场范围内的镜头")
+	}
+	endpointChanged := false
+	if stage == "video" && short.Shots[index].VideoRequestID != "" {
+		rt, _, _, err := s.clients(context.Background())
+		if err != nil {
+			return err
+		}
+		previous := short.Shots[index].VideoRequestBaseURL
+		if previous == "" {
+			previous = rt.BaseURL
+		}
+		endpointChanged = strings.TrimRight(previous, "/") != strings.TrimRight(rt.VideoBaseURL, "/")
+	}
 	if !s.tryLockShot(id, index) {
 		return ErrBusy
 	}
@@ -404,11 +587,20 @@ func (s *Service) RegenerateShot(id string, index int, stage string) error {
 		x.Status, x.Error = StatusGenerating, ""
 		shot := &x.Shots[index]
 		if stage == "image" {
-			shot.ImagePath, shot.ImageStatus = "", ShotRunning
+			shot.ImageStatus = ShotRunning
+			if !x.IsExplainer() {
+				shot.ImagePath = ""
+			}
+			markDraftStale(x)
 			shot.VideoPath, shot.VideoStatus, shot.VideoRequestID = "", ShotPending, ""
 		} else {
-			shot.VideoPath, shot.VideoStatus, shot.VideoRequestID = "", ShotRunning, ""
+			// 失败后的重试继续查询已提交任务；成功后的重生才提交新任务。
+			if shot.VideoStatus != ShotFailed || endpointChanged {
+				shot.VideoRequestID = ""
+			}
+			shot.VideoStatus = ShotRunning
 		}
+		shot.VideoSubmitUncertain = false
 		shot.Error = ""
 		return nil
 	}); err != nil {
@@ -433,7 +625,19 @@ func (s *Service) RegenerateShot(id string, index int, stage string) error {
 			s.finishGeneration(id)
 			return
 		}
-		s.generateShots(ctx, rt, gen, id, []int{index})
+		if err := s.generateShots(ctx, rt, gen, id, []int{index}); err != nil {
+			_, _ = s.store.Update(id, func(x *Short) error {
+				if stage == "image" {
+					x.Shots[index].ImageStatus = ShotFailed
+				} else {
+					x.Shots[index].VideoStatus = ShotFailed
+				}
+				x.Shots[index].Error = err.Error()
+				return nil
+			})
+			s.fail(id, err)
+			return
+		}
 		s.finishGeneration(id)
 	}()
 	return nil
@@ -496,6 +700,13 @@ func (s *Service) finishGeneration(id string) {
 	})
 }
 
+func imageModelFor(short *Short, rt Runtime) string {
+	if model := strings.TrimSpace(short.ImageModel); model != "" {
+		return model
+	}
+	return rt.Models.Image
+}
+
 func (s *Service) generateCharacters(ctx context.Context, rt Runtime, gen *GenClient, id string) error {
 	short, err := s.store.Get(id)
 	if err != nil {
@@ -506,7 +717,7 @@ func (s *Service) generateCharacters(ctx context.Context, rt Runtime, gen *GenCl
 		return err
 	}
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, s.concurrency)
+	sem := make(chan struct{}, concurrencyOr(rt.ImageConcurrency, 20))
 	var firstErr error
 	var mu sync.Mutex
 	for i, c := range short.Characters {
@@ -519,7 +730,12 @@ func (s *Service) generateCharacters(ctx context.Context, rt Runtime, gen *GenCl
 			defer wg.Done()
 			defer func() { <-sem }()
 			_, _ = s.store.Update(id, func(x *Short) error { x.Characters[i].Status = ShotRunning; return nil })
-			jpeg, err := gen.GenerateImage(ctx, rt.Models.Image, characterPrompt(short.Style, c), nil)
+			release, err := s.imageGate.acquire(ctx, concurrencyOr(rt.ImageConcurrency, 20))
+			var jpeg []byte
+			if err == nil {
+				jpeg, err = gen.GenerateImage(ctx, imageModelFor(short, rt), characterPrompt(short.Style, c), nil)
+				release()
+			}
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -547,10 +763,13 @@ func (s *Service) generateCharacters(ctx context.Context, rt Runtime, gen *GenCl
 }
 
 // generateShots 对指定镜头（nil=全部未完成）依次：首帧图 → 图生视频。
-func (s *Service) generateShots(ctx context.Context, rt Runtime, gen *GenClient, id string, only []int) {
+func (s *Service) generateShots(ctx context.Context, rt Runtime, gen *GenClient, id string, only []int) error {
+	if err := s.prepareOpeningTimeline(ctx, rt, id); err != nil {
+		return err
+	}
 	short, err := s.store.Get(id)
 	if err != nil {
-		return
+		return err
 	}
 	dir := s.store.AssetDir(id)
 	_ = os.MkdirAll(dir, 0o755)
@@ -558,26 +777,9 @@ func (s *Service) generateShots(ctx context.Context, rt Runtime, gen *GenClient,
 	for _, i := range only {
 		wanted[i] = true
 	}
-	// 参考图：寓言模式按角色名取角色设定图；解说模式按画风取「锚图」——
-	// 每套画风第一张先单独出，后面同画风的镜头都拿它当参考，保住光线、质感、人物长相。
+	// 寓言沿用角色设定图；财经解说只用文字统一画风，避免首图的人物或构图污染后续镜头。
 	refs := map[string]string{}
-	if short.IsExplainer() {
-		s.ensureStyleAnchors(ctx, rt, gen, id, dir, short, only, wanted)
-		if fresh, err := s.store.Get(id); err == nil {
-			short = fresh
-		}
-		for _, shot := range short.Shots {
-			if shot.ImageStatus != ShotDone || shot.ImagePath == "" {
-				continue
-			}
-			if _, ok := refs[shot.StyleKey]; ok {
-				continue
-			}
-			if raw, err := os.ReadFile(shot.ImagePath); err == nil {
-				refs[shot.StyleKey] = DataURL(raw)
-			}
-		}
-	} else {
+	if !short.IsExplainer() {
 		for _, c := range short.Characters {
 			if c.ImagePath == "" {
 				continue
@@ -598,31 +800,11 @@ func (s *Service) generateShots(ctx context.Context, rt Runtime, gen *GenClient,
 		wg.Add(1)
 		go func(i int, shot Shot) {
 			defer wg.Done()
-			s.generateOneShot(ctx, rt, gen, id, dir, i, shot, short, refs, s.videoSem)
+			s.generateOneShot(ctx, rt, gen, id, dir, i, shot, short, refs, nil)
 		}(i, shot)
 	}
 	wg.Wait()
-}
-
-// ensureStyleAnchors 解说模式：每套画风还没有任何成图时，先同步出第一张，作为同画风后续镜头的参考。
-func (s *Service) ensureStyleAnchors(ctx context.Context, rt Runtime, gen *GenClient, id, dir string, short *Short, only []int, wanted map[int]bool) {
-	hasImage := map[string]bool{}
-	for _, shot := range short.Shots {
-		if shot.ImageStatus == ShotDone && shot.ImagePath != "" {
-			hasImage[shot.StyleKey] = true
-		}
-	}
-	for i, shot := range short.Shots {
-		if only != nil && !wanted[i] {
-			continue
-		}
-		if hasImage[shot.StyleKey] || (shot.ImageStatus == ShotDone && shot.ImagePath != "") {
-			continue
-		}
-		if s.generateShotImage(ctx, rt, gen, id, dir, i, shot, short, nil) != "" {
-			hasImage[shot.StyleKey] = true
-		}
-	}
+	return nil
 }
 
 // generateShotImage 出一镜的图并写回；失败返回空。
@@ -635,6 +817,12 @@ func (s *Service) generateShotImage(ctx context.Context, rt Runtime, gen *GenCli
 			return nil
 		})
 	}
+	if short.IsExplainer() && strings.TrimSpace(shot.Scene) == "" && strings.TrimSpace(shot.Subject) == "" {
+		setShot(func(x *Shot) {
+			x.ImageStatus, x.Error = ShotFailed, "配图描述未完成，请先填写本镜主体或画面。"
+		})
+		return ""
+	}
 	prompt := shotImagePrompt(short.Style, shot, short.Characters)
 	if short.IsExplainer() {
 		prompt = explainerImagePrompt(shot)
@@ -643,23 +831,42 @@ func (s *Service) generateShotImage(ctx context.Context, rt Runtime, gen *GenCli
 		}
 	}
 	setShot(func(x *Shot) {
-		x.ImageStatus, x.Error, x.ImagePrompt, x.ImagePromptUsed = ShotRunning, "", prompt, prompt
+		x.ImageStatus, x.Error, x.ImagePrompt = ShotRunning, "", explainerOrFablePrompt(short, shot)
 	})
-	if s.imageSem != nil {
-		s.imageSem <- struct{}{}
-		defer func() { <-s.imageSem }()
+	release, limitErr := s.imageGate.acquire(ctx, concurrencyOr(rt.ImageConcurrency, 20))
+	if limitErr != nil {
+		setShot(func(x *Shot) { x.ImageStatus, x.Error = ShotFailed, limitErr.Error() })
+		return ""
 	}
-	jpeg, err := gen.GenerateImage(ctx, rt.Models.Image, prompt, references)
+	defer release()
+	size := "1792x1024"
+	if short.IsExplainer() && short.VisualSettings != nil && short.VisualSettings.Layout == "portrait_full" {
+		size = "1152x2048"
+	}
+	jpeg, err := gen.GenerateImageSize(ctx, imageModelFor(short, rt), prompt, references, size)
 	if err != nil {
 		setShot(func(x *Shot) { x.ImageStatus, x.Error = ShotFailed, "生图失败："+err.Error() })
 		return ""
 	}
 	imagePath := filepath.Join(dir, fmt.Sprintf("shot_%02d.jpg", i+1))
+	if short.IsExplainer() {
+		ext := ".jpg"
+		if http.DetectContentType(jpeg) == "image/png" {
+			ext = ".png"
+		}
+		if http.DetectContentType(jpeg) == "image/webp" {
+			ext = ".webp"
+		}
+		imagePath = filepath.Join(dir, fmt.Sprintf("shot_%02d_%s%s", i+1, uuid.NewString(), ext))
+	}
 	if err := os.WriteFile(imagePath, jpeg, 0o644); err != nil {
 		setShot(func(x *Shot) { x.ImageStatus, x.Error = ShotFailed, err.Error() })
 		return ""
 	}
-	setShot(func(x *Shot) { x.ImagePath, x.ImageStatus = imagePath, ShotDone })
+	setShot(func(x *Shot) {
+		x.ImagePath, x.ImageStatus, x.ImagePromptUsed, x.ImageStale = imagePath, ShotDone, prompt, false
+	})
+	_, _ = s.store.Update(id, func(x *Short) error { markDraftStale(x); return nil })
 	return imagePath
 }
 
@@ -673,7 +880,7 @@ func (s *Service) generateOneShot(ctx context.Context, rt Runtime, gen *GenClien
 		})
 	}
 	imagePath := shot.ImagePath
-	if shot.ImageStatus != ShotDone || imagePath == "" {
+	if shot.ImageStatus != ShotDone || imagePath == "" || shot.ImageStale {
 		var references []string
 		if short.IsExplainer() {
 			if ref, ok := refs[shot.StyleKey]; ok {
@@ -690,14 +897,22 @@ func (s *Service) generateOneShot(ctx context.Context, rt Runtime, gen *GenClien
 		if imagePath == "" {
 			return
 		}
+		shot.VideoRequestID = ""
+		shot.VideoSubmitUncertain = false
 	}
 	if !short.NeedsVideo(shot) {
 		// 图片镜到此为止：推拉平移在组装时用关键帧做。
-		setShot(func(x *Shot) { x.VideoPath, x.VideoStatus, x.VideoRequestID, x.Error = "", ShotPending, "", "" })
+		setShot(func(x *Shot) { x.Error = "" })
 		return
 	}
 
-	// 生视频单独限流：图可以 20 张齐发，视频任务同时挂太多容易被中转站拒。
+	// 视频任务单独限流；等待远端完成期间也占用一个视频并发名额。
+	release, limitErr := s.videoGate.acquire(ctx, concurrencyOr(rt.VideoConcurrency, 6))
+	if limitErr != nil {
+		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, limitErr.Error() })
+		return
+	}
+	defer release()
 	if videoSem != nil {
 		videoSem <- struct{}{}
 		defer func() { <-videoSem }()
@@ -713,23 +928,80 @@ func (s *Service) generateOneShot(ctx context.Context, rt Runtime, gen *GenClien
 		videoPrompt = explainerVideoPrompt(shot)
 	}
 	setShot(func(x *Shot) { x.VideoPrompt = videoPrompt })
-	requestID, err := gen.StartVideo(ctx, rt.Models.Video, videoPrompt, shot.Seconds, DataURL(frame))
-	if err != nil {
-		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, "提交视频失败："+err.Error() })
+	gen = videoClient(rt, gen)
+	if gen.BaseURL == "" {
+		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, "请配置视频接口URL" })
 		return
 	}
-	setShot(func(x *Shot) { x.VideoRequestID = requestID })
+	requestID := shot.VideoRequestID
+	previousURL := shot.VideoRequestBaseURL
+	if previousURL == "" {
+		previousURL = rt.BaseURL
+	}
+	if requestID != "" && previousURL != "" && strings.TrimRight(previousURL, "/") != strings.TrimRight(gen.BaseURL, "/") {
+		setShot(func(x *Shot) {
+			x.VideoStatus, x.Error = ShotFailed, "这个视频任务属于原接口，请切回原URL继续查询；如需在新接口重新生成，请使用单镜视频按钮。"
+		})
+		return
+	}
+	if requestID == "" {
+		if shot.VideoSubmitUncertain {
+			setShot(func(x *Shot) {
+				x.VideoStatus, x.Error = ShotFailed, "上次视频提交结果未确认，已暂停自动重提。请核对API后台后，使用单镜重生视频重新提交。"
+			})
+			return
+		}
+		aspect := "16:9"
+		if short.IsExplainer() && short.VisualSettings != nil && short.VisualSettings.Layout == "portrait_full" {
+			aspect = "9:16"
+		}
+		// 先落盘再提交，避免进程在收到任务编号前退出后自动重复计费。
+		if _, err := s.store.Update(id, func(x *Short) error {
+			x.Shots[i].VideoSubmitUncertain = true
+			x.Shots[i].VideoRequestID = ""
+			return nil
+		}); err != nil {
+			setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, err.Error() })
+			return
+		}
+		requestID, err = gen.StartVideoAspect(ctx, videoModelFor(short, rt), videoPrompt, shot.Seconds, DataURL(frame), aspect)
+		if err != nil {
+			setShot(func(x *Shot) {
+				x.VideoStatus, x.Error = ShotFailed, "提交视频失败："+err.Error()
+				x.VideoSubmitUncertain = errors.Is(err, ErrVideoSubmissionUncertain)
+			})
+			return
+		}
+	}
+	if _, err := s.store.Update(id, func(x *Short) error {
+		x.Shots[i].VideoRequestID = requestID
+		x.Shots[i].VideoRequestBaseURL = gen.BaseURL
+		x.Shots[i].VideoSubmitUncertain = false
+		return nil
+	}); err != nil {
+		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, "保存视频任务编号失败："+err.Error() })
+		return
+	}
 	mp4, err := gen.WaitVideo(ctx, requestID, 6*time.Minute)
 	if err != nil {
-		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, "视频生成失败："+err.Error() })
+		setShot(func(x *Shot) {
+			x.VideoStatus, x.Error = ShotFailed, "视频生成失败："+err.Error()
+			if errors.Is(err, ErrVideoTaskTerminal) {
+				x.VideoRequestID = ""
+			}
+		})
 		return
 	}
 	videoPath := filepath.Join(dir, fmt.Sprintf("shot_%02d.mp4", i+1))
+	if short.IsExplainer() {
+		videoPath = filepath.Join(dir, fmt.Sprintf("shot_%02d_%s.mp4", i+1, uuid.NewString()))
+	}
 	if err := os.WriteFile(videoPath, mp4, 0o644); err != nil {
 		setShot(func(x *Shot) { x.VideoStatus, x.Error = ShotFailed, err.Error() })
 		return
 	}
 	setShot(func(x *Shot) { x.VideoPath, x.VideoStatus, x.Error = videoPath, ShotDone, "" })
+	_, _ = s.store.Update(id, func(x *Short) error { markDraftStale(x); return nil })
 }
 
 // AssembleAsync 后台：配音 → 分镜计时 → 剪映草稿 → 注册进剪映。
@@ -742,6 +1014,10 @@ func (s *Service) AssembleAsync(id string) error {
 		s.unlock(id)
 		return err
 	}
+	if short.StoryboardStale {
+		s.unlock(id)
+		return errors.New("文案已更新，请先重新拆分镜")
+	}
 	for _, shot := range short.Shots {
 		if !short.ShotReady(shot) {
 			s.unlock(id)
@@ -752,17 +1028,24 @@ func (s *Service) AssembleAsync(id string) error {
 		s.unlock(id)
 		return errors.New("组装器未配置")
 	}
+	if _, err := s.store.Update(id, func(x *Short) error {
+		x.Status, x.Error = StatusAssembling, ""
+		x.AssemblyProgress = &AssemblyProgress{Message: "准备配音与草稿", StartedAt: now(), UpdatedAt: now()}
+		return nil
+	}); err != nil {
+		s.unlock(id)
+		return err
+	}
 	go func() {
 		defer s.unlock(id)
 		ctx := context.Background()
-		_, _ = s.store.Update(id, func(x *Short) error { x.Status, x.Error = StatusAssembling, ""; return nil })
 		rt, err := s.runtime(ctx)
 		if err != nil {
 			s.fail(id, err)
 			return
 		}
 		progress := func(step string) {
-			_, _ = s.store.Update(id, func(x *Short) error { x.Error = step; return nil })
+			_, _ = s.store.Update(id, func(x *Short) error { x.AssemblyProgress = assemblyStep(step, x.AssemblyProgress); return nil })
 		}
 		result, err := s.assemble.Assemble(ctx, rt, short, s.store.AssetDir(id), progress)
 		if err != nil {
@@ -771,8 +1054,10 @@ func (s *Service) AssembleAsync(id string) error {
 		}
 		_, _ = s.store.Update(id, func(x *Short) error {
 			x.Status, x.Error = StatusAssembled, ""
+			x.AssemblyProgress = &AssemblyProgress{Stage: 4, Message: "草稿已成功导入剪映", StartedAt: x.AssemblyProgress.StartedAt, UpdatedAt: now()}
 			x.NarrationPath, x.SRTPath = result.NarrationPath, result.SRTPath
 			x.DraftPath, x.DraftName, x.DurationS = result.DraftPath, result.DraftName, result.DurationS
+			x.DraftStale, x.Captions = false, result.Captions
 			for i := range x.Shots {
 				if i < len(result.ShotTimes) {
 					x.Shots[i].StartS, x.Shots[i].EndS = result.ShotTimes[i][0], result.ShotTimes[i][1]

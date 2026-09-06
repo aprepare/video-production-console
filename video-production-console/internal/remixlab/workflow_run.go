@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -55,11 +57,6 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 	if err := ValidateWorkflow(wf); err != nil {
 		return Experiment{}, err
 	}
-	snapshot, err := json.Marshal(wf)
-	if err != nil {
-		return Experiment{}, err
-	}
-
 	rt, err := s.runtime.Runtime(ctx)
 	if err != nil {
 		return Experiment{}, err
@@ -76,6 +73,7 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		in.BaseURL = preset.Slots[0].BaseURL
 		in.Model = preset.Slots[0].Model
 		in.ReasoningEffort = preset.Slots[0].ReasoningEffort
+		in.ServiceTier = preset.Slots[0].ServiceTier
 	} else {
 		in.BaseURL = strings.TrimSpace(rt.RemixBaseURL)
 		in.Model = strings.TrimSpace(rt.RemixModel)
@@ -83,12 +81,29 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 	}
 	writerNode := workflowWriter(wf)
 	if writerNode != nil {
+		if tier := strings.TrimSpace(writerNode.Config.ServiceTier); tier != "" {
+			in.ServiceTier = tier
+		}
 		if m := strings.TrimSpace(writerNode.Config.Model); m != "" {
 			in.Model = m
 		}
 		if e := strings.TrimSpace(writerNode.Config.ReasoningEffort); e != "" {
 			in.ReasoningEffort = e
 		}
+	}
+	// Freeze the inherited writer tier so preset edits do not change historical runs.
+	for i := range wf.Nodes {
+		if wf.Nodes[i].Type == WorkflowNodeWriter {
+			wf.Nodes[i].Config.ServiceTier = in.ServiceTier
+		}
+	}
+	wf, err = (Store{DataRoot: s.dataRoot}).freezeWorkflowWriter(wf)
+	if err != nil {
+		return Experiment{}, err
+	}
+	snapshot, err := json.Marshal(wf)
+	if err != nil {
+		return Experiment{}, err
 	}
 	// 每个显式模型解析成一个槽；空字符串表示沿用上面算出的默认档。
 	slots := make([]resolvedSlot, 0, len(cleanModels))
@@ -148,6 +163,7 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 	for index, slot := range slots {
 		slotID := uuid.NewString()
 		slotRec := store.RemixLabSlotRecord{
+			ServiceTier:      slot.ServiceTier,
 			ID:               slotID,
 			ExperimentID:     expID,
 			SortIndex:        index,
@@ -161,7 +177,8 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		}
 		slotRecs = append(slotRecs, slotRec)
 		slotViews = append(slotViews, SlotView{
-			ID: slotID, ExperimentID: expID, SortIndex: index, Label: slotRec.Label,
+			ServiceTier: slot.ServiceTier,
+			ID:          slotID, ExperimentID: expID, SortIndex: index, Label: slotRec.Label,
 			BaseURL: slot.BaseURL, Model: slot.Model, ReasoningEffort: slot.ReasoningEffort,
 			RunCount: runCount, APIKeyConfigured: slot.KeyConfigured,
 		})
@@ -184,6 +201,7 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 
 	slog.Default().Info("remix lab workflow experiment created", "experiment_id", expID, "models", len(slots), "runs", len(runRecs))
 	return Experiment{
+		AccountID:   expRec.ProduceAccountID,
 		ID:          expID,
 		Title:       title,
 		SourceText:  source,
@@ -195,4 +213,120 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		Slots:       slotViews,
 		Runs:        runViews,
 	}, nil
+}
+
+// ManualDraftStamp 标记跳过二创、手工贴进定稿的运行：不能打回/重试，
+// 否则会把占位「（手工定稿）」当对标原文送给写手。
+const ManualDraftStamp = "manual-draft"
+
+func isManualDraft(run store.RemixLabRunRecord) bool {
+	return strings.TrimSpace(run.PromptID) == ManualDraftStamp ||
+		strings.TrimSpace(run.PromptStamp) == ManualDraftStamp
+}
+
+// DraftInput 是跳过二创、直接把成稿贴进定稿节点的请求。
+type DraftInput struct {
+	PackageInput
+	AccountID string `json:"account_id"`
+}
+
+// ImportDraft 建一条已完成的工作流运行：不调写手/自检/审稿，定稿直接可确认进混剪。
+func (s *Service) ImportDraft(ctx context.Context, in DraftInput) (Experiment, error) {
+	script := strings.TrimSpace(in.ContinuousScript)
+	if script == "" {
+		return Experiment{}, ErrInvalidPackage
+	}
+	cleaned := PackageInput{
+		ContinuousScript: script,
+		Titles:           cleanStringList(in.Titles),
+		ShortTitles:      cleanStringList(in.ShortTitles),
+		Descriptions:     cleanStringList(in.Descriptions),
+		Topics:           cleanStringList(in.Topics),
+		CTA:              strings.TrimSpace(in.CTA),
+	}
+	if len(cleaned.ShortTitles) == 0 {
+		cleaned.ShortTitles = []string{boardTitleFromScript(script)}
+	}
+	accountID := strings.TrimSpace(in.AccountID)
+	if err := validateProduceOptions(accountID, false, 1); err != nil {
+		return Experiment{}, err
+	}
+	wf, err := s.WorkflowForAccount(accountID)
+	if err != nil {
+		return Experiment{}, err
+	}
+	if err := ValidateWorkflow(wf); err != nil {
+		return Experiment{}, err
+	}
+	snapshot, err := json.Marshal(wf)
+	if err != nil {
+		return Experiment{}, err
+	}
+	packageJSON, err := json.Marshal(cleaned)
+	if err != nil {
+		return Experiment{}, err
+	}
+	titlesJSON := []byte("[]")
+	if raw, err := json.Marshal(cleaned.Titles); err == nil && cleaned.Titles != nil {
+		titlesJSON = raw
+	}
+
+	now := s.now()
+	expID := uuid.NewString()
+	slotID := uuid.NewString()
+	runID := uuid.NewString()
+	finished := now
+	outputDir := filepath.Join(s.dataRoot, "remix-lab", expID, runID)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return Experiment{}, err
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "continuous_script.txt"), []byte(script), 0o644); err != nil {
+		return Experiment{}, err
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "publishing_package.json"), packageJSON, 0o644); err != nil {
+		return Experiment{}, err
+	}
+
+	expRec := store.RemixLabExperimentRecord{
+		ID:               expID,
+		Title:            experimentTitle(script, now),
+		SourceText:       "（手工定稿）",
+		PromptStamp:      ManualDraftStamp,
+		Status:           "completed",
+		WorkflowJSON:     string(snapshot),
+		ProduceAccountID: accountID,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	slotRec := store.RemixLabSlotRecord{
+		ID: slotID, ExperimentID: expID, SortIndex: 0, Label: "手工定稿", RunCount: 1,
+	}
+	runRec := store.RemixLabRunRecord{
+		ID: runID, ExperimentID: expID, SlotID: slotID, RunIndex: 1,
+		Status: "completed", ContinuousScript: script, TitlesJSON: string(titlesJSON),
+		PackageJSON: string(packageJSON), OutputDir: outputDir,
+		PromptID: ManualDraftStamp, PromptStamp: ManualDraftStamp, PromptName: "手工定稿",
+		StartedAt: &now, FinishedAt: &finished,
+	}
+	if err := s.repo.CreateExperiment(ctx, expRec, []store.RemixLabSlotRecord{slotRec}, []store.RemixLabRunRecord{runRec}); err != nil {
+		return Experiment{}, err
+	}
+	s.afterWorkflowRunCompleted(ctx, expRec, runRec)
+	return s.GetExperiment(ctx, expID)
+}
+
+func boardTitleFromScript(script string) string {
+	line := script
+	if i := strings.IndexAny(script, "\n\r"); i >= 0 {
+		line = script[:i]
+	}
+	line = strings.TrimSpace(line)
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return "手工定稿"
+	}
+	if len(runes) > 24 {
+		runes = runes[:24]
+	}
+	return string(runes)
 }

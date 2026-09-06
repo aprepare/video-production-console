@@ -205,6 +205,12 @@ func (s *Service) executeRun(ctx context.Context, exp store.RemixLabExperimentRe
 		}
 	}
 
+	var snapshotErr error
+	exp, snapshotErr = s.effectiveRunExperiment(ctx, exp, run.ID)
+	if snapshotErr != nil {
+		finish("failed", "", "", snapshotErr.Error())
+		return
+	}
 	if err := os.MkdirAll(run.OutputDir, 0o755); err != nil {
 		finish("failed", "", "", err.Error())
 		return
@@ -251,11 +257,15 @@ func (s *Service) executeRun(ctx context.Context, exp store.RemixLabExperimentRe
 		return
 	}
 
+	defaultModel, defaultEffort := s.remixDefaults(ctx, rt, rtErr)
 	opts := openaicompat.Options{
 		ManifestPath:      manifestPath,
 		OutputLastMessage: filepath.Join(run.OutputDir, "last.json"),
 		Model:             slot.Model,
 		ReasoningEffort:   slot.ReasoningEffort,
+		ServiceTier:       slot.ServiceTier,
+		DefaultModel:      defaultModel,
+		DefaultEffort:     defaultEffort,
 		BaseURL:           resolvedURL,
 		APIKey:            resolvedKey,
 		Pipeline:          slot.Pipeline,
@@ -287,8 +297,23 @@ func (s *Service) executeRun(ctx context.Context, exp store.RemixLabExperimentRe
 			}
 		}
 	}
+	// A resumed attempt reuses intermediate artifacts, not the previous
+	// attempt's terminal envelope. Otherwise an old failure masks new success.
+	if err := os.Remove(filepath.Join(run.OutputDir, "last.json")); err != nil && !os.IsNotExist(err) {
+		finish("failed", "", "", err.Error())
+		return
+	}
 	if err := s.runner(ctx, opts); err != nil {
 		finish("failed", "", "", scrubSecret(err.Error(), resolvedKey))
+		return
+	}
+	// The runtime reports business failures in its envelope and may retain a
+	// usable draft. Writing that envelope successfully is not a successful run.
+	if summary := failureSummary(filepath.Join(run.OutputDir, "last.json")); summary != "" {
+		script, _ := os.ReadFile(filepath.Join(run.OutputDir, "continuous_script.txt"))
+		run.DraftV1JSON = readRunArtifact(filepath.Join(run.OutputDir, "draft_v1.json"))
+		run.ReviewJSON = readRunArtifact(filepath.Join(run.OutputDir, "review.json"))
+		finish("failed", string(script), "", scrubSecret(summary, resolvedKey))
 		return
 	}
 
@@ -454,6 +479,7 @@ func mapExperiment(exp store.RemixLabExperimentRecord, slots []store.RemixLabSlo
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
+			ServiceTier:      slot.ServiceTier,
 			Pipeline:         slot.Pipeline,
 			RunCount:         slot.RunCount,
 			APIKeyConfigured: true,
@@ -488,6 +514,7 @@ func mapExperiment(exp store.RemixLabExperimentRecord, slots []store.RemixLabSlo
 		runViews = append(runViews, view)
 	}
 	return Experiment{
+		AccountID:   exp.ProduceAccountID,
 		ID:          exp.ID,
 		Title:       exp.Title,
 		SourceText:  exp.SourceText,

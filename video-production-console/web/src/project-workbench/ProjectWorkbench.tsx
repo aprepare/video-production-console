@@ -607,17 +607,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               {props.runtime.Queued > 0 ? ` · 排队 ${props.runtime.Queued}` : ""}
             </span>
           ) : null}
-          <label className="workbench-theme-control">
-            主题
-            <select
-              aria-label="选择项目工作台主题"
-              value={props.theme}
-              onChange={(event) => props.onThemeChange(event.target.value as "light" | "dark")}
-            >
-              <option value="light">日间</option>
-              <option value="dark">夜间</option>
-            </select>
-          </label>
           <button type="button" className="workbench-delete" onClick={props.onDelete} aria-label="删除当前项目" disabled={projectPending}>
             <Trash2 size={16} aria-hidden="true" />
             <span>删除项目</span>

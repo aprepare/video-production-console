@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { ChevronDown, PenLine } from "lucide-react";
 import { ModelSelect } from "../ModelSelect";
@@ -65,7 +65,8 @@ export function QuickGenerateForm({
   onCreated,
   onAdvancedMode,
 }: QuickGenerateFormProps) {
-  const [script, setScript] = useState("");
+  const [script, setScript] = useState(() => { try { return sessionStorage.getItem("console:image-quick-script") || ""; } catch { return ""; } });
+  useEffect(() => { try { if (script) sessionStorage.setItem("console:image-quick-script", script); else sessionStorage.removeItem("console:image-quick-script"); } catch { /* Keep editing available without storage. */ } }, [script]);
   const [ratio, setRatio] = useState<ImageProject["ratio"]>(defaultRatio);
   const [style, setStyle] = useState(defaultStyle);
   const [customStyle, setCustomStyle] = useState("");
@@ -112,6 +113,8 @@ export function QuickGenerateForm({
         setError("未返回项目编号");
         return;
       }
+      setScript("");
+      try { sessionStorage.removeItem("console:image-quick-script"); } catch { /* Storage may be disabled. */ }
       onCreated(next.project_id);
     } catch {
       setError("网络中断，请稍后重试");

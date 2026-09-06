@@ -1,0 +1,15 @@
+.asset-preview-modal.asset-preview-modal, .revise-modal.revise-modal { padding: 24px; color: var(--ds-text); background: var(--ds-surface); }
+.asset-preview-modal .modal-head, .revise-modal .modal-head { padding-bottom: 16px; border-bottom: 1px solid var(--ds-border); }
+.asset-preview-modal .modal-head h2 { overflow-wrap: anywhere; }
+.asset-preview-modal .asset-editor { line-height: 1.8; color: var(--ds-text); background: var(--ds-surface-muted); border: 1px solid var(--ds-border); border-radius: 10px; }
+.asset-preview-modal .asset-editor-actions { flex-wrap: wrap; gap: 10px; }
+.asset-preview-modal .asset-editor-actions button { min-height: 40px; border-radius: 8px; }
+.asset-preview-modal .caption-keywords-preview__lines > li { color: var(--ds-text); background: var(--ds-surface-muted); border-color: var(--ds-border); }
+.asset-preview-modal :is(button, textarea, input, select):focus-visible, .revise-modal :is(button, textarea, input, select):focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .asset-preview-modal.asset-preview-modal, .revise-modal.revise-modal { padding: 16px; max-height: calc(100dvh - 24px); }
+  .asset-preview-modal .caption-keywords-preview__add { flex-wrap: wrap; }
+  .asset-preview-modal .caption-keywords-preview__add input { min-width: 0; width: 100%; }
+  .asset-preview-modal .asset-editor-actions button { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .asset-preview-modal *, .revise-modal * { animation: none !important; transition: none !important; } }

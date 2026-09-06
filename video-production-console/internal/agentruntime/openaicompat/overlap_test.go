@@ -159,7 +159,7 @@ func TestStripCourseYearAndCollapseDuplicateMentions(t *testing.T) {
 	if strings.Count(got, canonicalCourse) != 1 {
 		t.Fatalf("卖课只留一次, got=%s notes=%v", got, notes)
 	}
-	if !containsString(notes, "课名去掉年份") || !containsString(notes, "删掉重复的卖课收口") {
+	if !containsString(notes, "统一课程名称，去掉年份与版本") || !containsString(notes, "删掉重复的卖课收口") {
 		t.Fatalf("notes=%v", notes)
 	}
 	issues := inspectCopyIssues(got, "")

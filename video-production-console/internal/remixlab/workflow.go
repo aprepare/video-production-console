@@ -24,7 +24,7 @@ const (
 	WorkflowNodeInput     = "input"     // 对标原文（固定1个）
 	WorkflowNodeAgent     = "agent"     // 情报agent（0-6个，可增删）
 	WorkflowNodeWriter    = "writer"    // 写手（固定1个，提示词走提示词库）
-	WorkflowNodeSelfcheck = "selfcheck" // 机械自检（固定1个，写手内置闸门，只读）
+	WorkflowNodeSelfcheck = "selfcheck" // 已停用，仅用于旧快照解码和桥接
 	WorkflowNodeReviewer  = "reviewer"  // 审稿终审（0-1个）
 	WorkflowNodeOutput    = "output"    // 定稿与发布包（固定1个）
 )
@@ -37,9 +37,12 @@ var (
 )
 
 type WorkflowNodeConfig struct {
+	Role string `json:"role,omitempty"`
 	// Model 等留空时用运行档默认（模型配置里的槽1/全局二创设置）。
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// Writer inherits its preset when empty; other nodes control Fast independently.
+	ServiceTier string `json:"service_tier,omitempty"`
 	// Channel "search" 走设置页的 Grok 搜索通道（联网核查用）；空走写手通道。
 	Channel      string `json:"channel,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
@@ -50,7 +53,7 @@ type WorkflowNodeConfig struct {
 	InjectRule  string `json:"inject_rule,omitempty"`
 	// PromptID 写手节点用：提示词库条目；空=当前日产（active prompt）。
 	PromptID string `json:"prompt_id,omitempty"`
-	// 机械自检节点的阈值覆盖（0=用内置默认：连抄20%/硬30%、篇幅0.8/硬0.65、返工2轮）。
+	// 仅供解码旧快照，机械审查已停用，不再读取这些阈值。
 	OverlapMaxPct  int     `json:"overlap_max_pct,omitempty"`
 	OverlapHardPct int     `json:"overlap_hard_pct,omitempty"`
 	LenMinRatio    float64 `json:"len_min_ratio,omitempty"`
@@ -68,19 +71,19 @@ type WorkflowNode struct {
 }
 
 type Workflow struct {
-	Version int            `json:"version"`
-	Name    string         `json:"name"`
-	Nodes   []WorkflowNode `json:"nodes"`
-	Edges   [][2]string    `json:"edges"`
+	EditorialRules *string        `json:"editorial_rules,omitempty"`
+	Version        int            `json:"version"`
+	Name           string         `json:"name"`
+	Nodes          []WorkflowNode `json:"nodes"`
+	Edges          [][2]string    `json:"edges"`
 	// Production 是定稿之后生产段（建项目→口播→字幕→配音→混剪）的可编辑
 	// 配置：字幕关键词默认关闭，口播/配音/混剪参数可改。随实验快照冻结。
 	Production remixproducer.Config `json:"production,omitzero"`
 }
 
-// DefaultWorkflow 是现行管线的数据化表达：三路情报 → 写手（内置自检）→ 审稿 → 定稿。
+// DefaultWorkflow：原文 → 写手 → 审稿 → 人工定稿。
 // agent_prompts.json 里的历史覆盖会被吸收进来，用户已调过的提示词不丢。
 func DefaultWorkflow(overrides AgentPrompts) Workflow {
-	hook, factsSearch, _, ammo := openaicompat.DefaultIntelAgentPrompts()
 	reviewer := openaicompat.DefaultReviewerPrompt()
 	pickText := func(override, fallback string) string {
 		if strings.TrimSpace(override) != "" {
@@ -89,57 +92,43 @@ func DefaultWorkflow(overrides AgentPrompts) Workflow {
 		return fallback
 	}
 	// 情报 agent 默认钉在快模型上：节点模型留空时引擎会回落到写手模型，
-	// 换写手（如 opus）会把三路情报一起拖慢，所以这里显式写死。
-	const intelModel = "grok-4.6-fast"
+	// 策划沿用快模型，换写手时保持独立。
 	return Workflow{
 		Version: 1,
 		Name:    "默认二创工作流",
 		Nodes: []WorkflowNode{
 			{ID: "source", Type: WorkflowNodeInput, Title: "对标原文", X: 0, Y: 190},
-			{ID: "hook", Type: WorkflowNodeAgent, Title: "钩子分析", X: 300, Y: 10, Config: WorkflowNodeConfig{
-				Model:        intelModel,
-				SystemPrompt: pickText(overrides.HookSystem, hook),
-				UserTemplate: "分析下面这篇口播的钩子与留人机制。\n\n# 原文\n{{source}}",
-				InjectTitle:  "钩子指纹｜复刻狠法，不复刻字面",
-			}},
-			{ID: "facts", Type: WorkflowNodeAgent, Title: "事实核查", X: 300, Y: 190, Config: WorkflowNodeConfig{
-				Model:        intelModel,
-				Channel:      "search",
-				SystemPrompt: pickText(overrides.FactsSearchSystem, factsSearch),
-				UserTemplate: "核查下面这篇口播的事实与数据。\n\n# 原文\n{{source}}",
-				InjectTitle:  "事实核查与新增数据",
-				InjectRule:   "正文数字只许用：原文已有的，或下面标「成立」/带来源的；标「已过时」的必须用最新值；新增数字口播时按 spoken_citation 带来源；标「查不到」「needs_verify」「low_confidence」的一律不进正文",
-			}},
-			{ID: "ammo", Type: WorkflowNodeAgent, Title: "弹药库", X: 300, Y: 370, Config: WorkflowNodeConfig{
-				Model:        intelModel,
-				SystemPrompt: pickText(overrides.AmmoSystem, ammo),
-				UserTemplate: "给下面这篇的二创改写备弹药。\n\n# 原文\n{{source}}",
-				InjectTitle:  "意象与现场弹药",
-				InjectRule:   "banned_imagery 是禁用清单必须避开；center_options 为空就直说，不要硬造贯穿全文的中心意象；有值也只许用在它标明的那一段；scenes 为空就不要自己编人物现场；有值也只许改写原文已有的人，不许新编老周柜员；phrase_swaps 可用可不用",
-			}},
 			{ID: "writer", Type: WorkflowNodeWriter, Title: "写手", X: 600, Y: 190},
-			{ID: "selfcheck", Type: WorkflowNodeSelfcheck, Title: "机械自检", X: 880, Y: 190},
-			{ID: "review", Type: WorkflowNodeReviewer, Title: "审稿终审", X: 1160, Y: 190, Config: WorkflowNodeConfig{
+			{ID: "review", Type: WorkflowNodeReviewer, Title: "审稿终审", X: 880, Y: 190, Config: WorkflowNodeConfig{
 				SystemPrompt: pickText(overrides.ReviewerSystem, reviewer),
 			}},
-			{ID: "final", Type: WorkflowNodeOutput, Title: "定稿与发布包", X: 1440, Y: 190},
+			{ID: "final", Type: WorkflowNodeOutput, Title: "定稿与发布包", X: 1160, Y: 190},
 		},
 		Edges: [][2]string{
-			{"source", "hook"}, {"source", "facts"}, {"source", "ammo"},
-			{"hook", "writer"}, {"facts", "writer"}, {"ammo", "writer"},
-			{"writer", "selfcheck"}, {"selfcheck", "review"}, {"review", "final"},
+			{"source", "writer"},
+			{"writer", "review"}, {"review", "final"},
 		},
 		Production: remixproducer.Config{CaptionsDisabled: true},
 	}
 }
 
 // ValidateWorkflow 校验节点数量、ID、连线拓扑。骨干链固定：
-// writer → selfcheck →（reviewer →）output；agent 只能挂在 input/agent 之后、
+// writer →（reviewer →）output；旧快照可含已停用的 selfcheck，读取时桥接。
+// agent 只能挂在 input/agent 之后、
 // 汇入 writer 或别的 agent；整图必须无环。
 func ValidateWorkflow(w Workflow) error {
+	if err := validateEditablePrompts(w); err != nil {
+		return err
+	}
 	byID := make(map[string]WorkflowNode, len(w.Nodes))
 	counts := map[string]int{}
 	for _, node := range w.Nodes {
+		if node.Config.Role != "" && (node.Config.Role != openaicompat.ReferenceDraftRole || node.Type != WorkflowNodeAgent) {
+			return fmt.Errorf("%w: 节点%s参考角色不合法", ErrInvalidWorkflow, node.ID)
+		}
+		if _, err := openaicompat.NormalizeServiceTier(node.Config.ServiceTier); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrInvalidWorkflow, node.ID, err)
+		}
 		id := strings.TrimSpace(node.ID)
 		if !workflowIDPattern.MatchString(id) {
 			return fmt.Errorf("%w: 节点ID %q 不合法（小写字母数字-_，32字以内）", ErrInvalidWorkflow, node.ID)
@@ -155,39 +144,15 @@ func ValidateWorkflow(w Workflow) error {
 		if strings.TrimSpace(node.Title) == "" {
 			return fmt.Errorf("%w: 节点 %s 缺标题", ErrInvalidWorkflow, id)
 		}
-		if node.Type == WorkflowNodeAgent && strings.TrimSpace(node.Config.SystemPrompt) == "" {
+		if node.Type == WorkflowNodeAgent && node.Config.Role != openaicompat.ReferenceDraftRole && strings.TrimSpace(node.Config.SystemPrompt) == "" {
 			return fmt.Errorf("%w: agent节点 %s 缺系统提示词", ErrInvalidWorkflow, id)
-		}
-		if node.Type == WorkflowNodeSelfcheck {
-			cfg := node.Config
-			if cfg.OverlapMaxPct != 0 && (cfg.OverlapMaxPct < 5 || cfg.OverlapMaxPct > 60) {
-				return fmt.Errorf("%w: 连抄上限要在5%%到60%%之间（0=默认20%%）", ErrInvalidWorkflow)
-			}
-			if cfg.OverlapHardPct != 0 && (cfg.OverlapHardPct < 5 || cfg.OverlapHardPct > 80) {
-				return fmt.Errorf("%w: 连抄硬上限要在5%%到80%%之间（0=默认30%%）", ErrInvalidWorkflow)
-			}
-			if cfg.OverlapMaxPct != 0 && cfg.OverlapHardPct != 0 && cfg.OverlapHardPct < cfg.OverlapMaxPct {
-				return fmt.Errorf("%w: 连抄硬上限不能低于触发上限", ErrInvalidWorkflow)
-			}
-			if cfg.LenMinRatio != 0 && (cfg.LenMinRatio < 0.3 || cfg.LenMinRatio > 1.5) {
-				return fmt.Errorf("%w: 篇幅下限要在0.3到1.5倍之间（0=默认0.8）", ErrInvalidWorkflow)
-			}
-			if cfg.LenHardRatio != 0 && (cfg.LenHardRatio < 0.2 || cfg.LenHardRatio > 1.5) {
-				return fmt.Errorf("%w: 篇幅硬下限要在0.2到1.5倍之间（0=默认0.65）", ErrInvalidWorkflow)
-			}
-			if cfg.LenMinRatio != 0 && cfg.LenHardRatio != 0 && cfg.LenHardRatio > cfg.LenMinRatio {
-				return fmt.Errorf("%w: 篇幅硬下限不能高于触发下限", ErrInvalidWorkflow)
-			}
-			if cfg.MaxRounds != 0 && (cfg.MaxRounds < 1 || cfg.MaxRounds > 4) {
-				return fmt.Errorf("%w: 返工轮数要在1到4之间（0=默认2）", ErrInvalidWorkflow)
-			}
 		}
 		byID[id] = node
 		counts[node.Type]++
 	}
 	if counts[WorkflowNodeInput] != 1 || counts[WorkflowNodeWriter] != 1 ||
-		counts[WorkflowNodeSelfcheck] != 1 || counts[WorkflowNodeOutput] != 1 {
-		return fmt.Errorf("%w: 原文/写手/机械自检/定稿各需恰好1个", ErrInvalidWorkflow)
+		counts[WorkflowNodeSelfcheck] > 1 || counts[WorkflowNodeOutput] != 1 {
+		return fmt.Errorf("%w: 原文/写手/定稿各需恰好1个，旧机械节点最多1个", ErrInvalidWorkflow)
 	}
 	if counts[WorkflowNodeReviewer] > 1 {
 		return fmt.Errorf("%w: 审稿节点最多1个", ErrInvalidWorkflow)
@@ -227,6 +192,15 @@ func ValidateWorkflow(w Workflow) error {
 				return fmt.Errorf("%w: 原文节点不能有入线", ErrInvalidWorkflow)
 			}
 		case WorkflowNodeAgent:
+			if node.Config.Role == openaicompat.ReferenceDraftRole {
+				choice := RerunModel{node.Config.Model, node.Config.ReasoningEffort, node.Config.ServiceTier}
+				if err := validateRerunModel(&choice); err != nil {
+					return fmt.Errorf("%w: 参考模型%s配置不合法", ErrInvalidWorkflow, node.ID)
+				}
+				if len(incoming[id]) != 1 || typeOf(incoming[id][0]) != WorkflowNodeInput || len(outgoing[id]) != 1 || typeOf(outgoing[id][0]) != WorkflowNodeWriter {
+					return fmt.Errorf("%w: 参考模型%s须独立连接原文与写手", ErrInvalidWorkflow, node.ID)
+				}
+			}
 			for _, from := range incoming[id] {
 				if t := typeOf(from); t != WorkflowNodeInput && t != WorkflowNodeAgent {
 					return fmt.Errorf("%w: agent节点 %s 只能接原文或别的agent，不能接 %s", ErrInvalidWorkflow, id, from)
@@ -243,20 +217,27 @@ func ValidateWorkflow(w Workflow) error {
 				return fmt.Errorf("%w: 机械自检必须且只能接在写手之后", ErrInvalidWorkflow)
 			}
 		case WorkflowNodeReviewer:
-			if len(incoming[id]) != 1 || typeOf(incoming[id][0]) != WorkflowNodeSelfcheck {
-				return fmt.Errorf("%w: 审稿必须接在机械自检之后", ErrInvalidWorkflow)
+			wantFrom := WorkflowNodeWriter
+			if counts[WorkflowNodeSelfcheck] == 1 {
+				wantFrom = WorkflowNodeSelfcheck
+			}
+			if len(incoming[id]) != 1 || typeOf(incoming[id][0]) != wantFrom {
+				return fmt.Errorf("%w: 审稿必须接在写手之后", ErrInvalidWorkflow)
 			}
 		case WorkflowNodeOutput:
 			if len(incoming[id]) != 1 {
 				return fmt.Errorf("%w: 定稿必须且只有一条入线", ErrInvalidWorkflow)
 			}
 			fromType := typeOf(incoming[id][0])
-			wantFrom := WorkflowNodeSelfcheck
+			wantFrom := WorkflowNodeWriter
+			if counts[WorkflowNodeSelfcheck] == 1 {
+				wantFrom = WorkflowNodeSelfcheck
+			}
 			if counts[WorkflowNodeReviewer] == 1 {
 				wantFrom = WorkflowNodeReviewer
 			}
 			if fromType != wantFrom {
-				return fmt.Errorf("%w: 定稿的上游应是%s", ErrInvalidWorkflow, map[string]string{WorkflowNodeSelfcheck: "机械自检", WorkflowNodeReviewer: "审稿"}[wantFrom])
+				return fmt.Errorf("%w: 定稿的上游应是%s", ErrInvalidWorkflow, wantFrom)
 			}
 			if len(outgoing[id]) > 0 {
 				return fmt.Errorf("%w: 定稿节点不能有出线", ErrInvalidWorkflow)
@@ -355,7 +336,7 @@ func decodeWorkflow(raw []byte) (Workflow, error) {
 		return Workflow{}, fmt.Errorf("decode workflow: %w", err)
 	}
 	w.Production = remixproducer.ParseConfig(string(raw))
-	return w, nil
+	return withoutMechanicalReview(w), nil
 }
 
 func (s Store) SaveWorkflow(w Workflow) error {
@@ -375,9 +356,11 @@ func (s Store) SaveWorkflowForAccount(accountID string, w Workflow) error {
 }
 
 func (s Store) writeWorkflowFile(path, dir string, w Workflow) error {
+	w = withReferenceDefaults(w)
 	if err := ValidateWorkflow(w); err != nil {
 		return err
 	}
+	w = withoutMechanicalReview(w)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create remix_lab dir: %w", err)
 	}
@@ -410,6 +393,7 @@ func (s *Service) SaveWorkflowDefinition(w Workflow) (Workflow, error) {
 }
 
 func (s *Service) SaveWorkflowDefinitionForAccount(accountID string, w Workflow) (Workflow, error) {
+	w = withReferenceDefaults(w)
 	if w.Name == "" {
 		w.Name = "默认二创工作流"
 	}
@@ -419,7 +403,7 @@ func (s *Service) SaveWorkflowDefinitionForAccount(accountID string, w Workflow)
 	if err := (Store{DataRoot: s.dataRoot}).SaveWorkflowForAccount(accountID, w); err != nil {
 		return Workflow{}, err
 	}
-	return w, nil
+	return withoutMechanicalReview(w), nil
 }
 
 // workflowReviewer 返回快照里的审稿节点（没有则 nil）。
@@ -452,5 +436,51 @@ func parseWorkflowJSON(raw string) (Workflow, bool) {
 		return Workflow{}, false
 	}
 	w.Production = remixproducer.ParseConfig(raw)
+	w = withoutMechanicalReview(w)
 	return w, len(w.Nodes) > 0
+}
+
+// withoutMechanicalReview 只构造运行时视图；不覆写历史快照，不改变模型或生产设置。
+func withoutMechanicalReview(w Workflow) Workflow {
+	for _, retired := range w.Nodes {
+		if retired.Type != WorkflowNodeSelfcheck {
+			continue
+		}
+		nodes := make([]WorkflowNode, 0, len(w.Nodes)-1)
+		for _, n := range w.Nodes {
+			if n.ID != retired.ID {
+				nodes = append(nodes, n)
+			}
+		}
+		var incoming, outgoing []string
+		edges := make([][2]string, 0, len(w.Edges))
+		for _, e := range w.Edges {
+			if e[1] == retired.ID {
+				incoming = append(incoming, e[0])
+			}
+			if e[0] == retired.ID {
+				outgoing = append(outgoing, e[1])
+			}
+			if e[0] != retired.ID && e[1] != retired.ID {
+				edges = append(edges, e)
+			}
+		}
+		for _, from := range incoming {
+			for _, to := range outgoing {
+				e := [2]string{from, to}
+				exists := false
+				for _, old := range edges {
+					if old == e {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					edges = append(edges, e)
+				}
+			}
+		}
+		w.Nodes, w.Edges = nodes, edges
+	}
+	return w
 }

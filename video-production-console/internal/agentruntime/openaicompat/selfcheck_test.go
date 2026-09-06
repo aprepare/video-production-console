@@ -53,8 +53,8 @@ func TestBuildSelfCheckRepairPromptListsSpansAndLength(t *testing.T) {
 	if !strings.Contains(prompt, "全国老百姓存在银行里的钱") {
 		t.Fatalf("prompt=%s", prompt)
 	}
-	if !strings.Contains(prompt, "扩写三到四句") || !strings.Contains(prompt, "0.61") {
-		t.Fatalf("篇幅不足必须要求补写: %s", prompt)
+	if !strings.Contains(prompt, "0.61") || !strings.Contains(prompt, "0.80") {
+		t.Fatalf("必须给出实际篇幅及目标下限: %s", prompt)
 	}
 	if !strings.Contains(prompt, "22%") {
 		t.Fatalf("必须报出重合率: %s", prompt)

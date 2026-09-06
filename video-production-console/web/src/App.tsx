@@ -20,6 +20,7 @@ import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { AiShortsPage } from "./ai-shorts/AiShortsPage";
+import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import {
   isShieldedProductionPath,
   visibleMontageKind,
@@ -123,12 +124,19 @@ function App() {
   const [taskOpen, setTaskOpen] = useState<Task | null>(null);
   const [timingNow, setTimingNow] = useState(() => Date.now());
   const [taskAnswerInput, setTaskAnswerInput] = useState("");
+  const taskActionLocks = useRef(new Set<string>());
+  const [pendingTaskIDs, setPendingTaskIDs] = useState<string[]>([]);
+  const [taskActionErrors, setTaskActionErrors] = useState<Record<string, string>>({});
   const [directoryManifest, setDirectoryManifest] = useState<DirectoryManifest | null>(null);
   const [directoryManifestStatus, setDirectoryManifestStatus] = useState("");
   const [openingDirectory, setOpeningDirectory] = useState(false);
   const [videoExporting, setVideoExporting] = useState(false);
   const videoExportAssetRef = useRef("");
   const [urlRevision, setURLRevision] = useState(0);
+  useEffect(() => {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [rawPathname]);
   const navigate = useCallback((href: string, mode: "push" | "replace" = "push") => {
     const current = `${window.location.pathname}${window.location.search}`;
     if (current === href) return;
@@ -791,48 +799,63 @@ function App() {
     window.addEventListener("keydown", returnToBoard);
     return () => window.removeEventListener("keydown", returnToBoard);
   }, [clearProjectSelection, preview, selected, settingsOpen, taskOpen]);
+  const runTaskAction = async (task: Task, failure: string, action: () => Promise<void>) => {
+    if (taskActionLocks.current.has(task.id)) return;
+    taskActionLocks.current.add(task.id);
+    setPendingTaskIDs([...taskActionLocks.current]);
+    setTaskActionErrors((previous) => ({ ...previous, [task.id]: "" }));
+    try {
+      await action();
+    } catch (error) {
+      const description = error instanceof Error && error.message.startsWith("剪映草稿") ? error.message : failure;
+      setTaskActionErrors((previous) => ({ ...previous, [task.id]: description }));
+      setMessage(description);
+    } finally {
+      taskActionLocks.current.delete(task.id);
+      setPendingTaskIDs([...taskActionLocks.current]);
+    }
+  };
   const answerTask = async (task: Task, providedAnswer?: string) => {
+    if (taskActionLocks.current.has(task.id)) return;
     const questions = taskQuestions(task);
     const prompt = questions.length
       ? `任务正在等待你回复：\n\n${questions.join("\n")}\n\n请输入回答：`
       : "请输入回复内容";
     const answer = providedAnswer ?? window.prompt(prompt);
     if (!answer?.trim()) return;
-    const response = await api(`/api/tasks/${task.id}/answer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer: answer.trim() }),
+    await runTaskAction(task, "任务回复失败，请重试；回答已保留。", async () => {
+      const response = await api(`/api/tasks/${task.id}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: answer.trim() }),
+      });
+      if (!response.ok) throw new Error("answer-failed");
+      if (taskOpenIDRef.current === task.id) setTaskAnswerInput((current) => current.trim() === answer.trim() ? "" : current);
+      if (selected && selectedIDRef.current === selected.id) await loadDetail(selected);
     });
-    if (!response.ok) setMessage("任务回复失败。");
-    else {
-      setTaskAnswerInput("");
-      if (selected) await loadDetail(selected);
-    }
   };
   const cancelTask = async (task: Task) => {
+    if (taskActionLocks.current.has(task.id)) return;
     if (
       !window.confirm(
         "确定停止这个任务吗？\n\n停止后不会登记这次任务的产物，现有项目素材不会被覆盖。",
       )
     )
       return;
-    const response = await api(`/api/tasks/${task.id}/cancel`, {
-      method: "POST",
-    });
-    if (!response.ok) setMessage("任务停止失败。");
-    else {
+    await runTaskAction(task, "任务停止失败，请重试。", async () => {
+      const response = await api(`/api/tasks/${task.id}/cancel`, { method: "POST" });
+      if (!response.ok) throw new Error("cancel-failed");
       setMessage("任务已停止；现有项目素材没有改动。");
-      if (selected) await loadDetail(selected);
-    }
+      if (selected && selectedIDRef.current === selected.id) await loadDetail(selected);
+    });
   };
   const retryMontageRegistration = async (task: Task) => {
-    const response = await api(`/api/tasks/${task.id}/retry-registration`, { method: "POST" });
-    if (!response.ok) {
-      setMessage(response.status === 409 ? "剪映草稿正在登记，无需重复操作。" : "剪映草稿登记重试失败。");
-      return;
-    }
-    setMessage("已重新排队登记剪映草稿，不会重新运行任务。");
-    if (selected) await loadDetail(selected);
+    await runTaskAction(task, "剪映草稿登记重试失败，请重试。", async () => {
+      const response = await api(`/api/tasks/${task.id}/retry-registration`, { method: "POST" });
+      if (!response.ok) throw new Error(response.status === 409 ? "剪映草稿正在登记，无需重复操作。" : "剪映草稿登记重试失败。");
+      setMessage("已重新排队登记剪映草稿，不会重新运行任务。");
+      if (selected && selectedIDRef.current === selected.id) await loadDetail(selected);
+    });
   };
   const openRegisteredDirectory = async (assetID: string) => {
     if (openingDirectory) return;
@@ -944,7 +967,15 @@ function App() {
 
   return (
     <ModelOptionsProvider options={modelOptionsList(settings?.public?.model_options)}>
-    <div className={imageRoute ? "shell shell--image" : "shell"}>
+    <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
+      <ConsoleNavigation
+        active={imageRoute ? "image" : aiShortsRoute ? "ai" : remixShell ? "remix" : null}
+        theme={theme}
+        onNavigate={navigate}
+        onThemeChange={setTheme}
+        onOpenSettings={() => void settingsPanel.openDialog()}
+        onLogout={() => void logout()}
+      />
       {route.view === "not-found" ? (
         <main className="notice" role="alert">
           <h1>404</h1>
@@ -963,24 +994,8 @@ function App() {
         />
       ) : imageRoute ? (
         <>
-          <header>
-            <div><span className="eyebrow">视频生产控制台</span><h1>图文制作</h1></div>
-            <div className="status">
-              <label className="theme-control">
-                主题
-                <select
-                  aria-label="选择界面主题"
-                  value={theme}
-                  onChange={(event) => setTheme(event.target.value as Theme)}
-                >
-                  <option value="light">日间</option>
-                  <option value="dark">夜间</option>
-                </select>
-              </label>
-              <button type="button" className="header-button" onClick={() => navigate("/")}>文案创作台</button>
-              <button className="header-button" onClick={() => void settingsPanel.openDialog()}>设置</button>
-              <button className="header-button" onClick={() => void logout()}>退出</button>
-            </div>
+          <header className="console-page-header">
+            <div><span className="eyebrow">IMAGE STUDIO · 图文工作室</span><h1>图文制作</h1><p>从一段文案，制作一组风格统一的图文。</p></div>
           </header>
           <ImageModeWorkbench
             api={api}
@@ -1113,6 +1128,8 @@ function App() {
       {taskOpen && (
         <TaskDetailDialog
           task={taskOpen}
+          actionPending={pendingTaskIDs.includes(taskOpen.id)}
+          actionError={taskActionErrors[taskOpen.id] || ""}
           projectTitle={selected?.title || ""}
           timingNow={timingNow}
           directoryManifest={directoryManifest}

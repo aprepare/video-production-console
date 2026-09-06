@@ -1,0 +1,8 @@
+.account-nav .account-list button { min-height: 40px; border-radius: 8px; overflow-wrap: anywhere; }
+.account-nav .account-list button.selected { color: var(--ds-accent); background: color-mix(in srgb, var(--ds-accent) 10%, var(--ds-surface)); border-color: var(--ds-border); }
+.account-nav .account-manage-toggle { min-height: 38px; color: var(--ds-text-muted); }
+.account-nav .add-account { min-width: 0; }
+.account-nav .add-account input { min-width: 0; max-width: 100%; color: var(--ds-text); background: var(--ds-surface); border-color: var(--ds-border); }
+.account-nav :is(button, input):focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 3px; }
+@media (max-width: 600px) { .account-nav .account-list { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .account-nav * { animation: none !important; transition: none !important; } }

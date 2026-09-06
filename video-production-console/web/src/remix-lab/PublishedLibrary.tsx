@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import {
   fetchRemixLabPublished,
@@ -9,7 +9,7 @@ import {
 } from "./api";
 import type { Account } from "../types";
 
-// 已发布文案库：每条出过剪映草稿的成稿都自动进来；操作员手填播放/点赞/
+// 交付文案库：每条出过剪映草稿的成稿都自动进来；操作员手填播放/点赞/
 // 出单，表格按转化率排一排，一眼看出哪种开头和课尾在赔本赚吆喝。
 
 type Props = {
@@ -45,6 +45,12 @@ function ordersPer10k(m?: RemixLabPublishedMetrics | null): string {
 }
 
 export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage }: Props) {
+  const revisions = useRef(new Map<string, number>());
+  const saveLock = useRef(false);
+  const dirtyRuns = useRef(new Set<string>());
+  const loadLock = useRef(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [items, setItems] = useState<RemixLabPublishedScript[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [expanded, setExpanded] = useState<string>("");
@@ -53,13 +59,17 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
   const [sortBy, setSortBy] = useState<"time" | "views" | "rate">("time");
 
   const load = async () => {
+    if (loadLock.current) return;
+    loadLock.current = true;
+    setLoading(true);
+    setLoadError("");
     try {
       const list = await fetchRemixLabPublished(api);
       setItems(list);
-      setDrafts(Object.fromEntries(list.map((item) => [item.run_id, toDraft(item.metrics)])));
+      setDrafts(current => Object.fromEntries(list.map(item => [item.run_id, dirtyRuns.current.has(item.run_id) ? current[item.run_id] : toDraft(item.metrics)])));
     } catch (error) {
-      onMessage(error instanceof Error ? error.message : "文案库读取失败。");
-    }
+      setLoadError(error instanceof Error ? error.message : "文案库读取失败。");
+    } finally { loadLock.current = false; setLoading(false); }
   };
 
   useEffect(() => {
@@ -92,10 +102,15 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
   }, [shown]);
 
   const patchDraft = (runID: string, patch: Partial<Draft>) => {
+    revisions.current.set(runID, (revisions.current.get(runID) || 0) + 1);
+    dirtyRuns.current.add(runID);
     setDrafts((current) => ({ ...current, [runID]: { ...(current[runID] ?? toDraft()), ...patch } }));
   };
 
   const save = async (runID: string) => {
+    if (saveLock.current) return;
+    saveLock.current = true;
+    const revision = revisions.current.get(runID);
     const draft = drafts[runID] ?? toDraft();
     setSaving(runID);
     try {
@@ -109,10 +124,12 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
       setItems((current) =>
         current.map((item) => (item.run_id === runID ? { ...item, metrics: { ...metrics, updated_at: new Date().toISOString() } } : item)),
       );
+      if (revisions.current.get(runID) === revision) dirtyRuns.current.delete(runID);
       onMessage("成绩已保存。");
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "成绩保存失败。");
     } finally {
+      saveLock.current = false;
       setSaving("");
     }
   };
@@ -128,8 +145,8 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
       >
         <div className="modal-head">
           <div>
-            <span className="muted">复盘用</span>
-            <h2 id="remix-lab-published-title">已发布文案库</h2>
+            <span className="muted">草稿交付与发布复盘</span>
+            <h2 id="remix-lab-published-title">交付文案库</h2>
           </div>
           <button type="button" className="close" aria-label="关闭文案库" onClick={onClose}>
             <X size={20} aria-hidden="true" />
@@ -158,7 +175,7 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
             {shown.length} 条 · 已填成绩 {totals.filled} 条 · 合计播放 {totals.views.toLocaleString()} · 点赞 {totals.likes.toLocaleString()} · 出单 {totals.orders}
             {totals.views ? ` · 万播出单 ${((totals.orders / totals.views) * 10000).toFixed(2)}` : ""}
           </span>
-          <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void load()}>
+          <button type="button" className="header-button remix-lab-icon-btn" disabled={loading} onClick={() => void load()}>
             <RefreshCw size={13} strokeWidth={2} />
             刷新
           </button>
@@ -181,7 +198,7 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
               </tr>
             </thead>
             <tbody>
-              {shown.length === 0 ? (
+              {loading ? (<tr><td colSpan={10} role="status">正在读取交付文案…</td></tr>) : loadError ? (<tr><td colSpan={10} role="alert">{loadError} <button type="button" onClick={() => void load()}>重试读取</button></td></tr>) : shown.length === 0 ? (
                 <tr><td colSpan={10} className="remix-lab-published__empty">还没有出过草稿的成稿。混剪跑完后会自动出现在这里。</td></tr>
               ) : shown.map((item) => {
                 const draft = drafts[item.run_id] ?? toDraft(item.metrics);
@@ -189,7 +206,7 @@ export function PublishedLibrary({ api, accounts, onClose, onOpenRun, onMessage 
                 return (
                   <Fragment key={item.run_id}>
                     <tr className={item.published ? "" : "remix-lab-published__unpublished"}>
-                      <td><small>{formatDate(item.produced_at)}</small>{item.published ? <span className="remix-lab-chip">已发布</span> : null}</td>
+                      <td><small>{formatDate(item.produced_at)}</small><span className="remix-lab-chip">{item.published ? "已发布" : "待发布"}</span></td>
                       <td>{accountName(item.account_id)}</td>
                       <td className="remix-lab-published__title">
                         <button type="button" className="remix-lab-published__toggle" onClick={() => setExpanded(open ? "" : item.run_id)}>

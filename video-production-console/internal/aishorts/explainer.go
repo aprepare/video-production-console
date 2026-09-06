@@ -18,39 +18,40 @@ import (
 // 不等就重试一次，还不等就退回按句号硬切，保证一个字都不丢。
 const (
 	explainerChunkRunes    = 450
-	explainerMaxShotRunes  = 30 // 一镜最多多少个实字（不含标点）
+	explainerMaxShotRunes  = 60 // 防止整段挤进一镜；实际按语义和配音定时
 	explainerMinShotRunes  = 8  // 少于这个数的碎片并入相邻镜头
 	explainerChunkParallel = 6
 )
 
-const explainerSystemPrompt = `你是财经解说视频的分镜师。观众是中老年人，视频横屏 16:9，画面是一张张 AI 生成的图配旁白。输入是一段口播文案，输出 JSON。
+const explainerSystemPrompt = `你是财经口播的视觉编辑。面向中老年观众，以真实、易懂、有变化的生活纪实画面辅助旁白。系统另行指定画幅和统一画风。
 
-切镜规则：
-- 一镜 = 一个完整的意思，通常是一个短句或一个分句，目标 14～26 字，最多 30 字（约 3～6 秒换一张图）。
-- 不要为了拆而拆：一个意思说完之前不要切；少于 8 个字的碎片（如「那我换一个问法：」「现在全被钉死了。」）必须并入前一镜或后一镜，绝不能单独成镜；一个标点、一个词绝不能单独成镜。
-- 一句话超过 30 字时才在逗号、分号、冒号处切开；切开后每一半都要能独立配一张图。
-- narration 必须是原文原句，不改字、不增删、不合并跨段落的句子；全部 narration 按顺序连起来必须严格等于输入原文。
-- 并列结构（第一/第二/第三、归属/定价/分配）各自成镜；因果和转折（因为…所以…、虽然…但是…）如果两半都很短就合成一镜。
+先理解每段的生活处境，再选画面：谁受到影响 → 正在做什么或面临什么选择 → 人与人、人与钱的关系 → 能拍到的场景。visual_intent 写清观众从哪个可见动作或关系理解原句，scene 只写可见内容。不要只列原句里的名词，再摆成静物。画面是生活示意，不能用它证明原句中的政策、工资变化或收益结论。
 
-每镜字段：
-- subject：画面主体，6～12 字，一眼能和这句话对上的那个东西（如「桌上三份盖红章的文件」「银行柜台上的一叠现金」「关上的铁门」）。
-- scene：画面描述 30～60 字，规则：
-  1. 直白优先。画面里必须出现这句话提到的具体名词；观众看图就能猜到这句话在说什么。不要文艺隐喻，不要"像……一样"，不要只拍情绪，不要多场景叠加。
-  2. 一镜一事：一个主体、一个状态或动作。
-  3. 尽量不画人。能用物件、场景、环境表达的，就不要出现人物（文件、印章、存折、现金、手机、柜台、门、街道、房子、餐桌都比人更直白）。十镜里出现人物的不超过三镜。
-  4. 确实需要人（讲某个人的处境、动作、情绪）时，只出现一位，写成「一位五十多岁的中国男人」「六十岁上下的中国大妈」这类，穿着朴素；不要外国人面孔，不要年轻模特脸；文案明确提到年轻人、孩子时才出现其他年龄。
-  5. 抽象词的固定译法：政策/文件→桌上盖红章的正式文件；数据/记录→手机屏幕上的点赞、定位、聊天图标；钱/收益→柜台上的现金、存折；归属→贴名字标签的文件夹；定价→价签、天平；分配→切开的蛋糕；机会/窗口→敞开的门透进光；错过→关上的门、开走的列车；跟风→排队的人群（背影即可）。
-  6. 写法顺序：先主体，再状态/动作，再环境和光线。
-  7. 禁止：警察、军人、制服人员、国旗国徽、领导人、文字、数字、图表、K线。政府机关只用"大楼外观"或"文件与公章"表示。
+切镜：一个完整意思一镜，通常约18～40字；以观点变化、例子、对比和转折切开，最长60字。短语与下文并在一起。不要按固定秒数换图，不拆断金额、百分比、年份、课程名或因果关系。narration 必须逐字保留原文，所有镜头连起来与输入一致；不要替用户改写口播。
 
-全片画风由系统统一添加，你不要选择画风。只返回 JSON 对象：
-{"shots":[{"narration":"","subject":"","scene":""}]}`
+配图：
+1. 人物、物件、环境按文意选择，不设固定比例，不预设静物优先。提到家人、工作也不代表每镜都需要人物。行为与关系用人物镜；具体对象与细节用物件镜；场所与空间用环境镜。根据本句传递的信息选最清楚的一种。不是每次出现“家庭”就合影，也不是每个抽象句都摆账本、钥匙、现金。只有确实需要空镜或静物特写时，才在scene明确无人。
+2. 一镜一个重点，选容易看懂的日常行为。例如同一段讲家庭收支：交代处境可用家人讨论，解释支出可用日常生活物件特写，交代工作环境可用办公楼或通勤空间空镜。按观点推进选择，不机械照搬三镜顺序。不要把“钱听谁的、进门、缩水、风口”逐字画成拟人钞票、门口现金、变小的钱或风。抽象内容必要时用metaphor并说明示意，不伪造事实证据。
+3. 人物按语境设定身份、年龄和具体动作：子女上班用年轻成年人，父母用中老年人；观众年龄不等于所有画中人物的年龄。普通中国生活状态，侧面、背面、同框互动均可，不强求正脸；避免摆拍、夸张愁容、磨皮模特。提交前检查整段镜头：有多种信息的段落不要全用人物镜，也不要全用静物镜；避免连续三个相同主体类型，若原意确实要求相同类型可保留并变化景别。人物镜写清人数和动作，空镜或静物特写明确写“无人入镜”。连续镜头按论述改变行为、关系或景别，避免反复查看手机、同一桌面、钞票堆或发愁的人脸；无须为凑类型改变原意。
+4. scene 按主体、状态/动作、环境、景别写成可直接生图的描述。日期、金额、利率、课程名交给后期字幕，图片中不生成可读文字、假界面或虚构数据图表；场景是示意，不伪装历史新闻现场。每镜不堆多个时空。
+5. camera_move 选择 still / zoom_in / zoom_out / pan_left / pan_right。物件细节可推近，环境可平移，对比可静止；运动服务主体，不按顺序轮换。这里只做静帧镜头运动，不承诺人物或物体真的行动。
+6. keywords 选0～3个在本镜旁白中逐字存在的连续词组：number 数值含单位，risk 风险词，concept 核心概念。金额、0.95%、2007年等保持完整；不要整句变黄。
+7. annotation 是可选的屏幕重点标注，通常空；关键转折、对比或总结时写一个短语，不重复整条字幕，不新增结论、不杜撰数字，也不写操作指令。标注由后期独立文字轨生成。
+
+只返回 JSON：{"shots":[{"narration":"原句","visual_intent":"原句与画面的对应理由","subject_type":"object/environment/person/comparison/metaphor","subject":"具体主体","scene":"可见场景","camera_move":"zoom_in","keywords":[{"text":"旁白中原词","kind":"concept"}],"annotation":""}]}`
 
 type explainerReply struct {
 	Shots []struct {
-		Narration string `json:"narration"`
-		Subject   string `json:"subject"`
-		Scene     string `json:"scene"`
+		StyleKey     string        `json:"style_key"`
+		Narration    string        `json:"narration"`
+		Subject      string        `json:"subject"`
+		Scene        string        `json:"scene"`
+		VisualIntent string        `json:"visual_intent"`
+		SubjectType  string        `json:"subject_type"`
+		CameraMove   string        `json:"camera_move"`
+		Motion       string        `json:"motion"`
+		Keywords     []ShotKeyword `json:"keywords"`
+		Annotation   string        `json:"annotation"`
 	} `json:"shots"`
 }
 
@@ -58,6 +59,7 @@ type explainerReply struct {
 // 两段式：先由 segmentModel 按话题把整篇切成几个大段（空则按段落/字数机械切），
 // 再由 model 对每个大段并行拆镜。大段之间互不依赖，几十秒就能拆完一篇。
 func buildExplainerStoryboard(ctx context.Context, chat openaicompat.ChatClient, model, segmentModel string, short *Short) error {
+	chat = reasoningClient{ChatClient: chat, effort: reasoningOf(short.TextReasoningEffort)}
 	chunks := segmentStory(ctx, chat, segmentModel, short.Story)
 	if len(chunks) == 0 {
 		return errors.New("文案为空")
@@ -66,14 +68,20 @@ func buildExplainerStoryboard(ctx context.Context, chat openaicompat.ChatClient,
 	errs := make([]error, len(chunks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, explainerChunkParallel)
+	prefixRunes := 0
 	for i, chunk := range chunks {
+		openingRunes := 0
+		if short.VisualSettings != nil && short.VisualSettings.FastOpening {
+			openingRunes = max(0, 120-prefixRunes)
+		}
+		prefixRunes += substantiveRunes(chunk)
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, chunk string) {
+		go func(i int, chunk string, openingRunes int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i], errs[i] = storyboardChunk(ctx, chat, model, chunk)
-		}(i, chunk)
+			results[i], errs[i] = storyboardChunk(ctx, visualPlanningClient{ChatClient: chat, style: short.Style}, model, chunk, openingRunes)
+		}(i, chunk, openingRunes)
 	}
 	wg.Wait()
 	for _, err := range errs {
@@ -152,11 +160,11 @@ func segmentStory(ctx context.Context, chat openaicompat.ChatClient, model, stor
 // 这不该让整块作废；实字对上就按模型给的切点从原文重新截出 narration（标点保留原文）。
 // 实字真对不上才重试；三次都不行就机械切，但把模型写好的画面描述按内容匹配借过来，
 // 不再出现"画面 = 旁白原句"这种没法生图的镜头。
-func storyboardChunk(ctx context.Context, chat openaicompat.ChatClient, model, chunk string) ([]Shot, error) {
+func storyboardChunk(ctx context.Context, chat openaicompat.ChatClient, model, chunk string, openingRunes ...int) ([]Shot, error) {
 	var lastErr error
 	var hints []Shot
 	for attempt := 0; attempt < 3; attempt++ {
-		shots, err := askExplainerModel(ctx, chat, model, chunk)
+		shots, err := askExplainerModel(ctx, chat, model, chunk, openingRunes...)
 		if err != nil {
 			lastErr = err
 			continue
@@ -227,7 +235,11 @@ func fallbackSplitWithHints(chunk string, hints []Shot) []Shot {
 		}
 		// 至少共享 3 个二元组才算同一句，避免把别处的画面借错。
 		if best >= 0 && bestScore >= 3 {
+			shots[i].StyleKey = hints[best].StyleKey
 			shots[i].Subject, shots[i].Scene = hints[best].Subject, hints[best].Scene
+			shots[i].VisualIntent, shots[i].SubjectType, shots[i].CameraMove = hints[best].VisualIntent, hints[best].SubjectType, hints[best].CameraMove
+			shots[i].Keywords = normalizedKeywords(shots[i].Narration, hints[best].Keywords)
+			// 回退匹配不复制标注，避免把其他句的结论放在本镜。
 		}
 	}
 	return shots
@@ -278,13 +290,17 @@ func splitOverlongShots(shots []Shot) []Shot {
 	return out
 }
 
-func askExplainerModel(ctx context.Context, chat openaicompat.ChatClient, model, chunk string) ([]Shot, error) {
+func askExplainerModel(ctx context.Context, chat openaicompat.ChatClient, model, chunk string, openingRunes ...int) ([]Shot, error) {
+	systemPrompt := explainerSystemPrompt + "\n额外返回 motion：基于本镜 scene 中已有主体的一项可行动态，供开场图生视频使用。建筑和物件优先用镜头移动、自然反光或已有环境变化；没有人物的场景不要新增手或人，不强迫每镜翻文件、递物品。"
+	if len(openingRunes) > 0 && openingRunes[0] > 0 {
+		systemPrompt += fmt.Sprintf("\n开场加密：本段最前约%d个实字属于前30秒附近（仅为策划估算，最终按配音对齐）。这些内容优先每10～16个实字一个完整意思，约2～4秒换一次可见主体或景别；避免连续重复画面，不切断数字、课程名和短语，不改原文。后面恢复通常18～40字一镜。", openingRunes[0])
+	}
 	resp, err := chat.Chat(openaicompat.ChatRequest{
 		Model:           model,
 		Stream:          true,
 		ReasoningEffort: "low",
 		Messages: []openaicompat.Message{
-			{Role: "system", Content: explainerSystemPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: "文案：\n" + strings.TrimSpace(chunk)},
 		},
 	})
@@ -309,7 +325,11 @@ func askExplainerModel(ctx context.Context, chat openaicompat.ChatClient, model,
 			continue
 		}
 		out = append(out, Shot{
+			StyleKey:  strings.TrimSpace(s.StyleKey),
 			Narration: line, Speaker: SpeakerNarrator, Subject: strings.TrimSpace(s.Subject), Scene: strings.TrimSpace(s.Scene),
+			VisualIntent: strings.TrimSpace(s.VisualIntent), SubjectType: s.SubjectType, CameraMove: s.CameraMove,
+			Motion:   strings.TrimSpace(s.Motion),
+			Keywords: s.Keywords, Annotation: strings.TrimSpace(s.Annotation),
 			Characters: []string{}, ImageStatus: ShotPending, VideoStatus: ShotPending,
 		})
 	}
@@ -438,7 +458,7 @@ func fallbackSplit(chunk string) []Shot {
 	for _, sentence := range splitSentences(chunk) {
 		for _, piece := range splitLong(sentence, explainerMaxShotRunes) {
 			shots = append(shots, Shot{
-				Narration: piece, Speaker: SpeakerNarrator, Scene: piece,
+				Narration: piece, Speaker: SpeakerNarrator, VisualIntent: "分镜回退：原句已保留，请补充具体主体与画面。",
 				StyleKey: ExplainerStyles[0].Key, Characters: []string{},
 				ImageStatus: ShotPending, VideoStatus: ShotPending,
 			})
@@ -485,6 +505,9 @@ func splitLong(sentence string, max int) []string {
 		}
 		cut := -1
 		for i := end; i > start+8; i-- {
+			if numericPunctuation(runes, i-1) {
+				continue
+			}
 			if runes[i-1] == '，' || runes[i-1] == '；' || runes[i-1] == '：' ||
 				runes[i-1] == '、' || runes[i-1] == ',' || runes[i-1] == ';' || runes[i-1] == ':' {
 				cut = i
@@ -494,6 +517,7 @@ func splitLong(sentence string, max int) []string {
 		if cut < 0 {
 			cut = end
 		}
+		cut = protectFinancialCut(runes, start, cut)
 		out = append(out, string(runes[start:cut]))
 		start = cut
 	}
@@ -537,15 +561,25 @@ func chunkStory(story string, max int) []string {
 	return chunks
 }
 
-// finalizeExplainerShots 编号、统一全片画风、轮转推拉类型。解说模式只用图片，不生成视频。
+// finalizeExplainerShots 编号、解析单镜画风并补齐镜头运动，清除旧视频状态。
 func finalizeExplainerShots(shots []Shot, styleKey string) {
 	styleKey = StyleByKey(styleKey).Key
 	for i := range shots {
 		shots[i].Index = i
-		shots[i].StyleKey = styleKey
-		shots[i].CameraMove = CameraMoves[i%len(CameraMoves)]
+		shots[i].StyleKey = resolvedShotStyle(styleKey, shots[i].StyleKey)
+		shots[i].SourceText = shots[i].Narration
+		if !validCameraMove(shots[i].CameraMove) {
+			switch shots[i].SubjectType {
+			case "environment":
+				shots[i].CameraMove = "pan_left"
+			case "comparison":
+				shots[i].CameraMove = "still"
+			default:
+				shots[i].CameraMove = "zoom_in"
+			}
+		}
 		shots[i].Hero = false
-		shots[i].Seconds = 6
+		shots[i].Seconds = explainerSecondsForLine(shots[i].Narration)
 		shots[i].VideoPath, shots[i].VideoStatus, shots[i].VideoRequestID, shots[i].VideoPrompt = "", ShotPending, "", ""
 	}
 }
@@ -572,12 +606,16 @@ func fillShotPrompts(short *Short, i int) {
 	if i < 0 || i >= len(short.Shots) {
 		return
 	}
-	shot := short.Shots[i]
 	if short.IsExplainer() {
-		short.Shots[i].ImagePrompt = explainerImagePrompt(shot)
+		normalizeVisualShot(short, i)
+		short.Shots[i].ImagePrompt = explainerImagePrompt(short.Shots[i])
 		short.Shots[i].VideoPrompt = ""
+		if short.NeedsVideo(short.Shots[i]) {
+			short.Shots[i].VideoPrompt = explainerVideoPrompt(short.Shots[i])
+		}
 		return
 	}
+	shot := short.Shots[i]
 	short.Shots[i].ImagePrompt = shotImagePrompt(short.Style, shot, short.Characters)
 	short.Shots[i].VideoPrompt = shotVideoPrompt(shot, short.Characters)
 }
@@ -597,14 +635,12 @@ const (
 	// 禁字：点名最爱长乱码的载体，并给替代画法。
 	explainerNoTextRule = "禁止任何文字、字母、数字、乱码或类似文字的笔画，包括文件、屏幕、招牌、标签上——这些地方留白或用色块、线条代替。"
 	// 画面描述里写了人才附：人物约束。
-	explainerPeopleRule = "人物：必须是中国中老年人（45～70 岁），朴素日常着装，一位为宜；不要外国面孔、不要年轻模特脸。"
-	// 画面描述里没写人就明确禁人：不说的话，"纪实/新闻感"这类风格词会让模型自己往画里加人。
-	explainerNoPeopleRule = "画面中不要出现任何人物、人脸、人体、手或人影，只画物件、建筑和场景。"
+	explainerPeopleRule = "人物：按场景指定年龄与动作表现，未指定时为普通中国成年人，朴素日常着装，自然皮肤与体态；不要模特摆拍。"
 	// 平台审核红线。
 	explainerSafetyRule = "禁止国徽、国旗、领导人像、警察或军人制服；印章只能是普通红色圆章。"
 )
 
-// explainerImagePrompt 是解说镜的生图提示词，控制在 200 字以内：
+// explainerImagePrompt 保留策划的主体、动作和关系，避免附加相反的主体约束：
 // 画面内容 → 构图 → 风格 → 三条硬约束（禁字、人物、审核）。旁白原句不放进来——实测会被原样印进图里。
 func explainerImagePrompt(shot Shot) string {
 	preset := StyleByKey(shot.StyleKey)
@@ -617,25 +653,30 @@ func explainerImagePrompt(shot Shot) string {
 		b.WriteString("主体：" + subject + "。")
 	}
 	b.WriteString("画面：" + strings.TrimRight(scene, "。") + "。")
-	b.WriteString("构图：单一主体、简洁、主体占画面大部分，16:9 横屏。")
+	if shot.VisualIntent != "" {
+		b.WriteString("画面意图（只转为可见关系，不渲染文字）：" + shot.VisualIntent + "。")
+	}
+	if shot.AspectRatio == "9:16" {
+		b.WriteString("构图：9:16 原生竖屏全幅，主体明确，中近景与环境关系清楚；下方约五分之一保持自然简洁供后期字幕使用，主体和关键动作避开右侧边缘。")
+	} else {
+		b.WriteString("构图：16:9 横屏，主体清楚、环境简洁，下缘留出自然的字幕空间。")
+	}
 	b.WriteString(preset.Prompt)
 	b.WriteString(explainerNoTextRule)
-	if mentionsPeople(scene) || mentionsPeople(shot.Subject) {
-		b.WriteString(explainerPeopleRule)
-	} else {
-		b.WriteString(explainerNoPeopleRule)
+	if shot.SubjectType == "person" || mentionsPeople(scene) || mentionsPeople(shot.Subject) {
+		b.WriteString(styledPeopleRule(shot.StyleKey))
 	}
 	b.WriteString(explainerSafetyRule)
 	return b.String()
 }
 
-// mentionsPeople 粗判画面描述里有没有人：有就附人物约束，没有就明确禁人。
+// mentionsPeople 仅决定是否补充人物质感说明；未识别到人物不会触发禁人指令。
 // 先剔掉"手机""人民币"这类带"人/手"却不是人的词。
 func mentionsPeople(text string) bool {
-	for _, notPerson := range []string{"手机", "人民币", "人行道", "人民", "无人", "没人", "不要人", "不出现人", "机器人"} {
+	for _, notPerson := range []string{"手机", "人民币", "人行道", "人民", "无人", "没人", "不要人", "不出现人", "机器人", "手写", "手工", "家庭", "个人", "人均", "人工智能"} {
 		text = strings.ReplaceAll(text, notPerson, "")
 	}
-	for _, k := range []string{"人", "男", "女", "爷", "奶", "叔", "姨", "妈", "爸", "老两口", "夫妻", "员", "手", "脸", "他", "她", "们", "背影", "身影", "顾客", "老板", "家庭", "孩子", "老人"} {
+	for _, k := range []string{"人物", "上班族", "青年", "子女", "父母", "儿子", "女儿", "闺女", "工人", "同事", "男人", "女人", "男性", "女性", "爷爷", "奶奶", "大叔", "阿姨", "妈妈", "爸爸", "老两口", "夫妻", "工作人员", "职员", "手部", "双手", "一只手", "脸", "背影", "身影", "顾客", "老板", "孩子", "老人", "中年人", "年轻人", "人群"} {
 		if strings.Contains(text, k) {
 			return true
 		}
@@ -648,11 +689,15 @@ func mentionsPeople(text string) bool {
 func explainerVideoPrompt(shot Shot) string {
 	motion := strings.TrimSpace(shot.Motion)
 	if motion == "" {
-		motion = "画面里的人或物按正常速度完成一个自然动作（翻开文件、抬头、递东西、按下印章），同时镜头缓慢推近"
+		motion = "镜头平稳推近或轻柔横移，保留已有主体，反光和环境随视角自然变化；建筑保持稳定，物件不变形，没有人物时不新增人物或手"
 	}
 	var b strings.Builder
 	b.WriteString("以这张图为第一帧，动作：" + strings.TrimRight(motion, "。") + "。")
-	b.WriteString("动作按真实生活的正常速度进行，不要慢动作、不要定格，动作在几秒内自然完成后画面停稳。")
+	if editorialShotStyle(shot.StyleKey) {
+		b.WriteString("保持纸片或模型材质，用轻微层次视差、整体推拉或已有元素的小幅移动表达动作；不要变成真人实拍，不改变元素数量、形状或图中关系。")
+	} else {
+		b.WriteString("动作按真实生活的正常速度进行，不要慢动作、不要定格，动作在几秒内自然完成后画面停稳。")
+	}
 	b.WriteString("画风、构图、光线、配色与第一帧完全一致，不出现新的人或物，不出现文字。")
 	b.WriteString("AUDIO: 只有轻的环境音，没有任何人声、没有说话、没有旁白、没有音乐。")
 	return b.String()

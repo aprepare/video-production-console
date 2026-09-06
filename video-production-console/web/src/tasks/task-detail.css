@@ -1,0 +1,25 @@
+.task-modal.task-modal { width: min(880px, 100%); padding: 24px; color: var(--ds-text); background: var(--ds-surface); }
+.task-modal .modal-head { padding-bottom: 18px; border-bottom: 1px solid var(--ds-border); }
+.task-modal .modal-head h2 { font-size: 24px; line-height: 1.35; overflow-wrap: anywhere; }
+.task-modal .task-modal-meta { gap: 10px; padding: 16px 0; overflow-wrap: anywhere; }
+.task-modal .task-modal-meta > span:nth-child(2) { font: 12px/1.5 "Cascadia Code", Consolas, monospace; color: var(--ds-text-muted); }
+.task-modal :is(.task-timing, .task-result-summary, .task-question, .montage-result) { padding: 18px; border: 1px solid var(--ds-border); border-radius: 10px; background: var(--ds-surface-muted); }
+.task-modal .task-question { border-left: 3px solid var(--ds-accent); }
+.task-modal :is(.task-message p, .task-result-summary p, .task-question p) { line-height: 1.75; overflow-wrap: anywhere; }
+.task-modal :is(.asset-text, .task-script-view pre) { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ds-text); background: var(--ds-surface-muted); }
+.task-modal button { min-height: 38px; border-radius: 8px; }
+.task-modal button:disabled { opacity: .5; cursor: wait; }
+.task-modal .task-answer-compose textarea { min-height: 110px; color: var(--ds-text); background: var(--ds-surface); border-color: var(--ds-border); }
+.task-modal :is(button, textarea, summary):focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 3px; }
+.task-modal .technical-diagnostics { border-color: var(--ds-border); color: var(--ds-text-muted); }
+.task-modal .directory-manifest li { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .task-modal.task-modal { padding: 16px; max-height: calc(100dvh - 24px); }
+  .task-modal :is(.task-timing, .task-result-summary, .task-question, .montage-result) { padding: 12px; }
+  .task-modal .task-timing-list li { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .task-modal .task-timing-list li strong { grid-column: 1 / -1; }
+  .task-modal .montage-result-head { flex-wrap: wrap; }
+  .task-modal .task-script-view__actions { flex-wrap: wrap; }
+  .task-modal .registered-directory dd { margin-left: 0; overflow-wrap: anywhere; }
+}
+@media (prefers-reduced-motion: reduce) { .task-modal *, .task-modal *::before, .task-modal *::after { animation: none !important; transition: none !important; } }

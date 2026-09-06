@@ -16,8 +16,8 @@ func TestCheckLockNumbersFlagsForeignYearAndMissing(t *testing.T) {
 	if !strings.Contains(joined, "2026年") || !strings.Contains(joined, "2008年") {
 		t.Fatalf("missing years not reported: %v", issues.Missing)
 	}
-	// 173.59万亿 口播化成 173万亿 不算缺失；0.95% 原样出现不算缺失。
-	if strings.Contains(joined, "173") || strings.Contains(joined, "0.95%") {
+	// 金额精度不得丢失；0.95% 原样出现不算缺失。
+	if !strings.Contains(joined, "173.59万亿") || strings.Contains(joined, "0.95%") {
 		t.Fatalf("false positives: %v", issues.Missing)
 	}
 }

@@ -27,14 +27,14 @@ func (c *scriptedIntelClient) Chat(req ChatRequest) (ChatResponse, error) {
 	}
 	reply := ""
 	switch {
-	case strings.Contains(system, "钩子分析师"):
+	case strings.Contains(system, "二创策划"):
 		if c.failHook {
 			return ChatResponse{}, errors.New("hook agent down")
 		}
-		reply = `{"hook_type":"宣布大事","unrevealed":"第三个锚"}`
+		reply = testWritingPlan
 	case strings.Contains(system, "事实核查员"):
-		reply = `{"source_facts":[{"claim":"利率","value":"0.95%","status":"成立"}],"fresh_ammo":[]}`
-	case strings.Contains(system, "军火库"):
+		reply = `{"source_facts":[{"claim":"利率","value":"0.95%","status":"成立","source":{"url":"https://www.icbc.com.cn/example","date":"2026-09-01"}}],"fresh_ammo":[]}`
+	case strings.Contains(system, "可选表达建议"):
 		reply = `{"banned_imagery":["搬家"],"center_options":["赶集"]}`
 	default:
 		reply = `{"continuous_script":"写手成稿"}`
@@ -51,12 +51,12 @@ func TestRunIntelPhaseWritesArtifactsAndBuildsIntelBlock(t *testing.T) {
 	client := &scriptedIntelClient{}
 	intel := runIntelPhase(client, Options{Model: "main-m"}, "原文正文", dir)
 
-	for _, section := range []string{"钩子指纹", "事实核查与新增数据", "意象与现场弹药", "宣布大事", "0.95%", "赶集"} {
+	for _, section := range []string{"二创策划", "core_question", "comment", "course_bridge", "ending_action"} {
 		if !strings.Contains(intel, section) {
 			t.Fatalf("intel missing %q:\n%s", section, intel)
 		}
 	}
-	for _, file := range []string{"hook_analysis.json", "facts_research.json", "imagery_ammo.json", "intel_summary.json"} {
+	for _, file := range []string{"hook_analysis.json", "intel_summary.json"} {
 		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
 			t.Fatalf("artifact %s missing: %v", file, err)
 		}
@@ -75,27 +75,27 @@ func TestRunIntelPhaseWritesArtifactsAndBuildsIntelBlock(t *testing.T) {
 	if err := json.Unmarshal(raw, &summary); err != nil {
 		t.Fatal(err)
 	}
-	// 未配置搜索通道：事实agent降级离线，search_used=false，模型回落主模型。
+	// 默认只有策划，不再隐式请求事实或弹药。
 	if summary.SearchUsed {
 		t.Fatal("search_used should be false without a search channel")
 	}
-	if len(summary.Agents) != 3 {
-		t.Fatalf("want 3 agents, got %d", len(summary.Agents))
+	if len(summary.Agents) != 1 || summary.Agents[0].Name != "hook" {
+		t.Fatalf("want only planner, got %+v", summary.Agents)
 	}
 	offlineSeen := false
 	client.mu.Lock()
 	for _, req := range client.requests {
-		if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "没有联网通道") {
+		if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "离线事实核查员") {
 			offlineSeen = true
 		}
 	}
 	client.mu.Unlock()
-	if !offlineSeen {
-		t.Fatal("facts agent should use the offline prompt without a search channel")
+	if offlineSeen {
+		t.Fatal("default planner must not invoke an offline facts agent")
 	}
 }
 
-func TestRunIntelPhaseUsesSearchClientWhenConfigured(t *testing.T) {
+func TestRunIntelPhaseDoesNotImplicitlyUseConfiguredSearchClient(t *testing.T) {
 	dir := t.TempDir()
 	main := &scriptedIntelClient{}
 	search := &scriptedIntelClient{}
@@ -107,28 +107,17 @@ func TestRunIntelPhaseUsesSearchClientWhenConfigured(t *testing.T) {
 	}
 	search.mu.Lock()
 	defer search.mu.Unlock()
-	if len(search.requests) != 1 {
-		t.Fatalf("search client should get exactly the facts call, got %d", len(search.requests))
-	}
-	if search.requests[0].Model != "grok-search" {
-		t.Fatalf("facts agent model = %q", search.requests[0].Model)
-	}
-	if !strings.Contains(search.requests[0].Messages[0].Content, "联网搜索") {
-		t.Fatal("facts agent should use the search-enabled prompt")
+	if len(search.requests) != 0 {
+		t.Fatalf("configured search must stay unused in planner flow, got %d", len(search.requests))
 	}
 }
 
-func TestRunIntelPhaseSurvivesPartialFailure(t *testing.T) {
+func TestRunIntelPhaseSurvivesPlannerFailure(t *testing.T) {
 	dir := t.TempDir()
 	client := &scriptedIntelClient{failHook: true}
 	intel := runIntelPhase(client, Options{Model: "main-m"}, "原文正文", dir)
-	if strings.Contains(intel, "钩子指纹") {
-		t.Fatal("failed hook agent must not appear in intel")
-	}
-	for _, section := range []string{"事实核查与新增数据", "意象与现场弹药"} {
-		if !strings.Contains(intel, section) {
-			t.Fatalf("intel missing %q after partial failure", section)
-		}
+	if intel != "" {
+		t.Fatalf("writer should proceed without failed planner output: %s", intel)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "hook_analysis.json")); !os.IsNotExist(err) {
 		t.Fatal("failed agent should not write an artifact")

@@ -14,27 +14,59 @@ import (
 // publishFieldIssues 列出发布字段不合格的地方；空切片表示合格。
 func publishFieldIssues(draft remixDraft) []string {
 	issues := make([]string, 0, 4)
+	if len(nonBlank(draft.Titles)) > 0 {
+		issues = append(issues, "titles 应为 []")
+	}
 	shorts := nonBlank(draft.ShortTitles)
 	if len(shorts) < 3 {
 		issues = append(issues, fmt.Sprintf("short_titles 只有 %d 条，需要恰好 3 条", len(shorts)))
+	} else if len(shorts) > 3 {
+		issues = append(issues, fmt.Sprintf("short_titles 有 %d 条，需要恰好 3 条", len(shorts)))
 	}
 	for _, s := range shorts {
-		if utf8.RuneCountInString(s) > 15 {
+		if strings.Contains(s, "#") {
+			issues = append(issues, "short_titles 不带 #")
+		}
+		if utf8.RuneCountInString(s) < 6 {
+			issues = append(issues, fmt.Sprintf("短标题「%s」不足 6 个字，short_titles 每条需 6 到 15 个字", s))
+		} else if utf8.RuneCountInString(s) > 15 {
 			issues = append(issues, fmt.Sprintf("短标题「%s」超过 15 个字", s))
 		}
 	}
 	descs := nonBlank(draft.Descriptions)
 	if len(descs) < 2 {
 		issues = append(issues, fmt.Sprintf("descriptions 只有 %d 条，需要 2 到 3 条", len(descs)))
+	} else if len(descs) > 3 {
+		issues = append(issues, fmt.Sprintf("descriptions 有 %d 条，需要 2 到 3 条", len(descs)))
 	}
 	for _, d := range descs {
 		body := strings.TrimSpace(trailingHashtagRun.ReplaceAllString(d, ""))
-		if utf8.RuneCountInString(body) > descriptionHardRunes {
-			issues = append(issues, fmt.Sprintf("描述「%s…」超过 %d 个字，压成一句", clipRunes(body, 0, 18), descriptionHardRunes))
+		if strings.Contains(d, "#") {
+			issues = append(issues, "descriptions 不带 #")
+		}
+		if utf8.RuneCountInString(body) > 40 {
+			issues = append(issues, fmt.Sprintf("描述「%s…」超过 40 个字，压成一句", clipRunes(body, 0, 18)))
 		}
 	}
-	if len(nonBlank(draft.Topics)) < 3 {
-		issues = append(issues, fmt.Sprintf("topics 只有 %d 个，需要 3 到 4 个带#的话题", len(nonBlank(draft.Topics))))
+	topics := nonBlank(draft.Topics)
+	if len(topics) > 0 && topics[0] != "#财经" && topics[0] != "#经济" && topics[0] != "#理财" {
+		issues = append(issues, "topics 首个应为 #财经/#经济/#理财")
+	}
+	if len(topics) < 3 {
+		issues = append(issues, fmt.Sprintf("topics 只有 %d 个，需要 3 到 4 个带#的话题", len(topics)))
+	} else if len(topics) > 4 {
+		issues = append(issues, fmt.Sprintf("topics 有 %d 个，需要 3 到 4 个带#的话题", len(topics)))
+	}
+	for _, t := range topics {
+		if !strings.HasPrefix(t, "#") {
+			issues = append(issues, fmt.Sprintf("topics 话题「%s」缺少 # 前缀，必须带#", t))
+		}
+	}
+	for _, s := range append(append(append([]string{}, shorts...), descs...), topics...) {
+		if strings.Contains(s, "财富觉醒方法论") || strings.Contains(s, "橱窗") || strings.Contains(s, "五块钱") {
+			issues = append(issues, "发布字段含课程推广话术")
+			break
+		}
 	}
 	return issues
 }

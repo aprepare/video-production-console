@@ -471,6 +471,50 @@ func TestRemixLabAgentHistoryHTTP(t *testing.T) {
 	}
 }
 
+func TestRemixLabImportDraftHTTP(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+	script := strings.Repeat("手工定稿正文。", 8)
+	body, _ := json.Marshal(map[string]any{"continuous_script": script})
+	req := httptest.NewRequest(http.MethodPost, "/api/remix-lab/workflow/import-draft", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exp remixlab.Experiment
+	if err := json.Unmarshal(rec.Body.Bytes(), &exp); err != nil {
+		t.Fatal(err)
+	}
+	if exp.Status != "completed" || !exp.Workflow || len(exp.Runs) != 1 {
+		t.Fatalf("exp=%+v", exp)
+	}
+	if exp.Runs[0].ContinuousScript != script {
+		t.Fatalf("script=%q", exp.Runs[0].ContinuousScript)
+	}
+	if exp.Runs[0].Production == nil || exp.Runs[0].Production.Status != "waiting_confirm" {
+		t.Fatalf("production=%+v", exp.Runs[0].Production)
+	}
+
+	stagesReq := httptest.NewRequest(http.MethodGet, "/api/remix-lab/runs/"+exp.Runs[0].ID+"/stages", nil)
+	stagesRec := httptest.NewRecorder()
+	handler.ServeHTTP(stagesRec, stagesReq)
+	if stagesRec.Code != http.StatusOK {
+		t.Fatalf("stages status=%d body=%s", stagesRec.Code, stagesRec.Body.String())
+	}
+	if !strings.Contains(stagesRec.Body.String(), `"id":"writer"`) || !strings.Contains(stagesRec.Body.String(), `"status":"skipped"`) {
+		t.Fatalf("stages=%s", stagesRec.Body.String())
+	}
+
+	shortReq := httptest.NewRequest(http.MethodPost, "/api/remix-lab/workflow/import-draft", strings.NewReader(`{"continuous_script":"太短"}`))
+	shortReq.Header.Set("Content-Type", "application/json")
+	shortRec := httptest.NewRecorder()
+	handler.ServeHTTP(shortRec, shortReq)
+	if shortRec.Code != http.StatusCreated {
+		t.Fatalf("short status=%d body=%s", shortRec.Code, shortRec.Body.String())
+	}
+}
+
 func TestRemixLabAgentLastEmptyHTTP(t *testing.T) {
 	handler := newRemixLabTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/remix-lab/agent/last", nil)

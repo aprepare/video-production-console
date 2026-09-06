@@ -127,7 +127,7 @@ func TestPickHotTopicsKeepsVerticalTagsAndPads(t *testing.T) {
 	}
 }
 
-func TestPublishingPackageKeepsModelTopicsInDescriptions(t *testing.T) {
+func TestPublishingPackagePreservesDescriptionAndMissingTitles(t *testing.T) {
 	pkg := publishingPackageFromDraft(remixDraft{
 		Descriptions: []string{"前两次的行情分别推高了外贸和房子。 #旧话题 #被换掉"},
 		Topics:       []string{"#楼市", "#房贷", "#家庭理财", "#财经"},
@@ -136,19 +136,13 @@ func TestPublishingPackageKeepsModelTopicsInDescriptions(t *testing.T) {
 	if len(topics) != 4 {
 		t.Fatalf("topics=%v", topics)
 	}
-	joined := strings.Join(topics, " ")
-	for _, desc := range pkg["descriptions"].([]string) {
-		if !strings.HasSuffix(desc, joined) {
-			t.Fatalf("description=%q topics=%v", desc, topics)
-		}
-		if strings.Contains(desc, "#旧话题") {
-			t.Fatalf("stale hashtag leaked: %q", desc)
-		}
+	if got := pkg["descriptions"].([]string); len(got) != 1 || got[0] != "前两次的行情分别推高了外贸和房子。 #旧话题 #被换掉" {
+		t.Fatalf("description changed: %v", got)
 	}
 	shorts, _ := pkg["short_titles"].([]string)
-	// 模型没给短标题时只从正文取，取不够就少给，不再凑「窗口不会等人」这类占位。
-	if len(shorts) == 0 || len(shorts) > 3 {
-		t.Fatalf("short_titles must be 1..3 script-derived items, got %v", shorts)
+	// 未提供的标题不自动生成。
+	if len(shorts) != 0 {
+		t.Fatalf("missing short_titles must stay empty, got %v", shorts)
 	}
 }
 

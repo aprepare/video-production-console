@@ -20,8 +20,12 @@ type Options struct {
 	OutputLastMessage string
 	Model             string
 	ReasoningEffort   string
-	// CheckModel is ignored on rewrite. copy / rewrite_sharp still use it
-	// for the post-draft quality check and repair pass.
+	ServiceTier       string
+	// DefaultModel / DefaultEffort 是设置页/模型档默认，给审稿等节点在
+	// 自身配置留空时用。不能回落到 Model（那是写手槽位，改写手不应改审稿）。
+	DefaultModel  string
+	DefaultEffort string
+	// CheckModel is retained for older callers; mechanical review is retired.
 	CheckModel   string
 	BaseURL      string
 	APIKey       string
@@ -31,10 +35,10 @@ type Options struct {
 	PythonBinary string
 	Client       ChatClient
 	CopyClient   CopyClient
-	// Pipeline 为 PipelineMultiAgent 时，写手动笔前先跑三路并行情报agent
-	// （钩子指纹/事实核查/意象弹药），产出注入写手上下文。仅 rewrite 生效。
+	// Pipeline 为 PipelineMultiAgent 时，写手动笔前先做一次二创策划。
+	// 产出注入写手上下文。仅 rewrite 生效。
 	Pipeline string
-	// ReviewerEnabled 打开后，写手成稿通过机械自检即交给审稿agent终审：
+	// ReviewerEnabled 打开后，写手成稿直接交给审稿agent终审：
 	// 只修违规处并留 draft_v1.json / review.json 双版本产物。仅 rewrite 生效。
 	ReviewerEnabled bool
 	// 各路agent系统提示词的覆盖文本；为空用内置默认。由创作台的
@@ -202,6 +206,16 @@ func Run(opts Options) error {
 	}
 	pipeline := strings.ToLower(strings.TrimSpace(opts.Pipeline))
 	spec, hasSpec := parseFlowSpec(opts.WorkflowJSON)
+	if hasSpec {
+		if node := spec.writer(); node != nil {
+			if strings.TrimSpace(node.Config.SystemPrompt) != "" {
+				system = node.Config.SystemPrompt
+			}
+			if strings.TrimSpace(node.Config.UserTemplate) != "" {
+				user = renderWriterUserTemplate(node.Config.UserTemplate, source, manifest.NonSecretSettings.RevisionNotes)
+			}
+		}
+	}
 	if style == PromptStyleRewrite {
 		if hasSpec {
 			// 工作流快照驱动：agent 节点按图分波并行，输出按连线注入写手。
@@ -214,12 +228,31 @@ func Run(opts Options) error {
 			}
 		}
 	}
+	if style == PromptStyleRewrite {
+		ctx := currentEditorialContext(manifest.OutputDir)
+		if hasSpec && spec.EditorialRules != nil {
+			ctx.Policy = *spec.EditorialRules
+			ctx.CustomPolicy = true
+		}
+		if node := spec.reviewer(); hasSpec && node != nil {
+			ctx.ReviewerUser = node.Config.UserTemplate
+		}
+		_, _, _, reviewerPrompt := resolveReviewerSettings(opts, specOrNil(spec, hasSpec), model, opts.ReasoningEffort)
+		ctx.ReviewerPrompt = override(reviewerPrompt, reviewerRolePrompt)
+		if err := saveEditorialContext(manifest.OutputDir, ctx); err != nil {
+			return writeFailure(outPath, manifestPath, err)
+		}
+		system = withEditorialPolicy(system, ctx.Policy)
+		system += "\n\n" + WriterJSONContract
+	}
 	captureWriterPrompts(manifest.OutputDir, system, user)
 	appendRemixRunLog(manifest.OutputDir, map[string]any{
 		"event": "prompt_selected", "prompt_style": style, "prompt_stamp": stamp,
 		"pipeline": pipeline, "system_bytes": len(system), "user_bytes": len(user),
 	})
 
+	baseClient := client
+	client = withServiceTier(baseClient, opts.ServiceTier)
 	writerStarted := time.Now()
 	resp, err := client.Chat(ChatRequest{
 		Model:           model,
@@ -240,77 +273,28 @@ func Run(opts Options) error {
 		})
 		return writeFailure(outPath, manifestPath, fmt.Errorf("empty chat choices"))
 	}
-	// 写手首稿耗时（不含自检返工），运行视图的写手节点用它显示用时。
+	// 写手首稿耗时，运行视图据此显示用时。
 	appendRemixRunLog(manifest.OutputDir, map[string]any{
 		"event": "writer", "model": model, "ms": writerMillis, "effort": strings.TrimSpace(opts.ReasoningEffort),
+		"requested_service_tier": opts.ServiceTier,
 	})
 	rawReply := resp.Choices[0].Message.Content
 	captureRemixModelReply(manifest.OutputDir, model, style, stamp, rawReply)
-	var (
-		content       = rawReply
-		checkWarnings []string
-		checkNote     string
-	)
-	var repairErr error
+	// 不按篇幅、重合率、数字锁词或发布字段触发返工；保留写手原始输出。
+	content := rawReply
 	if style == PromptStyleRewrite {
-		// rewrite（进化台采用的提示词走这条）：10 字连抄 + 篇幅自检，超标回传撞车片段返工。
-		// 工作流快照的机械自检节点可覆盖阈值。
-		limits := defaultSelfCheckLimits()
-		if hasSpec {
-			if node := spec.selfcheckNode(); node != nil {
-				limits = applyFlowSelfCheckLimits(limits, node.Config)
-			}
-		}
-		content, checkWarnings, checkNote, repairErr = selfCheckRemixRewrite(client, model, strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply, manifest.OutputDir, limits)
-	} else {
-		content, checkWarnings, checkNote, repairErr = repairRemixDraft(client, model, strings.TrimSpace(opts.CheckModel), strings.TrimSpace(opts.ReasoningEffort), system, user, source, rawReply)
-	}
-	if repairErr != nil {
-		appendRemixRunLog(manifest.OutputDir, map[string]any{
-			"event": "quality_failed", "prompt_style": style, "prompt_stamp": stamp,
-			"error": repairErr.Error(), "note": checkNote, "warnings": checkWarnings,
-		})
-		if strings.TrimSpace(content) != "" && content != rawReply {
-			if draft, parseErr := parseRemixDraft(content); parseErr == nil && strings.TrimSpace(draft.ContinuousScript) != "" {
-				_ = os.WriteFile(filepath.Join(manifest.OutputDir, "continuous_script.txt"), []byte(strings.TrimSpace(draft.ContinuousScript)), 0o644)
-			}
-		}
-		return writeFailure(outPath, manifestPath, repairErr)
-	}
-	appendRemixRunLog(manifest.OutputDir, map[string]any{
-		"event": "quality_passed", "prompt_style": style, "prompt_stamp": stamp,
-		"note": checkNote, "warnings": checkWarnings,
-	})
-	if style == PromptStyleRewrite {
-		// 审稿agent首轮：机械自检过闸后终审规范清单，只修违规处。
+		// 审稿模型直接接收写手首稿，保留修改前后供人工定稿。
 		// 工作流快照存在时由快照决定审稿节点有无与提示词；否则看固定开关。
-		// 审稿失败不拦交付，结论记在 review.json 供界面展示。
-		runReview := false
-		reviewerPrompt := opts.ReviewerSystemPrompt
-		reviewerModel := model
-		reviewerEffort := strings.TrimSpace(opts.ReasoningEffort)
-		if hasSpec {
-			if node := spec.reviewer(); node != nil {
-				runReview = true
-				if prompt := strings.TrimSpace(node.Config.SystemPrompt); prompt != "" {
-					reviewerPrompt = prompt
-				}
-				if m := strings.TrimSpace(node.Config.Model); m != "" {
-					reviewerModel = m
-				}
-				if e := strings.TrimSpace(node.Config.ReasoningEffort); e != "" {
-					reviewerEffort = e
-				}
-			}
-		} else {
-			runReview = opts.ReviewerEnabled
-		}
+		// 审稿通道或结构解析失败时保留待审稿，允许人工处理或重试。
+		runReview, reviewerModel, reviewerEffort, reviewerPrompt := resolveReviewerSettings(opts, specOrNil(spec, hasSpec), model, opts.ReasoningEffort)
 		if runReview {
 			outcome := ReviewRemixDraft(ReviewOptions{
-				Client:          client,
+				Client:          baseClient,
+				ServiceTier:     reviewerServiceTier(opts, specOrNil(spec, hasSpec)),
 				Model:           reviewerModel,
 				ReasoningEffort: reviewerEffort,
 				SystemPrompt:    reviewerPrompt,
+				EditorialRules:  spec.EditorialRules,
 				Source:          source,
 				DraftJSON:       content,
 				OutputDir:       manifest.OutputDir,
@@ -319,15 +303,13 @@ func Run(opts Options) error {
 			if outcome.RevisedJSON != "" {
 				content = outcome.RevisedJSON
 			}
-		}
-		// 发布字段（短标题/描述/话题）给少给错时，只补字段、不动正文。
-		var fieldsNote string
-		content, fieldsNote = repairPublishFields(client, model, strings.TrimSpace(opts.ReasoningEffort), system, user, content, manifest.OutputDir)
-		if fieldsNote != "" {
-			checkNote = appendCheckNote(checkNote, fieldsNote)
+			if outcome.Record.Error != "" {
+				preserveDraft(manifest.OutputDir, content)
+				return writeFailure(outPath, manifestPath, fmt.Errorf("终审未完成，已保留待审稿：%s", outcome.Record.Error))
+			}
 		}
 	}
-	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, checkWarnings, checkNote); err != nil {
+	if err := writeRemixDeliverable(manifest.OutputDir, manifest.TaskID, action, content, nil, ""); err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
 	resultFile := filepath.Join(manifest.OutputDir, "result.json")
@@ -357,6 +339,41 @@ func readPrimarySource(manifest manifestLite) (string, error) {
 		return readTextFile(fallback)
 	}
 	return "", fmt.Errorf("manifest is missing a source_script input")
+}
+
+func specOrNil(spec flowSpec, has bool) *flowSpec {
+	if !has {
+		return nil
+	}
+	return &spec
+}
+
+// resolveReviewerSettings 工作流审稿：节点自己的模型/强度 > 默认模型档；
+// 不回落到写手槽位。旧固定管线（无快照）仍跟写手同一模型。
+func resolveReviewerSettings(opts Options, spec *flowSpec, writerModel, writerEffort string) (run bool, model, effort, prompt string) {
+	prompt = opts.ReviewerSystemPrompt
+	if spec != nil {
+		node := spec.reviewer()
+		if node == nil {
+			return false, "", "", ""
+		}
+		if p := strings.TrimSpace(node.Config.SystemPrompt); p != "" {
+			prompt = p
+		}
+		model = strings.TrimSpace(node.Config.Model)
+		if model == "" {
+			model = strings.TrimSpace(opts.DefaultModel)
+		}
+		effort = strings.TrimSpace(node.Config.ReasoningEffort)
+		if effort == "" {
+			effort = strings.TrimSpace(opts.DefaultEffort)
+		}
+		return true, model, effort, prompt
+	}
+	if !opts.ReviewerEnabled {
+		return false, "", "", ""
+	}
+	return true, writerModel, strings.TrimSpace(writerEffort), prompt
 }
 
 func readTextFile(path string) (string, error) {
@@ -431,7 +448,7 @@ func runSpokenLines(opts Options, manifest manifestLite, source, outPath string)
 	// 每块各自耗时 vs 总耗时：并行生效时总耗时≈最慢那块，而不是各块之和。
 	appendRemixRunLog(manifest.OutputDir, map[string]any{
 		"event": "spoken_lines", "chunks": len(chunks), "model": model,
-		"effort": strings.TrimSpace(opts.ReasoningEffort),
+		"effort":   strings.TrimSpace(opts.ReasoningEffort),
 		"chunk_ms": chunkMillis, "total_ms": time.Since(spokenStarted).Milliseconds(),
 	})
 	if err := writeSpokenDeliverable(manifest.OutputDir, manifest.TaskID, strings.Join(results, "\n")); err != nil {
@@ -556,11 +573,16 @@ func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) str
 }
 
 func renderWriterUserTemplate(tmpl, source, notes string) string {
-	out := strings.ReplaceAll(tmpl, "{{SOURCE}}", source)
+	noteText := ""
 	if strings.TrimSpace(notes) != "" {
-		out = strings.ReplaceAll(out, "{{NOTES}}", "修改要求：\n"+notes+"\n")
-	} else {
-		out = strings.ReplaceAll(out, "{{NOTES}}", "")
+		noteText = "修改要求：\n" + notes + "\n"
+	}
+	out := strings.NewReplacer("{{SOURCE}}", source, "{{NOTES}}", noteText).Replace(tmpl)
+	if !strings.Contains(tmpl, "{{SOURCE}}") {
+		out += "\n\n# 同行原文\n" + source
+	}
+	if !strings.Contains(tmpl, "{{NOTES}}") && noteText != "" {
+		out += "\n\n" + noteText
 	}
 	return out
 }

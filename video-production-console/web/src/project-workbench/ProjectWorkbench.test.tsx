@@ -137,7 +137,7 @@ test("presents project identity, production stage, asset readiness, and task sta
   expect(container.querySelector(".workbench-stage-badge--assets")?.textContent).toContain("制作素材");
   const currentStep = container.querySelector('[aria-current="step"]');
   expect(currentStep?.textContent).toContain("素材");
-  expect(currentStep?.textContent).toContain("正在制作");
+  expect(currentStep?.textContent).toContain("当前阶段");
   expect(screen.getByLabelText("3 个资产已就绪，共 7 个")).toBeTruthy();
   expect(screen.getByLabelText("制作输入检查")).toBeTruthy();
   expect(container.querySelector(".project-asset--missing")).toBeTruthy();

@@ -43,13 +43,15 @@ type DraftAssembler struct {
 	// Brand 解出这条短片的账号包装（背景框、BGM、音效、字幕样式）；nil 或出错时用 DefaultBrandKit。
 	Brand func(ctx context.Context, accountID string) (BrandKit, error)
 	// 预跑配音的互斥：同一条短片同时只跑一次。
-	prewarm sync.Map
+	prewarm        sync.Map
+	narrationLocks sync.Map
 }
 
 type jobShot struct {
 	Video       string  `json:"video,omitempty"` // 视频镜
 	Image       string  `json:"image,omitempty"` // 图片镜（解说模式），配 camera_move
 	CameraMove  string  `json:"camera_move,omitempty"`
+	Annotation  string  `json:"annotation,omitempty"`
 	StartS      float64 `json:"start_s"`
 	EndS        float64 `json:"end_s"`
 	Audio       string  `json:"audio,omitempty"` // 旁白镜的 TTS 文件；角色镜为空
@@ -57,11 +59,7 @@ type jobShot struct {
 	Speaker     string  `json:"speaker"`
 }
 
-type jobCaption struct {
-	Text   string  `json:"text"`
-	StartS float64 `json:"start_s"`
-	EndS   float64 `json:"end_s"`
-}
+type jobCaption = CaptionCue
 
 // ttsClip 是一句旁白的配音结果。
 type ttsClip struct {
@@ -170,7 +168,7 @@ func (a *DraftAssembler) Assemble(ctx context.Context, rt Runtime, short *Short,
 	return a.buildDraft(ctx, rt, short, assetDir, draftJob{
 		Headline: short.Headline, DurationS: total, Shots: shots, Captions: caps,
 		NarrationPath: firstNarration, SRTPath: srtPath, ShotTimes: shotTimes,
-	})
+	}, progress)
 }
 
 // draftJob 是交给 Python 组草稿的全部材料。Narration 非空时整条旁白是一个文件；
@@ -198,7 +196,7 @@ type sfxCue struct {
 	Volume float64 `json:"volume"`
 }
 
-func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Short, assetDir string, in draftJob) (AssembleResult, error) {
+func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Short, assetDir string, in draftJob, callbacks ...func(string)) (AssembleResult, error) {
 	name := a.draftName(short)
 	job := map[string]any{
 		"draft_name":       name,
@@ -219,6 +217,12 @@ func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Shor
 	}
 	if in.Portrait {
 		job["layout"] = "portrait_inset"
+		if short.VisualSettings != nil {
+			job["layout"] = short.VisualSettings.Layout
+			job["visual_settings"] = short.VisualSettings
+		}
+		// 每次导出留一份新草稿，旧草稿和它引用的图片继续可用。
+		job["replace_draft"] = ""
 		job["brand"] = map[string]any{
 			"background": in.Brand.BackgroundPath,
 			"bgm": map[string]any{
@@ -247,6 +251,9 @@ func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Shor
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if len(callbacks) > 0 && callbacks[0] != nil {
+		cmd.Stderr = &assemblyOutput{output: &stderr, notify: callbacks[0]}
+	}
 	if err := cmd.Run(); err != nil {
 		return AssembleResult{}, fmt.Errorf("草稿脚本失败：%v\n%s\n%s", err, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
@@ -265,7 +272,7 @@ func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Shor
 	}
 	return AssembleResult{
 		NarrationPath: in.NarrationPath, SRTPath: in.SRTPath, DraftPath: out.DraftPath, DraftName: name,
-		DurationS: float64(out.DurationUS) / 1e6, ShotTimes: in.ShotTimes,
+		DurationS: float64(out.DurationUS) / 1e6, ShotTimes: in.ShotTimes, Captions: in.Captions,
 	}, nil
 }
 
@@ -283,7 +290,9 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 	}
 	// 老分镜里可能有「。」或三五个字的碎片：不给它们单独出画面，文字并进邻镜，
 	// 邻镜的图多停留一会儿。旧记录不用重拆重生也能出片。
-	ready = mergeFragmentShots(ready)
+	if short.VisualSettings == nil || short.VisualSettings.OpeningVideoSeconds == 0 {
+		ready = mergeFragmentShots(ready)
+	}
 	if len(ready) == 0 {
 		return AssembleResult{}, errors.New("没有可用的镜头画面")
 	}
@@ -310,10 +319,7 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 	shotTimes := make([][2]float64, len(short.Shots))
 	filled := make([]bool, len(short.Shots))
 	for i, shot := range ready {
-		shots = append(shots, jobShot{
-			Image: shot.ImagePath, CameraMove: shot.CameraMove,
-			StartS: times[i][0], EndS: times[i][1], VideoVolume: 0, Speaker: SpeakerNarrator,
-		})
+		shots = append(shots, explainerJobShots(short, shot, times[i])...)
 		if shot.Index >= 0 && shot.Index < len(shotTimes) {
 			shotTimes[shot.Index], filled[shot.Index] = times[i], true
 		}
@@ -340,16 +346,20 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 	pos := 0
 	for i, shot := range ready {
 		n := substantiveRunes(shot.Narration)
+		var local []jobCaption
 		if alignErr == nil {
-			caps = append(caps, clauseCaptionsFromCharMap(shot.Narration, pos, charTimes, times[i])...)
+			local = clauseCaptionsFromCharMap(shot.Narration, pos, charTimes, times[i])
 		} else {
-			caps = append(caps, spreadClauseCaptions(shot.Narration, times[i][0], times[i][1])...)
+			local = spreadClauseCaptions(shot.Narration, times[i][0], times[i][1])
 		}
+		caps = append(caps, keywordsOnCaptions(local, shot.Keywords)...)
 		pos += n
 	}
 	caps = tightenCaptions(caps, total)
 	srtPath := filepath.Join(assetDir, "narration.srt")
-	_ = os.WriteFile(srtPath, []byte(renderSRT(caps)), 0o644)
+	if err := os.WriteFile(srtPath, []byte(renderSRT(caps)), 0o644); err != nil {
+		return AssembleResult{}, err
+	}
 
 	// 账号包装：背景框、BGM、音效、字幕样式。拿不到就用默认（无背景、无 BGM）。
 	brand := DefaultBrandKit()
@@ -361,13 +371,16 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 		}
 	}
 	cues := planSFX(ready, times, total, brand)
+	if short.VisualSettings != nil && !short.VisualSettings.SFXEnabled {
+		cues = nil
+	}
 
 	progress("生成剪映草稿")
 	return a.buildDraft(ctx, rt, short, assetDir, draftJob{
 		Headline: "", DurationS: total, Shots: shots, Captions: caps,
 		Narration: narrationPath, NarrationPath: narrationPath, SRTPath: srtPath, ShotTimes: shotTimes,
 		Portrait: true, Brand: brand, SFX: cues,
-	})
+	}, progress)
 }
 
 const (
@@ -387,7 +400,12 @@ func splitClauses(line string) []string {
 		}
 		cur = cur[:0]
 	}
-	for _, r := range strings.TrimSpace(line) {
+	runes := []rune(strings.TrimSpace(line))
+	for i, r := range runes {
+		if (r == '.' || r == ',') && numericPunctuation(runes, i) {
+			cur = append(cur, r)
+			continue
+		}
 		switch r {
 		case '\n', '"', '\u201c', '\u201d', '「', '」', '（', '）', '(', ')':
 			continue
@@ -407,16 +425,7 @@ func splitClauses(line string) []string {
 			continue
 		}
 		parts := (len(runes) + portraitCaptionMaxRunes - 1) / portraitCaptionMaxRunes
-		base, extra := len(runes)/parts, len(runes)%parts
-		at := 0
-		for k := 0; k < parts; k++ {
-			n := base
-			if k < extra {
-				n++
-			}
-			out = append(out, strings.TrimRight(string(runes[at:at+n]), "，、"))
-			at += n
-		}
+		out = append(out, splitLong(c, (len(runes)+parts-1)/parts)...)
 	}
 	return out
 }
@@ -605,6 +614,14 @@ func loadPreparedNarration(assetDir, script string) (preparedNarration, bool) {
 // prepareNarration：整篇 TTS → 落盘 → 语音识别逐字对齐；结果连同脚本指纹一起缓存。
 // 生图阶段就会预跑一次，组装时脚本没改就直接复用，省掉 2～4 分钟。
 func (a *DraftAssembler) prepareNarration(ctx context.Context, rt Runtime, short *Short, assetDir, script string, progress func(string)) (preparedNarration, error) {
+	lock, _ := a.narrationLocks.LoadOrStore(assetDir, make(chan struct{}, 1))
+	lease := lock.(chan struct{})
+	select {
+	case lease <- struct{}{}:
+		defer func() { <-lease }()
+	case <-ctx.Done():
+		return preparedNarration{}, ctx.Err()
+	}
 	if meta, ok := loadPreparedNarration(assetDir, script); ok {
 		progress("复用已生成的配音与时间轴")
 		return meta, nil
@@ -627,7 +644,7 @@ func (a *DraftAssembler) prepareNarration(ctx context.Context, rt Runtime, short
 			return preparedNarration{}, fmt.Errorf("配音失败：%w", err)
 		}
 	}
-	audioPath := filepath.Join(assetDir, "narration.mp3")
+	audioPath := filepath.Join(assetDir, fmt.Sprintf("narration_%s_%d.mp3", scriptDigest(script)[:12], time.Now().UnixNano()))
 	if err := os.WriteFile(audioPath, delivery.Audio, 0o644); err != nil {
 		return preparedNarration{}, err
 	}

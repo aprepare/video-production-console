@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
-  BookOpenText,
   Check,
-  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -13,7 +11,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  Settings,
   Sparkles,
   Star,
   Trash2,
@@ -34,9 +31,9 @@ import {
   fetchRemixLabAgentPrompts,
   fetchRemixLabAgentSettings,
   fetchRemixLabDefaults,
+  fetchRemixLabProductionByProject,
   fetchRemixLabExperiment,
   fetchRemixLabExperiments,
-  fetchRemixLabProductionByProject,
   fetchRemixLabPrompts,
   produceRemixLabRun,
   retryRemixLabRun,
@@ -63,8 +60,8 @@ import {
 import { RunWorkbench } from "./RunWorkbench";
 import { RunFlow } from "./RunFlow";
 import { WorkflowCanvas } from "./WorkflowCanvas";
+import { FastModeButton } from "./FastModeButton";
 import { AccountsOverview } from "./AccountsOverview";
-import { PublishedLibrary } from "./PublishedLibrary";
 import { AccountOverridesDialog } from "../accounts/AccountOverridesDialog";
 import { stageLabel } from "../projects/stages";
 import type { Account, MontageStyle, Project, Theme } from "../types";
@@ -84,6 +81,7 @@ type RemixLabPageProps = {
 };
 
 type DraftSlot = {
+	service_tier?: string;
   base_url: string;
   model: string;
   api_key: string;
@@ -121,10 +119,10 @@ const AGENT_PROMPT_FIELDS: Array<{
   label: string;
   hint: string;
 }> = [
-  { key: "hook_system", label: "钩子分析", hint: "情报组第1路：拆原文开头钩子和留人机制，产出复刻要点。" },
-  { key: "facts_search_system", label: "事实核查（联网）", hint: "情报组第2路：核对原文数字，联网补带来源的新数据。" },
-  { key: "facts_offline_system", label: "事实核查（离线备用）", hint: "没配搜索通道时的降级版：只盘点原文事实，不补新数据。" },
-  { key: "ammo_system", label: "弹药库", hint: "情报组第3路：意象禁用清单、新意象候选、原创现场、换讲法。" },
+  { key: "hook_system", label: "二创策划", hint: "统一安排开头问题、正文推进、评论互动和课程承接，写手据此成文。" },
+  { key: "facts_search_system", label: "事实核查（联网备用）", hint: "供手动添加的自定义节点使用；默认流程不调用。" },
+  { key: "facts_offline_system", label: "事实核查（离线备用）", hint: "供自定义节点使用；默认流程不调用。" },
+  { key: "ammo_system", label: "弹药库（备用）", hint: "可选表达建议；默认流程不调用。" },
   { key: "reviewer_system", label: "审稿终审", hint: "每篇成稿的规范终审，打回重做也用它。改这里就是改审稿标准。" },
 ];
 function turnsFromAgentHistory(turns: RemixLabAgentHistoryTurn[]): AgentTurn[] {
@@ -172,6 +170,7 @@ function slotsFromDefaults(defaults: RemixLabDefaults): DraftSlot[] {
       model: preset.model,
       api_key: "",
       reasoning_effort: preset.reasoning_effort,
+      service_tier: preset.service_tier || "",
       pipeline: preset.pipeline || "",
       run_count: clampRunCount(preset.run_count || 1),
       preset_index: preset.preset_index,
@@ -228,6 +227,7 @@ function toCreateSlots(slots: DraftSlot[]): RemixLabCreateSlot[] {
       model: slot.model,
       api_key: slot.api_key,
       reasoning_effort: slot.reasoning_effort,
+      service_tier: slot.service_tier || "",
       run_count: clampRunCount(slot.run_count),
     };
     if (slot.pipeline) body.pipeline = slot.pipeline;
@@ -240,10 +240,6 @@ export function RemixLabPage({
   api,
   experimentID,
   onNavigate,
-  onOpenSettings,
-  onLogout,
-  theme,
-  onThemeChange,
   selectedProjectID,
   projectView,
   globalMontageStyle,
@@ -284,7 +280,6 @@ export function RemixLabPage({
   const [packageRun, setPackageRun] = useState<RemixLabRunView | null>(null);
   const [flowRun, setFlowRun] = useState<{ id: string; label: string } | null>(null);
   const [overviewOpen, setOverviewOpen] = useState(false);
-  const [publishedOpen, setPublishedOpen] = useState(false);
   const [agentSettings, setAgentSettings] = useState<RemixLabAgentSettings>({
     model: "",
     base_url: "",
@@ -379,11 +374,18 @@ export function RemixLabPage({
   }, [api, selectedProjectID, experimentID]);
 
   const pickAccount = (value: string) => {
+    accountSelectionEpoch.current += 1;
     setAccountID(value);
     try {
       window.localStorage.setItem("remix-lab:produce-account", value);
     } catch {
       // 忽略存储不可用
+    }
+    if (experimentID && value !== accountID) {
+      setExperiment(null);
+      setPackageRun(null);
+      onNavigate("/");
+      return;
     }
     if (selectedProjectID && value) {
       const open = projects.find((item) => item.id === selectedProjectID);
@@ -480,6 +482,13 @@ export function RemixLabPage({
     return "";
   }, [selectedProjectID, experiment]);
 
+  const selectedProduction = experiment?.runs[0]?.production;
+  const selectedProject = projectByID.get(historySelectedID);
+  const currentProductionStep = selectedProject?.stage === "published" || selectedProject?.stage === "review" || selectedProduction?.status === "completed"
+    ? 4 : selectedProduction || selectedProject?.stage === "assets" || selectedProject?.stage === "mixing"
+      ? 3 : experiment?.runs.some(run => run.status === "completed") || selectedProject?.stage === "script"
+        ? 2 : 1;
+
   const removeProject = async (id: string) => {
     try {
       const response = await api(`/api/projects/${id}`, { method: "DELETE" });
@@ -503,8 +512,10 @@ export function RemixLabPage({
     }
   };
 
+  const accountSelectionEpoch = useRef(0);
   useEffect(() => {
     setPackageRun(null);
+    setExperiment(null);
   }, [experimentID]);
 
   useEffect(() => {
@@ -514,11 +525,17 @@ export function RemixLabPage({
     }
     let cancelled = false;
     let timer: number | undefined;
+    const selectionEpoch = accountSelectionEpoch.current;
 
     const load = async () => {
       try {
         const detail = await fetchRemixLabExperiment(api, experimentID);
-        if (cancelled) return;
+        if (cancelled || selectionEpoch !== accountSelectionEpoch.current) return;
+        const owner = detail.account_id ?? detail.runs.find(run => run.production?.account_id)?.production?.account_id;
+        if (owner !== undefined) {
+          setAccountID(owner);
+          try { window.localStorage.setItem("remix-lab:produce-account", owner); } catch { /* optional preference */ }
+        }
         setExperiment(detail);
         if (detail.status === "running") {
           timer = window.setTimeout(() => {
@@ -589,7 +606,7 @@ export function RemixLabPage({
   }, [agentBusy, agentElapsed, agentTurns]);
 
   useEffect(() => {
-    if (!editingPrompt && !slotConfigOpen && !libraryOpen && !packageRun && !overviewOpen && !publishedOpen) return;
+    if (!editingPrompt && !slotConfigOpen && !libraryOpen && !packageRun && !overviewOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (editingPrompt) {
@@ -608,15 +625,11 @@ export function RemixLabPage({
         setOverviewOpen(false);
         return;
       }
-      if (publishedOpen) {
-        setPublishedOpen(false);
-        return;
-      }
       setSlotConfigOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editingPrompt, slotConfigOpen, libraryOpen, packageRun, overviewOpen, publishedOpen]);
+  }, [editingPrompt, slotConfigOpen, libraryOpen, packageRun, overviewOpen]);
 
   const openLibrary = async (tab: "writer" | "pipeline" = "writer") => {
     setLibraryTab(tab);
@@ -648,10 +661,9 @@ export function RemixLabPage({
   const openHistoryProject = async (projectID: string) => {
     try {
       const link = await fetchRemixLabProductionByProject(api, projectID);
-      onNavigate(`/remix-lab/${link.experiment_id}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "这个项目没有关联工作流。");
-    }
+      if (link.experiment_id) { onNavigate(`/remix-lab/${link.experiment_id}`); return; }
+    } catch { /* Standalone projects do not have a workflow association. */ }
+    onNavigate(`/projects/${projectID}`);
   };
 
   const openPackageEditor = async (runID: string, experimentIDForRun: string) => {
@@ -697,7 +709,10 @@ export function RemixLabPage({
   };
 
   // 断点重试（详情页/弹窗用）：提交后刷新详情恢复轮询。model 非空时先换模型。
+  const runRequestLocks = useRef(new Set<string>());
   const retryRunFromDetail = async (runID: string, nodeID: string, model?: string) => {
+    if (runRequestLocks.current.has(runID)) return;
+    runRequestLocks.current.add(runID);
     try {
       await retryRemixLabRun(api, runID, nodeID || undefined, model);
       setMessage(
@@ -711,19 +726,23 @@ export function RemixLabPage({
       setDetailRefresh((n) => n + 1);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "重试提交失败。");
-    }
+    } finally { runRequestLocks.current.delete(runID); }
   };
 
   // 确认闸门放行 / 生产失败续跑（详情页/弹窗用）。
   const produceRunFromDetail = async (runID: string, accountID: string) => {
+    if (runRequestLocks.current.has(runID)) return;
+    runRequestLocks.current.add(runID);
     try {
       await produceRemixLabRun(api, runID, accountID || undefined);
       setMessage("已放行：建项目 → 口播稿 → 配音 → 混剪，进度看工作流视图。");
       setFlowRun(null);
       setDetailRefresh((n) => n + 1);
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "开始混剪失败。");
-    }
+      return false;
+    } finally { runRequestLocks.current.delete(runID); }
   };
 
   const savePromptDraft = async () => {
@@ -849,7 +868,7 @@ export function RemixLabPage({
       }
       if (result.type === "update_workflow") {
         setWorkflowRefresh((n) => n + 1);
-        setMessage("工作流已按草案更新，画布已刷新，下次开跑生效。");
+        setMessage("工作流已按草案更新，步骤列表已刷新，下次开跑生效。");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "草案确认失败。");
@@ -874,7 +893,7 @@ export function RemixLabPage({
           <div>
             <span className="eyebrow">视频生产控制台</span>
             <h1>文案创作台</h1>
-            <p>按账号切换最新工作流，左边是历史项目，定稿后直接进混剪。</p>
+            <p>从原文到定稿，让每一次交付都有迹可循。</p>
           </div>
           <nav className="remix-lab-account-switch" aria-label="账号">
             <label>
@@ -936,47 +955,18 @@ export function RemixLabPage({
           </nav>
         </div>
         <div className="remix-lab-header-actions">
-          {theme && onThemeChange ? (
-            <label className="theme-control">
-              主题
-              <select
-                aria-label="选择界面主题"
-                value={theme}
-                onChange={(event) => onThemeChange(event.target.value as Theme)}
-              >
-                <option value="light">日间</option>
-                <option value="dark">夜间</option>
-              </select>
-            </label>
-          ) : null}
           <button type="button" className="header-button remix-lab-icon-btn" onClick={() => setOverviewOpen(true)}>
             <Users size={16} strokeWidth={2} />
             账号总览
           </button>
-          <button type="button" className="header-button remix-lab-icon-btn" onClick={() => setPublishedOpen(true)}>
-            <BookOpenText size={16} strokeWidth={2} />
-            文案库
-          </button>
-          {onOpenSettings ? (
-            <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void onOpenSettings()}>
-              <Settings size={16} strokeWidth={2} />
-              设置
-            </button>
-          ) : null}
-          <button type="button" className="header-button" onClick={() => onNavigate("/ai-shorts")}>
-            AI 短片
-          </button>
-          <button type="button" className="header-button" onClick={() => onNavigate("/image-projects")}>
-            图文制作
-          </button>
-          {onLogout ? (
-            <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void onLogout()}>
-              <LogOut size={16} strokeWidth={2} />
-              退出
-            </button>
-          ) : null}
         </div>
       </header>
+      <ol className="remix-lab-production-steps" aria-label="内容生产流程">
+        <li aria-current={currentProductionStep === 1 ? "step" : undefined}><span>01</span><strong>原文创作</strong><small>选择账号与工作流</small></li>
+        <li aria-current={currentProductionStep === 2 ? "step" : undefined}><span>02</span><strong>审稿定稿</strong><small>核对内容与发布包</small></li>
+        <li aria-current={currentProductionStep === 3 ? "step" : undefined}><span>03</span><strong>确认生产</strong><small>配音与混剪草稿</small></li>
+        <li aria-current={currentProductionStep === 4 ? "step" : undefined}><span>04</span><strong>交付复盘</strong><small>人工确认发布</small></li>
+      </ol>
       <div
         className={[
           "remix-lab__body",
@@ -1077,7 +1067,7 @@ export function RemixLabPage({
           {visibleProjects.length > 0 ? (
             <div className="remix-lab__history-group">
               <p className="remix-lab__history-group-title remix-lab__history-section">
-                其他项目 {orphanProjects.length} 条（不是从二创出来的）
+                独立混剪项目 {orphanProjects.length} 条（未关联二创记录）
               </p>
               <ul>
                 {visibleProjects.map((item) => (
@@ -1131,15 +1121,15 @@ export function RemixLabPage({
             <section className="remix-lab__designer" aria-label="工作流设计">
               <div className="wf-page-actions">
                 <div className="remix-lab-prompts__head-actions">
-                  <button type="button" className="header-button" onClick={() => setSlotConfigOpen(true)}>
-                    模型配置
-                  </button>
                   <button type="button" className="header-button" onClick={() => void openLibrary()}>
                     提示词库
                   </button>
                 </div>
               </div>
               <WorkflowCanvas
+                modelDefaults={defaults}
+                onOpenConnections={() => setSlotConfigOpen(true)}
+                defaultServiceTier={defaults?.presets[0]?.service_tier || ""}
                 key={`${accountID || "global"}:${experimentID || "design"}`}
                 api={api}
                 prompts={prompts}
@@ -1148,7 +1138,8 @@ export function RemixLabPage({
                 accountID={accountID}
                 onAccountIDChange={pickAccount}
                 runWorkflow={startWorkflowRun}
-                resumeExperiment={experimentID ? experiment : null}
+                resumeExperiment={experimentID && experiment?.id === experimentID ? experiment : null}
+                onRerunCreated={setExperiment}
                 onEditPackage={(runID, expID) => void openPackageEditor(runID, expID)}
                 onLeaveRun={experimentID ? () => onNavigate("/") : undefined}
                 onEditAgentPrompts={() => void openLibrary("pipeline")}
@@ -1326,18 +1317,6 @@ export function RemixLabPage({
         </aside>
         )}
       </div>
-      {publishedOpen ? (
-        <PublishedLibrary
-          api={api}
-          accounts={accounts}
-          onClose={() => setPublishedOpen(false)}
-          onMessage={setMessage}
-          onOpenRun={(expID) => {
-            setPublishedOpen(false);
-            onNavigate(`/remix-lab/${expID}`);
-          }}
-        />
-      ) : null}
       {overviewOpen ? (
         <AccountsOverview
           api={api}
@@ -1435,8 +1414,8 @@ export function RemixLabPage({
           >
             <div className="modal-head">
               <div>
-                <span className="muted">开跑时使用</span>
-                <h2 id="remix-lab-slot-dialog-title">模型配置</h2>
+                <span className="muted">连接设置与旧版写手对比预设</span>
+                <h2 id="remix-lab-slot-dialog-title">连接与旧版预设</h2>
               </div>
               <button
                 type="button"
@@ -1451,7 +1430,7 @@ export function RemixLabPage({
               {slots.map((slot, index) => (
                 <fieldset key={index} className="remix-lab-slot">
                   <legend>
-                    模型槽 {index + 1}
+                    写手预设 {index + 1}
                     <button
                       type="button"
                       className="header-button remix-lab-icon-btn"
@@ -1485,6 +1464,11 @@ export function RemixLabPage({
                         onChange={(event) => updateSlot(index, { reasoning_effort: event.target.value })}
                       />
                     </label>
+                    <FastModeButton
+                      label={`模型槽 ${index + 1} Fast 加速模式`}
+                      value={slot.service_tier}
+                      onChange={(service_tier) => updateSlot(index, { service_tier })}
+                    />
                     <label>
                       管线
                       <select
@@ -1493,7 +1477,7 @@ export function RemixLabPage({
                         onChange={(event) => updateSlot(index, { pipeline: event.target.value })}
                       >
                         <option value="">写手 → 审稿agent终审</option>
-                        <option value="multi_agent">情报组（钩子+事实搜索+弹药）→ 写手 → 审稿agent终审</option>
+                        <option value="multi_agent">二创策划 → 写手 → 审稿agent终审</option>
                       </select>
                       <small className="remix-lab-muted">所有成稿都会过审稿agent，只修违规处并留初稿对照。</small>
                     </label>
@@ -1548,8 +1532,8 @@ export function RemixLabPage({
           onClose={() => setFlowRun(null)}
           onEditAgentPrompts={() => void openLibrary("pipeline")}
           onMessage={setMessage}
-          onRetryNode={(nodeID, model) => void retryRunFromDetail(flowRun.id, nodeID, model)}
-          onRetryProduce={() => void produceRunFromDetail(flowRun.id, "")}
+          onRetryNode={(nodeID, model) => retryRunFromDetail(flowRun.id, nodeID, model)}
+          onRetryProduce={() => produceRunFromDetail(flowRun.id, "")}
         />
       ) : null}
       {libraryOpen ? (
@@ -1640,7 +1624,7 @@ export function RemixLabPage({
             ) : (
               <>
                 <p className="remix-lab-muted remix-lab-agent-prompts__intro">
-                  钩子、事实、弹药、审稿的系统提示词。改完保存后，下次开跑和打回立即生效。
+                  默认流程使用二创策划和审稿，其余为自定义节点备用。保存后新建和重新生成使用新配置，历史运行保留当时规则。
                 </p>
                 <div className="remix-lab-agent-prompts">
                   {agentPromptsDraft
@@ -1740,9 +1724,8 @@ export function RemixLabPage({
                 setFlowRun({ id: packageRun.id, label: `运行 ${packageRun.run_index}` });
                 setPackageRun(null);
               }}
-              onProduce={(accountID) => {
-                void produceRunFromDetail(packageRun.id, accountID);
-                setPackageRun(null);
+              onProduce={async (accountID) => {
+                if (await produceRunFromDetail(packageRun.id, accountID)) setPackageRun(null);
               }}
             />
           </div>

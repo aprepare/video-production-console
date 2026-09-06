@@ -1,0 +1,209 @@
+.preview-modal.workflow-prompt-editor {
+  display: flex;
+  width: min(1040px, calc(100vw - 32px));
+  max-height: min(900px, calc(100dvh - 32px));
+  padding: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid var(--ds-border);
+  border-radius: 18px;
+  background: var(--ds-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.workflow-prompt-editor__head,
+.workflow-prompt-editor__footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 22px;
+  background: var(--ds-surface);
+}
+
+.workflow-prompt-editor__head {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--ds-border);
+}
+
+.workflow-prompt-editor__head h2 {
+  margin: 2px 0 0;
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.workflow-prompt-editor__eyebrow {
+  color: var(--ds-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.workflow-prompt-editor__scroll {
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 20px 22px 28px;
+  overflow-y: auto;
+  border: 0;
+  gap: 16px;
+  background: color-mix(in srgb, var(--ds-canvas) 72%, var(--ds-surface));
+}
+
+.workflow-prompt-editor__rules,
+.workflow-prompt-editor__node,
+.workflow-prompt-editor__contracts {
+  padding: 18px;
+  border: 1px solid var(--ds-border);
+  border-radius: 14px;
+  background: var(--ds-surface);
+}
+
+.workflow-prompt-editor__rules {
+  border-left: 4px solid var(--teal-500);
+}
+
+.workflow-prompt-editor__section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.workflow-prompt-editor__section-head h3 {
+  margin: 0;
+  color: var(--ds-text);
+  font-size: 16px;
+  letter-spacing: -0.015em;
+}
+
+.workflow-prompt-editor__section-head p,
+.workflow-prompt-editor__contracts > p {
+  margin: 4px 0 0;
+  color: var(--ds-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.workflow-prompt-editor__node .workflow-prompt-editor__section-head span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--teal-600);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.workflow-prompt-editor__node > label,
+.workflow-prompt-editor__contracts > label {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--ds-text-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.workflow-prompt-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  resize: vertical;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  outline: none;
+  background: var(--ds-surface);
+  color: var(--ds-text);
+  font: 500 12.5px/1.65 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.workflow-prompt-editor textarea:focus {
+  border-color: var(--teal-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal-200) 58%, transparent);
+}
+
+.workflow-prompt-editor textarea:disabled,
+.workflow-prompt-editor textarea[readonly] {
+  background: var(--ds-canvas);
+  color: var(--ds-text-muted);
+}
+
+.workflow-prompt-editor__variables {
+  display: flex;
+  max-width: 60%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.workflow-prompt-editor__variables code {
+  padding: 3px 6px;
+  border: 1px solid var(--teal-200);
+  border-radius: 6px;
+  background: var(--teal-050);
+  color: var(--teal-700);
+  font-size: 10.5px;
+}
+
+.workflow-prompt-editor__contracts > summary {
+  cursor: pointer;
+  color: var(--ds-text);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.workflow-prompt-editor__footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--ds-border);
+}
+
+.workflow-prompt-editor__footer > span {
+  flex: 1 1 auto;
+  color: var(--red-600, #dc2626);
+  font-size: 12px;
+}
+
+.workflow-prompt-editor__state {
+  display: grid;
+  min-height: 220px;
+  margin: 0;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--ds-text-muted);
+}
+
+@media (max-width: 700px) {
+  .workflow-prompt-editor {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .workflow-prompt-editor__head,
+  .workflow-prompt-editor__footer {
+    padding: 14px;
+  }
+
+  .workflow-prompt-editor__scroll {
+    padding: 14px;
+  }
+
+  .workflow-prompt-editor__section-head {
+    flex-direction: column;
+  }
+
+  .workflow-prompt-editor__variables {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .workflow-prompt-editor__footer {
+    flex-wrap: wrap;
+  }
+
+  .workflow-prompt-editor__footer > span {
+    flex-basis: 100%;
+  }
+}

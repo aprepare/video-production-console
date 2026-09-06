@@ -11,9 +11,10 @@ import {
   type RemixLabRunView,
 } from "./api";
 import { ReviewCompare, ReviewIssueList, resolveReviewVersions, reviewVerdictLabel, reviewVerdictTone } from "./ReviewCompare";
+import { RunReferenceDrafts } from "./ReferenceDrafts";
 
 type AccountOption = { id: string; name: string; status: string };
-type ProjectOption = { id: string; title: string };
+type ProjectOption = { id: string; title: string; account_id?: string; account_name?: string };
 
 type RunWorkbenchProps = {
   api: RemixLabApi;
@@ -25,7 +26,7 @@ type RunWorkbenchProps = {
   /** 打开这次运行的工作流视图（n8n式节点分解）。 */
   onOpenFlow: () => void;
   /** 确认闸门放行 / 生产失败续跑（accountID 可空=沿用已选账号）。 */
-  onProduce?: (accountID: string) => void;
+  onProduce?: (accountID: string) => void | Promise<unknown>;
 };
 
 const PRODUCE_STEP_LABEL: Record<string, string> = {
@@ -124,6 +125,10 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [produceAccounts, setProduceAccounts] = useState<AccountOption[]>([]);
   const [produceAccountID, setProduceAccountID] = useState("");
+  const saveLock = useRef(false);
+  const actionLock = useRef(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const pendingProject = useRef<string>("");
   const commentTimer = useRef<number | undefined>(undefined);
   const pendingComment = useRef<string | null>(null);
 
@@ -218,16 +223,17 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
   });
 
   const savePackage = async (): Promise<boolean> => {
-    if (saving) return false;
+    if (saveLock.current) return false;
     const body = normalizedPackage();
-    if (runeCount(body.continuous_script) < 40) {
-      onMessage("正文太短（至少40字），检查后再保存。");
+    if (!body.continuous_script) {
+      onMessage("请填写正文后再保存。");
       return false;
     }
     if (body.short_titles.length === 0) {
       onMessage("第1条短标题是混剪板面的标题，必须填。");
       return false;
     }
+    saveLock.current = true;
     setSaving(true);
     try {
       await saveRemixLabRunPackage(api, run.id, body);
@@ -240,6 +246,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
       onMessage(error instanceof Error ? error.message : "定稿保存失败。");
       return false;
     } finally {
+      saveLock.current = false;
       setSaving(false);
     }
   };
@@ -263,6 +270,19 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
       onMessage(error instanceof Error ? error.message : "批注保存失败。");
     });
   };
+
+  const withAction = async (action: () => Promise<unknown>) => {
+    if (actionLock.current || saveLock.current) return;
+    actionLock.current = true;
+    setActionBusy(true);
+    try { await action(); } finally { actionLock.current = false; setActionBusy(false); }
+  };
+
+  const confirmProduce = () => withAction(async () => {
+    if (dirty && !(await savePackage())) return;
+    try { await onProduce?.(production?.account_id || produceAccountID); }
+    catch (error) { onMessage(error instanceof Error ? error.message : "开始混剪失败。"); }
+  });
 
   const startRework = async () => {
     if (reworking) return;
@@ -298,7 +318,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         return;
       }
       setAccounts(active);
-      setImportAccountID(active[0].id);
+      if (!pendingProject.current) setImportAccountID(active[0].id);
       setImportTitle((pkg.short_titles[0] || pkg.titles[0] || "二创成稿").trim().slice(0, 40));
       setAdoptOpen(false);
       setImportOpen(true);
@@ -323,6 +343,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
     }
     setImporting(true);
     try {
+      if (!pendingProject.current) {
       const createResponse = await api("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -330,6 +351,9 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
       });
       if (!createResponse.ok) throw new Error("项目创建失败。");
       const project = (await createResponse.json()) as { id: string };
+      pendingProject.current = project.id;
+      }
+      const project = { id: pendingProject.current };
       const form = new FormData();
       form.append(
         "file",
@@ -341,7 +365,8 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         body: form,
       });
       if (!uploadResponse.ok) throw new Error("文案写入项目失败。");
-      await adoptRemixLabRun(api, run.id, project.id).catch(() => undefined);
+      await adoptRemixLabRun(api, run.id, project.id);
+      pendingProject.current = "";
       setLinkedProjectID(project.id);
       setImportOpen(false);
       onChanged();
@@ -358,7 +383,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
       const response = await api("/api/projects");
       if (!response.ok) throw new Error("项目列表读取失败。");
       const list = (await response.json()) as ProjectOption[];
-      setProjects(list.map((project) => ({ id: project.id, title: project.title })));
+      setProjects(list);
       setImportOpen(false);
       setAdoptOpen(true);
     } catch (error) {
@@ -391,6 +416,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
           type="button"
           className="header-button remix-lab-icon-btn"
           onClick={() => addListItem(field)}
+          disabled={saving || actionBusy}
           aria-label={`添加${label}`}
         >
           <Plus size={13} strokeWidth={2} />
@@ -407,6 +433,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
             {options?.rows && options.rows > 1 ? (
               <textarea
                 aria-label={`${label} ${index + 1}`}
+                disabled={saving || actionBusy}
                 value={item}
                 rows={options.rows}
                 onChange={(event) => updateListItem(field, index, event.target.value)}
@@ -414,6 +441,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
             ) : (
               <input
                 aria-label={`${label} ${index + 1}`}
+                disabled={saving || actionBusy}
                 value={item}
                 onChange={(event) => updateListItem(field, index, event.target.value)}
               />
@@ -422,6 +450,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
               type="button"
               className="header-button remix-lab-icon-btn"
               onClick={() => removeListItem(field, index)}
+              disabled={saving || actionBusy}
               aria-label={`删除${label} ${index + 1}`}
             >
               <Trash2 size={13} strokeWidth={2} />
@@ -489,7 +518,8 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
               <button
                 type="button"
                 className="remix-lab-start"
-                onClick={() => onProduce(production.account_id || produceAccountID)}
+                disabled={actionBusy || saving}
+                onClick={() => void confirmProduce()}
               >
                 确认开始混剪
               </button>
@@ -512,7 +542,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
             <>
               <strong>生产失败</strong>
               <span className="remix-lab-run__error remix-lab-produce-strip__error">{production.error}</span>
-              <button type="button" className="remix-lab-start" onClick={() => onProduce("")}>
+              <button type="button" className="remix-lab-start" disabled={actionBusy || saving} onClick={() => void confirmProduce()}>
                 重试续跑
               </button>
               {production.project_id ? (
@@ -574,12 +604,15 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         </section>
       ) : null}
 
+      <RunReferenceDrafts api={api} runID={run.id} onMessage={onMessage} />
+      <div className="remix-lab-workbench__editor-grid">
       <div className="remix-lab-workbench__versions">
         <div className="remix-lab-workbench__pane">
           <h4>当前定稿（可编辑）</h4>
           <textarea
             aria-label={`运行 ${run.run_index} 正文`}
             className="remix-lab-workbench__script"
+            disabled={saving || actionBusy}
             value={pkg.continuous_script}
             rows={16}
             onChange={(event) => update({ continuous_script: event.target.value })}
@@ -594,6 +627,8 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         })}
         {renderListEditor("descriptions", "视频描述", { rows: 2 })}
         {renderListEditor("topics", "话题", { hint: "第1个是 #财经/#经济/#理财 之一，其余用正文里出现过的名词。" })}
+      </div>
+
       </div>
 
       {run.error_message ? <p className="remix-lab-run__error">{run.error_message}</p> : null}
@@ -614,21 +649,23 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
         <button
           type="button"
           className="remix-lab-start remix-lab-icon-btn"
-          disabled={saving || !dirty}
+          disabled={saving || actionBusy || !dirty}
           onClick={() => void savePackage()}
         >
           <Save size={14} strokeWidth={2} />
           {saving ? "保存中…" : "保存修改"}
         </button>
-        <button
-          type="button"
-          className="header-button remix-lab-icon-btn"
-          disabled={reworking}
-          onClick={() => void startRework()}
-        >
-          <Undo2 size={14} strokeWidth={2} />
-          {reworking ? "提交中…" : "按批注打回重做"}
-        </button>
+        {run.prompt_id === "manual-draft" || run.prompt_stamp === "manual-draft" ? null : (
+          <button
+            type="button"
+            className="header-button remix-lab-icon-btn"
+            disabled={reworking || actionBusy}
+            onClick={() => void withAction(startRework)}
+          >
+            <Undo2 size={14} strokeWidth={2} />
+            {reworking ? "提交中…" : "按批注打回重做"}
+          </button>
+        )}
         <button
           type="button"
           className="header-button remix-lab-icon-btn"
@@ -669,6 +706,7 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
             <select
               aria-label="导入账号"
               value={importAccountID}
+              disabled={importing || Boolean(pendingProject.current)}
               onChange={(event) => setImportAccountID(event.target.value)}
             >
               {accounts.map((account) => (
@@ -689,10 +727,10 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
           <button
             type="button"
             className="remix-lab-start"
-            disabled={importing || !importAccountID}
-            onClick={() => void confirmImport()}
+            disabled={importing || actionBusy || !importAccountID}
+            onClick={() => void withAction(confirmImport)}
           >
-            {importing ? "导入中…" : "确认导入"}
+            {importing ? "导入中…" : pendingProject.current ? "重试导入已创建项目" : "确认导入"}
           </button>
         </div>
       ) : null}
@@ -703,8 +741,8 @@ export function RunWorkbench({ api, run, onMessage, onChanged, onNavigate, onOpe
           <ul>
             {projects.map((project) => (
               <li key={project.id}>
-                <button type="button" onClick={() => void confirmAdopt(project.id)}>
-                  {project.title}
+                <button type="button" disabled={actionBusy} onClick={() => void withAction(() => confirmAdopt(project.id))}>
+                  {project.title} · 账号：{project.account_name || project.account_id || "未分组"}
                 </button>
               </li>
             ))}

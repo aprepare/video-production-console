@@ -36,6 +36,7 @@ type presetFile struct {
 }
 
 type presetSlot struct {
+	ServiceTier      string `json:"service_tier,omitempty"`
 	BaseURL          string `json:"base_url"`
 	Model            string `json:"model"`
 	ReasoningEffort  string `json:"reasoning_effort"`
@@ -45,6 +46,7 @@ type presetSlot struct {
 }
 
 type resolvedSlot struct {
+	ServiceTier      string
 	BaseURL          string
 	Model            string
 	ReasoningEffort  string
@@ -139,6 +141,7 @@ func (s *Service) Defaults(ctx context.Context) (DefaultsView, error) {
 			runCount = 1
 		}
 		view.Presets = append(view.Presets, PresetSlotView{
+			ServiceTier:      slot.ServiceTier,
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,
@@ -240,6 +243,7 @@ func (s *Service) CreateExperimentWithPrompts(ctx context.Context, source string
 	for i, slot := range resolved {
 		slotID := uuid.NewString()
 		slotRecs = append(slotRecs, store.RemixLabSlotRecord{
+			ServiceTier:      slot.ServiceTier,
 			ID:               slotID,
 			ExperimentID:     expID,
 			SortIndex:        i,
@@ -252,6 +256,7 @@ func (s *Service) CreateExperimentWithPrompts(ctx context.Context, source string
 			APIKeyCiphertext: slot.APIKeyCiphertext,
 		})
 		slotViews = append(slotViews, SlotView{
+			ServiceTier:      slot.ServiceTier,
 			ID:               slotID,
 			ExperimentID:     expID,
 			SortIndex:        i,
@@ -327,6 +332,10 @@ func normalizePipeline(value string) (string, error) {
 }
 
 func (s *Service) resolveSlot(in SlotInput, rt RuntimeView, preset presetFile) (resolvedSlot, error) {
+	tier, err := openaicompat.NormalizeServiceTier(in.ServiceTier)
+	if err != nil {
+		return resolvedSlot{}, err
+	}
 	model := strings.TrimSpace(in.Model)
 	if model == "" {
 		return resolvedSlot{}, ErrMissingModel
@@ -349,6 +358,7 @@ func (s *Service) resolveSlot(in SlotInput, rt RuntimeView, preset presetFile) (
 	}
 
 	out := resolvedSlot{
+		ServiceTier:     tier,
 		BaseURL:         baseURL,
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(in.ReasoningEffort),
@@ -416,6 +426,10 @@ func (s *Service) SavePresets(ctx context.Context, slots []SlotInput) (DefaultsV
 
 // resolvePresetSlot 与 resolveSlot 的差别只有一处：不强制要有 API Key。
 func (s *Service) resolvePresetSlot(in SlotInput, rt RuntimeView, preset presetFile) (resolvedSlot, error) {
+	tier, err := openaicompat.NormalizeServiceTier(in.ServiceTier)
+	if err != nil {
+		return resolvedSlot{}, err
+	}
 	model := strings.TrimSpace(in.Model)
 	if model == "" {
 		return resolvedSlot{}, ErrMissingModel
@@ -439,6 +453,7 @@ func (s *Service) resolvePresetSlot(in SlotInput, rt RuntimeView, preset presetF
 		BaseURL:         baseURL,
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(in.ReasoningEffort),
+		ServiceTier:     tier,
 		Pipeline:        pipeline,
 		RunCount:        runCount,
 	}
@@ -458,6 +473,25 @@ func (s *Service) resolvePresetSlot(in SlotInput, rt RuntimeView, preset presetF
 	}
 	out.KeyConfigured = strings.TrimSpace(out.APIKeyCiphertext) != "" || strings.TrimSpace(rt.RemixAPIKey) != ""
 	return out, nil
+}
+
+// remixDefaults 是设置页/模型档默认，给审稿等节点在自身配置留空时用，
+// 不跟写手槽位走。
+func (s *Service) remixDefaults(ctx context.Context, rt RuntimeView, rtErr error) (model, effort string) {
+	if rtErr == nil {
+		model = strings.TrimSpace(rt.RemixModel)
+		effort = strings.TrimSpace(rt.RemixReasoningEffort)
+	}
+	preset, err := s.loadPreset(ctx)
+	if err == nil && len(preset.Slots) > 0 {
+		if m := strings.TrimSpace(preset.Slots[0].Model); m != "" {
+			model = m
+		}
+		if e := strings.TrimSpace(preset.Slots[0].ReasoningEffort); e != "" {
+			effort = e
+		}
+	}
+	return
 }
 
 func (s *Service) loadPreset(ctx context.Context) (presetFile, error) {
@@ -482,6 +516,7 @@ func (s *Service) savePreset(ctx context.Context, slots []resolvedSlot) error {
 	file := presetFile{Slots: make([]presetSlot, 0, len(slots))}
 	for _, slot := range slots {
 		file.Slots = append(file.Slots, presetSlot{
+			ServiceTier:      slot.ServiceTier,
 			BaseURL:          slot.BaseURL,
 			Model:            slot.Model,
 			ReasoningEffort:  slot.ReasoningEffort,

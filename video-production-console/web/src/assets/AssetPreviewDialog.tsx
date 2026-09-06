@@ -1,3 +1,4 @@
+import "./asset-dialog.css";
 import { RotateCcw, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { assetLabels } from "./asset-labels";
@@ -256,7 +257,7 @@ export function AssetPreviewDialog({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <section
-        className="preview-modal"
+        className="preview-modal asset-preview-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="preview-dialog-title"

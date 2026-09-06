@@ -1263,6 +1263,11 @@ CREATE INDEX remix_lab_productions_experiment_idx ON remix_lab_productions(exper
     notes TEXT NOT NULL DEFAULT '',
     updated_at DATETIME NOT NULL
 );`,
+	`ALTER TABLE remix_lab_slots ADD COLUMN service_tier TEXT NOT NULL DEFAULT '';`,
+	`CREATE TABLE remix_lab_run_configs (
+		run_id TEXT PRIMARY KEY REFERENCES remix_lab_runs(id) ON DELETE CASCADE,
+		workflow_json TEXT NOT NULL
+	);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

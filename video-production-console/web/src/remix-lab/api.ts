@@ -1,6 +1,25 @@
 export type RemixLabApi = (path: string, init?: RequestInit) => Promise<Response>;
 
+export type RemixLabRerunModel = { model: string; reasoning_effort: string; service_tier: string };
+export type RemixLabRerunInput = { references?: RemixLabRerunModel[]; planner?: RemixLabRerunModel; writer: RemixLabRerunModel; reviewer: RemixLabRerunModel };
+export type RemixLabRerunResult = { experiment: RemixLabExperiment; run_id: string };
+
+export async function fetchRemixLabRerunOptions(api: RemixLabApi, runID: string): Promise<RemixLabRerunInput> {
+  const response = await api(`/api/remix-lab/runs/${runID}/rerun-options`);
+  if (!response.ok) throw new Error(await readAPIError(response, "重跑配置读取失败。"));
+  return response.json();
+}
+
+export async function rerunRemixLabRun(api: RemixLabApi, runID: string, input: RemixLabRerunInput): Promise<RemixLabRerunResult> {
+  const response = await api(`/api/remix-lab/runs/${runID}/rerun`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "新一轮文案提交失败。"));
+  return response.json();
+}
+
 export type RemixLabPreset = {
+	service_tier?: string;
   base_url: string;
   model: string;
   reasoning_effort: string;
@@ -36,6 +55,8 @@ export type RemixLabExperimentSummary = {
 
 /** 工作流定义：节点带各自的模型/通道/提示词配置，边决定数据流向。 */
 export type RemixLabWorkflowNodeConfig = {
+	role?: "reference";
+	service_tier?: string;
   model?: string;
   reasoning_effort?: string;
   channel?: string;
@@ -84,9 +105,19 @@ export type RemixLabWorkflowProduction = {
 export type RemixLabWorkflow = {
   version: number;
   name: string;
+  /** 公共写作规则；缺省跟随系统默认，显式空字符串表示取消公共规则。 */
+  editorial_rules?: string;
   nodes: RemixLabWorkflowNode[];
   edges: Array<[string, string]>;
   production?: RemixLabWorkflowProduction;
+};
+
+export type RemixLabWorkflowPrompts = {
+  workflow: RemixLabWorkflow;
+  /** 写手必须遵守的输出格式，只读展示，避免编辑后破坏解析。 */
+  writer_contract: string;
+  /** 审稿必须遵守的输出格式，只读展示，避免编辑后破坏解析。 */
+  reviewer_contract: string;
 };
 
 function workflowPath(accountID?: string): string {
@@ -119,6 +150,38 @@ export async function saveRemixLabWorkflow(
   return (await response.json()) as RemixLabWorkflow;
 }
 
+function workflowPromptsPath(accountID?: string): string {
+  const id = (accountID ?? "").trim();
+  return id
+    ? `/api/remix-lab/workflow-prompts?account_id=${encodeURIComponent(id)}`
+    : "/api/remix-lab/workflow-prompts";
+}
+
+/** 读取运行时展开后的实际提示词及其只读输出合同。 */
+export async function fetchRemixLabWorkflowPrompts(
+  api: RemixLabApi,
+  accountID?: string,
+): Promise<RemixLabWorkflowPrompts> {
+  const response = await api(workflowPromptsPath(accountID));
+  if (!response.ok) throw new Error(await readAPIError(response, "二创提示词读取失败。"));
+  return (await response.json()) as RemixLabWorkflowPrompts;
+}
+
+/** 保存账号（空账号为全局）的实际工作流提示词。 */
+export async function saveRemixLabWorkflowPrompts(
+  api: RemixLabApi,
+  workflow: RemixLabWorkflow,
+  accountID?: string,
+): Promise<RemixLabWorkflowPrompts> {
+  const response = await api(workflowPromptsPath(accountID), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflow }),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "二创提示词保存失败。"));
+  return (await response.json()) as RemixLabWorkflowPrompts;
+}
+
 // 用当前工作流开跑一个实验（run_count 1-3；可带生产账号与全自动开关）。
 // models 非空时显式指定写手主模型，优先级高于写手节点覆盖和模型配置预设；
 // 给多个模型则每个模型各开一个槽并行出稿，供快慢/质量对比。
@@ -139,6 +202,20 @@ export async function runRemixLabWorkflow(
     }),
   });
   if (!response.ok) throw new Error(await readAPIError(response, "工作流开跑失败。"));
+  return (await response.json()) as RemixLabExperiment;
+}
+
+// 跳过二创：把已有成稿直接落成定稿运行，停在确认闸门。
+export async function importRemixLabDraft(
+  api: RemixLabApi,
+  input: RemixLabPackageInput & { account_id?: string },
+): Promise<RemixLabExperiment> {
+  const response = await api("/api/remix-lab/workflow/import-draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "定稿导入失败。"));
   return (await response.json()) as RemixLabExperiment;
 }
 
@@ -188,6 +265,7 @@ export async function redoRemixLabProduceStep(
 }
 
 export type RemixLabSlotView = {
+  service_tier?: string;
   id: string;
   experiment_id: string;
   sort_index: number;
@@ -341,6 +419,8 @@ export type RemixLabAgentHistoryTurn = {
 };
 
 export type RemixLabExperiment = {
+  /** 项目开跑时的归属账号；空串表示全局工作流，旧服务可能缺省。 */
+  account_id?: string;
   id: string;
   title: string;
   source_text: string;
@@ -354,6 +434,7 @@ export type RemixLabExperiment = {
 };
 
 export type RemixLabCreateSlot = {
+  service_tier?: string;
   base_url: string;
   model: string;
   api_key: string;
@@ -483,7 +564,16 @@ export type RemixLabRunStage = {
   extra?: Record<string, unknown>;
 };
 
+export type RemixLabReferenceDraft = {
+  id: string; node_id: string; title: string; model: string;
+  reasoning_effort?: string; service_tier?: string; created_at: string;
+  status: "completed" | "failed"; error?: string; raw?: string;
+  copy: { continuous_script: string; titles: string[]; descriptions: string[]; analysis?: Record<string,string> };
+};
+
 export type RemixLabRunStagesView = {
+  reference_drafts?: RemixLabReferenceDraft[];
+  reference_error?: string;
   run_id: string;
   pipeline: string;
   status: string;

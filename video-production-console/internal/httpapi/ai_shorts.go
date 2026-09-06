@@ -74,6 +74,8 @@ func NewAIShortsHandler(dataRoot string, runtime AssetRuntimeProvider, accounts 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/ai-shorts", h.list)
 	mux.HandleFunc("GET /api/ai-shorts/styles", h.styles)
+	mux.HandleFunc("GET /api/ai-shorts/media-settings", h.mediaSettings)
+	mux.HandleFunc("PUT /api/ai-shorts/media-settings", h.saveMediaSettings)
 	mux.HandleFunc("POST /api/ai-shorts", h.create)
 	mux.HandleFunc("GET /api/ai-shorts/{id}", h.get)
 	mux.HandleFunc("PATCH /api/ai-shorts/{id}", h.update)
@@ -122,13 +124,21 @@ func (h *aiShortsHandler) writeErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// styles 返回解说模式的画风预设和拆分镜的默认模型，前端用来显示名字和让人切换。
+// styles 返回画风预设及文本/生图默认模型，前端显示真实的回退值。
 func (h *aiShortsHandler) styles(w http.ResponseWriter, r *http.Request) {
-	defaultText := aishorts.DefaultModels().Text
-	if rt, err := h.runtime(r.Context()); err == nil && strings.TrimSpace(rt.Models.Text) != "" {
-		defaultText = rt.Models.Text
+	models := aishorts.DefaultModels()
+	if rt, err := h.runtime(r.Context()); err == nil {
+		if strings.TrimSpace(rt.Models.Text) != "" {
+			models.Text = rt.Models.Text
+		}
+		if strings.TrimSpace(rt.Models.Image) != "" {
+			models.Image = rt.Models.Image
+		}
+		if strings.TrimSpace(rt.Models.Video) != "" {
+			models.Video = rt.Models.Video
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": aishorts.ExplainerStyles, "default_text_model": defaultText})
+	writeJSON(w, http.StatusOK, map[string]any{"items": aishorts.ExplainerStyles, "default_text_model": models.Text, "default_image_model": models.Image, "default_video_model": models.Video})
 }
 
 func (h *aiShortsHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -140,16 +150,41 @@ func (h *aiShortsHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h *aiShortsHandler) mediaSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.svc.MediaSettings()
+	if err != nil {
+		h.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+func (h *aiShortsHandler) saveMediaSettings(w http.ResponseWriter, r *http.Request) {
+	var in aishorts.MediaSettingsInput
+	if err := decodeJSON(w, r, maxRemixLabRequestSize, &in); err != nil {
+		writeDecodeError(w, err, "invalid_media_settings", "接口配置格式无效")
+		return
+	}
+	settings, err := h.svc.UpdateMediaSettings(in)
+	if err != nil {
+		h.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
 type aiShortTextInput struct {
-	AccountID string `json:"account_id"`
-	Mode      string `json:"mode"`
-	Title     string `json:"title"`
-	Story     string `json:"story"`
-	Headline  string `json:"headline"`
-	Style     string `json:"style"`
+	TextReasoningEffort *string `json:"text_reasoning_effort"`
+	AccountID           string  `json:"account_id"`
+	Mode                string  `json:"mode"`
+	Title               string  `json:"title"`
+	Story               string  `json:"story"`
+	Headline            string  `json:"headline"`
+	Style               string  `json:"style"`
 	// TextModel 拆分镜模型、SegmentModel 分大段模型；PATCH 时不传表示不改，传空串表示改回默认。
-	TextModel    *string `json:"text_model"`
-	SegmentModel *string `json:"segment_model"`
+	TextModel      *string                  `json:"text_model"`
+	SegmentModel   *string                  `json:"segment_model"`
+	ImageModel     *string                  `json:"image_model"`
+	VisualSettings *aishorts.VisualSettings `json:"visual_settings"`
 }
 
 func (h *aiShortsHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -158,14 +193,21 @@ func (h *aiShortsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, "invalid_ai_short", "A valid short payload is required.")
 		return
 	}
-	textModel, segmentModel := "", ""
+	textModel, segmentModel, imageModel := "", "", ""
 	if in.TextModel != nil {
 		textModel = *in.TextModel
 	}
 	if in.SegmentModel != nil {
 		segmentModel = *in.SegmentModel
 	}
-	short, err := h.svc.Create(in.AccountID, in.Mode, in.Title, in.Story, in.Headline, in.Style, textModel, segmentModel)
+	if in.ImageModel != nil {
+		imageModel = *in.ImageModel
+	}
+	effort := ""
+	if in.TextReasoningEffort != nil {
+		effort = *in.TextReasoningEffort
+	}
+	short, err := h.svc.CreateWithReasoning(in.AccountID, in.Mode, in.Title, in.Story, in.Headline, in.Style, textModel, segmentModel, imageModel, effort, in.VisualSettings)
 	if err != nil {
 		h.writeErr(w, err)
 		return
@@ -188,7 +230,7 @@ func (h *aiShortsHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, "invalid_ai_short", "A valid short payload is required.")
 		return
 	}
-	short, err := h.svc.UpdateText(r.PathValue("id"), in.Title, in.Story, in.Headline, in.Style, in.TextModel, in.SegmentModel)
+	short, err := h.svc.UpdateTextWithReasoning(r.PathValue("id"), in.Title, in.Story, in.Headline, in.Style, in.TextModel, in.SegmentModel, in.ImageModel, in.TextReasoningEffort, in.VisualSettings)
 	if err != nil {
 		h.writeErr(w, err)
 		return
@@ -234,9 +276,14 @@ func (h *aiShortsHandler) updateShot(w http.ResponseWriter, r *http.Request) {
 		Speaker   string `json:"speaker"`
 		Seconds   int    `json:"seconds"`
 		// 解说模式
-		StyleKey string `json:"style_key"`
-		Subject  string `json:"subject"`
-		Hero     *bool  `json:"hero"`
+		StyleKey     string                  `json:"style_key"`
+		Subject      string                  `json:"subject"`
+		Hero         *bool                   `json:"hero"`
+		VisualIntent *string                 `json:"visual_intent"`
+		SubjectType  *string                 `json:"subject_type"`
+		CameraMove   *string                 `json:"camera_move"`
+		Annotation   *string                 `json:"annotation"`
+		Keywords     *[]aishorts.ShotKeyword `json:"keywords"`
 	}
 	if err := decodeJSON(w, r, maxMessageJSONRequest, &in); err != nil {
 		writeDecodeError(w, err, "invalid_ai_short", "A valid shot payload is required.")
@@ -245,6 +292,7 @@ func (h *aiShortsHandler) updateShot(w http.ResponseWriter, r *http.Request) {
 	patch := aishorts.ShotPatch{
 		Scene: in.Scene, Motion: in.Motion, Narration: in.Narration, Speaker: in.Speaker, Seconds: in.Seconds,
 		StyleKey: in.StyleKey, Subject: in.Subject, Hero: in.Hero,
+		VisualIntent: in.VisualIntent, SubjectType: in.SubjectType, CameraMove: in.CameraMove, Annotation: in.Annotation, Keywords: in.Keywords,
 	}
 	short, err := h.svc.UpdateShot(r.PathValue("id"), index, patch)
 	if err != nil {

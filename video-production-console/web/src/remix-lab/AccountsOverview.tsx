@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Play, RefreshCw, Trash2, X } from "lucide-react";
+import { Eye, EyeOff, Play, RefreshCw, Trash2, X } from "lucide-react";
 import {
   fetchRemixLabExperiment,
   fetchRemixLabExperiments,
@@ -41,6 +41,17 @@ const PRODUCE_STEP: Record<string, string> = {
 };
 
 type LaunchResult = { ok: boolean; detail: string };
+
+const HIDDEN_ACCOUNTS_KEY = "remix-lab:overview-hidden-accounts";
+
+function readHiddenAccounts(): string[] {
+  try {
+    const saved: unknown = JSON.parse(window.localStorage.getItem(HIDDEN_ACCOUNTS_KEY) || "[]");
+    return Array.isArray(saved) ? [...new Set(saved.filter((id): id is string => typeof id === "string" && id.length > 0))] : [];
+  } catch {
+    return [];
+  }
+}
 
 function produceLabel(exp: RemixLabExperiment | undefined): string {
   if (!exp) return "";
@@ -91,6 +102,36 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
   const [refreshTick, setRefreshTick] = useState(0);
   // 展开某个账号，列出它全部实验（总览行默认只显示最新一条）。
   const [expandedAccount, setExpandedAccount] = useState("");
+  const [hiddenIDs, setHiddenIDs] = useState<string[]>(readHiddenAccounts);
+  const [hiddenManagerOpen, setHiddenManagerOpen] = useState(false);
+  const visibleAccounts = useMemo(() => accounts.filter((account) => !hiddenIDs.includes(account.id)), [accounts, hiddenIDs]);
+  const hiddenAccounts = useMemo(() => accounts.filter((account) => hiddenIDs.includes(account.id)), [accounts, hiddenIDs]);
+  const selectedCount = visibleAccounts.filter((account) => selected.has(account.id)).length;
+
+  const saveHiddenAccounts = (ids: string[]) => {
+    setHiddenIDs(ids);
+    try {
+      window.localStorage.setItem(HIDDEN_ACCOUNTS_KEY, JSON.stringify(ids));
+    } catch {
+      onMessage("显示已调整，但浏览器未能保存，下次打开可能需要重新设置。");
+    }
+  };
+
+  const hideAccount = (id: string) => {
+    if (launching) return;
+    saveHiddenAccounts([...new Set([...hiddenIDs, id])]);
+    setSelected((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    if (expandedAccount === id) setExpandedAccount("");
+  };
+
+  const showAccount = (id: string) => {
+    if (launching) return;
+    saveHiddenAccounts(hiddenIDs.filter((hiddenID) => hiddenID !== id));
+  };
 
   // 每个账号取最新实验（列表按更新时间倒序返回，这里再排一次保险）。
   const orderedSummaries = useMemo(
@@ -177,9 +218,9 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
     });
   };
 
-  const allSelected = accounts.length > 0 && accounts.every((item) => selected.has(item.id));
+  const allSelected = visibleAccounts.length > 0 && visibleAccounts.every((item) => selected.has(item.id));
   const toggleAll = () => {
-    setSelected(allSelected ? new Set() : new Set(accounts.map((item) => item.id)));
+    setSelected(allSelected ? new Set() : new Set(visibleAccounts.map((item) => item.id)));
   };
 
   const launch = async () => {
@@ -188,7 +229,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
       onMessage("先贴上要二创的爆款原文。");
       return;
     }
-    const chosen = accounts.filter((item) => selected.has(item.id));
+    const chosen = visibleAccounts.filter((item) => selected.has(item.id));
     if (chosen.length === 0) {
       onMessage("至少勾选一个账号。");
       return;
@@ -294,11 +335,11 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
             <button
               type="button"
               className="remix-lab-start"
-              disabled={launching}
+              disabled={launching || selectedCount === 0}
               onClick={() => void launch()}
             >
               <Play size={14} strokeWidth={2} aria-hidden="true" />
-              {launching ? "逐号提交中…" : `开跑二创（已选 ${selected.size} 个账号）`}
+              {launching ? "逐号提交中…" : `开跑二创（已选 ${selectedCount} 个账号）`}
             </button>
           </div>
         </section>
@@ -306,6 +347,13 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
         <section className="remix-lab-overview__table" aria-label="账号进度">
           <div className="remix-lab-overview__table-head">
             <h3>账号进度</h3>
+            <div className="remix-lab-overview__table-actions">
+            <button type="button" className="header-button remix-lab-icon-btn"
+              aria-expanded={hiddenManagerOpen} aria-controls="overview-hidden-accounts"
+              onClick={() => setHiddenManagerOpen((open) => !open)}>
+              <EyeOff size={13} aria-hidden="true" />
+              管理隐藏账号（{hiddenAccounts.length}）
+            </button>
             <button
               type="button"
               className="header-button remix-lab-icon-btn"
@@ -314,7 +362,22 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
               <RefreshCw size={13} strokeWidth={2} />
               刷新
             </button>
+            </div>
           </div>
+          {hiddenManagerOpen ? (
+            <div id="overview-hidden-accounts" className="remix-lab-overview__hidden" role="region" aria-label="隐藏账号管理">
+              <p className="remix-lab-muted">隐藏仅影响本浏览器的账号总览，不会停用账号或中断已有任务。恢复显示后可重新勾选开跑。</p>
+              {hiddenAccounts.length ? <ul>{hiddenAccounts.map((account) => (
+                <li key={account.id}>
+                  <span>{account.name}</span>
+                  <button type="button" className="header-button remix-lab-icon-btn" aria-label={`显示账号 ${account.name}`}
+                    disabled={launching} onClick={() => showAccount(account.id)}>
+                    <Eye size={13} aria-hidden="true" />恢复显示
+                  </button>
+                </li>
+              ))}</ul> : <span className="remix-lab-muted">没有隐藏的账号。</span>}
+            </div>
+          ) : null}
           <table>
             <thead>
               <tr>
@@ -323,6 +386,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                     type="checkbox"
                     aria-label="全选账号"
                     checked={allSelected}
+                    disabled={launching || visibleAccounts.length === 0}
                     onChange={toggleAll}
                   />
                 </th>
@@ -335,14 +399,14 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
               </tr>
             </thead>
             <tbody>
-              {accounts.length === 0 ? (
+              {visibleAccounts.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="remix-lab-overview__empty">
-                    还没有账号。回创作台右上角「新增账号」先建一个。
+                    {accounts.length === 0 ? "还没有账号。回创作台右上角「新增账号」先建一个。" : "账号已全部隐藏，点击「管理隐藏账号」恢复显示。"}
                   </td>
                 </tr>
               ) : (
-                accounts.map((account) => {
+                visibleAccounts.map((account) => {
                   const summary = latestByAccount.get(account.id);
                   const detail = summary ? details[summary.id] : undefined;
                   const launchResult = launchResults[account.id];
@@ -361,6 +425,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                           type="checkbox"
                           aria-label={`选择账号 ${account.name}`}
                           checked={selected.has(account.id)}
+                          disabled={launching}
                           onChange={() => toggleAccount(account.id)}
                         />
                       </td>
@@ -402,17 +467,24 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                         <small>{summary?.updated_at ? formatTime(summary.updated_at) : ""}</small>
                       </td>
                       <td>
+                        <div className="remix-lab-overview__account-actions">
+                        <button type="button" className="header-button remix-lab-icon-btn"
+                          aria-label={`隐藏账号 ${account.name}`} title="在账号总览中隐藏，可随时恢复显示"
+                          disabled={launching || deactivating === account.id} onClick={() => hideAccount(account.id)}>
+                          <EyeOff size={13} aria-hidden="true" />隐藏
+                        </button>
                         <button
                           type="button"
                           className="header-button remix-lab-icon-btn remix-lab-overview__deactivate"
                           aria-label={`停用账号 ${account.name}`}
                           title="停用后从所有列表消失，历史项目和实验保留"
-                          disabled={deactivating === account.id}
+                          disabled={launching || deactivating === account.id}
                           onClick={() => void deactivate(account)}
                         >
                           <Trash2 size={13} strokeWidth={2} />
                           {deactivating === account.id ? "停用中…" : "停用"}
                         </button>
+                        </div>
                       </td>
                     </tr>
                     {open ? (
@@ -442,7 +514,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
             </tbody>
           </table>
           <p className="remix-lab-muted">
-            表格每 4 秒自动刷新。点账号名进入该账号的实验详情，可看画布、改定稿、放行混剪。
+            表格每 4 秒自动刷新。点账号名查看流程步骤、修改定稿或确认混剪；隐藏设置仅在本浏览器保存。
           </p>
         </section>
       </div>

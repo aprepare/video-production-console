@@ -160,6 +160,24 @@ function openTab(name: string) {
   fireEvent.click(screen.getByRole("tab", { name }));
 }
 
+test("category tabs support arrow keys and Home End with one tab stop", () => {
+  renderPanel();
+  const first = screen.getByRole("tab", { name: "二创" });
+  first.focus();
+  fireEvent.keyDown(first, { key: "ArrowRight" });
+  const imageTab = screen.getByRole("tab", { name: "图文" });
+  expect(document.activeElement).toBe(imageTab);
+  expect(imageTab.getAttribute("aria-selected")).toBe("true");
+  expect(first.tabIndex).toBe(-1);
+  fireEvent.keyDown(imageTab, { key: "End" });
+  expect(document.activeElement).toBe(screen.getByRole("tab", { name: "系统" }));
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "ArrowLeft" });
+  fireEvent.keyDown(document.activeElement!, { key: "Home" });
+  expect(document.activeElement).toBe(first);
+});
+
 test("image tab only exposes service addresses and keys", () => {
   renderPanel();
   openTab("图文");

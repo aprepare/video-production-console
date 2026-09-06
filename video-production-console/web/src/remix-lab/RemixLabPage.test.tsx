@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { RemixLabPage } from "./RemixLabPage";
 
@@ -190,9 +190,33 @@ test("remix-lab shows the workflow canvas with start button after loading", asyn
   expect(screen.queryByRole("button", { name: /默认模型档/ })).toBeNull();
   expect(screen.queryByRole("button", { name: "保存工作流" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Agent提示词" })).toBeNull();
-  fireEvent.click(screen.getByText("对标原文"));
+  fireEvent.click(screen.getByRole("button", { name: /对标原文/ }));
   expect(await screen.findByRole("button", { name: "开始二创" })).toBeTruthy();
+  expect(screen.getByText(/对比写手模型/)).toBeTruthy();
+  expect(screen.getByText(/审稿沿用已有设置/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "撤销" })).toBeTruthy();
+});
+
+test("creation studio keeps account overview and history available without a published library entry", async () => {
+  const api = vi.fn(withLabExtras(async (path: string) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    throw new Error(`unexpected ${path}`);
+  }));
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  await screen.findByText("钩子分析");
+
+  expect(screen.queryByRole("button", { name: "文案库" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "历史项目" })).toBeTruthy();
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜索历史" }), {
+    target: { value: "历史稿件" },
+  });
+  expect(screen.getByDisplayValue("历史稿件")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "账号总览" }));
+  expect(await screen.findByRole("dialog", { name: "账号总览" })).toBeTruthy();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "账号总览" })).toBeNull();
+  expect(screen.getByDisplayValue("历史稿件")).toBeTruthy();
 });
 
 test("remix-lab can remove an extra model slot", async () => {
@@ -226,13 +250,45 @@ test("remix-lab can remove an extra model slot", async () => {
   }));
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
   await screen.findByRole("button", { name: "模型配置" });
-  expect(screen.queryByText("模型槽 2")).toBeNull();
+  expect(screen.queryByText("写手预设 2")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "模型配置" }));
   expect(screen.getByRole("dialog", { name: "模型配置" })).toBeTruthy();
-  expect(screen.getByText("模型槽 2")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
+  expect(screen.getByText("写手预设 2")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "删除模型槽 2" }));
-  expect(screen.queryByText("模型槽 2")).toBeNull();
+  expect(screen.queryByText("写手预设 2")).toBeNull();
   expect((screen.getByRole("button", { name: "删除模型槽 1" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("Fast preset saves and survives reopening model settings", async () => {
+  let saved = {
+    ...defaults,
+    presets: [{ base_url: "https://example.test", model: "chosen", reasoning_effort: "high", service_tier: "priority", run_count: 1, api_key_configured: true, preset_index: 0 }],
+  };
+  const api = vi.fn(withLabExtras(async (path, init) => {
+    if (path === "/api/remix-lab/defaults") return json(saved);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === "/api/remix-lab/presets" && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      expect(body.slots[0]).toMatchObject({ model: "chosen", reasoning_effort: "high", service_tier: "default" });
+      saved = { ...saved, presets: body.slots.map((slot: Record<string, unknown>) => ({ ...slot, api_key_configured: true, preset_index: 0 })) };
+      return json(saved);
+    }
+    throw new Error(`unexpected ${path}`);
+  }));
+  const page = render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "模型配置" }));
+  fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
+  const fast = screen.getByRole("button", { name: "模型槽 1 Fast 加速模式" });
+  expect(fast.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(fast);
+  fireEvent.click(screen.getByRole("button", { name: "保存并完成" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "连接与旧版预设" })).toBeNull());
+  page.unmount();
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "模型配置" }));
+  fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
+  expect(screen.getByRole("button", { name: "模型槽 1 Fast 加速模式" }).getAttribute("aria-pressed")).toBe("false");
 });
 
 test("remix-lab opens prompt editor from the library dialog", async () => {
@@ -336,6 +392,42 @@ test("history project opens the linked workflow instead of the old project page"
   render(<RemixLabPage api={api} onNavigate={onNavigate} />);
   fireEvent.click(await screen.findByRole("button", { name: /^现金为王那期/ }));
   await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/remix-lab/${experimentID}`));
+});
+
+test("writer Fast saves independently and preserves reasoning effort", async () => {
+  const puts: Array<Record<string, unknown>> = [];
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path.startsWith("/api/remix-lab/workflow") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      puts.push(body);
+      return json(body);
+    }
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click((await screen.findAllByText("写手"))[0]);
+  const effort = await screen.findByLabelText("写手思考强度");
+  fireEvent.change(effort, { target: { value: "high" } });
+  fireEvent.click(await screen.findByRole("button", { name: "写手 Fast 加速模式" }));
+
+  await waitFor(() => expect(puts).toHaveLength(1), { timeout: 2000 });
+  const nodes = puts[0].nodes as Array<{ type: string; config: { reasoning_effort?: string; model?: string; service_tier?: string } }>;
+  const writer = nodes.find((node) => node.type === "writer");
+  const reviewer = nodes.find((node) => node.type === "reviewer");
+  expect(writer?.config.reasoning_effort).toBe("high");
+  expect(writer?.config.service_tier).toBe("priority");
+  expect(reviewer?.config.service_tier ?? "").toBe("");
+  expect(reviewer?.config.model ?? "").toBe("");
+  expect(reviewer?.config.reasoning_effort ?? "").toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "写手 Fast 加速模式" }));
+  await waitFor(() => expect(puts).toHaveLength(2), { timeout: 2000 });
+  const updated = puts[1].nodes as typeof nodes;
+  expect(updated.find((node) => node.type === "writer")?.config).toMatchObject({
+    reasoning_effort: "high", service_tier: "default",
+  });
 });
 
 test("workflow canvas edits a node prompt in the drawer and saves the graph", async () => {
@@ -467,7 +559,7 @@ test("remix-lab starts a workflow run and stays on the canvas with live progress
   }));
 
   render(<RemixLabPage api={api} onNavigate={onNavigate} />);
-  fireEvent.click(await screen.findByText("对标原文"));
+  fireEvent.click(await screen.findByRole("button", { name: /对标原文/ }));
   await screen.findByRole("button", { name: "开始二创" });
   fireEvent.change(screen.getByLabelText("对标原文"), { target: { value: "这是二创原文" } });
   fireEvent.click(screen.getByRole("button", { name: "开始二创" }));
@@ -478,7 +570,75 @@ test("remix-lab starts a workflow run and stays on the canvas with live progress
   // 不跳页：画布原地切到运行视图，节点显示等待状态
   expect(onNavigate).not.toHaveBeenCalled();
   expect(await screen.findByRole("button", { name: "返回编辑" })).toBeTruthy();
-  expect(await screen.findByText("等待中")).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /写手.*待执行/ })).toBeTruthy();
+});
+
+test("remix-lab imports a pasted draft at the final node and skips remix", async () => {
+  const posts: Array<{ path: string; body: unknown }> = [];
+  const script = "手工定稿正文。".repeat(8);
+  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments" && (!init?.method || init.method === "GET")) {
+      return json([]);
+    }
+    if (path.startsWith("/api/remix-lab/workflow") && init?.method === "PUT") {
+      return json(JSON.parse(String(init.body)));
+    }
+    if (path === "/api/remix-lab/workflow/import-draft" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      posts.push({ path, body });
+      return json(
+        {
+          id: experimentID,
+          title: "手工定稿",
+          source_text: "（手工定稿）",
+          prompt_stamp: "manual-draft",
+          status: "completed",
+          workflow: true,
+          created_at: "2026-08-25T00:00:00Z",
+          updated_at: "2026-08-25T00:00:00Z",
+          slots: [],
+          runs: [
+            {
+              id: runID, experiment_id: experimentID, slot_id: "slot-1", run_index: 1,
+              status: "completed", continuous_script: body.continuous_script, titles_json: "[]",
+              package_json: JSON.stringify(body), draft_v1_json: "", review_json: "",
+              error_message: "", comment: "", adopted_project_id: "",
+              production: { status: "waiting_confirm", step: "confirm", account_id: "", auto: false },
+            },
+          ],
+        },
+        201,
+      );
+    }
+    if (path === `/api/remix-lab/runs/${runID}/stages`) {
+      return json({
+        run_id: runID,
+        pipeline: "workflow",
+        status: "completed",
+        stages: [
+          { id: "source", kind: "input", title: "对标原文", status: "skipped", x: 0, y: 190 },
+          { id: "writer", kind: "agent", title: "写手", status: "skipped", x: 600, y: 190 },
+          { id: "final", kind: "output", title: "定稿与发布包", status: "ok", x: 1440, y: 190, output: JSON.stringify({ continuous_script: script }) },
+        ],
+        edges: [["source", "writer"], ["writer", "final"]],
+        production: { status: "waiting_confirm", step: "confirm", account_id: "", auto: false },
+      });
+    }
+    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
+  }));
+
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByText("定稿与发布包"));
+  fireEvent.change(await screen.findByLabelText("定稿正文"), { target: { value: script } });
+  fireEvent.change(screen.getByLabelText("板标题"), { target: { value: "板面主标题" } });
+  fireEvent.click(screen.getByRole("button", { name: "作为定稿导入" }));
+
+  await waitFor(() => expect(posts).toHaveLength(1));
+  const body = posts[0].body as { continuous_script: string; short_titles: string[] };
+  expect(body.continuous_script).toBe(script);
+  expect(body.short_titles).toEqual(["板面主标题"]);
+  expect(await screen.findByRole("button", { name: "返回编辑" })).toBeTruthy();
 });
 
 test("remix-lab flushes pending comment when experimentID changes", async () => {
@@ -779,7 +939,7 @@ test("remix-lab patches comment on blur and adopts into a project", async () => 
   expect(patches[0].body).toEqual({ comment: "开头不够狠" });
 
   fireEvent.click(screen.getByRole("button", { name: "采用到项目" }));
-  fireEvent.click(await screen.findByRole("button", { name: "目标项目" }));
+  fireEvent.click(await screen.findByRole("button", { name: /目标项目 · 账号/ }));
   await waitFor(() => expect(adopts).toHaveLength(1));
   expect(adopts[0].body).toEqual({ project_id: "project-1" });
   expect(await screen.findByText(/已进项目/)).toBeTruthy();
@@ -848,6 +1008,49 @@ function workbenchExperiment() {
     runs: [workbenchRun],
   };
 }
+
+test("historical project aligns the account selector and switching accounts leaves its production gate", async () => {
+  window.localStorage.setItem("remix-lab:produce-account", "cloud");
+  const production = {run_id: runID, account_id: "research", status: "waiting_confirm", step: "confirm", auto: false};
+  const detail = {...workbenchExperiment(), account_id: "research", runs: [{...workbenchRun, production}]};
+  const navigate = vi.fn();
+  const api = vi.fn(withLabExtras(async (path: string) => {
+    if (path === "/api/accounts") return json([{id:"cloud",name:"云中观局",status:"active"},{id:"research",name:"认知研习",status:"active"}]);
+    if (path === "/api/remix-lab/defaults") return json(defaults);
+    if (path === "/api/remix-lab/experiments") return json([]);
+    if (path === `/api/remix-lab/experiments/${experimentID}`) return json(detail);
+    if (path.endsWith("/stages")) return json({run_id:runID,status:"completed",stages:[],edges:[],production});
+    throw new Error(`unexpected GET ${path}`);
+  }));
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={navigate} />);
+  await waitFor(() => expect((screen.getByLabelText("切换账号工作流") as HTMLSelectElement).value).toBe("research"));
+  await waitFor(() => expect((screen.getByLabelText("混剪账号") as HTMLSelectElement).value).toBe("research"));
+  fireEvent.change(screen.getByLabelText("切换账号工作流"), {target:{value:"cloud"}});
+  expect(navigate).toHaveBeenCalledWith("/");
+  expect(window.localStorage.getItem("remix-lab:produce-account")).toBe("cloud");
+  expect(screen.queryByRole("button", {name:"确认开始混剪"})).toBeNull();
+});
+
+test("late historical detail cannot restore an account after the user switched away", async () => {
+  window.localStorage.setItem("remix-lab:produce-account", "research");
+  let finish!: (value: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish=resolve; });
+  const navigate=vi.fn();
+  const api=vi.fn(withLabExtras(async(path:string)=>{
+    if(path==="/api/accounts") return json([{id:"cloud",name:"云中观局",status:"active"},{id:"research",name:"认知研习",status:"active"}]);
+    if(path==="/api/remix-lab/defaults") return json(defaults);
+    if(path==="/api/remix-lab/experiments") return json([]);
+    if(path===`/api/remix-lab/experiments/${experimentID}`) return pending;
+    throw new Error(`unexpected GET ${path}`);
+  }));
+  render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={navigate} />);
+  await screen.findByRole("option", {name:"云中观局"});
+  fireEvent.change(screen.getByLabelText("切换账号工作流"),{target:{value:"cloud"}});
+  finish(json({...workbenchExperiment(),account_id:"research"}));
+  await waitFor(()=>expect(navigate).toHaveBeenCalledWith("/"));
+  expect((screen.getByLabelText("切换账号工作流") as HTMLSelectElement).value).toBe("cloud");
+  expect(screen.queryByRole("button",{name:"改稿"})).toBeNull();
+});
 
 test("creation studio shows review verdict, saves edited package, and reworks with annotations", async () => {
   const packagePuts: Array<{ body: Record<string, unknown> }> = [];
@@ -949,8 +1152,8 @@ test("run workbench opens the workflow view and inspects the failed stage", asyn
   render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
   // 历史/实验直接摊在工作流画布上
   expect(await screen.findByText("钩子分析")).toBeTruthy();
-  expect(screen.getByText("写手")).toBeTruthy();
-  expect(screen.getByText("审稿终审")).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /写手/ })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /审稿终审/ })).toBeTruthy();
   // 默认选中第一个失败节点，检视器里能看到错误
   expect(await screen.findByText("ammo agent down")).toBeTruthy();
   expect(screen.getByRole("button", { name: "编辑这路Agent提示词" })).toBeTruthy();
@@ -1110,7 +1313,7 @@ test("produce gate defaults to the run's own account and warns when switched", a
   const gateSelect = screen.getByLabelText("混剪账号") as HTMLSelectElement;
   await waitFor(() => expect(gateSelect.querySelector('option[value="acct-2"]')).toBeTruthy());
   // 这稿是财经漫游跑出来的，闸门默认就是财经漫游，不沾上一稿选过的账号。
-  expect(gateSelect.value).toBe("acct-2");
+  await waitFor(() => expect(gateSelect.value).toBe("acct-2"));
   expect(screen.queryByText(/确认要进别的号/)).toBeNull();
   fireEvent.change(gateSelect, { target: { value: "acct-1" } });
   expect(screen.getByText(/这稿是按「财经漫游」写的/)).toBeTruthy();
@@ -1395,11 +1598,11 @@ test("history projects group by account and filter after switching to A", async 
   }));
 
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  // 这些项目没有对应的二创实验 → 列在「其他项目」里，全局视图下每条带账号名
+  // 这些项目没有对应的二创实验 → 列在「独立混剪项目」里，全局视图下每条带账号名
   expect(await screen.findByRole("button", { name: /^A项目一/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /^A项目二/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /^B项目/ })).toBeTruthy();
-  expect(screen.getByText(/其他项目 3 条/)).toBeTruthy();
+  expect(screen.getByText(/独立混剪项目 3 条（未关联二创记录）/)).toBeTruthy();
   expect(screen.getAllByText("账号A").length).toBeGreaterThan(0);
 
   fireEvent.change(screen.getByLabelText("切换账号工作流"), { target: { value: accountA } });
@@ -1410,7 +1613,7 @@ test("history projects group by account and filter after switching to A", async 
   expect(screen.getByRole("button", { name: /^A项目二/ })).toBeTruthy();
 });
 
-test("settings button calls onOpenSettings once", async () => {
+test("global settings live outside the copy workspace", async () => {
   const onOpenSettings = vi.fn();
   const api = vi.fn(withLabExtras(async (path: string) => {
     if (path === "/api/remix-lab/defaults") return json(defaults);
@@ -1418,8 +1621,9 @@ test("settings button calls onOpenSettings once", async () => {
   }));
 
   render(<RemixLabPage api={api} onNavigate={vi.fn()} onOpenSettings={onOpenSettings} />);
-  fireEvent.click(await screen.findByRole("button", { name: "设置" }));
-  expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("list", { name: "内容生产流程" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "设置" })).toBeNull();
+  expect(onOpenSettings).not.toHaveBeenCalled();
 });
 
 test("new account form shows the account name field", async () => {
@@ -1433,7 +1637,7 @@ test("new account form shows the account name field", async () => {
   expect(screen.getByLabelText("账号名称")).toBeTruthy();
 });
 
-test("tidy layout button realigns the graph and autosaves clean positions", async () => {
+test("fixed workflow steps save configuration without changing stored graph positions", async () => {
   const puts: Array<Record<string, unknown>> = [];
   const messyWorkflow = {
     ...workflowFixture,
@@ -1460,21 +1664,25 @@ test("tidy layout button realigns the graph and autosaves clean positions", asyn
     throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
   }));
 
-  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "一键整理" }));
+  const { container } = render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /钩子分析/ }));
+  expect(screen.getByRole("navigation", { name: /流程步骤/ })).toBeTruthy();
+  expect(container.querySelector(".react-flow")).toBeNull();
+  expect(screen.queryByRole("button", { name: "一键整理" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("节点系统提示词"), { target: { value: "固定步骤中的新策划规则" } });
 
   await waitFor(() => {
     const last = puts[puts.length - 1] as
-      | { nodes?: Array<{ id: string; x: number; y: number }>; production?: { node_positions?: unknown } }
+      | { nodes?: Array<{ id: string; x: number; y: number; config: { system_prompt?: string } }>; edges?: unknown; production?: { node_positions?: unknown } }
       | undefined;
     expect(last).toBeTruthy();
     const byID = new Map((last?.nodes ?? []).map((node) => [node.id, node]));
-    // 单个 agent 回到写手左侧居中；写手回到骨干链横排
-    expect(byID.get("hook")).toMatchObject({ x: 300, y: 190 });
-    expect(byID.get("writer")).toMatchObject({ x: 600, y: 190 });
-    expect(byID.get("final")).toMatchObject({ x: 1440, y: 190 });
-    // 生产排拖动过的位置被清掉，回到默认横排
-    expect(last?.production?.node_positions).toBeUndefined();
+    expect(byID.get("hook")?.config.system_prompt).toBe("固定步骤中的新策划规则");
+    expect(last?.nodes?.map(({ id, x, y }) => ({ id, x, y }))).toEqual(
+      messyWorkflow.nodes.map(({ id, x, y }) => ({ id, x, y })),
+    );
+    expect(last?.edges).toEqual(messyWorkflow.edges);
+    expect(last?.production).toEqual(messyWorkflow.production);
   }, { timeout: 3000 });
 });
 
@@ -1528,7 +1736,7 @@ test("spoken node lets the operator edit and save the script before narration", 
   }));
 
   render(<RemixLabPage api={api} experimentID={experimentID} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByText("口播稿"));
+  fireEvent.click(await within(await screen.findByRole("navigation", { name: "运行步骤" })).findByRole("button", { name: /口播稿/ }));
   expect(await screen.findByText(/手里有钱的都听好了/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "编辑口播稿" }));
   fireEvent.change(screen.getByLabelText("编辑口播稿"), {
@@ -1621,4 +1829,27 @@ test("produce nodes offer redo, export and publish actions on the canvas", async
   expect(screen.getByRole("button", { name: "板题" })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "确认已发布" }));
   await waitFor(() => expect(publishes).toHaveLength(1));
+});
+
+test('source draft survives account switches and canvas remounts', async () => {
+  window.sessionStorage.clear();
+  const api = vi.fn(withLabExtras(async (path: string) => {
+    if (path === '/api/remix-lab/defaults') return json(defaults);
+    if (path === '/api/accounts') return json([{id:'draft-a',name:'草稿账号A',status:'active'},{id:'draft-b',name:'草稿账号B',status:'active'}]);
+    if (path === '/api/projects') return json([]);
+    if (path.startsWith('/api/remix-lab/experiments')) return json([]);
+    throw new Error(`unexpected ${path}`);
+  }));
+  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  await screen.findByRole('option',{name:'草稿账号A'});
+  fireEvent.change(screen.getByLabelText('切换账号工作流'),{target:{value:'draft-a'}});
+  fireEvent.click(await screen.findByRole('button', { name: /对标原文/ }));
+  fireEvent.change(screen.getByLabelText('对标原文'),{target:{value:'账号A尚未提交的原文'}});
+  fireEvent.change(screen.getByLabelText('切换账号工作流'),{target:{value:'draft-b'}});
+  fireEvent.click(await screen.findByRole('button', { name: /对标原文/ }));
+  expect((screen.getByLabelText('对标原文') as HTMLTextAreaElement).value).toBe('');
+  fireEvent.change(screen.getByLabelText('切换账号工作流'),{target:{value:'draft-a'}});
+  fireEvent.click(await screen.findByRole('button', { name: /对标原文/ }));
+  expect((screen.getByLabelText('对标原文') as HTMLTextAreaElement).value).toBe('账号A尚未提交的原文');
+  window.sessionStorage.clear();
 });
