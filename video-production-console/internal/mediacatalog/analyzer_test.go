@@ -502,20 +502,28 @@ func TestAnalysisRunnerRejectsTamperedKeyframes(t *testing.T) {
 }
 
 type concurrentVision struct {
-	inflight atomic.Int32
-	peak     atomic.Int32
+	inflight   atomic.Int32
+	peak       atomic.Int32
+	allStarted chan struct{}
 }
 
 func (v *concurrentVision) Analyze(ctx context.Context, keyframes []KeyframeInput) (ShotAnalysis, error) {
 	current := v.inflight.Add(1)
+	defer v.inflight.Add(-1)
 	for {
 		peak := v.peak.Load()
 		if current <= peak || v.peak.CompareAndSwap(peak, current) {
 			break
 		}
 	}
-	time.Sleep(80 * time.Millisecond)
-	v.inflight.Add(-1)
+	if current == 4 {
+		close(v.allStarted)
+	}
+	select {
+	case <-v.allStarted:
+	case <-ctx.Done():
+		return ShotAnalysis{}, ctx.Err()
+	}
 	return ShotAnalysis{
 		Summary: "a person reviews documents at a desk", Mood: "calm", Setting: "office",
 		PeopleCount: 1, MotionLevel: "low",
@@ -541,29 +549,25 @@ func TestClampAnalysisConcurrency(t *testing.T) {
 }
 
 func TestAnalysisRunnerRunsShotsConcurrently(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	repo := newTestRepository(t)
 	for i := 0; i < 4; i++ {
 		seedAnalyzableShot(t, repo, fmt.Sprintf("parallel-%d", i), SceneBoundary{InMS: 0, OutMS: 4000})
 	}
-	vision := &concurrentVision{}
+	vision := &concurrentVision{allStarted: make(chan struct{})}
 	runner, err := NewAnalysisRunnerWithConcurrency(repo, vision, staticEmbedder{}, "test-embed-model", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := time.Now()
 	summary, err := runner.Run(ctx)
-	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if summary.AnalyzedShots != 4 || summary.FailedShots != 0 {
 		t.Fatalf("summary=%+v", summary)
 	}
-	if vision.peak.Load() < 3 {
-		t.Fatalf("peak concurrency=%d, want at least 3", vision.peak.Load())
-	}
-	if elapsed > 300*time.Millisecond {
-		t.Fatalf("elapsed %s, concurrent analysis should finish near one shot latency", elapsed)
+	if vision.peak.Load() != 4 {
+		t.Fatalf("peak concurrency=%d, want 4", vision.peak.Load())
 	}
 }
