@@ -68,10 +68,14 @@ func normalizeLegacy(short *Short) {
 		if short.VisualSettings == nil {
 			short.VisualSettings = legacyVisualSettings()
 		}
-		// 单画风沿用旧规则，混合策略保留每镜选择；已生成视频保留。
+		// 单画风沿用旧规则，混合策略保留每镜选择，分段画风和手动钉住的镜按各自规则；已生成视频保留。
 		short.Style = StyleByKey(strings.TrimSpace(short.Style)).Key
+		if len(short.Shots) > 0 && short.Shots[0].Role == "" {
+			// 老记录没打过角色：补上，但不改它们已经生成好的画风（这一步只在内存里，用户改设置时才会真正重算）。
+			assignShotRoles(short.Shots, segmentStylesOf(short).openingShots())
+		}
 		for i := range short.Shots {
-			short.Shots[i].StyleKey = resolvedShotStyle(short.Style, short.Shots[i].StyleKey)
+			short.Shots[i].StyleKey = resolvedShotStyleFor(short, short.Shots[i])
 			short.Shots[i].Hero = short.NeedsVideo(short.Shots[i])
 		}
 	} else if s := strings.TrimSpace(short.Style); s == "" || s == legacyStylePrompt {
@@ -84,6 +88,7 @@ func normalizeLegacy(short *Short) {
 	}
 	// 预览提示词每次读取都按当前规则重算；图真正用过的提示词另存在 ImagePromptUsed 里。
 	fillAllPrompts(short, false)
+	fillCoverPrompt(short)
 }
 
 // List 返回全部短片，最新在前。

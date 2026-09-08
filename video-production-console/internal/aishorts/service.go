@@ -79,8 +79,10 @@ type Service struct {
 	assemble Assembler
 	// busy 锁整条短片的批量任务（拆分镜 / 生成全部 / 组装）。
 	// shotBusy 只锁某一镜：不同镜头可并行，同一镜不能重复提交。
-	busy     sync.Map
-	shotBusy sync.Map
+	// coverBusy 只锁封面：和分镜生图互不挡，同一条短片不能同时出两张封面。
+	busy      sync.Map
+	shotBusy  sync.Map
+	coverBusy sync.Map
 	// 生图并发上限（中转站允许 20 张同时出）和生视频并发上限（任务型接口，别压太多）。
 	imageGate generationLimiter
 	videoGate generationLimiter
@@ -140,7 +142,7 @@ func (s *Service) CreateWithReasoning(accountID, mode, title, story, headline, s
 	}
 	if mode == ModeExplainer {
 		if strings.TrimSpace(style) == "" {
-			style = financeEditorial
+			style = "cinematic_doc"
 		}
 		style = StyleByKey(strings.TrimSpace(style)).Key
 	} else if strings.TrimSpace(style) == "" {
@@ -172,8 +174,12 @@ func (s *Service) CreateWithReasoning(accountID, mode, title, story, headline, s
 
 func (s *Service) Get(id string) (*Short, error) {
 	short, err := s.store.Get(id)
-	if err != nil || (short.Status != StatusGenerating && short.Status != StatusAssembling) || !s.tryLock(id) {
-		return short, err
+	if err != nil {
+		return nil, err
+	}
+	short = s.recoverCoverIfInterrupted(short)
+	if (short.Status != StatusGenerating && short.Status != StatusAssembling) || !s.tryLock(id) {
+		return short, nil
 	}
 	defer s.unlock(id)
 	return s.store.Update(id, func(x *Short) error {
@@ -251,15 +257,8 @@ func (s *Service) UpdateTextWithReasoning(id, title, story, headline, style stri
 				nextStyle := StyleByKey(strings.TrimSpace(style)).Key
 				if nextStyle != short.Style {
 					short.Style = nextStyle
-					// 切换项目策略后重新解析每镜画风，旧图保留并标为需要重生。
-					for i := range short.Shots {
-						shot := &short.Shots[i]
-						shot.StyleKey = resolvedShotStyle(nextStyle, shot.StyleKey)
-						shot.ImageStale = shot.ImagePath != ""
-						shot.VideoPath, shot.VideoStatus, shot.VideoRequestID = "", ShotPending, ""
-						shot.Hero, shot.VideoPrompt, shot.Error = false, "", ""
-					}
-					if len(short.Shots) > 0 {
+					// 切换项目底色后重新解析每镜画风（分段画风和手动钉住的镜不受影响），变了的镜旧图标为需要重生。
+					if reapplyShotStyles(short) > 0 {
 						short.Status = StatusStoryboard
 					}
 				}
@@ -337,13 +336,17 @@ func (s *Service) UpdateShot(id string, index int, patch ShotPatch) (*Short, err
 			if patch.Keywords != nil {
 				shot.Keywords = append([]ShotKeyword{}, (*patch.Keywords)...)
 			}
-			if short.Style == financeEditorial && strings.TrimSpace(patch.StyleKey) != "" {
-				if !editorialShotStyle(strings.TrimSpace(patch.StyleKey)) {
-					return errors.New("混合画风仅支持纸张拼贴或微缩模型")
+			if key := strings.TrimSpace(patch.StyleKey); key != "" {
+				// 任何项目都能手动定单镜画风；定过的镜钉住，分段画风和底色变化不再覆盖它。
+				if key == financeEditorial || StyleByKey(key).Key != key {
+					return errors.New("镜头画风无效")
 				}
-				shot.StyleKey = strings.TrimSpace(patch.StyleKey)
+				if shot.StyleKey != key && shot.ImagePath != "" {
+					shot.ImageStale = true
+				}
+				shot.StyleKey, shot.StylePinned = key, true
 			}
-			shot.StyleKey = resolvedShotStyle(short.Style, shot.StyleKey)
+			shot.StyleKey = resolvedShotStyleFor(short, *shot)
 			if s := strings.TrimSpace(patch.Subject); s != "" {
 				shot.Subject = s
 			}
@@ -531,7 +534,7 @@ func (s *Service) GenerateAll(id string) error {
 		}
 		// 解说模式：配音 + 逐字对齐和生图并行跑，组装时命中缓存，省 2～4 分钟。
 		if pre, ok := s.assemble.(NarrationPrewarmer); ok && short.IsExplainer() {
-			if short.VisualSettings == nil || short.VisualSettings.OpeningVideoSeconds == 0 {
+			if !short.WantsAnyVideo() {
 				go pre.PrewarmNarration(ctx, rt, short, s.store.AssetDir(id))
 			}
 		}

@@ -20,6 +20,12 @@ func main() {
 		"reference_inject_rule":    openaicompat.ReferenceInjectRule,
 		"writer_system":            openaicompat.BoneFleshSystemPrompt(), "writer_user": openaicompat.BoneFleshUserPrompt,
 		"reviewer": openaicompat.DefaultReviewerPrompt(), "hook": hook, "facts": facts, "facts_offline": offline, "ammo": ammo,
+		// 工作流文件把公共底线放在 editorial_rules，节点只存角色提示；下面四项供数据同步脚本直接写入节点。
+		"editorial_rules":        openaicompat.SharedEditorialPolicy,
+		"writer_role":            openaicompat.SeparateEditorialPrompt(openaicompat.BoneFleshSystemPrompt()),
+		"reviewer_role":          openaicompat.SeparateEditorialPrompt(openaicompat.DefaultReviewerPrompt()),
+		"reviewer_user_template": openaicompat.ReviewerUserTemplate,
+		"planner_system":         openaicompat.PlannerSystemPrompt,
 		"facts_inject_rule":     openaicompat.FactsInjectRule,
 		"ammo_inject_rule":      openaicompat.AmmoInjectRule,
 		"planner_user_template": openaicompat.PlannerUserTemplate,

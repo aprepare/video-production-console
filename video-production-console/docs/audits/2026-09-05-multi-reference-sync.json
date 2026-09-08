@@ -1,0 +1,62 @@
+{
+  "version": "骨肉分离v3.13 用户评阅与多模型参考 2026-09-05",
+  "applied": true,
+  "files": [
+    {
+      "path": "video-console-data\\remix_lab\\active_prompt.json",
+      "before_sha256": "dfc820e9902d7f9067ea149a3cfd38ef6a5164ef2502ce66941574d0934fb3d0",
+      "after_sha256": "ff75777fbc3c7c28a9365858c259fc82f3cca3b0a30b77f639dd88133d78c2f0"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\library.json",
+      "before_sha256": "93c4398d3861fef184bce85e9211ee07cdd5396cc4425442f63eec719fd591d3",
+      "after_sha256": "d0d1128ceb62478eae24f060f9afcc07864adb59937cfb5abae92d07dc18162b"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\agent_prompts.json",
+      "before_sha256": "5839ff597642c8f11eac4cfdeb35179f7898a3f600f2cfe774e53d9a40f5d9b6",
+      "after_sha256": "a87799afd1006c43fbd71b96d937fe9359bf7cb2a8e82c8fe9ddf57a50020091"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflow.json",
+      "before_sha256": "ac76cdfca665dc1ba347dd6ae59e3236990bfc812d17ce248e9798817455229e",
+      "after_sha256": "32c2ec55b2a1cac3e947defc995cf8f3fa5b7420352f774f37e481660aaa55d1"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\04bbe3a0-2496-47b8-acb7-9c1862ef6850.json",
+      "before_sha256": "51aaa30a83ec4c71ea4aac886da3d2859b55b38f2161bc01ce197159b0e4a190",
+      "after_sha256": "d26f4f7c467c05219e750fc07f5d07518c1fbcdaf535da728c90258533cb0e27"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\41469c17-fe4a-486b-a733-9ff4ce163ca5.json",
+      "before_sha256": "263693428b303e101a8cf948ba78dddaa2bd3fcfbaeae1f263bcc5d1656e3a8b",
+      "after_sha256": "9ed1950d5eda5720fb1a1343a21ba293b481160834ad45e5a3abcc4388757c95"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\66dfed1b-1e0c-4b6c-85bf-cebdd562bf6f.json",
+      "before_sha256": "781320414e60f913eb17f17c4ae224bd4b8da0f6d60c02636a4f447a52bc11e7",
+      "after_sha256": "8631d155cac9a9f4d44e312075158b8e224e81318e351a24c1d1da0b052d9dad"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\8c232ac1-a2e2-424e-866e-77fe8be1195d.json",
+      "before_sha256": "06b0cc3e898d5ccc8b66bde5d43a13e5ad010c443a08530eff79832e5990eb9c",
+      "after_sha256": "d65314780ae5508c2ea0b11c58c81f2f1b4bab8e709e089188ffca8ae2c8790a"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\b953bbba-25ff-4660-a056-f165e8e39027.json",
+      "before_sha256": "37cefaf585b546042a1a41e52b1fddf45ee6e3175c89f6335272c8f849ba6271",
+      "after_sha256": "d8fcdd69a93ce9f82071aa3ca46fc75939691acb51455ef7200ef4458d620fec"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\c7a0d74a-4617-47a5-881b-7f8d44758115.json",
+      "before_sha256": "f66822e656f7bea142c9b7478197603d2f934f11dea76d723fabc0a25e0b087b",
+      "after_sha256": "9308b03994970b8bcd11f2962d35de75ba045569f3c259703de35e545d611e0c"
+    },
+    {
+      "path": "video-console-data\\remix_lab\\workflows\\d57748b3-6218-49a9-8239-a5ea7bd2ccf9.json",
+      "before_sha256": "de40812cdb82d7fe3b3062e3b3e0a15fed07de365b0d1dd44b6eaaaf79e00739",
+      "after_sha256": "3fc82514152a1fc975f2c4ef4941e5988cdb81cdbb114c997bd88d6f15353916"
+    }
+  ],
+  "backup": "video-console-data\\remix_lab\\backup-policy-20260905-153921"
+}

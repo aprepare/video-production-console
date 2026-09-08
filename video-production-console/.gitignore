@@ -3,15 +3,15 @@
 tmp_*
 scratch/
 Untitled
-原稿.txt
-最初的原稿
-发布文案.txt
-二创稿*
-换说法*
-洗稿*
-新模型稿*
-今日对话总结*
-今日建库对话总结*
+/原稿.txt
+/最初的原稿
+/发布文案.txt
+/二创稿*
+/换说法*
+/洗稿*
+/新模型稿*
+/今日对话总结*
+/今日建库对话总结*
 catalog-builder.config.json
 node_modules/
 web/node_modules/
@@ -20,6 +20,9 @@ video-console.db
 /dist/
 web/dist/
 release/
+artifacts/
+.pytest_cache/
+.tmp-rename/
 # Embedded production frontend must stay versioned.
 !internal/webui/dist/
 !internal/webui/dist/**
@@ -35,3 +38,10 @@ publish*.exe
 web/*-output*.txt
 web/test-target*.txt
 task5-*
+# 2026-09-07 清理归档：临时物、旧备份、旧 exe，可整目录删除
+_archive/
+dist/archive/
+
+# 规则、成稿、参考库必须进版本库；根目录临时稿规则不要误伤这里
+!/二创工作区/
+!/二创工作区/**

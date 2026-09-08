@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Clapperboard, Film, Plus, RefreshCw, Trash2, Wand2 } from "lucide-react";
+import { ArrowLeft, Clapperboard, Film, ImagePlus, Plus, RefreshCw, Trash2, Wand2 } from "lucide-react";
 import type { Account, Theme } from "../types";
 import {
   assembleShort,
   assetURL,
   createShort,
   deleteShort,
+  generateCover,
   generateShort,
   fetchMeta,
   getShort,
@@ -18,8 +19,8 @@ import {
   updateShort,
   updateShot,
   NARRATOR,
-  defaultVisualSettings, visualOf,
-  type VisualSettings, type ShotKeyword,
+  defaultVisualSettings, visualOf, videoPlanOf, DEFAULT_CAPTION_COLOR, SHOT_ROLE_LABEL,
+  type VisualSettings, type SegmentStyles, type ShotKeyword,
   type AiShort,
   type AiShortMode,
   type AiShot,
@@ -29,7 +30,7 @@ import {
 import { ModelCombo } from "../ModelSelect";
 import { AssemblyStatus, ReasoningSelect } from "./WorkflowControls";
 import { MediaSettingsPanel } from "./MediaSettingsPanel";
-import { OpeningVideoFields, VisualSettingsFields, KeywordEditor, HighlightedText, FramePreview, subjectTypes, cameraMoves } from "./VisualControls";
+import { OpeningVideoFields, VisualSettingsFields, KeywordEditor, HighlightedText, FramePreview, StylePicker, SegmentStyleFields, subjectTypes, cameraMoves } from "./VisualControls";
 import "./ai-shorts.css";
 import "./workbench.css";
 
@@ -86,10 +87,12 @@ function storeDraft(id: string, value: SavedDraft | null) {
 }
 
 function sameVisualSettings(a: VisualSettings, b: VisualSettings) {
-  const normalize = (value: VisualSettings) => ({ ...value, fast_opening: !!value.fast_opening, opening_video_seconds: value.opening_video_seconds ?? 0, video_model: (value.video_model ?? "").trim() });
+  // 分段画风是对象，压成一个字符串再比，空值和缺省都算"跟随底色"。
+  const segKey = (s?: SegmentStyles) => [s?.opening ?? "", s?.opening_shots || 0, s?.money ?? "", s?.blessing ?? "", s?.scenario ?? ""].join("|");
+  const normalize = (value: VisualSettings): Record<string, string | number | boolean> => ({ ...value, fast_opening: !!value.fast_opening, opening_video_seconds: value.opening_video_seconds ?? 0, video_model: (value.video_model ?? "").trim(), video_plan: videoPlanOf(value), video_first_n: value.video_first_n ?? 0, caption_style: value.caption_style ?? "outline", caption_color: (value.caption_color || DEFAULT_CAPTION_COLOR).toUpperCase(), headline_seconds: value.headline_seconds || 10, segment_styles: segKey(value.segment_styles) });
   const left = normalize(a), right = normalize(b);
-  return (Object.keys(left) as (keyof VisualSettings)[]).every(key => left[key] === right[key])
-    && (Object.keys(right) as (keyof VisualSettings)[]).every(key => left[key] === right[key]);
+  return Object.keys(left).every(key => left[key] === right[key])
+    && Object.keys(right).every(key => left[key] === right[key]);
 }
 
 export function AiShortsPage({ api, shortID, onNavigate }: Props) {
@@ -100,6 +103,15 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
   const mediaDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState("");
   const busyRef = useRef(false);
+  // 拆分镜是同步请求，几分钟没动静会让人以为卡死：给个走秒和按思考强度的预期。
+  const [busySince, setBusySince] = useState(0);
+  const [clock, setClock] = useState(0);
+  useEffect(() => {
+    if (busy !== "拆分镜") return;
+    setBusySince(Date.now()); setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
   const loadVersion = useRef(0);
   const [loadState, setLoadState] = useState("idle");
   const [loadError, setLoadError] = useState("");
@@ -200,10 +212,11 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shortID]);
 
-  // 生成中 / 组装中持续轮询，其余状态停。
+  // 生成中 / 组装中 / 封面出图中持续轮询，其余状态停。
   const active = current?.status === "generating" || current?.status === "assembling";
+  const coverBusy = current?.cover?.status === "running";
   useEffect(() => {
-    if (!current || !active) return;
+    if (!current || (!active && !coverBusy)) return;
     const version = loadVersion.current;
     const id = current.id;
     let cancelled = false;
@@ -220,7 +233,7 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
     }, 3000);
     return () => { cancelled = true; window.clearInterval(pollRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id, active]);
+  }, [current?.id, active, coverBusy]);
 
 
 
@@ -312,12 +325,19 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
     setCurrent({ ...current, status: "generating" });
   });
 
+  const makeCover = () => current && run("封面", async () => {
+    await generateCover(api, current.id);
+    setCurrent({ ...current, cover: { ...current.cover, status: "running", error: undefined, stale: false } });
+  });
+
   const saveShot = (index: number) => current && run("保存分镜", async () => {
     const { scene, motion, narration, speaker, style_key, subject, visual_intent, subject_type, camera_move, annotation, keywords } = shotDraft;
+    // 画风只在用户真改了才发：后端把手动定过画风的镜"钉住"，不再被分段画风和底色覆盖，别把没动过的也钉上。
+    const shot = current.shots.find((s) => s.index === index);
     const input = isExplainer
       ? {
           scene, motion, narration, subject, visual_intent, subject_type, camera_move, annotation, keywords,
-          ...(current.style === "finance_editorial" ? { style_key } : {}),
+          ...(style_key && style_key !== (shot?.style_key ?? "") ? { style_key } : {}),
         }
       : { scene, motion, narration, speaker };
     setCurrent(await updateShot(api, current.id, index, input));
@@ -334,7 +354,7 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
   const isExplainer = current?.mode === "explainer";
   const contentDirty = !!current && (reasoningDraft !== (current.text_reasoning_effort??"") || storyDraft !== current.story || headlineDraft !== current.headline || styleDraft !== current.style || textModelDraft !== (current.text_model ?? "") || segmentModelDraft !== (current.segment_model ?? ""));
   const imageModelDirty = !!current && imageModelDraft.trim() !== (current.image_model ?? "");
-  const videoConfigDirty=!!current&&isExplainer&&((visualDraft.opening_video_seconds||0)!==(current.visual_settings?.opening_video_seconds||0)||(visualDraft.video_model||"").trim()!==(current.visual_settings?.video_model||""));
+  const videoConfigDirty=!!current&&isExplainer&&(videoPlanOf(visualDraft)!==videoPlanOf(current.visual_settings)||(visualDraft.opening_video_seconds||0)!==(current.visual_settings?.opening_video_seconds||0)||(visualDraft.video_first_n||0)!==(current.visual_settings?.video_first_n||0)||(visualDraft.video_model||"").trim()!==(current.visual_settings?.video_model||""));
   const textDirty = contentDirty || imageModelDirty || (!!current && isExplainer && !sameVisualSettings(visualDraft, visualOf(current)));
   useEffect(() => {
     if (!current) return;
@@ -390,6 +410,12 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                     <Wand2 size={14} /> {busy === "拆分镜" ? "拆分镜中…" : current.shots.length ? "重新拆分镜" : "拆分镜"}
                   </button>
                 </div>
+                {busy === "拆分镜" ? (() => {
+                  const chunks = Math.max(1, Math.ceil(storyDraft.replace(/[\s，。、！？；：“”‘’「」（）《》—…]/g, "").length / 320));
+                  const effort = reasoningDraft || "low";
+                  const expect = effort === "high" || effort === "xhigh" ? "每块约 5 分钟，整篇 5～9 分钟" : effort === "medium" ? "每块约 2～3 分钟" : "每块约 1 分钟，整篇一两分钟";
+                  return <p className="ai-shorts__muted">已用 {Math.max(0, Math.floor((clock - busySince) / 1000))} 秒 · 文案切成约 {chunks} 块同时拆，思考强度 {effort}：{expect}。这是一次同步请求，请勿刷新页面。</p>;
+                })() : null}
 
             {current.shots.length > 0 && <>
               <div className="ai-shorts__toolbar">
@@ -398,7 +424,7 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                 </span>
                 <div className="ai-shorts__row">
                   <button type="button" className="remix-lab-start" disabled={!!busy || active || textDirty || current.storyboard_stale || editingShot !== null} onClick={generate}>
-                    {active && current.status === "generating" ? "生成中…" : doneShots === 0 ? (isExplainer ? current.visual_settings?.opening_video_seconds ? "生成图片与开场视频" : "生成全部图片" : "生成全部") : "续跑未完成的"}
+                    {active && current.status === "generating" ? "生成中…" : doneShots === 0 ? (isExplainer ? videoPlanOf(current.visual_settings) !== "none" ? "生成图片与视频镜头" : "生成全部图片" : "生成全部") : "续跑未完成的"}
                   </button>
                   <button
                     type="button"
@@ -476,21 +502,21 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                   <ModelCombo id="ai-shorts-new-segment-model" aria-label="分大段模型" value={newSegmentModel} onChange={setNewSegmentModel} placeholder="如 gemini-3.8-flash-high；留空不用模型" />
                 </label>
               ) : null}
-              {newMode === "explainer" ? (
-                <label>
-                  画面风格策略
-                  <select value={newStyle} onChange={(e) => setNewStyle(e.target.value)}>
-                    {styles.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
-                  </select>
-                  {newStyle === "finance_editorial" ? <span className="ai-shorts__muted">大多数镜头使用纸张拼贴，抽象概念和多方关系使用微缩模型；拆分镜后可逐镜调整。</span> : null}
-                </label>
-              ) : null}
+              {newMode === "explainer" ? <>
+                <StylePicker styles={styles} value={newStyle} onChange={setNewStyle} disabled={!!busy} />
+                {styles.length ? <SegmentStyleFields value={newVisual} onChange={setNewVisual} styles={styles} disabled={!!busy} /> : null}
+              </> : null}
               {newMode === "fable" ? (
                 <label>
                   顶部金句（可空，拆分镜时会自动补）
                   <input value={newHeadline} onChange={(e) => setNewHeadline(e.target.value)} />
                 </label>
-              ) : null}
+              ) : (
+                <label>
+                  顶部大标题（视频上方的大字；填发布包里选定的那条，不超过 12 字；留空则草稿里没有标题）
+                  <input value={newHeadline} onChange={(e) => setNewHeadline(e.target.value)} placeholder="如：老百姓的钱开始值钱了" />
+                </label>
+              )}
               {newMode === "explainer" ? <VisualSettingsFields value={newVisual} onChange={setNewVisual} disabled={!!busy} defaultVideoModel={defaultVideoModel} /> : null}
               </details>
               <label>
@@ -513,12 +539,11 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                   {MODE_LABEL[current.mode ?? "fable"]}
                   {current.account_id ? ` · 账号：${accountName(current.account_id) || current.account_id}` : ""}
                 </p>
-                {!isExplainer ? (
-                  <label>
-                    顶部金句
-                    <input value={headlineDraft} onChange={(e) => setHeadlineDraft(e.target.value)} />
-                  </label>
-                ) : null}
+                <label>
+                  {isExplainer ? "顶部大标题（视频上方的大字，不超过 12 字；改完保存再重新组装）" : "顶部金句"}
+                  <input value={headlineDraft} onChange={(e) => setHeadlineDraft(e.target.value)} placeholder={isExplainer ? "如：老百姓的钱开始值钱了" : ""} />
+                </label>
+                {isExplainer && !headlineDraft.trim() ? <p className="ai-shorts__dirty">顶部大标题为空：组装出的草稿不会有标题，「顶部标题显示」的秒数也不起作用。</p> : null}
                 <label>
                   {isExplainer ? "口播文案" : "旁白文案"}
                   <textarea rows={6} value={storyDraft} onChange={(e) => setStoryDraft(e.target.value)} />
@@ -535,13 +560,10 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                   </label>
                 ) : null}
                 {isExplainer ? (
-                  <label>
-                    画面风格策略（更改后建议重新拆分镜，旧图保留）
-                    <select value={styleDraft || "documentary"} onChange={(e) => setStyleDraft(e.target.value)}>
-                      {styles.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
-                    </select>
-                    {styleDraft === "finance_editorial" ? <span className="ai-shorts__muted">大多数镜头使用纸张拼贴，抽象概念和多方关系使用微缩模型；可在每张分镜卡中手动切换。</span> : null}
-                  </label>
+                  <>
+                    <StylePicker styles={styles} value={styleDraft || "documentary"} onChange={setStyleDraft} disabled={!!busy || active} hint="更改后建议重新拆分镜，旧图保留" />
+                    {styles.length ? <SegmentStyleFields value={visualDraft} onChange={setVisualDraft} styles={styles} disabled={!!busy || active} /> : null}
+                  </>
                 ) : (
                   <details>
                     <summary>画风前缀（全片统一）</summary>
@@ -550,6 +572,36 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                 )}
                 {isExplainer ? <VisualSettingsFields hideOpening value={visualDraft} onChange={setVisualDraft} disabled={!!busy || active} defaultVideoModel={defaultVideoModel} /> : null}
               </details>
+
+              {isExplainer ? (
+                <section className="ai-shorts__card">
+                  <h2>封面</h2>
+                  <p className="ai-shorts__muted">按顶部大标题出一张 9:16 图，画风跟当前画面风格走，标题印在画面上方。</p>
+                  {current.cover?.path ? (
+                    <img className="ai-shorts__cover" src={assetURL(current.id, current.cover.path)} alt={current.headline || "封面"} />
+                  ) : (
+                    <div className="ai-shorts__cover ai-shorts__placeholder">{coverBusy ? "封面出图中…" : "还没有封面"}</div>
+                  )}
+                  {current.cover?.stale ? <p className="ai-shorts__dirty">大标题或画风改过，这张封面是旧的。</p> : null}
+                  {current.cover?.error ? <p className="ai-shorts__error">{current.cover.error}</p> : null}
+                  <div className="ai-shorts__row">
+                    <button
+                      type="button"
+                      className="header-button"
+                      disabled={!!busy || coverBusy || !current.headline.trim() || headlineDraft !== current.headline || styleDraft !== current.style}
+                      onClick={makeCover}
+                    >
+                      {current.cover?.path ? <RefreshCw size={12} /> : <ImagePlus size={12} />}
+                      {coverBusy ? "封面出图中…" : current.cover?.path ? "重新生成封面" : "生成封面"}
+                    </button>
+                    {current.cover?.path ? (
+                      <a className="header-button" href={assetURL(current.id, current.cover.path)} download={`${current.headline || "封面"}.jpg`}>下载封面</a>
+                    ) : null}
+                  </div>
+                  {!current.headline.trim() ? <p className="ai-shorts__dirty">先填顶部大标题并保存，才能出封面。</p> : null}
+                  {current.headline.trim() && (headlineDraft !== current.headline || styleDraft !== current.style) ? <p className="ai-shorts__dirty">大标题或画风有未保存修改，先保存再出封面。</p> : null}
+                </section>
+              ) : null}
 
               {current.characters.length ? (
                 <section className="ai-shorts__card">
@@ -621,7 +673,6 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
                     key={shot.index}
                     shortID={current.id}
                     shot={shot}
-                    projectStyle={current.style}
                     visual={visualDraft}
                     explainer={isExplainer}
                     ready={shotReady(current, shot)}
@@ -684,11 +735,10 @@ export function AiShortsPage({ api, shortID, onNavigate }: Props) {
 }
 
 function ShotCard({
-  shortID, shot, projectStyle, visual, explainer, ready, styles, speakers, disabled, editing, draft, onDraft, onEdit, onCancel, onSave, onRegen, saving, needsVideo,
+  shortID, shot, visual, explainer, ready, styles, speakers, disabled, editing, draft, onDraft, onEdit, onCancel, onSave, onRegen, saving, needsVideo,
 }: {
   shortID: string;
   shot: AiShot;
-  projectStyle: string;
   visual: VisualSettings;
   explainer: boolean;
   ready: boolean;
@@ -710,7 +760,9 @@ function ShotCard({
   const speaker = shot.speaker || NARRATOR;
   const spoken = !explainer && speaker !== NARRATOR;
   const styleName = styles.find((s) => s.key === shot.style_key)?.name ?? shot.style_key ?? "";
-  const shotStyles = styles.filter((style) => style.key === "paper_collage" || style.key === "miniature");
+  // 任何项目都能单独定一镜的画风（混合策略不是画风，不列）。
+  const shotStyles = styles.filter((style) => style.key !== "finance_editorial");
+  const roleLabel = SHOT_ROLE_LABEL[shot.role ?? ""] ?? "";
   // 图是按旧提示词出的：描述/规则改过之后没重生。
   const stale = !!shot.image_stale;
   const stateClass = ready ? "done" : needsVideo ? shot.video_status : shot.image_status;
@@ -731,8 +783,8 @@ function ShotCard({
         <span className="ai-shorts__shot-state">
           {explainer ? (
             <>
-              {styleName ? `${styleName} · ` : ""}
-              图片 {SHOT_STATUS[shot.image_status] ?? shot.image_status} · {needsVideo?`开场视频 ${SHOT_STATUS[shot.video_status]??shot.video_status}`:cameraMoves[shot.camera_move||"zoom_in"]}
+              {roleLabel ? `${roleLabel} · ` : ""}{styleName ? `${styleName}${shot.style_pinned ? "（手动）" : ""} · ` : ""}
+              图片 {SHOT_STATUS[shot.image_status] ?? shot.image_status} · {needsVideo?`AI 视频 ${SHOT_STATUS[shot.video_status]??shot.video_status}`:cameraMoves[shot.camera_move||"zoom_in"]}
             </>
           ) : (
             <>
@@ -748,14 +800,12 @@ function ShotCard({
           <fieldset className="ai-shorts__shot-edit" disabled={saving}>
             {explainer ? (
               <div>
-                {projectStyle === "finance_editorial" ? (
-                  <label>
-                    镜头画风
-                    <select value={draft.style_key} onChange={(e) => onDraft({ ...draft, style_key: e.target.value })}>
-                      {shotStyles.map((style) => <option key={style.key} value={style.key}>{style.name}</option>)}
-                    </select>
-                  </label>
-                ) : null}
+                <label>
+                  镜头画风{roleLabel ? `（本镜角色：${roleLabel}）` : ""}
+                  <select value={draft.style_key} onChange={(e) => onDraft({ ...draft, style_key: e.target.value })}>
+                    {shotStyles.map((style) => <option key={style.key} value={style.key}>{style.name}</option>)}
+                  </select>
+                </label>
                 <label>画面类型<select value={draft.subject_type} onChange={(e)=>onDraft({...draft,subject_type:e.target.value})}>{Object.entries(subjectTypes).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>
                 <label>
                   画面主体

@@ -63,7 +63,7 @@
   .console-nav__mark svg { width: 18px; }
   .console-nav__brand-text strong { font-size: 13px; }
   .console-nav__brand-text small, .console-nav__section-label, .console-nav__link small, .console-nav__utility span, .console-nav__footnote { display: none; }
-  .console-nav__workspaces { grid-area: 2 / 1 / 3 / 3; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .console-nav__workspaces { grid-area: 2 / 1 / 3 / 3; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
   .console-nav__link { gap: 8px; min-height: 42px; padding: 10px 6px; justify-content: center; border-radius: 8px; }
   .console-nav__link strong { font-size: 12px; white-space: nowrap; }
   .console-nav__link svg { width: 17px; }

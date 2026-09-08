@@ -247,14 +247,14 @@ func TestReviewRemixDraftSendsAnnotations(t *testing.T) {
 		t.Fatalf("requests = %d, want 1", len(client.requests))
 	}
 	user := client.requests[0].Messages[1].Content
-	if !strings.Contains(user, "开头第二句删掉") || !strings.Contains(user, "# 同行原文") {
+	if !strings.Contains(user, "开头第二句删掉") || !strings.Contains(user, "【同行原文】") || !strings.Contains(user, "原文正文") {
 		t.Fatalf("user message missing annotations/source: %s", user[:200])
 	}
 }
 
 func TestDefaultReviewerPromptUsesSharedCourseAndEditingRules(t *testing.T) {
 	prompt := DefaultReviewerPrompt()
-	for _, want := range []string{SharedEditorialPolicy, "只修有证据的问题", "禁止整篇重写", "where", "课程资料", "关注理由", "祝福互动"} {
+	for _, want := range []string{SharedEditorialPolicy, "只修有依据的问题", "不整篇重写", "where", "课程资料", "课尾五步", "价格锚定", "遗憾预演", "祝福"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q", want)
 		}

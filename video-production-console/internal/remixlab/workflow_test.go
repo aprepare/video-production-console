@@ -310,8 +310,9 @@ func TestCreateWorkflowExperimentSnapshotsAndRuns(t *testing.T) {
 	if agents != 1 {
 		t.Fatalf("agent stages = %d, want 1", agents)
 	}
-	// 二创段 4 条边 + 生产段 6 条（关键词默认关闭）。
-	if len(view.Edges) != 10 {
+	// 二创段 5 条边（原文→策划、策划→写手、原文→写手、写手→审稿、审稿→定稿）
+	// + 生产段 6 条（定稿→闸门、闸门→建项目→口播→配音→混剪→发布；关键词默认关闭）。
+	if len(view.Edges) != 11 {
 		t.Fatalf("edges = %d", len(view.Edges))
 	}
 	if _, exists := byID["produce-captions"]; exists {

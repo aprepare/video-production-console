@@ -15,18 +15,43 @@ export const NARRATOR = "旁白";
 /** fable = 寓言动画（角色 + 每镜视频）；explainer = 财经解说（每镜一图 + 推拉，重点镜出视频）。 */
 export type AiShortMode = "fable" | "explainer";
 
-export type AiStylePreset = { key: string; name: string; prompt: string; usage: string };
+// note：给选画风的人看的判断（适合谁 / 能不能让人停下）；preview：同一测试场景下该画风的参考图地址。
+export type AiStylePreset = { key: string; name: string; prompt: string; usage: string; note?: string; preview?: string };
 
+export type VideoPlan = "none" | "opening" | "hooks" | "all" | "first_n";
+/** 分段画风：各位置用哪套画风（style key），空 = 跟随项目底色。opening_shots 开头算几镜，默认 1。 */
+export type SegmentStyles = { opening?: string; opening_shots?: number; money?: string; blessing?: string; scenario?: string };
+export const SEGMENT_ROLES: { key: keyof Omit<SegmentStyles, "opening_shots">; label: string; hint: string }[] = [
+  { key: "opening", label: "开头几镜", hint: "抓人用：年代老照片或版画" },
+  { key: "money", label: "讲钱的镜", hint: "旁白里有利息、存款、金额的镜" },
+  { key: "blessing", label: "祝福词那一镜", hint: "评论区留四个字那一句" },
+  { key: "scenario", label: "结尾处境镜", hint: "课尾前“……的时候，您拿不拿得出来”那几镜" },
+];
+/** 07 里给用户的推荐方案。 */
+export const RECOMMENDED_SEGMENT_STYLES: SegmentStyles = { opening: "retro_film", opening_shots: 1, money: "macro_money", blessing: "papercut", scenario: "oil_painting" };
+export const SHOT_ROLE_LABEL: Record<string, string> = { opening: "开头", money: "讲钱", blessing: "祝福词", scenario: "结尾处境", course: "课尾", body: "" };
 export type ShotKeyword = { text: string; kind: "number" | "concept" | "risk" };
 export type CaptionCue = { text: string; start_s: number; end_s: number; keywords?: ShotKeyword[] };
 export type VisualSettings = {
   fast_opening?: boolean; opening_video_seconds?: 0 | 30 | 60; video_model?: string;
+  /** 视频计划：none 全图 / opening 前 30·60 秒 / hooks 开场＋中段钩子＋结尾三段 / all 全片 / first_n 前 N 镜。空值按 opening_video_seconds 推导。 */
+  video_plan?: VideoPlan; video_first_n?: number;
+  /** 字幕样式：outline 白字黑边 / band 白字＋半透明底块。 */
+  caption_style?: "outline" | "band";
+  /** 字幕与顶部标题字色 #RRGGBB，默认黄字 #FFDE00。 */
+  caption_color?: string;
+  /** 顶部大标题只在开头停几秒；-1 表示贯穿全片；缺省 10。 */
+  headline_seconds?: number;
+  /** 分段画风；缺省或空对象 = 全片跟随底色。 */
+  segment_styles?: SegmentStyles;
   layout: "portrait_full" | "portrait_inset";
   caption_enabled: boolean; caption_position: "lower" | "middle" | "window"; caption_size: number;
   keywords_enabled: boolean; annotation_enabled: boolean;
   motion_strength: "gentle" | "standard" | "none"; transition: "cut" | "fade"; sfx_enabled: boolean;
 };
-export const defaultVisualSettings = (): VisualSettings => ({ layout: "portrait_full", caption_enabled: true, caption_position: "lower", caption_size: 12, keywords_enabled: true, annotation_enabled: true, motion_strength: "gentle", transition: "fade", sfx_enabled: false, fast_opening:true, opening_video_seconds:0 });
+export const DEFAULT_CAPTION_COLOR = "#FFDE00";
+export const HEADLINE_FULL_VIDEO = -1;
+export const defaultVisualSettings = (): VisualSettings => ({ layout: "portrait_full", caption_enabled: true, caption_position: "lower", caption_size: 18, caption_color: DEFAULT_CAPTION_COLOR, headline_seconds: 10, keywords_enabled: false, annotation_enabled: false, motion_strength: "gentle", transition: "fade", sfx_enabled: false, fast_opening:true, opening_video_seconds:0 });
 export const visualOf = (short: AiShort): VisualSettings => short.visual_settings ?? { ...defaultVisualSettings(), layout: "portrait_inset", caption_position: "window", caption_size: 9, keywords_enabled: false, annotation_enabled: false, sfx_enabled: true, fast_opening:false, transition:"cut" };
 
 export type AiShot = {
@@ -40,6 +65,9 @@ export type AiShot = {
   seconds: number;
   /** 解说模式：画风预设 key / 画面主体 / 重点镜（图生视频） / 推拉类型。 */
   style_key?: string;
+  /** 镜头在全片里的位置角色（opening/money/blessing/scenario/course/body），分段画风按它选画风；style_pinned 表示手动定过画风。 */
+  role?: string;
+  style_pinned?: boolean;
   subject?: string;
   hero?: boolean;
   camera_move?: string;
@@ -66,9 +94,21 @@ export type AiShot = {
   end_s?: number;
 };
 
+export type AiCover = {
+  path?: string;
+  status?: string;
+  prompt?: string;
+  prompt_used?: string;
+  headline_used?: string;
+  style_key?: string;
+  error?: string;
+  stale?: boolean;
+};
+
 export type AiShort = {
   text_reasoning_effort?: string;
   assembly_progress?: {stage:number;message:string;started_at:string;updated_at:string};
+  cover?: AiCover;
   id: string;
   account_id?: string;
   mode?: AiShortMode;
@@ -151,11 +191,43 @@ export function shotReady(short: AiShort, shot: AiShot): boolean {
   return shotNeedsVideo(short,shot) ? shot.video_status === "done" && !!shot.video_path && !shot.image_stale : shot.image_status === "done" && !!shot.image_path && !shot.image_stale;
 }
 
+/** 与后端 VisualSettings.Plan 一致：显式 video_plan 优先，否则按 opening_video_seconds 推导。 */
+export function videoPlanOf(v?: VisualSettings | null): VideoPlan {
+  const plan = v?.video_plan;
+  if (plan === "none" || plan === "opening" || plan === "hooks" || plan === "all" || plan === "first_n") return plan;
+  return (v?.opening_video_seconds || 0) > 0 ? "opening" : "none";
+}
+
+const HOOKS_OPENING_SECS = 60, HOOKS_CLOSING_SHOTS = 3, SHOT_GAP_SECS = 0.35;
+
+/** 这镜的起始秒；未配音定时时按 0.23 秒/字估算，与后端 shotStart 同步。 */
+function shotStartOf(short: AiShort, shot: AiShot): number {
+  if ((shot.end_s || 0) > (shot.start_s || 0)) return shot.start_s || 0;
+  let start = 0;
+  for (const previous of short.shots || []) {
+    if (previous.index === shot.index) break;
+    start += previous.narration.replace(/[\s，。！？、；：“”‘’（）【】《》…—,.!?;:"'()\[\]-]/g, "").length * 0.23 + SHOT_GAP_SECS;
+  }
+  return start;
+}
+
+function isMidHookShot(short: AiShort, shot: AiShot): boolean {
+  const shots = short.shots || [];
+  const i = shots.findIndex((x) => x.narration.includes("四个字"));
+  if (i < 0) return false;
+  return shot.index === shots[i].index || (i + 1 < shots.length && shot.index === shots[i + 1].index);
+}
+
 export function shotNeedsVideo(short: AiShort, shot: AiShot): boolean {
   if(short.mode!=="explainer") return true;
-  const limit=short.visual_settings?.opening_video_seconds||0;
-  if(!limit) return false;
-  return (shot.end_s||0)>(shot.start_s||0)?(shot.start_s||0)<limit:!!shot.hero;
+  const v = short.visual_settings;
+  switch (videoPlanOf(v)) {
+    case "all": return true;
+    case "first_n": return shot.index < (v?.video_first_n || 0);
+    case "opening": return shotStartOf(short, shot) < (v?.opening_video_seconds || 60);
+    case "hooks": return shotStartOf(short, shot) < HOOKS_OPENING_SECS || isMidHookShot(short, shot) || shot.index >= (short.shots?.length || 0) - HOOKS_CLOSING_SHOTS;
+    default: return false;
+  }
 }
 
 export async function createShort(api: Api, input: ShortTextInput): Promise<AiShort> {
@@ -201,6 +273,10 @@ export async function regenerateCharacter(api: Api, id: string, index: number): 
 
 export async function assembleShort(api: Api, id: string): Promise<void> {
   await json(await api(`/api/ai-shorts/${id}/assemble`, { method: "POST" }), "组装失败。");
+}
+
+export async function generateCover(api: Api, id: string): Promise<void> {
+  await json(await api(`/api/ai-shorts/${id}/cover`, { method: "POST" }), "封面生成失败。");
 }
 
 /** 素材文件（图/视频/配音）的访问地址：后端只按文件名回传短片目录内的文件。 */

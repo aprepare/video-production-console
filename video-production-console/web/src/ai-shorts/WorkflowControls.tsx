@@ -1,10 +1,18 @@
 import {useEffect,useState} from "react";
 import type {AiShort} from "./api";
 
+// 09-08 实测（grok-4.6-fast，同一块 218 字）：low 49 秒，high 319 秒，拆出来的镜头数一样。
+// 拆分镜是并行的，总时长 ≈ 最慢那一块，所以强度直接决定等多久。
+const REASONING_HINT: Record<string, string> = {
+ "": "默认 low：一块约 1 分钟，整篇一两分钟。",
+ none: "不思考，最快，画面描述会粗一些。", minimal: "接近 low。", low: "一块约 1 分钟，整篇一两分钟。",
+ medium: "一块约 2～3 分钟。", high: "一块约 5 分钟，整篇 5～9 分钟；画面描述和 low 差别不大，不推荐。", xhigh: "比 high 更慢，不推荐。",
+};
 export function ReasoningSelect({value,onChange,disabled}:{value:string;onChange:(v:string)=>void;disabled?:boolean}) {
+ const slow = value === "high" || value === "xhigh";
  return <label>分镜思考强度<select aria-label="分镜思考强度" value={value} disabled={disabled} onChange={e=>onChange(e.target.value)}>
-  <option value="">默认（low）</option>{["none","minimal","low","medium","high","xhigh"].map(v=><option key={v} value={v}>{v}</option>)}
- </select><small>用于分大段与拆分镜，需接口和模型支持。</small></label>;
+  <option value="">默认（low，推荐）</option>{["none","minimal","low","medium","high","xhigh"].map(v=><option key={v} value={v}>{v}</option>)}
+ </select><small className={slow ? "ai-shorts__dirty" : undefined}>{REASONING_HINT[value] ?? REASONING_HINT[""]} 只影响拆分镜，不影响生图。</small></label>;
 }
 export function AssemblyStatus({short}:{short:AiShort}) {
  const [clock,setClock]=useState(Date.now());

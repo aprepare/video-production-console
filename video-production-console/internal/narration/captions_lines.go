@@ -135,6 +135,51 @@ func alignSpokenLines(lines []string, words []Word) ([]Caption, error) {
 	return captions, nil
 }
 
+// AlignLinesToRunes places each 口播稿 line on a caller-supplied stream of
+// content runes and returns, per line, the [first,last] stream index it covers
+// ({-1,-1} when the stream has no trace of the line). content strips the
+// characters the caller's stream also skipped, so both sides count the same
+// units. Same LCS + dominant-cluster logic as alignSpokenLines, without timings.
+func AlignLinesToRunes(lines []string, stream []rune, content func(string) []rune) [][2]int {
+	out := make([][2]int, len(lines))
+	for i := range out {
+		out[i] = [2]int{-1, -1}
+	}
+	if len(stream) == 0 || len(lines) == 0 {
+		return out
+	}
+	timed := make([]timedRune, len(stream))
+	for i, r := range stream {
+		timed[i] = timedRune{r: r}
+	}
+	var wants []rune
+	var wantLine []int
+	for li, line := range lines {
+		for _, r := range content(line) {
+			wants = append(wants, r)
+			wantLine = append(wantLine, li)
+		}
+	}
+	if len(wants) == 0 {
+		return out
+	}
+	matches := lcsMatches(wants, timed)
+	lineIdx := make(map[int][]int, len(lines))
+	for wi, si := range matches {
+		if si >= 0 {
+			lineIdx[wantLine[wi]] = append(lineIdx[wantLine[wi]], si)
+		}
+	}
+	for li := range lines {
+		idxs := clusterIndexes(lineIdx[li])
+		if len(idxs) == 0 {
+			continue
+		}
+		out[li] = [2]int{idxs[0], idxs[len(idxs)-1]}
+	}
+	return out
+}
+
 // clusterIndexes keeps the longest tight run of matched stream indexes. Very
 // common runes (的、了、人) can be claimed far from a line's true position;
 // the dominant cluster is where the line was actually spoken.

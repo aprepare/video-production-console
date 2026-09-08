@@ -81,7 +81,8 @@ type Workflow struct {
 	Production remixproducer.Config `json:"production,omitzero"`
 }
 
-// DefaultWorkflow：原文 → 写手 → 审稿 → 人工定稿。
+// DefaultWorkflow：原文 → 二创策划 → 写手 → 审稿 → 人工定稿。
+// 策划节点 ID 固定为 hook：引擎按此文件名读取写作计划并交给审稿 {{writing_plan}}。
 // agent_prompts.json 里的历史覆盖会被吸收进来，用户已调过的提示词不丢。
 func DefaultWorkflow(overrides AgentPrompts) Workflow {
 	reviewer := openaicompat.DefaultReviewerPrompt()
@@ -91,20 +92,28 @@ func DefaultWorkflow(overrides AgentPrompts) Workflow {
 		}
 		return fallback
 	}
-	// 情报 agent 默认钉在快模型上：节点模型留空时引擎会回落到写手模型，
-	// 策划沿用快模型，换写手时保持独立。
+	// 策划节点模型留空时回落到写手模型；推理强度用 medium 已够出计划，比写手省时。
 	return Workflow{
 		Version: 1,
 		Name:    "默认二创工作流",
 		Nodes: []WorkflowNode{
 			{ID: "source", Type: WorkflowNodeInput, Title: "对标原文", X: 0, Y: 190},
-			{ID: "writer", Type: WorkflowNodeWriter, Title: "写手", X: 600, Y: 190},
-			{ID: "review", Type: WorkflowNodeReviewer, Title: "审稿终审", X: 880, Y: 190, Config: WorkflowNodeConfig{
-				SystemPrompt: pickText(overrides.ReviewerSystem, reviewer),
+			{ID: openaicompat.PlannerNodeID, Type: WorkflowNodeAgent, Title: openaicompat.PlannerNodeTitle, X: 320, Y: 190, Config: WorkflowNodeConfig{
+				ReasoningEffort: "medium",
+				SystemPrompt:    pickText(overrides.HookSystem, openaicompat.PlannerSystemPrompt),
+				UserTemplate:    openaicompat.PlannerUserTemplate,
+				InjectTitle:     openaicompat.PlannerInjectTitle,
+				InjectRule:      openaicompat.PlannerInjectRule,
 			}},
-			{ID: "final", Type: WorkflowNodeOutput, Title: "定稿与发布包", X: 1160, Y: 190},
+			{ID: "writer", Type: WorkflowNodeWriter, Title: "写手", X: 640, Y: 190},
+			{ID: "review", Type: WorkflowNodeReviewer, Title: "审稿终审", X: 960, Y: 190, Config: WorkflowNodeConfig{
+				SystemPrompt: pickText(overrides.ReviewerSystem, reviewer),
+				UserTemplate: openaicompat.ReviewerUserTemplate,
+			}},
+			{ID: "final", Type: WorkflowNodeOutput, Title: "定稿与发布包", X: 1280, Y: 190},
 		},
 		Edges: [][2]string{
+			{"source", openaicompat.PlannerNodeID}, {openaicompat.PlannerNodeID, "writer"},
 			{"source", "writer"},
 			{"writer", "review"}, {"review", "final"},
 		},

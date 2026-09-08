@@ -29,7 +29,7 @@ func (s *Service) prepareOpeningTimeline(ctx context.Context, rt Runtime, id str
 	if err != nil {
 		return err
 	}
-	if !short.IsExplainer() || short.VisualSettings == nil || short.VisualSettings.OpeningVideoSeconds == 0 {
+	if !short.IsExplainer() || !short.WantsAnyVideo() {
 		return nil
 	}
 	times := make([][2]float64, len(short.Shots))
@@ -61,7 +61,11 @@ func (s *Service) prepareOpeningTimeline(ctx context.Context, rt Runtime, id str
 			x.Shots[i].StartS, x.Shots[i].EndS = t[0], t[1]
 			x.Shots[i].Hero = x.NeedsVideo(x.Shots[i])
 			if x.Shots[i].Hero {
-				duration := math.Min(t[1], float64(x.VisualSettings.OpeningVideoSeconds)) - t[0]
+				// opening 档只给开场窗口内的部分做视频，窗口外那截接静图；其他档整镜都是视频。
+				duration := t[1] - t[0]
+				if limit := x.VisualSettings.OpeningLimit(); limit > 0 && x.VisualSettings.Plan() == VideoPlanOpening {
+					duration = math.Min(t[1], limit) - t[0]
+				}
 				switch {
 				case duration <= 6:
 					x.Shots[i].Seconds = 6
@@ -69,8 +73,11 @@ func (s *Service) prepareOpeningTimeline(ctx context.Context, rt Runtime, id str
 					x.Shots[i].Seconds = 10
 				case duration <= 15:
 					x.Shots[i].Seconds = 15
+				case duration <= 20:
+					// 40～65 字一镜时偶有 15～20 秒的镜；15 秒视频在剪映里放慢到 ≥0.75x 补齐，看不出来。
+					x.Shots[i].Seconds = 15
 				default:
-					return fmt.Errorf("第%d镜超过15秒，请增加分镜后再生成开场视频", i+1)
+					return fmt.Errorf("第%d镜超过20秒，请增加分镜后再生成开场视频", i+1)
 				}
 			}
 		}
@@ -92,7 +99,10 @@ func explainerJobShots(short *Short, shot Shot, timing [2]float64) []jobShot {
 		return []jobShot{item}
 	}
 	item.Image, item.Video = "", shot.VideoPath
-	limit := float64(short.VisualSettings.OpeningVideoSeconds)
+	if short.VisualSettings.Plan() != VideoPlanOpening {
+		return []jobShot{item}
+	}
+	limit := short.VisualSettings.OpeningLimit()
 	if item.EndS <= limit {
 		return []jobShot{item}
 	}

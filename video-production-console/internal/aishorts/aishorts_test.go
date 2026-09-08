@@ -89,16 +89,31 @@ func TestSpreadCaptions(t *testing.T) {
 	}
 }
 
-func TestSplitClausesKeepsWholeClauses(t *testing.T) {
+func TestSplitClausesOneLinePerScreen(t *testing.T) {
+	// 对齐混剪口播稿：一条字幕 ≤9 个实字；分句先按标点切，超长的再按顿号/词边界压短。
 	got := splitClauses("一夜之间，你在网上留下的每一条痕迹，买过啥、看过啥、去过哪、跟谁聊过天，全都能被编号、被估价、被交易。")
-	want := []string{"一夜之间", "你在网上留下的每一条痕迹", "买过啥、看过啥、去过哪、跟谁聊过天", "全都能被编号、被估价、被交易"}
+	want := []string{"一夜之间", "你在网上", "留下的每一条痕迹", "买过啥、看过啥", "去过哪、跟谁聊过天", "全都能被编号", "被估价、被交易"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("clauses = %v", got)
 	}
-	// 超过 32 字的分句才均分。
-	long := splitClauses(strings.Repeat("字", 40))
-	if len(long) != 2 || len([]rune(long[0])) != 20 {
-		t.Fatalf("long clause split = %v", long)
+	for _, c := range got {
+		if n := substantiveRunes(c); n > portraitCaptionMaxRunes || n < portraitCaptionMinRunes {
+			t.Fatalf("caption %q has %d runes", c, n)
+		}
+	}
+	// 没有任何标点的长句均分，每条不超过上限且不切断数字单位。
+	long := splitClauses("这笔钱放在银行里一年只有950元利息根本跑不过物价")
+	joined := strings.Join(long, "")
+	if joined != "这笔钱放在银行里一年只有950元利息根本跑不过物价" {
+		t.Fatalf("text changed: %q", joined)
+	}
+	for _, c := range long {
+		if substantiveRunes(c) > portraitCaptionMaxRunes {
+			t.Fatalf("long clause piece too long: %v", long)
+		}
+		if strings.Contains(c, "950") && !strings.Contains(c, "950元") {
+			t.Fatalf("number cut from unit: %v", long)
+		}
 	}
 }
 
@@ -146,7 +161,7 @@ func TestFallbackBorrowsScenesFromHints(t *testing.T) {
 }
 
 func TestSplitOverlongShotsKeepsScene(t *testing.T) {
-	shots := []Shot{{Narration: strings.Repeat("一二三四五六七八九十，", 8), Scene: "桌上的文件", Subject: "文件"}}
+	shots := []Shot{{Narration: strings.Repeat("一二三四五六七八九十，", 11), Scene: "桌上的文件", Subject: "文件"}}
 	got := splitOverlongShots(shots)
 	if len(got) < 2 {
 		t.Fatalf("overlong shot not split: %+v", got)
@@ -253,6 +268,42 @@ func TestFallbackSplitRespectsLimit(t *testing.T) {
 	}
 	if squash(joined.String()) != squash(text) {
 		t.Fatalf("fallback lost text: %q", joined.String())
+	}
+}
+
+func TestBalanceExplainerShotsMergesToTargetLength(t *testing.T) {
+	long := func(n int, tag string) string { return strings.Repeat("字", n) + "。" }
+	shots := []Shot{
+		{Narration: long(14, "a"), Scene: "开场1"}, {Narration: long(15, "b"), Scene: "开场2"}, // 开场区 29 字，保持短镜
+		{Narration: long(100, "c"), Scene: "开场3"}, // 跨出开场区
+		{Narration: long(20, "d"), Scene: "d", Keywords: []ShotKeyword{{Text: "甲", Kind: "concept"}}},
+		{Narration: long(30, "e"), Scene: "e", Keywords: []ShotKeyword{{Text: "乙", Kind: "number"}}, Annotation: "注"},
+		{Narration: long(35, "f"), Scene: "f"}, {Narration: long(38, "g"), Scene: "g"}, // 35+38 > 68，不并
+		{Narration: long(50, "h"), Scene: "h"}, {Narration: long(12, "i"), Scene: "i"}, // 短尾并回前一镜
+	}
+	got := balanceExplainerShots(shots, 120)
+	var joined, want strings.Builder
+	for _, s := range got {
+		joined.WriteString(s.Narration)
+	}
+	for _, s := range shots {
+		want.WriteString(s.Narration)
+	}
+	if joined.String() != want.String() {
+		t.Fatal("balance lost or reordered narration")
+	}
+	lens := make([]int, 0, len(got))
+	for _, s := range got {
+		lens = append(lens, substantiveRunes(s.Narration))
+	}
+	if len(got) != 7 || lens[0] != 14 || lens[1] != 15 || lens[2] != 100 || lens[3] != 50 || lens[4] != 35 || lens[5] != 38 || lens[6] != 62 {
+		t.Fatalf("lens = %v, want [14 15 100 50 35 38 62]", lens)
+	}
+	if got[3].Scene != "e" || got[3].Annotation != "注" || len(got[3].Keywords) != 2 {
+		t.Fatalf("merged shot should keep the longer shot's scene plus both keywords: %+v", got[3])
+	}
+	if got[6].Scene != "h" {
+		t.Fatalf("tail merge should keep previous scene: %+v", got[6])
 	}
 }
 
@@ -373,7 +424,9 @@ func TestFinalizeExplainerShots(t *testing.T) {
 		shots[i].StyleKey = "documentary"
 		shots[i].VideoPath, shots[i].VideoStatus = "old.mp4", ShotDone
 	}
-	finalizeExplainerShots(shots, "collage")
+	short := &Short{Mode: ModeExplainer, Style: "collage", Shots: shots}
+	finalizeExplainerShots(short)
+	shots = short.Shots
 	for i, s := range shots {
 		if s.Index != i || s.CameraMove == "" {
 			t.Fatalf("shot %d not finalized: %+v", i, s)

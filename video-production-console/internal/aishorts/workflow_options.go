@@ -26,8 +26,12 @@ type reasoningClient struct {
 	effort string
 }
 
+// Chat 只给没写思考强度的请求补上用户选的强度。分大段、拆镜重试这类明确写了 "low" 的调用保留原值——
+// 之前是无条件覆盖，导致这些辅助调用也按 high/xhigh 跑，一篇稿的拆分镜多耗一两分钟（09-08 排查）。
 func (c reasoningClient) Chat(req openaicompat.ChatRequest) (openaicompat.ChatResponse, error) {
-	req.ReasoningEffort = c.effort
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		req.ReasoningEffort = c.effort
+	}
 	return c.ChatClient.Chat(req)
 }
 

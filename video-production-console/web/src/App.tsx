@@ -19,6 +19,7 @@ import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
+import { WorkspacePage } from "./workspace/WorkspacePage";
 import { AiShortsPage } from "./ai-shorts/AiShortsPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import {
@@ -104,7 +105,9 @@ function App() {
   const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
   const aiShortsRoute = route.view === "ai-shorts";
+  const workspaceRoute = route.view === "workspace";
   const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project";
+  const workspaceFile = workspaceRoute ? new URLSearchParams(window.location.search).get("file") || undefined : undefined;
   const montageRoute = route.view === "projects" || route.view === "project";
   const routedProjectID = route.view === "project" ? route.projectID : undefined;
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
@@ -580,6 +583,7 @@ function App() {
       || route.view === "image-video"
       || route.view === "remix-lab"
       || route.view === "ai-shorts"
+      || route.view === "workspace"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -969,7 +973,7 @@ function App() {
     <ModelOptionsProvider options={modelOptionsList(settings?.public?.model_options)}>
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <ConsoleNavigation
-        active={imageRoute ? "image" : aiShortsRoute ? "ai" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : aiShortsRoute ? "ai" : workspaceRoute ? "workspace" : remixShell ? "remix" : null}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
@@ -982,6 +986,8 @@ function App() {
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
+      ) : workspaceRoute ? (
+        <WorkspacePage api={api} file={workspaceFile} onNavigate={navigate} />
       ) : aiShortsRoute ? (
         <AiShortsPage
           api={api}

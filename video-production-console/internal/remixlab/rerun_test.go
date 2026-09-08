@@ -59,8 +59,9 @@ func TestRerunUsesSnapshotAndRejectsOverlappingRound(t *testing.T) {
 	if _, err = svc.SaveWorkflowDefinition(current); err != nil {
 		t.Fatal(err)
 	}
+	// hook 是策划节点而不是参考稿：进 Planner，References 为 nil。
 	options, err := svc.RerunOptions(t.Context(), "old")
-	if err != nil || options.References == nil || len(*options.References) != 1 || (*options.References)[0].Model != "saved-planner" || (*options.References)[0].ReasoningEffort != "medium" || (*options.References)[0].ServiceTier != "default" || options.Writer.Model != "saved-writer" || options.Writer.ServiceTier != "priority" || options.Reviewer.Model != "saved-reviewer" {
+	if err != nil || options.References != nil || options.Planner == nil || options.Planner.Model != "saved-planner" || options.Planner.ReasoningEffort != "medium" || options.Planner.ServiceTier != "default" || options.Writer.Model != "saved-writer" || options.Writer.ServiceTier != "priority" || options.Reviewer.Model != "saved-reviewer" {
 		t.Fatalf("rerun options did not use saved role settings: %+v, %v", options, err)
 	}
 	input := RerunInput{Writer: RerunModel{"claude-writer", "high", "default"}, Reviewer: RerunModel{"reviewer-choice", "low", "priority"}}
@@ -92,7 +93,11 @@ func TestRerunUsesSnapshotAndRejectsOverlappingRound(t *testing.T) {
 			if node.Config.Role == "reference" {
 				referenceCount++
 			}
-			if node.ID == "hook" && (node.Config.Model != "reference-a" || node.Config.ReasoningEffort != "medium" || node.Config.ServiceTier != "priority") {
+			// 显式参考列表只增删参考稿；策划节点保留账号里保存的设置。
+			if node.ID == "hook" && (node.Config.Role == "reference" || node.Config.Model != "saved-planner" || node.Config.ReasoningEffort != "medium") {
+				t.Fatalf("planner node altered by reference selection: %+v", node.Config)
+			}
+			if node.Config.Role == "reference" && node.ID == "reference_1" && (node.Config.Model != "reference-a" || node.Config.ReasoningEffort != "medium" || node.Config.ServiceTier != "priority") {
 				t.Fatalf("reference override lost: %+v", node.Config)
 			}
 			if node.ID == "ammo" || node.ID == "facts" {

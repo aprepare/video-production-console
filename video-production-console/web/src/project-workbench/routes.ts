@@ -10,6 +10,7 @@ export type AppLocation =
   | { view: "remix-lab"; experimentID: string }
   | { view: "ai-shorts" }
   | { view: "ai-shorts"; shortID: string }
+  | { view: "workspace" }
   | { view: "not-found" };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,6 +41,9 @@ export function parseLocation(pathname: string): AppLocation {
   if (shortMatch) {
     if (!uuidPattern.test(shortMatch[1])) return { view: "not-found" };
     return { view: "ai-shorts", shortID: shortMatch[1].toLowerCase() };
+  }
+  if (pathname === "/workspace" || pathname === "/workspace/") {
+    return { view: "workspace" };
   }
   if (pathname === "/remix-lab" || pathname === "/remix-lab/") {
     return { view: "remix-lab" };

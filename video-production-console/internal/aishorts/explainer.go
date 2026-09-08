@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"video-production-console/internal/agentruntime/openaicompat"
 )
@@ -17,24 +18,32 @@ import (
 // 各块并行拆，再按原顺序拼起来。每块拆完都核对「全部 narration 连起来 == 原文」，
 // 不等就重试一次，还不等就退回按句号硬切，保证一个字都不丢。
 const (
-	explainerChunkRunes    = 450
-	explainerMaxShotRunes  = 60 // 防止整段挤进一镜；实际按语义和配音定时
+	// 09-08 提速：块从 450 字缩到 320 字、并发从 6 提到 10。单次调用的耗时基本跟输出 token 成正比，
+	// 块小一半每次就快一半；一篇 1800～2300 字的稿 6～8 块同时在跑，总时长 ≈ 最慢那一块。
+	explainerChunkRunes    = 320
+	explainerMaxShotRunes  = 80 // 防止整段挤进一镜；实际按语义和配音定时（一镜约 40～65 字，≈9～15 秒）
 	explainerMinShotRunes  = 8  // 少于这个数的碎片并入相邻镜头
-	explainerChunkParallel = 6
+	explainerChunkParallel = 10
+	// 开场加密区之后的镜头长度：不足 explainerTargetMin 的镜并入后一镜，合并后不超过 explainerTargetMax。
+	explainerTargetMin  = 40
+	explainerTargetMax  = 68
+	explainerOpeningRun = 120 // fast_opening 时前约 120 实字（≈30 秒）保持短镜
 )
 
-const explainerSystemPrompt = `你是财经口播的视觉编辑。面向中老年观众，以真实、易懂、有变化的生活纪实画面辅助旁白。系统另行指定画幅和统一画风。
+const explainerSystemPrompt = `你是财经口播的视觉导演。观众是 50 岁以上的普通人，画面要一眼看懂：这是谁、在哪、正在做什么。系统另行指定画幅和统一画风。
 
-先理解每段的生活处境，再选画面：谁受到影响 → 正在做什么或面临什么选择 → 人与人、人与钱的关系 → 能拍到的场景。visual_intent 写清观众从哪个可见动作或关系理解原句，scene 只写可见内容。不要只列原句里的名词，再摆成静物。画面是生活示意，不能用它证明原句中的政策、工资变化或收益结论。
+先通读全文，知道开头、转折、高潮、结尾在哪，再逐段选画面。每镜不是把这段话全画出来，而是选出这段里最具体、最容易看懂、最值得被看到的一个现实瞬间。
 
-切镜：一个完整意思一镜，通常约18～40字；以观点变化、例子、对比和转折切开，最长60字。短语与下文并在一起。不要按固定秒数换图，不拆断金额、百分比、年份、课程名或因果关系。narration 必须逐字保留原文，所有镜头连起来与输入一致；不要替用户改写口播。
+切镜：一个完整意思一镜，通常约 40～65 字（念 9～15 秒），以完整句为主，在观点变化、举例、对比、转折处切开，最长 80 字；不足 20 字的短句并入相邻镜。不拆断金额、百分比、年份、课程名或因果关系。narration 必须逐字保留原文，所有镜头连起来与输入一致；不要替用户改写口播。
 
-配图：
-1. 人物、物件、环境按文意选择，不设固定比例，不预设静物优先。提到家人、工作也不代表每镜都需要人物。行为与关系用人物镜；具体对象与细节用物件镜；场所与空间用环境镜。根据本句传递的信息选最清楚的一种。不是每次出现“家庭”就合影，也不是每个抽象句都摆账本、钥匙、现金。只有确实需要空镜或静物特写时，才在scene明确无人。
-2. 一镜一个重点，选容易看懂的日常行为。例如同一段讲家庭收支：交代处境可用家人讨论，解释支出可用日常生活物件特写，交代工作环境可用办公楼或通勤空间空镜。按观点推进选择，不机械照搬三镜顺序。不要把“钱听谁的、进门、缩水、风口”逐字画成拟人钞票、门口现金、变小的钱或风。抽象内容必要时用metaphor并说明示意，不伪造事实证据。
-3. 人物按语境设定身份、年龄和具体动作：子女上班用年轻成年人，父母用中老年人；观众年龄不等于所有画中人物的年龄。普通中国生活状态，侧面、背面、同框互动均可，不强求正脸；避免摆拍、夸张愁容、磨皮模特。提交前检查整段镜头：有多种信息的段落不要全用人物镜，也不要全用静物镜；避免连续三个相同主体类型，若原意确实要求相同类型可保留并变化景别。人物镜写清人数和动作，空镜或静物特写明确写“无人入镜”。连续镜头按论述改变行为、关系或景别，避免反复查看手机、同一桌面、钞票堆或发愁的人脸；无须为凑类型改变原意。
-4. scene 按主体、状态/动作、环境、景别写成可直接生图的描述。日期、金额、利率、课程名交给后期字幕，图片中不生成可读文字、假界面或虚构数据图表；场景是示意，不伪装历史新闻现场。每镜不堆多个时空。
-5. camera_move 选择 still / zoom_in / zoom_out / pan_left / pan_right。物件细节可推近，环境可平移，对比可静止；运动服务主体，不按顺序轮换。这里只做静帧镜头运动，不承诺人物或物体真的行动。
+配图（按优先级）：
+1. 一眼看懂优先：能直接画事实就不画象征。禁止拟人钞票、变小的钱、乌云、天平、锁链、空椅子、破碎镜子、多重叠影、概念海报这类要观众猜的画面。抽象的判断和总结，回到前后文找一个能承载它的真实人物、事件或生活场景来画。
+2. 具体真实优先：选现实中真能拍到的场景——家里餐桌、小区门口、菜市场、银行营业厅、医院缴费窗口、单位、街道、车站、店铺。人物 + 动作 + 环境是默认结构；只有确实需要空镜或物件特写时，才在 scene 明确“无人入镜”。
+3. 人物要有明确动作（数存折、翻保单、排队、打电话、劝人、指着什么、回头看），不能机械站着。人物按语境定身份和年龄：观众自己一辈用五六十岁的中国普通人，子女用年轻成年人，孙辈用孩子；朴素日常着装，自然皮肤和体态，不摆拍、不磨皮、不夸张愁容。
+4. 视觉起伏：开头前三镜、转折、高潮、课尾这些位置用更明确的动作、更强的情绪或更大的场面；过渡段可以平静。连续三镜不能同时出现同一人物 + 同一地点 + 同一景别，主动换场景、人数、景别、机位、光线。远景交代环境和人群，中景交代行为，近景交代情绪，特写交代物件和手部动作，俯拍交代规模，低机位交代建筑和车辆。
+5. 一镜只有一个视觉中心：1 个主视觉 + 少量辅助元素，不把多个时间、地点、事件塞进一张图，约 1 秒内能看懂。
+6. scene 按“地点 + 主体 + 动作 + 环境 + 景别 + 光线”写成可直接生图的描述，70～110 字。日期、金额、利率、课程名交给后期字幕，图片中不生成任何可读文字、假界面或数据图表；场景是示意，不伪装新闻现场。
+7. camera_move 选择 still / zoom_in / zoom_out / pan_left / pan_right：人物情绪和物件细节推近，环境和人群平移，对比可静止；运动服务主体，不按顺序轮换。这里只做静帧镜头运动，不承诺人物真的行动。
 6. keywords 选0～3个在本镜旁白中逐字存在的连续词组：number 数值含单位，risk 风险词，concept 核心概念。金额、0.95%、2007年等保持完整；不要整句变黄。
 7. annotation 是可选的屏幕重点标注，通常空；关键转折、对比或总结时写一个短语，不重复整条字幕，不新增结论、不杜撰数字，也不写操作指令。标注由后期独立文字轨生成。
 
@@ -59,20 +68,24 @@ type explainerReply struct {
 // 两段式：先由 segmentModel 按话题把整篇切成几个大段（空则按段落/字数机械切），
 // 再由 model 对每个大段并行拆镜。大段之间互不依赖，几十秒就能拆完一篇。
 func buildExplainerStoryboard(ctx context.Context, chat openaicompat.ChatClient, model, segmentModel string, short *Short) error {
+	started := time.Now()
+	// 只给没写思考强度的请求补上用户选的强度：分大段和重试用的 "low" 要保住，不然一篇稿 3 分钟大半耗在这。
 	chat = reasoningClient{ChatClient: chat, effort: reasoningOf(short.TextReasoningEffort)}
 	chunks := segmentStory(ctx, chat, segmentModel, short.Story)
 	if len(chunks) == 0 {
 		return errors.New("文案为空")
 	}
+	slog.Default().Info("ai short storyboard: start", "chunks", len(chunks), "runes", substantiveRunes(short.Story), "segment_model", segmentModel, "segment_elapsed", time.Since(started).Round(time.Second))
 	results := make([][]Shot, len(chunks))
 	errs := make([]error, len(chunks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, explainerChunkParallel)
 	prefixRunes := 0
+	fastOpening := short.VisualSettings != nil && short.VisualSettings.FastOpening
 	for i, chunk := range chunks {
 		openingRunes := 0
-		if short.VisualSettings != nil && short.VisualSettings.FastOpening {
-			openingRunes = max(0, 120-prefixRunes)
+		if fastOpening {
+			openingRunes = max(0, explainerOpeningRun-prefixRunes)
 		}
 		prefixRunes += substantiveRunes(chunk)
 		wg.Add(1)
@@ -95,10 +108,16 @@ func buildExplainerStoryboard(ctx context.Context, chat openaicompat.ChatClient,
 		short.Shots = append(short.Shots, part...)
 	}
 	short.Shots = tidyExplainerShots(short.Shots)
-	finalizeExplainerShots(short.Shots, StyleByKey(short.Style).Key)
+	openingKeep := 0
+	if fastOpening {
+		openingKeep = explainerOpeningRun
+	}
+	short.Shots = balanceExplainerShots(short.Shots, openingKeep)
+	finalizeExplainerShots(short)
 	if len(short.Shots) == 0 {
 		return errors.New("没拆出镜头")
 	}
+	slog.Default().Info("ai short storyboard: done", "chunks", len(chunks), "shots", len(short.Shots), "elapsed", time.Since(started).Round(time.Second), "effort", reasoningOf(short.TextReasoningEffort))
 	return nil
 }
 
@@ -163,8 +182,14 @@ func segmentStory(ctx context.Context, chat openaicompat.ChatClient, model, stor
 func storyboardChunk(ctx context.Context, chat openaicompat.ChatClient, model, chunk string, openingRunes ...int) ([]Shot, error) {
 	var lastErr error
 	var hints []Shot
+	started := time.Now()
 	for attempt := 0; attempt < 3; attempt++ {
-		shots, err := askExplainerModel(ctx, chat, model, chunk, openingRunes...)
+		// 第一次按用户选的思考强度；重试只是为了把原文对齐，用 low 快出结果，画面描述已经有第一次的 hints 兜底。
+		effort := ""
+		if attempt > 0 {
+			effort = "low"
+		}
+		shots, err := askExplainerModel(ctx, chat, model, chunk, effort, openingRunes...)
 		if err != nil {
 			lastErr = err
 			continue
@@ -174,9 +199,10 @@ func storyboardChunk(ctx context.Context, chat openaicompat.ChatClient, model, c
 		}
 		if !narrationMatches(shots, chunk) {
 			lastErr = errors.New("模型改动或漏掉了原文")
-			slog.Default().Warn("ai short storyboard: narration mismatch, retrying", "attempt", attempt+1, "model", model)
+			slog.Default().Warn("ai short storyboard: narration mismatch, retrying", "attempt", attempt+1, "model", model, "elapsed", time.Since(started).Round(time.Second))
 			continue
 		}
+		slog.Default().Info("ai short storyboard: chunk ok", "runes", substantiveRunes(chunk), "shots", len(shots), "attempts", attempt+1, "elapsed", time.Since(started).Round(time.Second))
 		return splitOverlongShots(realignNarrations(shots, chunk)), nil
 	}
 	slog.Default().Warn("ai short storyboard: falling back to mechanical split", "model", model, "error", lastErr)
@@ -290,15 +316,16 @@ func splitOverlongShots(shots []Shot) []Shot {
 	return out
 }
 
-func askExplainerModel(ctx context.Context, chat openaicompat.ChatClient, model, chunk string, openingRunes ...int) ([]Shot, error) {
+// askExplainerModel 拆一块。effort 为空时由外层 reasoningClient 补成用户选的思考强度；重试传 "low"。
+func askExplainerModel(ctx context.Context, chat openaicompat.ChatClient, model, chunk, effort string, openingRunes ...int) ([]Shot, error) {
 	systemPrompt := explainerSystemPrompt + "\n额外返回 motion：基于本镜 scene 中已有主体的一项可行动态，供开场图生视频使用。建筑和物件优先用镜头移动、自然反光或已有环境变化；没有人物的场景不要新增手或人，不强迫每镜翻文件、递物品。"
 	if len(openingRunes) > 0 && openingRunes[0] > 0 {
-		systemPrompt += fmt.Sprintf("\n开场加密：本段最前约%d个实字属于前30秒附近（仅为策划估算，最终按配音对齐）。这些内容优先每10～16个实字一个完整意思，约2～4秒换一次可见主体或景别；避免连续重复画面，不切断数字、课程名和短语，不改原文。后面恢复通常18～40字一镜。", openingRunes[0])
+		systemPrompt += fmt.Sprintf("\n开场加密：本段最前约%d个实字属于前30秒附近（仅为策划估算，最终按配音对齐）。这些内容优先每10～16个实字一个完整意思，约2～4秒换一次可见主体或景别；避免连续重复画面，不切断数字、课程名和短语，不改原文。后面恢复通常 40～65 字一镜，不要再切成十几字的碎镜。", openingRunes[0])
 	}
 	resp, err := chat.Chat(openaicompat.ChatRequest{
 		Model:           model,
 		Stream:          true,
-		ReasoningEffort: "low",
+		ReasoningEffort: effort,
 		Messages: []openaicompat.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: "文案：\n" + strings.TrimSpace(chunk)},
@@ -422,6 +449,75 @@ func tidyExplainerShots(shots []Shot) []Shot {
 		}
 	}
 	return cleaned
+}
+
+// balanceExplainerShots 把开场加密区之后的碎镜并成 40～68 实字一镜：模型常按句切出十几字的镜头，
+// 每镜一图会让画面切得太碎、也让图片费用翻倍。前 openingKeep 个实字（约前 30 秒）保持原切法，
+// 之后不足 explainerTargetMin 的镜并入后一镜，直到合并会超过 explainerTargetMax 为止；结尾的短尾并回前一镜。
+// 合并后的画面沿用旁白更长那一镜的场景，keywords 合并后最多三个。
+func balanceExplainerShots(shots []Shot, openingKeep int) []Shot {
+	if len(shots) < 2 {
+		return shots
+	}
+	out := make([]Shot, 0, len(shots))
+	pos := 0
+	for i := 0; i < len(shots); {
+		cur := shots[i]
+		start := pos
+		pos += substantiveRunes(cur.Narration)
+		i++
+		if start < openingKeep {
+			out = append(out, cur)
+			continue
+		}
+		for i < len(shots) && substantiveRunes(cur.Narration) < explainerTargetMin &&
+			substantiveRunes(cur.Narration)+substantiveRunes(shots[i].Narration) <= explainerTargetMax {
+			cur = mergeShots(cur, shots[i])
+			pos += substantiveRunes(shots[i].Narration)
+			i++
+		}
+		out = append(out, cur)
+	}
+	// 结尾短尾（不到目标下限的一半）并回前一镜，前一镜不在开场区且合并后不超上限。
+	if n := len(out); n >= 2 {
+		last, prev := out[n-1], out[n-2]
+		prevStart := 0
+		for _, s := range out[:n-2] {
+			prevStart += substantiveRunes(s.Narration)
+		}
+		if prevStart >= openingKeep && substantiveRunes(last.Narration) < explainerTargetMin/2 &&
+			substantiveRunes(prev.Narration)+substantiveRunes(last.Narration) <= explainerTargetMax+8 {
+			out[n-2] = mergeShots(prev, last)
+			out = out[:n-1]
+		}
+	}
+	return out
+}
+
+// mergeShots 把 b 并入 a：旁白顺序拼接；画面取旁白更长的一镜，平局取前一镜。
+func mergeShots(a, b Shot) Shot {
+	base, other := a, b
+	if substantiveRunes(b.Narration) > substantiveRunes(a.Narration) {
+		base, other = b, a
+	}
+	merged := base
+	merged.Narration = a.Narration + b.Narration
+	if merged.Annotation == "" {
+		merged.Annotation = other.Annotation
+	}
+	merged.Hero = a.Hero || b.Hero
+	seen := map[string]bool{}
+	merged.Keywords = nil
+	for _, kw := range append(append([]ShotKeyword{}, a.Keywords...), b.Keywords...) {
+		if kw.Text == "" || seen[kw.Text] || len(merged.Keywords) >= 3 {
+			continue
+		}
+		seen[kw.Text] = true
+		merged.Keywords = append(merged.Keywords, kw)
+	}
+	merged.ImageStatus, merged.VideoStatus = ShotPending, ShotPending
+	merged.ImagePath, merged.VideoPath = "", ""
+	return merged
 }
 
 // narrationMatches 只比实字：忽略空白和标点，拼接结果与原文一致就算对上。
@@ -561,12 +657,14 @@ func chunkStory(story string, max int) []string {
 	return chunks
 }
 
-// finalizeExplainerShots 编号、解析单镜画风并补齐镜头运动，清除旧视频状态。
-func finalizeExplainerShots(shots []Shot, styleKey string) {
-	styleKey = StyleByKey(styleKey).Key
+// finalizeExplainerShots 编号、按旁白打镜头角色、解析单镜画风（分段画风在这里生效）并补齐镜头运动，清除旧视频状态。
+func finalizeExplainerShots(short *Short) {
+	shots := short.Shots
+	assignShotRoles(shots, segmentStylesOf(short).openingShots())
 	for i := range shots {
 		shots[i].Index = i
-		shots[i].StyleKey = resolvedShotStyle(styleKey, shots[i].StyleKey)
+		shots[i].StylePinned = false // 重新拆的镜头是新镜头，没有手动定过的画风
+		shots[i].StyleKey = resolvedShotStyleFor(short, shots[i])
 		shots[i].SourceText = shots[i].Narration
 		if !validCameraMove(shots[i].CameraMove) {
 			switch shots[i].SubjectType {
@@ -637,7 +735,7 @@ const (
 	// 画面描述里写了人才附：人物约束。
 	explainerPeopleRule = "人物：按场景指定年龄与动作表现，未指定时为普通中国成年人，朴素日常着装，自然皮肤与体态；不要模特摆拍。"
 	// 平台审核红线。
-	explainerSafetyRule = "禁止国徽、国旗、领导人像、警察或军人制服；印章只能是普通红色圆章。"
+	explainerSafetyRule = "禁止国徽、国旗、领导人像、警察或军人制服。不要自行添加印章、图章、落款或角标；只有画面中的文件确实需要盖章时，才用一枚无字的普通红色圆章。"
 )
 
 // explainerImagePrompt 保留策划的主体、动作和关系，避免附加相反的主体约束：
@@ -657,17 +755,37 @@ func explainerImagePrompt(shot Shot) string {
 		b.WriteString("画面意图（只转为可见关系，不渲染文字）：" + shot.VisualIntent + "。")
 	}
 	if shot.AspectRatio == "9:16" {
-		b.WriteString("构图：9:16 原生竖屏全幅，主体明确，中近景与环境关系清楚；下方约五分之一保持自然简洁供后期字幕使用，主体和关键动作避开右侧边缘。")
+		// 之前写"下方五分之一留白"，实测出来的图底部是一大块空桌面/空地板；改成主体偏上、纵深填满。
+		// 不在提示词里提"字幕"：09-07 实测提了之后模型在底部自己印了一行乱码字幕。
+		b.WriteString("构图：9:16 原生竖屏全幅，真正按竖屏设计：主体放在画面中上部，利用道路、桌面、走廊、站立人物的纵深把画面填满，前景—中景—远景层次清楚；最下方约六分之一只延续地面、桌面或环境，不放脸和关键动作，也不要留成空白。")
 	} else {
 		b.WriteString("构图：16:9 横屏，主体清楚、环境简洁，下缘留出自然的字幕空间。")
 	}
 	b.WriteString(preset.Prompt)
 	b.WriteString(explainerNoTextRule)
-	if shot.SubjectType == "person" || mentionsPeople(scene) || mentionsPeople(shot.Subject) {
+	if preset.Key == "macro_money" {
+		// 分段画风把"讲钱的镜"换成静物时，scene 多半还是拆镜时按底色写的人物场景；这里明说改成静物，免得人脸和"不出现人脸"打架。
+		b.WriteString("本镜改为静物特写：人物不入镜，把场景里的人和动作换成桌面上的钱、存折、票据、老花镜、茶杯和手部局部，保留原场景的光线和环境感。")
+	} else if shot.SubjectType == "person" || mentionsPeople(scene) || mentionsPeople(shot.Subject) {
 		b.WriteString(styledPeopleRule(shot.StyleKey))
 	}
 	b.WriteString(explainerSafetyRule)
 	return b.String()
+}
+
+// StylePreviewPrompt 用生产同一条提示词链路，给某套画风出"参考图"用的提示词：
+// 同一个测试场景 + 该画风 + 三条硬约束，这样前端缩略图和实际出图是一回事。
+// scripts/ai-shorts/render_style_previews.py 通过 /api/ai-shorts/style-preview-prompts 取它。
+func StylePreviewPrompt(styleKey, scene string) string {
+	key := StyleByKey(styleKey).Key
+	if styleKey == financeEditorial {
+		key = "paper_collage" // 混合策略没有自己的画风，参考图用它的主表达
+	}
+	shot := Shot{StyleKey: key, Scene: strings.TrimSpace(scene), AspectRatio: "9:16"}
+	if mentionsPeople(shot.Scene) {
+		shot.SubjectType = "person"
+	}
+	return explainerImagePrompt(shot)
 }
 
 // mentionsPeople 仅决定是否补充人物质感说明；未识别到人物不会触发禁人指令。

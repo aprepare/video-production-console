@@ -20,22 +20,31 @@ func TestReferenceModelsSelectZeroTwoThreeAndRejectDependentCandidates(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		agents := 0
+		// 默认图自带的策划节点不是参考稿，选参考模型时必须原样保留。
+		agents, planners := 0, 0
 		for _, node := range wf.Nodes {
-			if node.Type == WorkflowNodeAgent {
-				agents++
-				if node.Config.Model != "selected" || node.Config.ServiceTier != "priority" {
-					t.Fatal("selection lost")
-				}
+			if node.Type != WorkflowNodeAgent {
+				continue
+			}
+			if node.Config.Role != "reference" {
+				planners++
+				continue
+			}
+			agents++
+			if node.Config.Model != "selected" || node.Config.ServiceTier != "priority" {
+				t.Fatal("selection lost")
 			}
 		}
 		if agents != count {
 			t.Fatalf("got %d references want %d", agents, count)
 		}
+		if planners != 1 {
+			t.Fatalf("planner node must survive reference selection, got %d", planners)
+		}
 		if count == 2 {
 			var ids []string
 			for _, node := range wf.Nodes {
-				if node.Type == WorkflowNodeAgent {
+				if node.Type == WorkflowNodeAgent && node.Config.Role == "reference" {
 					ids = append(ids, node.ID)
 				}
 			}

@@ -57,6 +57,14 @@ func styledPeopleRule(style string) string {
 		return "人物如需出现，使用普通中国生活人物的半色调照片剪影，保留纸片边缘，与拼贴材质一致。"
 	case "miniature":
 		return "人物如需出现，使用朴素成年微缩模型人物，材质与场景一致，无夸张表情，不生成真人皮肤特写。"
+	case "clay_3d":
+		return "人物如需出现，使用黏土质感的成年人物，比例适中、表情克制，服装朴素，和场景同一材质，不做卡通大眼。"
+	case "papercut":
+		return "人物如需出现，用剪纸侧影或皮影式的镂空人形表现，不画写实面孔。"
+	case "ink_wash", "woodcut_poster", "poster", "oil_painting":
+		return "人物如需出现，按本画风的绘画语言表现普通中国成年人，朴素日常着装、动作和年龄符合场景，不做写实照片质感，不做模特摆拍。"
+	case "retro_film":
+		return "人物如需出现，为八九十年代打扮的普通中国人，衣着朴素、发型和物件符合年代，自然抓拍不摆拍，胶片颗粒下皮肤真实。"
 	default:
 		return explainerPeopleRule
 	}

@@ -20,10 +20,77 @@ type VisualSettings struct {
 	FastOpening         bool    `json:"fast_opening"`
 	OpeningVideoSeconds int     `json:"opening_video_seconds"`
 	VideoModel          string  `json:"video_model,omitempty"`
+	// VideoPlan 决定哪些镜头做图生视频：none / opening（前 30 或 60 秒，沿用 OpeningVideoSeconds）/
+	// hooks（开头 60 秒 + 中段祝福钩子 + 课尾三镜）/ all / first_n（前 VideoFirstN 镜）。
+	// 空值按 OpeningVideoSeconds 推导，兼容旧记录。
+	VideoPlan   string `json:"video_plan,omitempty"`
+	VideoFirstN int    `json:"video_first_n,omitempty"`
+	// CaptionStyle：outline 白字黑边（默认）/ band 白字 + 半透明底色块。
+	CaptionStyle string `json:"caption_style,omitempty"`
+	// CaptionColor：字幕和顶部标题的字色 #RRGGBB；默认黄字 #FFDE00（用户在剪映里定稿的样式）。
+	CaptionColor string `json:"caption_color,omitempty"`
+	// HeadlineSeconds：顶部大标题只在开头停几秒；默认 10，HeadlineFullVideo 表示贯穿全片。
+	HeadlineSeconds int `json:"headline_seconds,omitempty"`
+	// SegmentStyles 分段画风：开头 / 讲钱 / 祝福词 / 结尾处境各用什么画风，空 = 跟随项目底色。见 segment_styles.go。
+	SegmentStyles SegmentStyles `json:"segment_styles,omitzero"`
 }
 
+const (
+	DefaultCaptionColor    = "#FFDE00"
+	DefaultHeadlineSeconds = 10
+	HeadlineFullVideo      = -1
+)
+
+const (
+	VideoPlanNone     = "none"
+	VideoPlanOpening  = "opening"
+	VideoPlanHooks    = "hooks"
+	VideoPlanAll      = "all"
+	VideoPlanFirstN   = "first_n"
+	hooksOpeningSecs  = 60.0
+	hooksClosingShots = 3
+)
+
+// Plan 返回归一化后的视频档位。
+func (v *VisualSettings) Plan() string {
+	if v == nil {
+		return VideoPlanNone
+	}
+	switch v.VideoPlan {
+	case VideoPlanNone, VideoPlanOpening, VideoPlanHooks, VideoPlanAll, VideoPlanFirstN:
+		return v.VideoPlan
+	}
+	if v.OpeningVideoSeconds > 0 {
+		return VideoPlanOpening
+	}
+	return VideoPlanNone
+}
+
+// OpeningLimit 是 opening 档的秒数；hooks 档固定 60。
+func (v *VisualSettings) OpeningLimit() float64 {
+	if v == nil {
+		return 0
+	}
+	switch v.Plan() {
+	case VideoPlanOpening:
+		if v.OpeningVideoSeconds > 0 {
+			return float64(v.OpeningVideoSeconds)
+		}
+		return hooksOpeningSecs
+	case VideoPlanHooks:
+		return hooksOpeningSecs
+	}
+	return 0
+}
+
+// DefaultVisualSettings 是竖版全幅 AI 短片的默认包装，按用户在剪映里改定的草稿反推：
+// 黄字 18 号黑边字幕、一行一屏；顶部大标题只停前 10 秒；不放章节式的"重点标注"轨，也不在字幕里变色高亮。
 func DefaultVisualSettings() *VisualSettings {
-	return &VisualSettings{Layout: "portrait_full", CaptionEnabled: true, CaptionPosition: "lower", CaptionSize: 12, KeywordsEnabled: true, AnnotationEnabled: true, MotionStrength: "gentle", Transition: "fade", FastOpening: true}
+	return &VisualSettings{
+		Layout: "portrait_full", CaptionEnabled: true, CaptionPosition: "lower", CaptionSize: 18, CaptionColor: DefaultCaptionColor,
+		KeywordsEnabled: false, AnnotationEnabled: false, MotionStrength: "gentle", Transition: "fade", FastOpening: true,
+		HeadlineSeconds: DefaultHeadlineSeconds,
+	}
 }
 
 func legacyVisualSettings() *VisualSettings {
@@ -51,7 +118,20 @@ func normalizedVisualSettings(in *VisualSettings) (*VisualSettings, error) {
 		v.CaptionPosition = "lower"
 	}
 	if v.CaptionSize == 0 {
-		v.CaptionSize = 12
+		v.CaptionSize = 18
+	}
+	v.CaptionColor = strings.ToUpper(strings.TrimSpace(v.CaptionColor))
+	if v.CaptionColor == "" {
+		v.CaptionColor = DefaultCaptionColor
+	}
+	if !hexColorRE.MatchString(v.CaptionColor) {
+		return nil, errors.New("字幕颜色请填 #RRGGBB")
+	}
+	if v.HeadlineSeconds == 0 {
+		v.HeadlineSeconds = DefaultHeadlineSeconds
+	}
+	if v.HeadlineSeconds != HeadlineFullVideo && (v.HeadlineSeconds < 3 || v.HeadlineSeconds > 120) {
+		return nil, errors.New("标题显示时长请填 3～120 秒，或选贯穿全片")
 	}
 	if v.MotionStrength == "" {
 		v.MotionStrength = "gentle"
@@ -77,7 +157,34 @@ func normalizedVisualSettings(in *VisualSettings) (*VisualSettings, error) {
 	if v.OpeningVideoSeconds != 0 && v.OpeningVideoSeconds != 30 && v.OpeningVideoSeconds != 60 {
 		return nil, errors.New("开场视频请选择关闭、前30秒或前60秒")
 	}
+	v.VideoPlan = strings.TrimSpace(v.VideoPlan)
+	switch v.VideoPlan {
+	case "", VideoPlanNone, VideoPlanOpening, VideoPlanHooks, VideoPlanAll, VideoPlanFirstN:
+	default:
+		return nil, errors.New("视频档位无效")
+	}
+	if v.VideoPlan == VideoPlanFirstN && v.VideoFirstN <= 0 {
+		return nil, errors.New("请填写前几镜使用视频")
+	}
+	if v.VideoPlan == VideoPlanOpening && v.OpeningVideoSeconds == 0 {
+		v.OpeningVideoSeconds = 60
+	}
+	if v.VideoPlan == VideoPlanNone {
+		v.OpeningVideoSeconds = 0
+	}
+	v.CaptionStyle = strings.TrimSpace(v.CaptionStyle)
+	if v.CaptionStyle == "" {
+		v.CaptionStyle = "outline"
+	}
+	if v.CaptionStyle != "outline" && v.CaptionStyle != "band" {
+		return nil, errors.New("字幕样式无效")
+	}
 	v.VideoModel = strings.TrimSpace(v.VideoModel)
+	seg, err := normalizeSegmentStyles(v.SegmentStyles)
+	if err != nil {
+		return nil, err
+	}
+	v.SegmentStyles = seg
 	return &v, nil
 }
 
@@ -91,6 +198,8 @@ type CaptionCue struct {
 	EndS     float64       `json:"end_s"`
 	Keywords []ShotKeyword `json:"keywords,omitempty"`
 }
+
+var hexColorRE = regexp.MustCompile(`^#[0-9A-F]{6}$`)
 
 var financialTokenRE = regexp.MustCompile(`[0-9]+(?:[.,][0-9]+)*(?:%|％|万亿|亿元|万元|亿|万|元|年|点|块)?|《[^》]+》`)
 
@@ -230,7 +339,12 @@ func applyVisualSettings(short *Short, settings *VisualSettings) error {
 		if short.VisualSettings != nil && short.VisualSettings.FastOpening != next.FastOpening && len(short.Shots) > 0 {
 			short.StoryboardStale = true
 		}
+		segmentChanged := short.VisualSettings == nil || short.VisualSettings.SegmentStyles != next.SegmentStyles
 		short.VisualSettings = next
+		if segmentChanged {
+			// 分段画风变了：重新打角色、重新解析每镜画风，变了的镜标旧图待重生。
+			reapplyShotStyles(short)
+		}
 		markDraftStale(short)
 		for _, shot := range short.Shots {
 			if !short.ShotReady(shot) {

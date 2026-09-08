@@ -1,9 +1,9 @@
-import { Clapperboard, Film, Images, LogOut, Moon, PenLine, Settings2, Sun } from "lucide-react";
+import { BookOpen, Clapperboard, Film, Images, LogOut, Moon, PenLine, Settings2, Sun } from "lucide-react";
 import type { Theme } from "../types";
 import "./console-navigation.css";
 
 type Props = {
-  active: "remix" | "image" | "ai" | null;
+  active: "remix" | "workspace" | "image" | "ai" | null;
   theme: Theme;
   onNavigate: (href: string) => void;
   onThemeChange: (theme: Theme) => void;
@@ -13,6 +13,7 @@ type Props = {
 
 const workspaces = [
   { id: "remix", href: "/", label: "文案与混剪", description: "从灵感到成片", icon: PenLine },
+  { id: "workspace", href: "/workspace", label: "二创文档", description: "成稿与规则", icon: BookOpen },
   { id: "image", href: "/image-projects", label: "图文制作", description: "让内容被看见", icon: Images },
   { id: "ai", href: "/ai-shorts", label: "AI短片", description: "把故事变成画面", icon: Film },
 ] as const;

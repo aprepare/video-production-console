@@ -1,6 +1,13 @@
 /task*-last.txt
+.playwright-mcp/
+.superpowers/
 /video-production-console/.superpowers/
+/video-production-console/.pytest_cache/
+/video-production-console/.tmp-rename/
+/video-production-console/artifacts/
 /video-production-console/dist/
+/video-production-console/release/
+/video-production-console/_archive/
 /video-production-console/video-console-data/
 /video-production-console/*.log
 /video-production-console/web/node_modules/
@@ -8,3 +15,7 @@
 **/__pycache__/
 *.pyc
 /video-production-console/task*-last.txt
+
+# 二创工作区必须进库，方便改错后从 GitHub 还原
+!/video-production-console/二创工作区/
+!/video-production-console/二创工作区/**

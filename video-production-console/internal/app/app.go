@@ -30,6 +30,7 @@ import (
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
+	"video-production-console/internal/workspace"
 )
 
 type remixLabRuntimeAdapter struct {
@@ -216,6 +217,7 @@ func New(options Options) *App {
 			}
 			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
 		}
+		mux.Handle("/api/workspace/", httpapi.NewWorkspaceHandler(workspace.Store{}))
 
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {

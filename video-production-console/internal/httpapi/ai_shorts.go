@@ -74,6 +74,7 @@ func NewAIShortsHandler(dataRoot string, runtime AssetRuntimeProvider, accounts 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/ai-shorts", h.list)
 	mux.HandleFunc("GET /api/ai-shorts/styles", h.styles)
+	mux.HandleFunc("GET /api/ai-shorts/style-preview-prompts", h.stylePreviewPrompts)
 	mux.HandleFunc("GET /api/ai-shorts/media-settings", h.mediaSettings)
 	mux.HandleFunc("PUT /api/ai-shorts/media-settings", h.saveMediaSettings)
 	mux.HandleFunc("POST /api/ai-shorts", h.create)
@@ -86,6 +87,7 @@ func NewAIShortsHandler(dataRoot string, runtime AssetRuntimeProvider, accounts 
 	mux.HandleFunc("POST /api/ai-shorts/{id}/shots/{index}/regenerate", h.regenerateShot)
 	mux.HandleFunc("POST /api/ai-shorts/{id}/characters/{index}/regenerate", h.regenerateCharacter)
 	mux.HandleFunc("POST /api/ai-shorts/{id}/assemble", h.assemble)
+	mux.HandleFunc("POST /api/ai-shorts/{id}/cover", h.cover)
 	mux.HandleFunc("GET /api/ai-shorts/{id}/asset", h.asset)
 	return mux
 }
@@ -138,7 +140,26 @@ func (h *aiShortsHandler) styles(w http.ResponseWriter, r *http.Request) {
 			models.Video = rt.Models.Video
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": aishorts.ExplainerStyles, "default_text_model": models.Text, "default_image_model": models.Image, "default_video_model": models.Video})
+	items := make([]aishorts.StylePreset, len(aishorts.ExplainerStyles))
+	for i, s := range aishorts.ExplainerStyles {
+		s.Preview = aishorts.StylePreviewPath(s.Key)
+		items[i] = s
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "default_text_model": models.Text, "default_image_model": models.Image, "default_video_model": models.Video})
+}
+
+// stylePreviewPrompts 给 scripts/ai-shorts/render_style_previews.py 用：同一测试场景下每套画风的完整生图提示词，
+// 走生产同一条链路（explainerImagePrompt），保证参考图和真实出图一致。?scene= 可换场景。
+func (h *aiShortsHandler) stylePreviewPrompts(w http.ResponseWriter, r *http.Request) {
+	scene := strings.TrimSpace(r.URL.Query().Get("scene"))
+	if scene == "" {
+		scene = "一位六十多岁的普通中国老人坐在家里的餐桌旁，面前摊着几张存折和银行卡，手边一副老花镜和一杯茶，老伴在旁边站着倒水，窗外是老小区的居民楼"
+	}
+	out := make([]map[string]string, 0, len(aishorts.ExplainerStyles))
+	for _, s := range aishorts.ExplainerStyles {
+		out = append(out, map[string]string{"key": s.Key, "name": s.Name, "prompt": aishorts.StylePreviewPrompt(s.Key, scene)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scene": scene, "items": out})
 }
 
 func (h *aiShortsHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -178,8 +199,10 @@ type aiShortTextInput struct {
 	Mode                string  `json:"mode"`
 	Title               string  `json:"title"`
 	Story               string  `json:"story"`
-	Headline            string  `json:"headline"`
-	Style               string  `json:"style"`
+	// Headline 顶部大标题。PATCH 时不传表示保留现值，传空串表示清空——
+	// 之前是普通 string，只改画面设置的请求会把标题悄悄清掉（09-07 实测）。
+	Headline *string `json:"headline"`
+	Style    string  `json:"style"`
 	// TextModel 拆分镜模型、SegmentModel 分大段模型；PATCH 时不传表示不改，传空串表示改回默认。
 	TextModel      *string                  `json:"text_model"`
 	SegmentModel   *string                  `json:"segment_model"`
@@ -207,7 +230,11 @@ func (h *aiShortsHandler) create(w http.ResponseWriter, r *http.Request) {
 	if in.TextReasoningEffort != nil {
 		effort = *in.TextReasoningEffort
 	}
-	short, err := h.svc.CreateWithReasoning(in.AccountID, in.Mode, in.Title, in.Story, in.Headline, in.Style, textModel, segmentModel, imageModel, effort, in.VisualSettings)
+	headline := ""
+	if in.Headline != nil {
+		headline = *in.Headline
+	}
+	short, err := h.svc.CreateWithReasoning(in.AccountID, in.Mode, in.Title, in.Story, headline, in.Style, textModel, segmentModel, imageModel, effort, in.VisualSettings)
 	if err != nil {
 		h.writeErr(w, err)
 		return
@@ -230,7 +257,14 @@ func (h *aiShortsHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, "invalid_ai_short", "A valid short payload is required.")
 		return
 	}
-	short, err := h.svc.UpdateTextWithReasoning(r.PathValue("id"), in.Title, in.Story, in.Headline, in.Style, in.TextModel, in.SegmentModel, in.ImageModel, in.TextReasoningEffort, in.VisualSettings)
+	id := r.PathValue("id")
+	headline := ""
+	if in.Headline != nil {
+		headline = *in.Headline
+	} else if cur, err := h.svc.Get(id); err == nil {
+		headline = cur.Headline
+	}
+	short, err := h.svc.UpdateTextWithReasoning(id, in.Title, in.Story, headline, in.Style, in.TextModel, in.SegmentModel, in.ImageModel, in.TextReasoningEffort, in.VisualSettings)
 	if err != nil {
 		h.writeErr(w, err)
 		return
@@ -338,6 +372,14 @@ func (h *aiShortsHandler) regenerateCharacter(w http.ResponseWriter, r *http.Req
 
 func (h *aiShortsHandler) assemble(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.AssembleAsync(r.PathValue("id")); err != nil {
+		h.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
+}
+
+func (h *aiShortsHandler) cover(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.GenerateCover(r.PathValue("id")); err != nil {
 		h.writeErr(w, err)
 		return
 	}

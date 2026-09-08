@@ -60,16 +60,21 @@ class KeywordTextSegment(draft.TextSegment):
         material = super().export_material()
         content = json.loads(material["content"])
         base = content["styles"][0]
+        base_rgb = tuple(base["fill"]["content"]["solid"]["color"])
         colors = [None] * len(self.text)
         for word in sorted(self.keywords, key=lambda w: len(w.get("text", "")), reverse=True):
             token = word.get("text", "")
             if not token:
                 continue
+            color = KEYWORD_COLORS.get(word.get("kind"), "#FFD166")
+            # 正文本身是黄字时金色高亮看不出来，改用白色区分。
+            if sum(abs(a - b) for a, b in zip(hex_rgb(color), base_rgb)) < 0.35:
+                color = "#FFFFFF"
             pos = 0
             while (pos := self.text.find(token, pos)) >= 0:
                 end = pos + len(token)
                 if all(c is None for c in colors[pos:end]):
-                    colors[pos:end] = [KEYWORD_COLORS.get(word.get("kind"), "#FFD166")] * len(token)
+                    colors[pos:end] = [color] * len(token)
                 pos = end
         styles = []
         start = 0
@@ -113,27 +118,43 @@ def hex_rgb(value: str):
         return (1.0, 1.0, 1.0)
 
 
-# 图片镜的推拉平移：(起始缩放, 结束缩放, 起始 x 偏移, 结束 x 偏移)。幅度小，中老年看着不晕。
+# 图片镜的推拉平移：(起始缩放, 结束缩放, 起始 x 偏移, 结束 x 偏移)。
+# 之前 zoom 1.03→1.10、pan ±0.015 且两个关键帧线性插值：一是幅度小到看不出在动，
+# 二是匀速起停像幻灯片。现在按"每秒动多少"给幅度（长镜头动得更多，但速度不变），
+# 并用五个关键帧做缓入缓出（smoothstep），起停柔和。
 CAMERA_MOVES = {
     "still": (1.0, 1.0, 0.0, 0.0),
-    "zoom_in": (1.03, 1.10, 0.0, 0.0),
-    "zoom_out": (1.10, 1.03, 0.0, 0.0),
-    "pan_left": (1.06, 1.06, 0.015, -0.015),
-    "pan_right": (1.06, 1.06, -0.015, 0.015),
+    "zoom_in": (1.00, 1.12, 0.0, 0.0),
+    "zoom_out": (1.12, 1.00, 0.0, 0.0),
+    "pan_left": (1.08, 1.08, 0.03, -0.03),
+    "pan_right": (1.08, 1.08, -0.03, 0.03),
 }
+MOVE_REFERENCE_SECONDS = 10.0  # 上表幅度对应 10 秒镜头；更短的镜头按比例缩小幅度，更长的不再放大
+
+
+def _smoothstep(t: float) -> float:
+    return t * t * (3 - 2 * t)
 
 
 def add_camera_move(segment, move: str, duration: int, strength="standard", cover=1.0) -> None:
     if strength == "none":
         move = "still"
     scale_from, scale_to, x_from, x_to = CAMERA_MOVES.get(move, CAMERA_MOVES["zoom_in"])
-    factor = 0.5 if strength == "gentle" else 1.0
-    scale_from, scale_to = (cover * (1 + (s - 1) * factor) for s in (scale_from, scale_to))
+    factor = 0.6 if strength == "gentle" else 1.0
+    factor *= min(1.0, (duration / 1_000_000) / MOVE_REFERENCE_SECONDS) if duration > 0 else 1.0
+    base = 1.0 if move in ("zoom_in", "zoom_out") else (scale_from + scale_to) / 2
+    scale_from, scale_to = (cover * (base + (s - base) * factor) for s in (scale_from, scale_to))
     x_from, x_to = x_from * factor, x_to * factor
-    segment.add_keyframe(draft.KeyframeProperty.uniform_scale, 0, scale_from)
-    segment.add_keyframe(draft.KeyframeProperty.uniform_scale, duration, scale_to)
-    segment.add_keyframe(draft.KeyframeProperty.position_x, 0, x_from)
-    segment.add_keyframe(draft.KeyframeProperty.position_x, duration, x_to)
+    if move == "still" or duration <= 0:
+        segment.add_keyframe(draft.KeyframeProperty.uniform_scale, 0, scale_from)
+        segment.add_keyframe(draft.KeyframeProperty.position_x, 0, x_from)
+        return
+    for i in range(5):
+        t = i / 4
+        at = int(duration * t)
+        e = _smoothstep(t)
+        segment.add_keyframe(draft.KeyframeProperty.uniform_scale, at, scale_from + (scale_to - scale_from) * e)
+        segment.add_keyframe(draft.KeyframeProperty.position_x, at, x_from + (x_to - x_from) * e)
 
 
 # ===== 竖版内嵌布局（借用混剪验证过的数值） =====
@@ -191,6 +212,9 @@ def bgm_windows(total_us: int, bgm: dict) -> list:
     duration = us(bgm.get("duration_s") or 0)
     if head <= 0:
         head = duration or total_us
+    # 账号配置的可用头段常比实际文件长几十毫秒（按整秒填的），超出素材时长剪映会拒绝导入。
+    if duration and head > duration:
+        head = duration
     if climax_len <= 0 or climax_start + climax_len > (duration or head):
         climax_start, climax_len = 0, head
     windows = []
@@ -314,7 +338,7 @@ def build(job: dict) -> dict:
                 continue
             script.add_segment(draft.AudioSegment(clip, draft.Timerange(start, length), volume=1.0), audio_track)
 
-    # BGM：先放头一遍再循环副歌段，开头 1.5 秒淡入、结尾 2 秒淡出，音量走混剪验证过的 -12 dB。
+    # BGM：先放头一遍再循环副歌段，开头 1.5 秒淡入、结尾 2 秒淡出；音量由 Go 侧给（竖版 AI 短片 -22 dB）。
     bgm = brand.get("bgm") or {}
     bgm_path = (bgm.get("path") or "").strip()
     if bgm_path and Path(bgm_path).is_file():
@@ -351,20 +375,28 @@ def build(job: dict) -> dict:
             prev_end = at + length
 
     style = job.get("style") or {}
-    # 顶部金句（全片）
+    # 顶部大标题：默认只停开头 headline_seconds 秒（观众靠前十秒决定停不停），<=0 或缺省则贯穿全片。
     headline = (job.get("headline") or "").strip()
     if headline:
         head_track = script.append_track(draft.TrackSpec(draft.TrackType.text, "标题"))
+        text_kwargs = {"size": float(style.get("headline_size", 11)), "color": tuple(style.get("headline_color", [1, 1, 1])), "bold": True}
+        if style.get("headline_wrap"):
+            # 竖版全幅：居中、自动折行、最多占 0.9 行宽，放在画面上方约 1/8 处。
+            text_kwargs.update(align=1, auto_wrapping=True, max_line_width=0.9)
         kwargs = {
-            "style": draft.TextStyle(size=float(style.get("headline_size", 11)), color=tuple(style.get("headline_color", [1, 1, 1])), bold=True),
-            "clip_settings": draft.ClipSettings(transform_y=0.78),
-            "border": draft.TextBorder(color=(0, 0, 0), width=60.0),
+            "style": draft.TextStyle(**text_kwargs),
+            "clip_settings": draft.ClipSettings(transform_y=0.74 if style.get("headline_wrap") else 0.78),
+            # 描边 40 → 剪映里 0.08，和字幕一致（用户定稿的草稿里标题和字幕描边都是 0.08）。
+            "border": draft.TextBorder(color=(0, 0, 0), width=40.0),
         }
         if f := font_of(style.get("headline_font", "新青年体")):
             kwargs["font"] = f
-        script.add_segment(draft.TextSegment(headline, draft.Timerange(0, total_us), **kwargs), head_track)
+        head_seconds = float(job.get("headline_seconds") or 0)
+        head_us = min(total_us, us(head_seconds)) if head_seconds > 0 else total_us
+        script.add_segment(draft.TextSegment(headline, draft.Timerange(0, head_us), **kwargs), head_track)
 
-    # 字幕（跟旁白计时）。竖版：压在画面窗口底边，白字 + 底色块（截图那种），不描边；横版沿用旧样式。
+    # 字幕（跟旁白计时）。竖版全幅：Go 侧已按口播稿切成 ≤9 字一屏，黄字黑边（用户定稿样式）；
+    # 横图底板：白字 + 底色块；横版沿用旧样式。
     cap_track = script.append_track(draft.TrackSpec(draft.TrackType.text, "字幕"))
     prev_end = 0
     caption = brand.get("caption") or {}
@@ -376,19 +408,23 @@ def build(job: dict) -> dict:
         if end <= start:
             continue
         if portrait:
-            # 一条字幕 = 一个完整分句，小字号、自动折行，最多两行；行宽留 0.86 给底色块边距。
+            # 一条字幕 = 一行口播稿；自动折行只作兜底，行宽留 0.86 给底色块边距。
+            cap_color = (visual.get("caption_color") if full else None) or caption.get("color") or "#FFFFFF"
             kwargs = {
                 "style": draft.TextStyle(
-                    size=float(visual.get("caption_size") or caption.get("size") or (12 if full else 9)), color=hex_rgb(caption.get("color") or "#FFFFFF"),
+                    size=float(visual.get("caption_size") or caption.get("size") or (18 if full else 9)), color=hex_rgb(cap_color),
                     bold=True, align=1, auto_wrapping=True, max_line_width=0.80 if full else 0.86,
                 ),
                 # 窗口底边在 y=-0.38；字幕压在窗口内侧下沿。
                 "clip_settings": draft.ClipSettings(transform_y={"lower":-0.56,"middle":0.0,"window":-0.30}.get(visual.get("caption_position"), -0.56 if full else -0.30)),
             }
-            if caption.get("bg_color") and not full:
-                kwargs["background"] = draft.TextBackground(
-                    color=str(caption["bg_color"]), alpha=float(caption.get("bg_alpha") or 0.92), style=1, round_radius=0.12,
-                )
+            # 字幕样式：band = 白字 + 半透明深色底块（全幅也可选）；outline = 白字黑边（默认）。
+            band = (visual.get("caption_style") == "band") or (bool(caption.get("bg_color")) and not full)
+            if band:
+                # 账号品牌底色只用于横图底板版式；全幅 AI 图上的底块用中性深色，压在浅色拼贴/纪实画面上都不抢。
+                bg_color = "#000000" if full else str(caption.get("bg_color") or "#000000")
+                bg_alpha = 0.55 if full else float(caption.get("bg_alpha") or 0.92)
+                kwargs["background"] = draft.TextBackground(color=bg_color, alpha=bg_alpha, style=1, round_radius=0.12)
             else:
                 kwargs["border"] = draft.TextBorder(color=(0, 0, 0), width=40.0)
             if f := font_of(caption.get("font") or "新青年体"):
@@ -428,13 +464,25 @@ def build(job: dict) -> dict:
     return {"workspace": str(workspace), "job_id": job_id, "duration_us": total_us}
 
 
+def draft_folder_name(name: str, fallback: str) -> str:
+    """草稿名 → 可用作 Windows 文件夹名的字符串；全空时退回 job_id。"""
+    cleaned = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in (name or "")).strip(" .")
+    return cleaned[:120] or fallback
+
+
 def register(job: dict, built: dict) -> str:
     root = Path(job["jianying_root"])
     root_meta_path = root / "root_meta_info.json"
     if not root_meta_path.is_file():
         raise FileNotFoundError(f"root_meta_info.json not found under {root}")
     workspace = Path(built["workspace"])
-    target = root / built["job_id"]
+    # 剪映打开草稿后会用文件夹名覆盖登记的 draft_name（横版混剪草稿一直按名字建目录，所以没露出来）；
+    # 用十六进制 job_id 建目录的草稿被打开一次就变成一串乱码名。这里按草稿名建目录，重名再加后缀。
+    target = root / draft_folder_name(job["draft_name"], built["job_id"])
+    suffix = 1
+    while target.exists():
+        suffix += 1
+        target = root / f"{draft_folder_name(job['draft_name'], built['job_id'])}_{suffix}"
     stop_jianying()
     root_meta = read_json(root_meta_path)
     entries = root_meta.get("all_draft_store")

@@ -1,0 +1,44 @@
+{
+  "applied": true,
+  "config_and_artifact_files": 20,
+  "workflow_snapshots": 25,
+  "recovered": [
+    {
+      "run_id": "da8ed790-45f5-404a-b703-fc606e00a1ef",
+      "account": "认知漫步",
+      "restored_at": "2026-09-05T03:21:45.109022+00:00",
+      "reason": "用户要求移除事实核查并保留现有稿件",
+      "selfcheck": "skipped",
+      "review": "skipped",
+      "body_sha256": "d3ba8adbee8ed4865a1958937db9a381803919380b927fcef6e224fced9f88e9"
+    },
+    {
+      "run_id": "b54690c5-65e9-4c39-a45a-dea601fbc020",
+      "account": "云中观局",
+      "restored_at": "2026-09-05T03:21:45.109022+00:00",
+      "reason": "用户要求移除事实核查并保留现有稿件",
+      "selfcheck": "skipped",
+      "review": "skipped",
+      "body_sha256": "31c7d34bb64924b6a48dce660e40e6af9f643b005213f4a895f2999c1d6e5458"
+    },
+    {
+      "run_id": "5e9c37de-406f-4670-acd9-5feaefd5404b",
+      "account": "财经漫游",
+      "restored_at": "2026-09-05T03:21:45.109022+00:00",
+      "reason": "用户要求移除事实核查并保留现有稿件",
+      "selfcheck": "skipped",
+      "review": "skipped",
+      "body_sha256": "98e7213f783563ce91ffd1de18fe5c512a1b0103ee7a8221b408ce49cc10d088"
+    },
+    {
+      "run_id": "d2aa31a9-91de-4b8b-943a-32acfbc1d1ff",
+      "account": "认知研习",
+      "restored_at": "2026-09-05T03:21:45.109022+00:00",
+      "reason": "用户要求移除事实核查并保留现有稿件",
+      "selfcheck": "skipped",
+      "review": "skipped",
+      "body_sha256": "5ce1b9c13aa5f3b6fc767c18532f8b6cfbd6dd48bdf9f00fee008e8e91505106"
+    }
+  ],
+  "backup": "video-console-data\\backup-remove-facts-20260905-112145"
+}

@@ -23,6 +23,8 @@ describe("application routes", () => {
       view: "image-video",
       projectID,
     });
+    expect(parseLocation("/workspace")).toEqual({ view: "workspace" });
+    expect(parseLocation("/workspace/")).toEqual({ view: "workspace" });
     expect(parseLocation("/remix-lab")).toEqual({ view: "remix-lab" });
     expect(parseLocation("/remix-lab/")).toEqual({ view: "remix-lab" });
     expect(parseLocation(`/remix-lab/${projectID}`)).toEqual({

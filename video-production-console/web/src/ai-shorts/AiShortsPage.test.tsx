@@ -8,8 +8,8 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const short: AiShort = { id: "one", title: "测试短片", mode: "explainer", headline: "", story: "已保存的口播文案", style: "documentary", status: "storyboard", characters: [], shots: [{ index: 0, narration: "第一句", scene: "原画面", motion: "", characters: [], seconds: 3, image_status: "pending", video_status: "pending" }], created_at: "", updated_at: "" };
 const base = (path: string) => path === "/api/ai-shorts" ? json({ items: [short] }) : path === "/api/ai-shorts/one" ? json(short) : path === "/api/accounts" ? json([]) : json({ items: [] });
 const editorialStyles = [
-  { key: "finance_editorial", name: "财经编辑混合", prompt: "", usage: "项目策略" },
-  { key: "paper_collage", name: "纸张拼贴", prompt: "", usage: "大多数镜头" },
+  { key: "finance_editorial", name: "财经编辑混合", prompt: "", usage: "大多数镜头使用纸张拼贴，概念关系用微缩模型", note: "杂志感、统一克制", preview: "/style-previews/finance_editorial.jpg" },
+  { key: "paper_collage", name: "纸张拼贴", prompt: "", usage: "大多数镜头", preview: "/style-previews/paper_collage.jpg" },
   { key: "miniature", name: "微缩模型", prompt: "", usage: "概念关系" },
   { key: "documentary", name: "生活纪实", prompt: "", usage: "旧项目单一画风" },
 ];
@@ -27,13 +27,22 @@ test("creates new explainers with the finance editorial strategy by default", as
   });
   render(<AiShortsPage api={api} onNavigate={vi.fn()} />);
   expect(await screen.findByLabelText(/^画面风格策略/)).toHaveValue("finance_editorial");
+  // 选中画风的用途和判断来自 /api/ai-shorts/styles，参考图卡片可点选。
   expect(screen.getByText(/大多数镜头使用纸张拼贴/)).toBeInTheDocument();
+  expect(screen.getByText(/杂志感、统一克制/)).toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: "财经编辑混合" })).toHaveAttribute("aria-checked", "true");
+  fireEvent.click(screen.getByRole("radio", { name: "纸张拼贴" }));
+  expect(screen.getByLabelText(/^画面风格策略/)).toHaveValue("paper_collage");
+  fireEvent.click(screen.getByRole("radio", { name: "财经编辑混合" }));
+  // 解说模式也有顶部大标题输入框（09-07 之前没有，导致标题一直是空的）；填了要随创建请求发出去。
+  fireEvent.change(screen.getByLabelText(/^顶部大标题/), { target: { value: "老百姓的钱开始值钱了" } });
   fireEvent.change(screen.getByLabelText(/口播文案（/), { target: { value: "一家人辛苦攒下来的钱，存款到期之后先把条件问清楚。" } });
   fireEvent.click(screen.getByRole("button", { name: "建短片" }));
   await waitFor(() => expect(sent.style).toBe("finance_editorial"));
+  expect(sent.headline).toBe("老百姓的钱开始值钱了");
 });
 
-test("mixed projects save a per-shot style while single-style projects stay uniform", async () => {
+test("per-shot style is editable on any project and only sent when changed", async () => {
   let mixedPayload: Record<string, unknown> = {};
   const mixed: AiShort = {
     ...short,
@@ -51,9 +60,10 @@ test("mixed projects save a per-shot style while single-style projects stay unif
   };
   const view = render(<AiShortsPage api={mixedApi} shortID="one" onNavigate={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "改描述" }));
-  const shotStyle = screen.getByLabelText("镜头画风") as HTMLSelectElement;
+  const shotStyle = screen.getByLabelText(/^镜头画风/) as HTMLSelectElement;
   expect(shotStyle).toHaveValue("paper_collage");
-  expect(Array.from(shotStyle.options, (option) => option.value)).toEqual(["paper_collage", "miniature"]);
+  // 混合策略本身不是画风，不在单镜可选项里；其余每套都能选（分段画风的手动版）。
+  expect(Array.from(shotStyle.options, (option) => option.value)).toEqual(["paper_collage", "miniature", "documentary"]);
   fireEvent.change(shotStyle, { target: { value: "miniature" } });
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(mixedPayload.style_key).toBe("miniature"));
@@ -68,11 +78,14 @@ test("mixed projects save a per-shot style while single-style projects stay unif
     }
     return base(path);
   };
-  render(<AiShortsPage api={singleApi} shortID="one" onNavigate={vi.fn()} />);
+  const single = render(<AiShortsPage api={singleApi} shortID="one" onNavigate={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "改描述" }));
-  expect(screen.queryByLabelText("镜头画风")).toBeNull();
+  // 没改画风就不发 style_key：后端会把发过画风的镜钉住，不该把没动过的也钉上。
+  expect(screen.getByLabelText(/^镜头画风/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(singlePayload).not.toHaveProperty("style_key"));
+  await waitFor(() => expect(singlePayload).toHaveProperty("scene"));
+  expect(singlePayload).not.toHaveProperty("style_key");
+  single.unmount();
 });
 
 test("unlocks generation after the server normalizes saved fields", async () => {
@@ -144,14 +157,15 @@ test("enables opening video and saves its model before offering video regenerati
     return base(path);
   });
   render(<AiShortsPage api={api} shortID="one" onNavigate={vi.fn()} />);
-  fireEvent.change(await screen.findByLabelText("开场 AI 视频"),{target:{value:"60"}});
+  fireEvent.change(await screen.findByLabelText("AI 视频用法"),{target:{value:"opening"}});
+  fireEvent.change(screen.getByLabelText("开场时长"),{target:{value:"60"}});
   const model=screen.getByLabelText("生视频模型");
   await waitFor(()=>expect(model).toHaveAttribute("placeholder","默认：grok-imagine-video-1.5"));
   expect(screen.getByRole("button",{name:"重生图"})).toBeDisabled();
   fireEvent.change(model,{target:{value:"grok-imagine-video-1.5"}});
   fireEvent.click(screen.getByRole("button",{name:"保存文案"}));
   expect(await screen.findByRole("button",{name:"只重生视频"})).toBeEnabled();
-  expect(stored.visual_settings).toMatchObject({opening_video_seconds:60,video_model:"grok-imagine-video-1.5"});
+  expect(stored.visual_settings).toMatchObject({video_plan:"opening",opening_video_seconds:60,video_model:"grok-imagine-video-1.5"});
   expect(stored.shots[0].image_path).toBe("still.png");
   expect(api.mock.calls.some(([path])=>path.endsWith("/generate")||path.endsWith("/storyboard"))).toBe(false);
 });
@@ -290,6 +304,18 @@ test("clears persisted edits after a successful save", async () => {
   stored = { ...stored, story: "更新后的服务端文案" };
   render(<AiShortsPage api={api} shortID="one" onNavigate={vi.fn()} />);
   expect(await screen.findByLabelText("口播文案")).toHaveValue("更新后的服务端文案");
+});
+
+test("generates a cover from the saved headline", async () => {
+  const withHeadline: AiShort = { ...short, headline: "老百姓的钱开始值钱了" };
+  const api = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/api/ai-shorts/one/cover" && init?.method === "POST") return json({ status: "ok" }, 202);
+    return path === "/api/ai-shorts/one" ? json(withHeadline) : base(path);
+  });
+  render(<AiShortsPage api={api} shortID="one" onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "生成封面" }));
+  await waitFor(() => expect(api.mock.calls.some(([path, init]) => path === "/api/ai-shorts/one/cover" && init?.method === "POST")).toBe(true));
+  expect(await screen.findByRole("button", { name: "封面出图中…" })).toBeDisabled();
 });
 
 test("saves visual settings without invoking storyboard or generation", async () => {

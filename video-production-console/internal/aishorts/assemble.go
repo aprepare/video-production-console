@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/narration"
 	"video-production-console/internal/spokenlines"
 )
@@ -42,6 +44,8 @@ type DraftAssembler struct {
 	AccountName  func(accountID string) string
 	// Brand 解出这条短片的账号包装（背景框、BGM、音效、字幕样式）；nil 或出错时用 DefaultBrandKit。
 	Brand func(ctx context.Context, accountID string) (BrandKit, error)
+	// Chat 建文本模型客户端（口播稿切行用）；nil 时按 Runtime 里的 BaseURL/APIKey 建 HTTP 客户端。
+	Chat ChatClientFactory
 	// 预跑配音的互斥：同一条短片同时只跑一次。
 	prewarm        sync.Map
 	narrationLocks sync.Map
@@ -69,11 +73,38 @@ type ttsClip struct {
 }
 
 const (
-	shotGapSeconds          = 0.35 // 旁白镜之间留一点气口
-	narratorShotVideoVolume = 0.15 // 旁白镜保留一点环境音垫在 TTS 底下
-	captionMaxRunes         = 16   // 单条字幕最多多少字，长句按标点/字数切开
+	shotGapSeconds          = 0.35   // 旁白镜之间留一点气口
+	narratorShotVideoVolume = 0.15   // 旁白镜保留一点环境音垫在 TTS 底下
+	captionMaxRunes         = 16     // 单条字幕最多多少字，长句按标点/字数切开
+	aiShortBGMVolume        = 0.0794 // 竖版 AI 短片 BGM 线性音量，-22 dB（用户在剪映里定的）
 	ttsParallel             = 3
 )
+
+// hexToRGB 把 #RRGGBB 转成剪映文本样式用的 0～1 三元组；解析不了就回白色。
+func hexToRGB(hex string) []float64 {
+	hex = strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(hex) != 6 {
+		return []float64{1, 1, 1}
+	}
+	out := make([]float64, 3)
+	for i := 0; i < 3; i++ {
+		var v byte
+		for _, c := range hex[i*2 : i*2+2] {
+			switch {
+			case c >= '0' && c <= '9':
+				v = v*16 + byte(c-'0')
+			case c >= 'a' && c <= 'f':
+				v = v*16 + byte(c-'a'+10)
+			case c >= 'A' && c <= 'F':
+				v = v*16 + byte(c-'A'+10)
+			default:
+				return []float64{1, 1, 1}
+			}
+		}
+		out[i] = math.Round(float64(v)/255*10000) / 10000
+	}
+	return out
+}
 
 func (a *DraftAssembler) Assemble(ctx context.Context, rt Runtime, short *Short, assetDir string, progress func(string)) (AssembleResult, error) {
 	if progress == nil {
@@ -212,6 +243,22 @@ func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Shor
 			"headline_font": "新青年体", "headline_size": 12, "headline_color": []float64{1, 1, 1},
 		},
 	}
+	if in.Portrait && short.VisualSettings != nil && short.VisualSettings.Layout == "portrait_full" {
+		// 竖版全幅的顶部大标题要一眼能读：字号、颜色跟字幕一致（用户在剪映里定稿的样式），
+		// 允许折两行，只在开头停 HeadlineSeconds 秒——观众决定停不停就靠前十秒，之后让画面干净。
+		style := job["style"].(map[string]any)
+		style["headline_size"] = short.VisualSettings.CaptionSize
+		style["headline_color"] = hexToRGB(short.VisualSettings.CaptionColor)
+		style["headline_wrap"] = true
+		job["headline_seconds"] = short.VisualSettings.HeadlineSeconds
+		if strings.TrimSpace(in.Headline) == "" && short.VisualSettings.HeadlineSeconds != 0 {
+			// 09-07 用户开了"顶部标题显示"却没看到标题：解说模式当时没有大标题输入框，字段一直是空的。
+			// 这里把原因写进进度，别让人对着草稿找。
+			for _, cb := range callbacks {
+				cb("顶部大标题为空，草稿里不会出现标题：到「文案与画面设置」填上发布包里选定的大标题，再点重新组装")
+			}
+		}
+	}
 	if in.Narration != "" {
 		job["narration"] = in.Narration
 	}
@@ -223,10 +270,15 @@ func (a *DraftAssembler) buildDraft(ctx context.Context, rt Runtime, short *Shor
 		}
 		// 每次导出留一份新草稿，旧草稿和它引用的图片继续可用。
 		job["replace_draft"] = ""
+		// AI 短片的 BGM 固定 -22 dB：账号混剪样式里的 -12 dB 是给风景混剪配的，压在单人解说配音下面太响。
+		bgmVolume := in.Brand.BGMVolume
+		if bgmVolume <= 0 || bgmVolume > aiShortBGMVolume {
+			bgmVolume = aiShortBGMVolume
+		}
 		job["brand"] = map[string]any{
 			"background": in.Brand.BackgroundPath,
 			"bgm": map[string]any{
-				"path": in.Brand.BGMPath, "volume": in.Brand.BGMVolume,
+				"path": in.Brand.BGMPath, "volume": bgmVolume,
 				"usable_head_s": in.Brand.BGMUsableHeadS, "climax_start_s": in.Brand.BGMClimaxStartS, "climax_duration_s": in.Brand.BGMClimaxDurationS,
 			},
 			"sfx": in.SFX,
@@ -290,7 +342,7 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 	}
 	// 老分镜里可能有「。」或三五个字的碎片：不给它们单独出画面，文字并进邻镜，
 	// 邻镜的图多停留一会儿。旧记录不用重拆重生也能出片。
-	if short.VisualSettings == nil || short.VisualSettings.OpeningVideoSeconds == 0 {
+	if !short.WantsAnyVideo() {
 		ready = mergeFragmentShots(ready)
 	}
 	if len(ready) == 0 {
@@ -339,21 +391,30 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 			}
 		}
 	}
-	// 字幕：一条 = 一个完整分句（只在逗号/句号/问号/感叹号/分号处切，顿号不切），
-	// 小字号自动折成两行，最长 32 字（超了才均分成两条）；
-	// 时间从逐字映射里取，提前 0.1 秒出、和下一条无缝接（没有映射就在镜内按字数铺）。
-	caps := make([]jobCaption, 0, len(ready)*2)
-	pos := 0
-	for i, shot := range ready {
-		n := substantiveRunes(shot.Narration)
-		var local []jobCaption
-		if alignErr == nil {
-			local = clauseCaptionsFromCharMap(shot.Narration, pos, charTimes, times[i])
-		} else {
-			local = spreadClauseCaptions(shot.Narration, times[i][0], times[i][1])
+	// 字幕：按混剪系统的口播稿一行一屏（≤9 实字、不拆词、数字转阿拉伯数字）。
+	// 首选文本模型按 spokenlines 提示词切行，再用逐字对齐的时间轴定时；
+	// 模型或对齐不可用时退回规则切分（先按分句标点切，再压到 ≤9 字、切点不拆词）。
+	var caps []jobCaption
+	if alignErr == nil {
+		if lines := a.spokenLinesFor(ctx, rt, short, assetDir, script, progress); len(lines) > 0 {
+			// 关键词照旧算好挂在字幕上，是否变色由 Python 侧按 keywords_enabled 决定。
+			caps = spokenLineCaptions(lines, ready, script, charTimes, total, true)
 		}
-		caps = append(caps, keywordsOnCaptions(local, shot.Keywords)...)
-		pos += n
+	}
+	if len(caps) == 0 {
+		caps = make([]jobCaption, 0, len(ready)*2)
+		pos := 0
+		for i, shot := range ready {
+			n := substantiveRunes(shot.Narration)
+			var local []jobCaption
+			if alignErr == nil {
+				local = clauseCaptionsFromCharMap(shot.Narration, pos, charTimes, times[i])
+			} else {
+				local = spreadClauseCaptions(shot.Narration, times[i][0], times[i][1])
+			}
+			caps = append(caps, keywordsOnCaptions(local, shot.Keywords)...)
+			pos += n
+		}
 	}
 	caps = tightenCaptions(caps, total)
 	srtPath := filepath.Join(assetDir, "narration.srt")
@@ -376,21 +437,25 @@ func (a *DraftAssembler) assembleExplainer(ctx context.Context, rt Runtime, shor
 	}
 
 	progress("生成剪映草稿")
+	// 解说竖版也放顶部大标题：中老年观众靠视频上方那行字决定停不停，用发布包里选定的大标题。
 	return a.buildDraft(ctx, rt, short, assetDir, draftJob{
-		Headline: "", DurationS: total, Shots: shots, Captions: caps,
+		Headline: strings.TrimSpace(short.Headline), DurationS: total, Shots: shots, Captions: caps,
 		Narration: narrationPath, NarrationPath: narrationPath, SRTPath: srtPath, ShotTimes: shotTimes,
 		Portrait: true, Brand: brand, SFX: cues,
 	}, progress)
 }
 
 const (
-	portraitCaptionMaxRunes = 32   // 竖版一条字幕最多几个字（小字号两行装得下）
+	// 竖版一条字幕最多几个实字：对齐混剪系统的口播稿（一行一屏、≤9 字，见 spokenlines.MaxContentRunes）。
+	// 之前放到 32 字让一条字幕装下整个分句，字号一放大就折成两三行、几句话挤在一屏。
+	portraitCaptionMaxRunes = spokenlines.MaxContentRunes
+	portraitCaptionMinRunes = 4    // 切出来的一段少于这个数就并回相邻段，免得单独闪一个词
 	captionLeadSeconds      = 0.10 // 字幕比声音早出一点，观感上才"同步"
 	captionMaxHoldSeconds   = 0.60 // 一条字幕最多在下一条出现前多停多久
 )
 
-// splitClauses 按分句标点切（，。！？；：），顿号和引号不切，保留分句内的标点；
-// 超过 portraitCaptionMaxRunes 的分句均分成几条。
+// splitClauses 先按分句标点切（，。！？；：），引号不切；再把每个分句压到 portraitCaptionMaxRunes
+// 个实字以内：先在顿号处分，再在不拆词、不拆数字单位、不拆书名的位置找最靠中间的切点。
 func splitClauses(line string) []string {
 	var clauses []string
 	var cur []rune
@@ -419,13 +484,124 @@ func splitClauses(line string) []string {
 	flush()
 	var out []string
 	for _, c := range clauses {
-		runes := []rune(c)
-		if len(runes) <= portraitCaptionMaxRunes {
-			out = append(out, c)
-			continue
+		out = append(out, wrapCaptionClause(c, portraitCaptionMaxRunes)...)
+	}
+	return out
+}
+
+// wrapCaptionClause 把一个分句压成每条 ≤ maxRunes 实字的字幕：
+// 先按顿号拆成并列项、相邻短项能装下就并回去；仍超长的段按均分目标找不拆词的切点。
+func wrapCaptionClause(clause string, maxRunes int) []string {
+	if substantiveRunes(clause) <= maxRunes {
+		return []string{clause}
+	}
+	var items []string
+	var cur []rune
+	for _, r := range clause {
+		cur = append(cur, r)
+		if r == '、' {
+			items = append(items, string(cur))
+			cur = cur[:0]
 		}
-		parts := (len(runes) + portraitCaptionMaxRunes - 1) / portraitCaptionMaxRunes
-		out = append(out, splitLong(c, (len(runes)+parts-1)/parts)...)
+	}
+	if len(cur) > 0 {
+		items = append(items, string(cur))
+	}
+	var out []string
+	for _, group := range groupCaptionItems(items, maxRunes) {
+		out = append(out, splitBalanced(strings.TrimRight(group, "、"), maxRunes)...)
+	}
+	return out
+}
+
+// groupCaptionItems 把顿号并列项合成尽量均匀的几条：每条 ≤ maxRunes 实字，条数最少，
+// 各条长度尽量接近，少于 portraitCaptionMinRunes 的单独一条要重罚（"被交易"三个字自己闪一下很难看）。
+// 单项本身超长的留给 splitBalanced 处理。
+func groupCaptionItems(items []string, maxRunes int) []string {
+	n := len(items)
+	if n <= 1 {
+		return items
+	}
+	lens := make([]int, n)
+	total := 0
+	for i, item := range items {
+		lens[i] = substantiveRunes(item)
+		total += lens[i]
+	}
+	groups := (total + maxRunes - 1) / maxRunes
+	target := float64(total) / float64(groups)
+	const inf = math.MaxFloat64
+	// best[i] = 把 items[i:] 分组的最小代价；cut[i] = 第一组包含到哪一项（不含）。
+	best := make([]float64, n+1)
+	cut := make([]int, n+1)
+	for i := n - 1; i >= 0; i-- {
+		best[i] = inf
+		sum := 0
+		for j := i + 1; j <= n; j++ {
+			sum += lens[j-1]
+			if sum > maxRunes && j > i+1 {
+				break
+			}
+			cost := (float64(sum) - target) * (float64(sum) - target)
+			if sum < portraitCaptionMinRunes {
+				cost += 100
+			}
+			if sum > maxRunes {
+				cost += 1000 // 单项超长：只能自己一组，后面再切
+			}
+			if best[j] < inf && cost+best[j] < best[i] {
+				best[i], cut[i] = cost+best[j], j
+			}
+		}
+	}
+	var out []string
+	for i := 0; i < n; i = cut[i] {
+		out = append(out, strings.Join(items[i:cut[i]], ""))
+	}
+	return out
+}
+
+// splitBalanced 把一段没有分句标点的文字均分成 ceil(n/max) 条，切点在目标附近找
+// 第一个不拆词、不拆金额/利率/年份、不拆书名的位置；实在找不到就按目标硬切。
+func splitBalanced(text string, maxRunes int) []string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes || substantiveRunes(text) <= maxRunes {
+		return []string{text}
+	}
+	var out []string
+	base := 0
+	for len(runes)-base > maxRunes {
+		remaining := len(runes) - base
+		chunks := (remaining + maxRunes - 1) / maxRunes
+		target := base + int(math.Round(float64(remaining)/float64(chunks)))
+		lower, upper := base+portraitCaptionMinRunes, base+maxRunes
+		if limit := len(runes) - portraitCaptionMinRunes; upper > limit {
+			upper = limit
+		}
+		cut := 0
+		for delta := 0; delta <= upper-lower && cut == 0; delta++ {
+			for _, candidate := range [2]int{target - delta, target + delta} {
+				if candidate < lower || candidate > upper {
+					continue
+				}
+				if montageplan.BreaksSpokenWord(runes, candidate) || protectFinancialCut(runes, base, candidate) != candidate {
+					continue
+				}
+				cut = candidate
+				break
+			}
+		}
+		if cut <= base {
+			cut = protectFinancialCut(runes, base, min(target, len(runes)-1))
+			if cut <= base {
+				cut = min(base+maxRunes, len(runes))
+			}
+		}
+		out = append(out, string(runes[base:cut]))
+		base = cut
+	}
+	if base < len(runes) {
+		out = append(out, string(runes[base:]))
 	}
 	return out
 }
@@ -644,6 +820,10 @@ func (a *DraftAssembler) prepareNarration(ctx context.Context, rt Runtime, short
 			return preparedNarration{}, fmt.Errorf("配音失败：%w", err)
 		}
 	}
+	// 开场时间轴会在任何图片生成之前先配音，这时短片目录可能还不存在。
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return preparedNarration{}, err
+	}
 	audioPath := filepath.Join(assetDir, fmt.Sprintf("narration_%s_%d.mp3", scriptDigest(script)[:12], time.Now().UnixNano()))
 	if err := os.WriteFile(audioPath, delivery.Audio, 0o644); err != nil {
 		return preparedNarration{}, err
@@ -705,7 +885,10 @@ func (a *DraftAssembler) PrewarmNarration(ctx context.Context, rt Runtime, short
 	}
 	if _, err := a.prepareNarration(ctx, rt, short, assetDir, script, func(string) {}); err != nil {
 		slog.Default().Warn("ai short: narration prewarm failed", "id", short.ID, "error", err)
+		return
 	}
+	// 口播稿切行也顺手预跑，组装时直接命中缓存。
+	a.spokenLinesFor(ctx, rt, short, assetDir, script, func(string) {})
 }
 
 // alignByASR 调 scripts/ai-shorts/align_narration.py：用 faster-whisper 转写配音，

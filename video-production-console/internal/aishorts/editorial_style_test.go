@@ -21,7 +21,8 @@ func (c *editorialPlannerCapture) Chat(req openaicompat.ChatRequest) (openaicomp
 
 func TestEditorialPlannerSelectsStyleBeforeScene(t *testing.T) {
 	c := &editorialPlannerCapture{}
-	short := &Short{Mode: ModeExplainer, Style: "finance_editorial", Story: "家庭积蓄先安排日常支出。剩下的钱分作应急与长期储备。"}
+	// 开场加密区内的短镜不做合并，这里只验证规划器逐镜选画风。
+	short := &Short{Mode: ModeExplainer, Style: "finance_editorial", Story: "家庭积蓄先安排日常支出。剩下的钱分作应急与长期储备。", VisualSettings: &VisualSettings{FastOpening: true}}
 	if err := buildExplainerStoryboard(context.Background(), c, "fixture", "", short); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestEditorialPlannerSelectsStyleBeforeScene(t *testing.T) {
 func TestEditorialDefaultAndLegacyCompatibility(t *testing.T) {
 	svc := NewService(t.TempDir(), nil, nil)
 	short, err := svc.Create("", ModeExplainer, "", "家庭积蓄先安排日常支出，剩下的钱分作应急与长期储备。", "", "", "", "", "")
-	if err != nil || short.Style != "finance_editorial" {
+	if err != nil || short.Style != "cinematic_doc" {
 		t.Fatal("new default", short, err)
 	}
 	legacy := &Short{Mode: ModeExplainer, Shots: []Shot{{StyleKey: "miniature"}}}
@@ -76,9 +77,9 @@ func TestEditorialPromptsKeepMaterialAndNoText(t *testing.T) {
 
 func TestEditorialStylesSurviveFinalizeAndReload(t *testing.T) {
 	shots := []Shot{{Narration: "这部分钱留给日常支出。", StyleKey: "miniature"}, {Narration: "另一部分留作应急储备。", StyleKey: "paper_collage"}, {Narration: "先问清楚具体条件。", StyleKey: "invalid"}}
-	finalizeExplainerShots(shots, "finance_editorial")
-	svc := NewService(t.TempDir(), nil, nil)
 	s := &Short{ID: "editorial", Mode: ModeExplainer, Style: "finance_editorial", Shots: shots}
+	finalizeExplainerShots(s)
+	svc := NewService(t.TempDir(), nil, nil)
 	if err := svc.store.Save(s); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,14 @@ func TestEditorialShotOverrideOnlyInvalidatesItsImage(t *testing.T) {
 	if err != nil || got.Shots[0].StyleKey != "miniature" {
 		t.Fatal("override lost on read", err)
 	}
-	if _, err = svc.UpdateShot(s.ID, 0, ShotPatch{StyleKey: "documentary"}); err == nil {
-		t.Fatal("invalid mixed style accepted")
+	// 09-08 起任何项目都能手动定单镜画风（分段画风的手动版），只有不存在的 key 和"混合策略"本身会被拒。
+	if _, err = svc.UpdateShot(s.ID, 0, ShotPatch{StyleKey: "documentary"}); err != nil {
+		t.Fatal("single style should be allowed on a mixed project now", err)
+	}
+	if _, err = svc.UpdateShot(s.ID, 0, ShotPatch{StyleKey: "nope"}); err == nil {
+		t.Fatal("unknown style accepted")
+	}
+	if _, err = svc.UpdateShot(s.ID, 0, ShotPatch{StyleKey: financeEditorial}); err == nil {
+		t.Fatal("strategy key accepted as shot style")
 	}
 }

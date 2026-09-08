@@ -17,20 +17,15 @@ const ReviewerJSONContract = `【系统输出格式：审稿；本格式优先�
 verdict 只能为 pass 或 fixed。fixed 必须含完整 revised 正文及至少一条具体修改依据，不得省略正文。revised 中未改字段原样带回。无法核实的事项在 summary 中如实说明，不把未知判为已核实。
 字符串内的英文双引号必须写成 \"，换行写成 \n；引用句子优先用中文引号。不要在 JSON 之前输出 Let、思考过程或其他文字。`
 
-const ReviewerUserTemplate = `按共同规则终审下面的稿子。
-
+const ReviewerUserTemplate = `按共同底线终审下面的稿子。
+【写作计划】
+{{writing_plan}}
 【操作员批注】
 {{annotations}}
-
-【本轮二创策划（仅作参考，无则忽略）】
-{{writing_plan}}
-
-【事实核查结论（看状态与来源，不把未核查视为核准）】
+【事实核查结论（如未提供，不视为已核准）】
 {{facts}}
-
 【同行原文】
 {{source}}
-
 【待审成稿（写手 JSON）】
 {{draft}}`
 
