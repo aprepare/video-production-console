@@ -8,6 +8,11 @@ permissions:
 jobs:
   verify:
     runs-on: windows-latest
+    env:
+      # The Windows default TEMP may contain the RUNNER~1 short-name alias.
+      # Path-safety fixtures require canonical paths, as production inputs do.
+      TEMP: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
     defaults:
       run:
         working-directory: video-production-console
