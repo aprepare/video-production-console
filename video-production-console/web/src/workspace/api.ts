@@ -14,6 +14,7 @@ export type WorkspaceFile = {
   path: string;
   content: string;
   mtime: string;
+  revision: string;
   spoken_body: string;
 };
 
@@ -39,11 +40,11 @@ export async function fetchWorkspaceFile(api: WorkspaceApi, path: string): Promi
   return response.json();
 }
 
-export async function saveWorkspaceFile(api: WorkspaceApi, path: string, content: string): Promise<WorkspaceFile> {
+export async function saveWorkspaceFile(api: WorkspaceApi, path: string, content: string, expectedRevision: string): Promise<WorkspaceFile> {
   const response = await api("/api/workspace/file", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, content }),
+    body: JSON.stringify({ path, content, expected_revision: expectedRevision }),
   });
   if (!response.ok) throw new Error(await readError(response, "保存失败。"));
   return response.json();

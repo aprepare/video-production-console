@@ -34,6 +34,16 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
       body = { public: {}, configured_public: {}, active_public: {}, restart_required: false };
     } else if (path === "/api/runtime") {
       body = { Limit: 2, Running: 0, Queued: 0 };
+    } else if (url.pathname === "/api/remix-lab/experiments") {
+      body = [];
+    } else if (url.pathname === "/api/remix-lab/defaults") {
+      body = { presets: [], remix_model: "", remix_base_url: "", remix_reasoning_effort: "", remix_api_key_configured: false };
+    } else if (url.pathname === "/api/remix-lab/prompts") {
+      body = { prompts: [] };
+    } else if (url.pathname === "/api/remix-lab/workflow") {
+      body = { version: 1, name: "测试工作流", nodes: [], edges: [] };
+    } else if (url.pathname === "/api/remix-lab/agent/history") {
+      body = { turns: [] };
     } else if (path === `/api/projects/${projectID}`) {
       body = review
         ? {
@@ -128,7 +138,7 @@ test("project workbench exposes landmarks, current step, focus and mobile layout
 
   await expect(page.getByRole("heading", { name: project.title })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "五阶段生产轨" })).toBeVisible();
-  await expect(page.locator('[aria-current="step"]')).toContainText("文案");
+  await expect(page.getByRole("navigation", { name: "五阶段生产轨" }).locator('[aria-current="step"]')).toContainText("文案");
   await expect(page.getByRole("region", { name: "当前项目资产" })).toBeVisible();
   await expect(page.getByRole("region", { name: "当前任务摘要" })).toBeVisible();
   await expect(page.getByRole("button", { name: "移动端：先粘贴同行原文" })).toBeVisible();
@@ -143,19 +153,19 @@ test("project workbench keeps its desktop dark-theme visual contract", async ({ 
   await mockConsole(page, true);
   await page.goto(`/projects/${projectID}`);
 
-  await page.getByLabel("选择项目工作台主题").selectOption("dark");
+  await page.getByLabel("选择界面主题").selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   const title = page.getByRole("heading", { name: project.title });
   const assets = page.getByRole("region", { name: "当前项目资产" });
   const taskSummary = page.getByRole("region", { name: "当前任务摘要" });
 
-  await expect(title).toHaveCSS("color", "rgb(238, 242, 255)");
-  await expect(page.locator(".project-workbench")).toHaveCSS("background-color", "rgb(8, 13, 29)");
-  await expect(assets).toHaveCSS("background-color", "rgb(21, 29, 57)");
-  await expect(assets).toHaveCSS("color", "rgb(238, 242, 255)");
-  await expect(taskSummary).toHaveCSS("background-color", "rgb(21, 29, 57)");
-  await expect(taskSummary).toHaveCSS("color", "rgb(238, 242, 255)");
+  await expect(title).toHaveCSS("color", "rgb(228, 237, 247)");
+  await expect(page.locator(".project-workbench")).toHaveCSS("background-color", "rgb(15, 25, 41)");
+  await expect(assets).toHaveCSS("background-color", "rgb(25, 39, 59)");
+  await expect(assets).toHaveCSS("color", "rgb(228, 237, 247)");
+  await expect(taskSummary).toHaveCSS("background-color", "rgb(25, 39, 59)");
+  await expect(taskSummary).toHaveCSS("color", "rgb(228, 237, 247)");
 
   const measurements = await page.evaluate(() =>
     [
@@ -185,7 +195,7 @@ test("review and task data do not overflow desktop columns", async ({ page }) =>
   await page.setViewportSize({ width: 1180, height: 900 });
   await mockConsole(page, true, true);
   await page.goto(`/projects/${projectID}`);
-  await page.getByLabel("选择项目工作台主题").selectOption("dark");
+  await page.getByLabel("选择界面主题").selectOption("dark");
 
   await expect(page.locator(".workbench-grid--review")).toBeVisible();
   for (const selector of [".project-workbench", ".workbench-grid--review", ".project-assets", ".project-task-summary", ".publishing-review"]) {

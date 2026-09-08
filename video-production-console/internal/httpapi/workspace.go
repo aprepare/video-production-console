@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -63,11 +62,16 @@ func (h *workspaceHandler) getFile(w http.ResponseWriter, r *http.Request) {
 
 func (h *workspaceHandler) putFile(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
+		Path             string `json:"path"`
+		Content          string `json:"content"`
+		ExpectedRevision string `json:"expected_revision"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "请求格式不对。")
+	if err := decodeJSON(w, r, 16<<20, &in); err != nil {
+		writeDecodeError(w, err, "invalid_json", "请求格式不对。")
+		return
+	}
+	if strings.TrimSpace(in.ExpectedRevision) == "" {
+		writeError(w, http.StatusBadRequest, "workspace_revision_required", "请先重新读取文件，再保存修改。")
 		return
 	}
 	store, err := h.ready()
@@ -75,7 +79,7 @@ func (h *workspaceHandler) putFile(w http.ResponseWriter, r *http.Request) {
 		writeWorkspaceError(w, err)
 		return
 	}
-	if err := store.Write(in.Path, in.Content); err != nil {
+	if err := store.Write(in.Path, in.Content, in.ExpectedRevision); err != nil {
 		writeWorkspaceError(w, err)
 		return
 	}
@@ -89,6 +93,8 @@ func (h *workspaceHandler) putFile(w http.ResponseWriter, r *http.Request) {
 
 func writeWorkspaceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, workspace.ErrConflict):
+		writeError(w, http.StatusConflict, "workspace_conflict", "文件已被其他窗口或程序修改，当前草稿已保留。请先复制草稿，再重新读取文件并合并修改。")
 	case errors.Is(err, workspace.ErrOutside), errors.Is(err, workspace.ErrKind):
 		writeError(w, http.StatusBadRequest, "workspace_path_invalid", "只能读写二创工作区里的 markdown 或文本文件。")
 	case errors.Is(err, workspace.ErrNotFound):

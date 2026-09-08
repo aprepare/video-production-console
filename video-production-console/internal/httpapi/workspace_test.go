@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,7 +31,18 @@ func TestWorkspaceHTTPReadAndWrite(t *testing.T) {
 		t.Fatalf("escape status=%d body=%s", escapeRes.Code, escapeRes.Body.String())
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/workspace/file", strings.NewReader(`{"path":"agent.md","content":"# 改过了\n"}`))
+	readRes := httptest.NewRecorder()
+	handler.ServeHTTP(readRes, httptest.NewRequest(http.MethodGet, "/api/workspace/file?path=agent.md", nil))
+	var file map[string]any
+	if err := json.Unmarshal(readRes.Body.Bytes(), &file); err != nil {
+		t.Fatal(err)
+	}
+	revision, _ := file["revision"].(string)
+	if len(revision) != 64 {
+		t.Fatalf("missing content revision: %s", readRes.Body.String())
+	}
+	payload, _ := json.Marshal(map[string]string{"path": "agent.md", "content": "# 改过了\n", "expected_revision": revision})
+	putReq := httptest.NewRequest(http.MethodPut, "/api/workspace/file", strings.NewReader(string(payload)))
 	putReq.Header.Set("Content-Type", "application/json")
 	putRes := httptest.NewRecorder()
 	handler.ServeHTTP(putRes, putReq)
@@ -43,5 +55,20 @@ func TestWorkspaceHTTPReadAndWrite(t *testing.T) {
 	}
 	if string(got) != "# 改过了\n" {
 		t.Fatalf("disk=%q", got)
+	}
+	// A second editor still holding the original revision must not replace the saved draft.
+	conflict := httptest.NewRecorder()
+	handler.ServeHTTP(conflict, httptest.NewRequest(http.MethodPut, "/api/workspace/file", strings.NewReader(string(payload))))
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("stale save status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodPut, "/api/workspace/file", strings.NewReader(`{"path":"agent.md","content":"stale"}`)))
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("unversioned save status=%d", missing.Code)
+	}
+	got, _ = os.ReadFile(filepath.Join(root, "agent.md"))
+	if string(got) != "# 改过了\n" {
+		t.Fatalf("conflicting save changed disk: %q", got)
 	}
 }

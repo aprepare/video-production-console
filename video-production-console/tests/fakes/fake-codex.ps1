@@ -35,7 +35,11 @@ function New-Result([string]$Status, [string]$Summary, [bool]$WithOutputs) {
         [System.IO.File]::WriteAllText($selfCheckPath, "{`"ok`":true}", $utf8)
         [System.IO.File]::WriteAllText($scriptPath, "script", $utf8)
         $scriptInfo = Get-Item -LiteralPath $scriptPath
-        $scriptSHA = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        # Go's child environment may not expose PowerShell's optional utility module.
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $scriptSHA = [BitConverter]::ToString($hasher.ComputeHash([System.IO.File]::ReadAllBytes($scriptPath))).Replace("-", "").ToLowerInvariant()
+        } finally { $hasher.Dispose() }
         $artifacts = @([ordered]@{ type = "self_check"; path = $selfCheckPath; description = "self check" })
         $assets = @([ordered]@{
             type = "continuous_script"

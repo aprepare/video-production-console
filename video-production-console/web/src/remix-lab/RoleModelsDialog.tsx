@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RemixLabDefaults, RemixLabRerunModel, RemixLabWorkflow } from "./api";
+import { ReferenceModelFields } from "./ReferenceModelFields";
 import { RoleModelFields } from "./RoleModelFields";
 import { isReferenceNode, replaceReferenceModels } from "./reference-workflow";
 
@@ -24,6 +25,11 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
     reasoning_effort: node?.config.reasoning_effort || (label === "审稿" ? defaults?.remix_reasoning_effort : fallbackWriter.reasoning_effort) || "",
     service_tier: node?.config.service_tier || (label === "写手" ? fallbackWriter.service_tier : "default"),
   } as RemixLabRerunModel})));
+  const [references, setReferences] = useState(() => workflow.nodes.filter(isReferenceNode).map(node => ({
+    model: node.config.model || fallbackWriter.model,
+    reasoning_effort: node.config.reasoning_effort || fallbackWriter.reasoning_effort,
+    service_tier: node.config.service_tier || "default",
+  } as RemixLabRerunModel)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const lock = useRef(false);
@@ -38,7 +44,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
         const choice = choices.get(node.id);
         return choice ? {...node, config:{...node.config, ...choice, model:choice.model.trim()}} : node;
       })};
-      await onSave(replaceReferenceModels(updated,[]));
+      await onSave(replaceReferenceModels(updated,references));
       onClose();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "模型配置保存失败。"); }
     finally { lock.current = false; setBusy(false); }
@@ -59,6 +65,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
         <button type="button" className="close" aria-label="关闭模型配置" disabled={busy} onClick={onClose}>×</button></div>
       <p className="remix-lab-muted">参考模型先独立出稿，写手借鉴后完整重写，审稿负责定稿检查。保存后用于此账号的新建和重新生成，历史稿件保留。</p>
       {error ? <p role="alert">{error}</p> : null}
+      <ReferenceModelFields values={references} onChange={setReferences} fallback={fallbackWriter} disabled={busy} />
       <div className="remix-lab-slots">
         {roles.map((role,index) => <fieldset key={role.label} disabled={busy || !role.id} className="remix-lab-slot"><legend>{role.label}</legend>
           {role.id ? <div className="remix-lab-slot__fields"><RoleModelFields id={`role-${role.id}`} label={role.label} value={role.value}
@@ -68,7 +75,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
       </div>
       <div className="remix-lab-modal__actions">
         {onConnections ? <button type="button" className="header-button" disabled={busy} onClick={onConnections}>连接与旧版预设</button> : null}
-        <button type="button" className="remix-lab-start" disabled={busy || roles.some(role => role.id && !role.value.model.trim())} onClick={() => void save()}>{busy ? "正在保存…" : "保存并完成"}</button>
+        <button type="button" className="remix-lab-start" disabled={busy || references.some(value => !value.model.trim()) || roles.some(role => role.id && !role.value.model.trim())} onClick={() => void save()}>{busy ? "正在保存…" : "保存并完成"}</button>
       </div>
     </div>
   </div>, document.body);

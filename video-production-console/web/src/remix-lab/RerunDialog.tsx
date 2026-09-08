@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ReferenceModelFields } from "./ReferenceModelFields";
 import { RoleModelFields } from "./RoleModelFields";
 import { fetchRemixLabRerunOptions, rerunRemixLabRun, type RemixLabApi, type RemixLabRerunInput, type RemixLabRerunResult } from "./api";
 
@@ -14,7 +15,7 @@ export function RerunDialog({ api, runID, onClose, onCreated }: {
   useEffect(() => {
     let cancelled = false;
     void fetchRemixLabRerunOptions(api, runID).then(value => {
-      if (!cancelled) setSettings({...value,references:[]});
+      if (!cancelled) setSettings(value);
     }).catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : "配置读取失败。"); });
     return () => { cancelled = true; };
   }, [api, runID]);
@@ -43,14 +44,18 @@ export function RerunDialog({ api, runID, onClose, onCreated }: {
         <p className="remix-lab-muted">沿用当前项目原文与账号最新版提示词，直接生成写手稿并审稿。模型选择仅用于新一轮，历史版本保留，完成后等待你确认。</p>
         {error ? <p role="alert">{error}</p> : null}
         {!settings && !error ? <p>正在读取模型配置…</p> : null}
-        {settings ? <div className="remix-rerun-models">
-          {([ ["planner", "二创策划"], ["writer", "写手"], ["reviewer", "审稿"] ] as const).map(([key, label]) => settings[key] ? (
-            <fieldset key={key} disabled={busy} className="remix-rerun-model"><legend>{label}</legend>
-              <RoleModelFields id={`rerun-${key}`} label={label} modelLabel={`重跑${label}模型`} value={settings[key]!}
-                onChange={value => setSettings(current => current && ({...current, [key]: value}))} />
-            </fieldset>
-          ) : null)}
-        </div> : null}
+        {settings ? <>
+          <ReferenceModelFields values={settings.references ?? []} fallback={settings.writer} disabled={busy}
+            onChange={references => setSettings(current => current && ({...current, references}))} />
+          <div className="remix-rerun-models">
+            {([ ["planner", "二创策划"], ["writer", "写手"], ["reviewer", "审稿"] ] as const).map(([key, label]) => settings[key] ? (
+              <fieldset key={key} disabled={busy} className="remix-rerun-model"><legend>{label}</legend>
+                <RoleModelFields id={`rerun-${key}`} label={label} modelLabel={`重跑${label}模型`} value={settings[key]!}
+                  onChange={value => setSettings(current => current && ({...current, [key]: value}))} />
+              </fieldset>
+            ) : null)}
+          </div>
+        </> : null}
         <div className="remix-lab-modal__actions">
           <button type="button" className="header-button" disabled={busy} onClick={onClose}>取消</button>
           <button type="button" className="primary-button" disabled={busy || settings?.references?.some(value=>!value.model.trim()) || !settings?.writer.model.trim() || !settings?.reviewer.model.trim() || (!!settings?.planner && !settings.planner.model.trim())} onClick={() => void start()}>{busy ? "提交中…" : "开始新一轮"}</button>

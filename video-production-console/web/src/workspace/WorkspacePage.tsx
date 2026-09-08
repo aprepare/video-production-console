@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Check, Copy, FolderOpen, Pencil, RefreshCw, Save } from "lucide-react";
 import {
   defaultWorkspaceFile,
@@ -35,16 +35,32 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
   const [message, setMessage] = useState("");
   const [copied, setCopied] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const currentRef = useRef<WorkspaceFile | null>(null);
+  const draftRef = useRef("");
+  const draftVersionRef = useRef(0);
+  const fileRequestRef = useRef(0);
+  const treeRequestRef = useRef(0);
+  const routeVersionRef = useRef(0);
+  const routeLoadingRef = useRef(false);
+  const savingRef = useRef(false);
   const dirty = current !== null && draft !== current.content;
 
   const loadTree = async () => {
+    const request = ++treeRequestRef.current;
     const next = await fetchWorkspaceTree(api);
-    setTree(next);
+    if (request === treeRequestRef.current) setTree(next);
     return next;
   };
 
   const openFile = async (path: string) => {
+    const request = ++fileRequestRef.current;
+    const draftVersion = draftVersionRef.current;
     const next = await fetchWorkspaceFile(api, path);
+    if (request !== fileRequestRef.current || draftVersion !== draftVersionRef.current) return;
+    currentRef.current = next;
+    draftRef.current = next.content;
+    draftVersionRef.current += 1;
     setCurrent(next);
     setDraft(next.content);
     setEditing(false);
@@ -52,16 +68,22 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    const routeVersion = ++routeVersionRef.current;
+    routeLoadingRef.current = true;
+    fileRequestRef.current += 1;
     (async () => {
       try {
         const nextTree = await loadTree();
-        if (cancelled) return;
+        if (cancelled || routeVersion !== routeVersionRef.current) return;
         const target = file || defaultWorkspaceFile(nextTree);
         if (target) await openFile(target);
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "工作区读取失败。");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && routeVersion === routeVersionRef.current) {
+          routeLoadingRef.current = false;
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -71,13 +93,14 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
 
   useEffect(() => {
     const onFocus = () => {
-      if (dirty) return;
+      if (dirty || savingRef.current || routeLoadingRef.current) return;
+      if (file && current?.path !== file) return;
       void loadTree().catch(() => undefined);
       if (current) void openFile(current.path).catch(() => undefined);
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [current, dirty]);
+  }, [current, dirty, file]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -98,15 +121,39 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
   };
 
   const save = async () => {
-    if (!current) return;
+    if (!current || savingRef.current) return;
+    const path = current.path;
+    const content = draft;
+    const revision = current.revision;
+    const draftVersion = draftVersionRef.current;
+    const routeVersion = routeVersionRef.current;
+    savingRef.current = true;
+    setSaving(true);
     try {
-      const next = await saveWorkspaceFile(api, current.path, draft);
+      const next = await saveWorkspaceFile(api, path, content, revision);
+      if (routeVersion !== routeVersionRef.current || currentRef.current?.path !== path) return;
+      currentRef.current = next;
       setCurrent(next);
-      setDraft(next.content);
+      if (draftVersion === draftVersionRef.current && draftRef.current === content) {
+        draftRef.current = next.content;
+        draftVersionRef.current += 1;
+        setDraft(next.content);
+      }
       setMessage("已写回工作区文件。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      if (routeVersion === routeVersionRef.current && currentRef.current?.path === path) {
+        setMessage(error instanceof Error ? error.message : "保存失败。");
+      }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
+  };
+
+  const updateDraft = (value: string) => {
+    draftRef.current = value;
+    draftVersionRef.current += 1;
+    setDraft(value);
   };
 
   const copy = async (label: string, text: string) => {
@@ -139,8 +186,8 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
           <button type="button" className="workspace-btn" disabled={!current} onClick={() => setEditing((value) => !value)}>
             <Pencil size={15} />{editing ? "预览" : "编辑"}
           </button>
-          <button type="button" className="workspace-btn workspace-btn--primary" disabled={!dirty} onClick={() => void save()}>
-            {dirty ? <Save size={15} /> : <Check size={15} />}{dirty ? "保存" : "已同步"}
+          <button type="button" className="workspace-btn workspace-btn--primary" disabled={!dirty || saving} onClick={() => void save()}>
+            {dirty ? <Save size={15} /> : <Check size={15} />}{saving ? "保存中…" : dirty ? "保存" : "已同步"}
           </button>
         </div>
       </header>
@@ -152,7 +199,7 @@ export function WorkspacePage({ api, file, onNavigate }: Props) {
         </nav>
         <section className="workspace-doc" aria-label="文档">
           {!current ? <p className="workspace-muted">从左边点一篇打开。</p> : editing ? (
-            <textarea aria-label="编辑文档" value={draft} onChange={(event) => setDraft(event.target.value)} />
+            <textarea aria-label="编辑文档" value={draft} onChange={(event) => updateDraft(event.target.value)} />
           ) : (
             <>
               <h2 className="workspace-doc-title">{current.path}</h2>

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +76,58 @@ func TestFindRootWalksParents(t *testing.T) {
 	}
 	if found != root {
 		t.Fatalf("found=%q want=%q", found, root)
+	}
+}
+
+func TestLinkedFilesCannotReadOrOverwriteOutsideWorkspace(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	target := filepath.Join(outside, "original.md")
+	if err := os.WriteFile(target, []byte("outside original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "linked.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	s := Store{Root: root}
+	if _, err := s.Read("linked.md"); err == nil {
+		t.Error("read followed a link outside the workspace")
+	}
+	if err := s.Write("linked.md", "overwritten"); err == nil {
+		t.Error("write followed a link outside the workspace")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "outside original" {
+		t.Fatalf("outside file changed: %q, %v", got, err)
+	}
+}
+
+func TestExternalEditWithUnchangedTimestampConflicts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "draft.md")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: root}
+	initial, err := s.Read("draft.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if err := os.WriteFile(path, []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write("draft.md", "browser draft", initial.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale save: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "external" {
+		t.Fatalf("external edit overwritten: %q", got)
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 1 {
+		t.Fatalf("temporary files left after conflict: %v", entries)
 	}
 }

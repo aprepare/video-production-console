@@ -212,7 +212,7 @@ test("advanced image route keeps the manual segment-preview flow", async ({ page
   await mockImageConsole(page, "advanced");
   await page.goto("/");
 
-  await page.getByRole("button", { name: "图文制作" }).click();
+  await page.getByRole("link", { name: "图文制作" }).click();
   await expect(page.getByRole("heading", { name: "图文项目", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "高级手动模式" }).click();
   await expect(page).toHaveURL(/\/image-projects\/advanced\/?$/);
@@ -269,5 +269,5 @@ test("quick generate recovers after refresh and opens publishing copy with hasht
   await expect(download).toBeVisible();
   await publish.click();
   await expect(page.getByRole("dialog", { name: "图文标题及描述" })).toBeVisible();
-  await expect(page.getByLabel("描述")).toContainText(hashtags);
+  await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue(new RegExp(hashtags));
 });
