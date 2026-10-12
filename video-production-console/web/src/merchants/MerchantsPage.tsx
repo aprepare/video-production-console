@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ArrowLeft, FilePlus2, FolderOpen, Plus, RefreshCw, Search, Store, Trash2, Upload, X } from "lucide-react";
 import "../shell/studio-page.css";
 import "./merchants.css";
+import { AigcStudio } from "./AigcStudio";
 
 export type BusinessApi = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -34,6 +35,7 @@ export type Material = {
   license_source: LicenseSource;
   license_scope: string;
   license_expires_at: string;
+  parent_material_id: string;
   created_at: string;
 };
 
@@ -304,7 +306,7 @@ function MerchantDetail({ api, merchantID, accounts, projects, onBack }: { api: 
   const [materials, setMaterials] = useState<Material[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [tab, setTab] = useState<"orders" | "materials">("orders");
+  const [tab, setTab] = useState<"orders" | "materials" | "aigc">("orders");
   const [editing, setEditing] = useState(false);
   const [orderDialog, setOrderDialog] = useState(false);
   const [openOrderID, setOpenOrderID] = useState("");
@@ -323,6 +325,9 @@ function MerchantDetail({ api, merchantID, accounts, projects, onBack }: { api: 
     }
   }, [api, merchantID]);
   useEffect(() => { void load(); }, [load]);
+  const reloadMaterials = useCallback(async () => {
+    try { setMaterials(await json<Material[]>(api, `/api/merchants/${merchantID}/materials`, undefined, "素材读取失败。")); } catch { /* keep the current list */ }
+  }, [api, merchantID]);
 
   if (state === "loading") return <main className="studio-page" id="studio-content" tabIndex={-1}><p className="studio-empty" role="status">正在读取商户…</p></main>;
   if (state === "error" || !merchant) return <main className="studio-page" id="studio-content" tabIndex={-1}>
@@ -360,12 +365,13 @@ function MerchantDetail({ api, merchantID, accounts, projects, onBack }: { api: 
         <div className="studio-tabs" role="tablist" aria-label="商户内容">
           <button type="button" role="tab" aria-selected={tab === "orders"} onClick={() => setTab("orders")}>订单 {orders.length}</button>
           <button type="button" role="tab" aria-selected={tab === "materials"} onClick={() => setTab("materials")}>授权素材 {materials.length}</button>
+          <button type="button" role="tab" aria-selected={tab === "aigc"} onClick={() => setTab("aigc")}>AIGC 重塑</button>
         </div>
         {tab === "orders" ? <button type="button" className="studio-button studio-button--primary" onClick={() => setOrderDialog(true)}><FilePlus2 size={15} aria-hidden="true" />新建订单</button> : null}
       </header>
-      {tab === "orders"
-        ? <OrderList orders={orders} onOpen={setOpenOrderID} />
-        : <MaterialLedger api={api} merchantID={merchant.id} materials={materials} onChange={setMaterials} onNotice={setNotice} />}
+      {tab === "orders" ? <OrderList orders={orders} onOpen={setOpenOrderID} /> : null}
+      {tab === "materials" ? <MaterialLedger api={api} merchantID={merchant.id} materials={materials} onChange={setMaterials} onNotice={setNotice} /> : null}
+      {tab === "aigc" ? <AigcStudio api={api} merchantID={merchant.id} materials={materials} orders={orders} onMaterialsChanged={reloadMaterials} onNotice={setNotice} /> : null}
     </section>
 
     {editing ? <MerchantDialog title="编辑商户" initial={merchant} accounts={accounts} onClose={() => setEditing(false)} onSubmit={async (draft) => {
