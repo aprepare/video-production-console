@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
+	"video-production-console/internal/aigc"
 	"video-production-console/internal/assets"
 	consoleauth "video-production-console/internal/auth"
 	"video-production-console/internal/baokuan"
@@ -246,6 +248,17 @@ func New(options Options) *App {
 				mux.Handle(prefix, merchantsHandler)
 			}
 		}
+		var aigcRuntime aigc.RuntimeProvider
+		if options.Settings != nil {
+			aigcRuntime = options.Settings
+		}
+		aigcService := aigc.New(options.DB, options.Config.DataRoot, aigcRuntime)
+		resumeCtx, cancelResume := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := aigcService.Resume(resumeCtx); err != nil {
+			slog.Error("resume AIGC jobs", "error", err)
+		}
+		cancelResume()
+		mux.Handle("/api/aigc/", httpapi.NewAIGCHandler(aigcService))
 
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {

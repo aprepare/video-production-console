@@ -1371,6 +1371,20 @@ CREATE INDEX order_costs_order_idx ON order_costs(order_id, occurred_at DESC);
 
 ALTER TABLE projects ADD COLUMN order_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE projects ADD COLUMN delivered_at DATETIME;`,
+	`CREATE TABLE aigc_jobs (
+    id TEXT PRIMARY KEY,
+    merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+    order_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('extract_frames', 'restyle', 'image_to_video')),
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'awaiting_confirm', 'completed', 'failed', 'cancelled')),
+    input_material_ids TEXT NOT NULL DEFAULT '[]',
+    output_material_ids TEXT NOT NULL DEFAULT '[]',
+    params_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX aigc_jobs_merchant_idx ON aigc_jobs(merchant_id, created_at DESC);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

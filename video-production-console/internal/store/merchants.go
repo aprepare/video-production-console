@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -124,6 +125,7 @@ var (
 	orderPackages    = enumSet("trial", "monthly", "premium", "custom")
 	orderStatuses    = enumSet("draft", "signed", "producing", "delivered", "closed", "cancelled")
 	costKinds        = enumSet("labor", "api", "material", "revision", "other")
+	derivedSteps     = enumSet("extract_frames", "restyle", "image_to_video")
 )
 
 func enumSet(values ...string) map[string]struct{} {
@@ -320,6 +322,54 @@ func (r *MerchantRepository) CreateMaterial(ctx context.Context, value MerchantM
 		return MerchantMaterial{}, ErrMerchantNotFound
 	}
 	return r.GetMaterial(ctx, value.ID)
+}
+
+// CreateDerivedMaterial records an AI-generated material and its source lineage.
+func (r *MerchantRepository) CreateDerivedMaterial(ctx context.Context, value MerchantMaterial, sourceID, step string, params any, model string) (MerchantMaterial, error) {
+	if err := validateEnum("derived material step", step, derivedSteps); err != nil {
+		return MerchantMaterial{}, err
+	}
+	source, err := r.GetMaterial(ctx, sourceID)
+	if err != nil {
+		return MerchantMaterial{}, err
+	}
+	if value.MerchantID == "" || value.MerchantID != source.MerchantID {
+		return MerchantMaterial{}, invalidData("derived material must belong to the source merchant")
+	}
+	rootID := source.ID
+	var sourceProvenance struct {
+		RootMaterialID string `json:"root_material_id"`
+	}
+	if json.Unmarshal([]byte(source.ProvenanceJSON), &sourceProvenance) == nil && sourceProvenance.RootMaterialID != "" {
+		rootID = sourceProvenance.RootMaterialID
+	}
+	if value.CreatedAt.IsZero() {
+		value.CreatedAt = time.Now().UTC()
+	} else {
+		value.CreatedAt = value.CreatedAt.UTC()
+	}
+	if params == nil {
+		params = map[string]any{}
+	}
+	provenance, err := json.Marshal(struct {
+		Step             string `json:"step"`
+		SourceMaterialID string `json:"source_material_id"`
+		RootMaterialID   string `json:"root_material_id"`
+		Params           any    `json:"params"`
+		Model            string `json:"model"`
+		CreatedAt        string `json:"created_at"`
+	}{
+		Step: step, SourceMaterialID: source.ID, RootMaterialID: rootID,
+		Params: params, Model: model, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return MerchantMaterial{}, invalidData("encode derived material provenance: %v", err)
+	}
+	value.ParentMaterialID = source.ID
+	value.ProvenanceJSON = string(provenance)
+	value.LicenseSource = "ai_generated"
+	value.LicenseScope = source.LicenseScope
+	return r.CreateMaterial(ctx, value)
 }
 
 func (r *MerchantRepository) GetMaterial(ctx context.Context, id string) (MerchantMaterial, error) {
