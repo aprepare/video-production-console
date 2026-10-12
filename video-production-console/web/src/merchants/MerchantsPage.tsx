@@ -493,7 +493,7 @@ function OrderDrawer({ api, orderID, projects, accounts, onClose }: { api: Busin
       <div className="studio-stat-grid">
         <div className="studio-stat"><span>交付进度</span><strong>{detail.summary.delivered_project_count}/{detail.order.video_quota || detail.summary.project_count}</strong><small>已归单项目 {detail.summary.project_count}</small></div>
         <div className="studio-stat"><span>已收</span><strong>{yuan(detail.summary.paid_cents)}</strong><small>合同 {yuan(detail.order.price_cents)}</small></div>
-        <div className="studio-stat"><span>成本</span><strong>{yuan(detail.summary.cost_cents)}</strong><small>人工 {Math.round(detail.summary.labor_minutes / 6) / 10} 小时 · 返工 {detail.summary.revision_count} 次</small></div>
+        <div className="studio-stat"><span>成本</span><strong>{yuan(detail.summary.cost_cents)}</strong><small>{Math.round(detail.summary.labor_minutes / 6) / 10}h 人工 · 返工 {detail.summary.revision_count}</small></div>
         <div className="studio-stat" data-tone={detail.summary.contribution_cents < 0 ? "negative" : undefined}><span>贡献</span><strong>{yuan(detail.summary.contribution_cents)}</strong><small>已收 − 已记成本</small></div>
       </div>
 

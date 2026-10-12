@@ -41,3 +41,7 @@
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 1199px) { .reference-detail { position: static; } }
 @media (prefers-reduced-motion: reduce) { .reference-item { transition: none; } }
+/* Keep platform · keyword · search on one line in the narrow column. */
+.references-search > form.studio-row { flex-wrap: nowrap; }
+.references-search > form.studio-row .grow { flex: 1 1 auto; min-width: 0; }
+.references-search > form.studio-row > button { flex: 0 0 auto; }
