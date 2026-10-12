@@ -88,6 +88,7 @@ const emptySecretDraft = {
   vision_api_key: "",
   embedding_api_key: "",
   pixabay_api_key: "",
+  platform_api_token: "",
 };
 
 const settings: Settings = {
@@ -105,6 +106,7 @@ const settings: Settings = {
     vision_api_key: { configured: false, masked: "" },
     embedding_api_key: { configured: false, masked: "" },
     pixabay_api_key: { configured: false, masked: "" },
+    platform_api_token: { configured: false, masked: "" },
   },
 };
 

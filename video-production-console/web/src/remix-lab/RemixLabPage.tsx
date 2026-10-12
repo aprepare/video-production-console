@@ -963,12 +963,13 @@ export function RemixLabPage({
           </button>
         </div>
       </header>
-      <ol className="remix-lab-production-steps" aria-label="内容生产流程">
+      {/* 打开项目后由工作台自己的五段生产轨表达进度，这里不再叠一条。 */}
+      {selectedProjectID && projectView ? null : <ol className="remix-lab-production-steps" aria-label="内容生产流程">
         <li aria-current={currentProductionStep === 1 ? "step" : undefined}><span>01</span><strong>原文创作</strong><small>选择账号与工作流</small></li>
         <li aria-current={currentProductionStep === 2 ? "step" : undefined}><span>02</span><strong>审稿定稿</strong><small>核对内容与发布包</small></li>
         <li aria-current={currentProductionStep === 3 ? "step" : undefined}><span>03</span><strong>确认生产</strong><small>配音与混剪草稿</small></li>
         <li aria-current={currentProductionStep === 4 ? "step" : undefined}><span>04</span><strong>交付复盘</strong><small>人工确认发布</small></li>
-      </ol>
+      </ol>}
       <div
         className={[
           "remix-lab__body",

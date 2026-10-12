@@ -48,6 +48,7 @@ type SecretDraft = {
   vision_api_key: string;
   embedding_api_key: string;
   pixabay_api_key: string;
+  platform_api_token: string;
 };
 
 const settingsTabs = [
@@ -904,6 +905,30 @@ export function SettingsPanel({
           ) : null}
           {tab === "system" ? (
             <>
+              <p className="settings-section-title">平台接口（对标采集与口播转写）</p>
+              <Field label="平台接口地址">
+                <input
+                  aria-label="平台接口地址"
+                  value={draft.platform_api_base_url || ""}
+                  placeholder="http://165.254.188.202:8790"
+                  onChange={setText("platform_api_base_url")}
+                />
+              </Field>
+              <Field label="平台接口 Token">
+                <small>
+                  {settings?.secrets.platform_api_token?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                </small>
+                <input
+                  type="password"
+                  aria-label="平台接口 Token"
+                  value={secretDraft.platform_api_token}
+                  placeholder="留空保持不变"
+                  onChange={(event) =>
+                    onSecretDraftChange({ ...secretDraft, platform_api_token: event.target.value })
+                  }
+                />
+              </Field>
+              <p className="settings-section-title">任务默认值</p>
               <Field label="默认模型">
                 <ModelSelect
                   value={draft.codex_default_model || ""}

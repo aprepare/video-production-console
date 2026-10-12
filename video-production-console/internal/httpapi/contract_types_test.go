@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"video-production-console/internal/domain"
+	"video-production-console/internal/store"
 )
 
 // Go response structs and the frontend types that read them are both written by
@@ -34,6 +35,14 @@ var responseContracts = []struct {
 	{"task event", domain.TaskEvent{}, "tasks/event-types.ts", "TaskEvent"},
 	{"semantic event", domain.SemanticEvent{}, "tasks/event-types.ts", "SemanticEvent"},
 	{"project", projectView{}, "project-workbench/types.ts", "ProjectSummary"},
+	{"merchant", store.Merchant{}, "merchants/MerchantsPage.tsx", "Merchant"},
+	{"merchant material", store.MerchantMaterial{}, "merchants/MerchantsPage.tsx", "Material"},
+	{"order", store.Order{}, "merchants/MerchantsPage.tsx", "Order"},
+	{"order cost", store.OrderCost{}, "merchants/MerchantsPage.tsx", "OrderCost"},
+	{"order summary", store.OrderSummary{}, "merchants/MerchantsPage.tsx", "OrderSummary"},
+	{"order project", store.OrderProject{}, "merchants/MerchantsPage.tsx", "OrderProject"},
+	{"business overview", store.BusinessOverview{}, "merchants/MerchantsPage.tsx", "BusinessOverview"},
+	{"reference post", store.ReferencePost{}, "references/ReferencesPage.tsx", "ReferencePost"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

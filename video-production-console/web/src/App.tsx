@@ -22,6 +22,8 @@ import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import { ReferencesPage } from "./references/ReferencesPage";
+import { MerchantsPage } from "./merchants/MerchantsPage";
+import { TaskCenter } from "./tasks/TaskCenter";
 import { clearRetiredFeatureDrafts } from "./shell/retiredFeatureDrafts";
 import {
   isShieldedProductionPath,
@@ -105,7 +107,8 @@ function App() {
   const route = parseLocation(isShieldedProductionPath(rawPathname) ? "/projects" : rawPathname);
   const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
-  const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project";
+  const merchantRoute = route.view === "merchants" || route.view === "merchant";
+  const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project" || merchantRoute;
   const montageRoute = route.view === "projects" || route.view === "project";
   const routedProjectID = route.view === "project" ? route.projectID : undefined;
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
@@ -585,6 +588,8 @@ function App() {
       || route.view === "image-video"
       || route.view === "remix-lab"
       || route.view === "references"
+      || route.view === "merchants"
+      || route.view === "merchant"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -975,12 +980,13 @@ function App() {
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : route.view === "references" ? "references" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : route.view === "references" ? "references" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
         onOpenSettings={() => void settingsPanel.openDialog()}
         onLogout={() => void logout()}
+        footerSlot={<TaskCenter api={api} projects={projects} onOpenProject={(projectID) => navigate(`/projects/${projectID}`)} />}
       />
       {route.view === "not-found" ? (
         <main className="notice" role="alert" id="studio-content" tabIndex={-1}>
@@ -988,6 +994,14 @@ function App() {
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
+      ) : merchantRoute ? (
+        <MerchantsPage
+          api={api}
+          accounts={accounts}
+          projects={projects}
+          initialMerchantID={route.view === "merchant" ? route.merchantID : undefined}
+          onNavigate={navigate}
+        />
       ) : route.view === "references" ? (
         <ReferencesPage api={api} onNavigate={navigate} onOpenSettings={() => void settingsPanel.openDialog()} />
       ) : imageRoute ? (

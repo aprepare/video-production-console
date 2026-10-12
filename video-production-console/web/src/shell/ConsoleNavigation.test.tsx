@@ -18,9 +18,10 @@ test("navigation marks the active workspace and preserves modified link clicks",
   expect(navigate).toHaveBeenCalledTimes(1);
 });
 
-test("only copy and image workspaces remain in navigation", () => {
+test("navigation lists the merchant, reference, copy and image workspaces only", () => {
   render(<ConsoleNavigation active="remix" theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
-  expect(screen.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/", "/image-projects"]);
+  expect(screen.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/image-projects"]);
+  expect(screen.getByRole("link", { name: "文案与混剪" }).getAttribute("aria-current")).toBe("page");
   expect(screen.queryByRole("link", { name: "二创文档" })).toBeNull();
   expect(screen.queryByRole("link", { name: "AI短片" })).toBeNull();
 });

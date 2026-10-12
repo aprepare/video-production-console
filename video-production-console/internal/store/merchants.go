@@ -35,11 +35,12 @@ type Merchant struct {
 }
 
 type MerchantMaterial struct {
-	ID               string    `json:"id"`
-	MerchantID       string    `json:"merchant_id"`
-	Kind             string    `json:"kind"`
-	Filename         string    `json:"filename"`
-	Path             string    `json:"path"`
+	ID         string `json:"id"`
+	MerchantID string `json:"merchant_id"`
+	Kind       string `json:"kind"`
+	Filename   string `json:"filename"`
+	// Path is the absolute storage location; it never leaves the server.
+	Path             string    `json:"-"`
 	Size             int64     `json:"size"`
 	SHA256           string    `json:"sha256"`
 	Description      string    `json:"description"`

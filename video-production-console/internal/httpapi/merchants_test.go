@@ -155,7 +155,7 @@ func TestMerchantMaterialUploadFailureCleansFiles(t *testing.T) {
 }
 
 func TestMerchantMaterialKindsAndMerchantFileCascade(t *testing.T) {
-	h, _, _ := merchantAPI(t)
+	h, db, _ := merchantAPI(t)
 	m := merchantJSON(t, merchantRequest(t, h, "POST", "/api/merchants", `{"name":"店铺"}`, 201))
 	mid := m["id"].(string)
 	paths := []string{}
@@ -164,7 +164,10 @@ func TestMerchantMaterialKindsAndMerchantFileCascade(t *testing.T) {
 		if mat["kind"] != tc.kind {
 			t.Fatal(mat)
 		}
-		paths = append(paths, mat["path"].(string))
+		if _, leaked := mat["path"]; leaked {
+			t.Fatalf("material JSON exposes the storage path: %v", mat)
+		}
+		paths = append(paths, materialPath(t, db, mat["id"].(string)))
 	}
 	merchantRequest(t, h, "DELETE", "/api/merchants/"+mid, "", 204)
 	for _, path := range paths {
@@ -233,7 +236,8 @@ func TestMerchantMaterialUploadContentDeleteAndPathProtection(t *testing.T) {
 	uploadMerchantMaterial(t, h, mid, "clip.MP4", map[string]string{"kind": "bad"}, 400)
 	uploadMerchantMaterial(t, h, mid, "clip.MP4", map[string]string{"license_source": "bad"}, 400)
 	mat := merchantJSON(t, uploadMerchantMaterial(t, h, mid, "clip.MP4", map[string]string{"description": "店内", "license_scope": "代运营"}, 201))
-	id, path := mat["id"].(string), mat["path"].(string)
+	id := mat["id"].(string)
+	path := materialPath(t, db, id)
 	sum := sha256.Sum256([]byte("hello material"))
 	if mat["sha256"] != fmt.Sprintf("%x", sum) || mat["size"] != float64(14) || mat["kind"] != "video" {
 		t.Fatal(mat)
@@ -274,4 +278,13 @@ func TestMerchantMaterialUploadContentDeleteAndPathProtection(t *testing.T) {
 	if w := merchantRequest(t, h, "GET", "/api/merchants/"+mid+"/materials", "", 200); strings.TrimSpace(w.Body.String()) != "[]" {
 		t.Fatal(w.Body.String())
 	}
+}
+
+func materialPath(t *testing.T, db *sql.DB, id string) string {
+	t.Helper()
+	var path string
+	if err := db.QueryRow(`SELECT path FROM merchant_materials WHERE id=?`, id).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

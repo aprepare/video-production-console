@@ -1,23 +1,27 @@
-import { Clapperboard, Images, LogOut, Moon, PenLine, Radar, Settings2, Sun } from "lucide-react";
+import { Clapperboard, Images, LogOut, Moon, PenLine, Radar, Settings2, Store, Sun } from "lucide-react";
+import type { ReactNode } from "react";
 import type { Theme } from "../types";
 import "./console-navigation.css";
 
 type Props = {
-  active: "remix" | "image" | "references" | null;
+  active: "remix" | "image" | "references" | "merchants" | null;
   theme: Theme;
   onNavigate: (href: string) => void;
   onThemeChange: (theme: Theme) => void;
   onOpenSettings: () => void;
   onLogout: () => void;
+  /** Extra footer entries such as the task center trigger. */
+  footerSlot?: ReactNode;
 };
 
 const workspaces = [
+  { id: "merchants", href: "/merchants", label: "商户与订单", description: "交付、授权与成本", icon: Store },
   { id: "references", href: "/references", label: "对标采集", description: "爆款口播与热评", icon: Radar },
   { id: "remix", href: "/", label: "文案与混剪", description: "从灵感到成片", icon: PenLine },
   { id: "image", href: "/image-projects", label: "图文制作", description: "让内容被看见", icon: Images },
 ] as const;
 
-export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, onOpenSettings, onLogout }: Props) {
+export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, onOpenSettings, onLogout, footerSlot }: Props) {
   return <aside className="console-nav" aria-label="控制台导航">
     <div className="console-nav__brand">
       <span className="console-nav__mark"><Clapperboard size={23} strokeWidth={1.8} aria-hidden="true" /></span>
@@ -37,6 +41,7 @@ export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, on
       ><Icon size={20} strokeWidth={1.8} aria-hidden="true" /><span><strong>{label}</strong><small>{description}</small></span></a>)}
     </nav>
     <div className="console-nav__footer">
+      {footerSlot}
       <button type="button" className="console-nav__utility" onClick={onOpenSettings} title="设置" aria-label="设置"><Settings2 size={18} aria-hidden="true" /><span>设置</span></button>
       <label className="console-nav__theme" title="选择界面主题">
         {theme === "dark" ? <Moon size={18} aria-hidden="true" /> : <Sun size={18} aria-hidden="true" />}

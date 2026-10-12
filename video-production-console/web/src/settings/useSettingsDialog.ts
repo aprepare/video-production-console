@@ -17,6 +17,7 @@ const emptySecretDraft = {
   vision_api_key: "",
   embedding_api_key: "",
   pixabay_api_key: "",
+  platform_api_token: "",
 };
 
 type SettingsDialogOptions = {
