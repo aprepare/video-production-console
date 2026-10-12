@@ -109,6 +109,12 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-plan: %w", err))
 	}
 
+	// montage.plan is the review-only variant: the validated plan is the
+	// deliverable and no plaintext draft is built or registered.
+	if _, action := identityFromManifest(manifestPath); action == "montage.plan" {
+		return writePlanOnlyEnvelope(outPath, manifestPath, planPath)
+	}
+
 	resultFile := filepath.Join(filepath.Dir(planPath), "result.json")
 	// An earlier attempt must never turn a failed execution into stale success.
 	if removeErr := os.Remove(resultFile); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -339,6 +345,30 @@ func decodeGBK(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// writePlanOnlyEnvelope reports a completed montage.plan task whose only
+// artifact is the validated production plan.
+func writePlanOnlyEnvelope(outPath, manifestPath, planPath string) error {
+	taskID, action := identityFromManifest(manifestPath)
+	envelope := map[string]any{
+		"schema_version": "2.0",
+		"task_id":        taskID,
+		"action":         action,
+		"status":         "completed",
+		"summary":        "production plan validated; execution deferred to montage.execute",
+		"questions":      []any{},
+		"artifacts": []map[string]any{{
+			"type": "production_plan", "kind": "file", "path": planPath,
+		}},
+		"asset_outputs": []any{},
+		"warnings":      []any{},
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	return writeRawEnvelope(outPath, raw)
 }
 
 func writeFailure(outPath, manifestPath string, cause error) error {

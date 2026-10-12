@@ -891,9 +891,11 @@ export function RemixLabPage({
             <PenLine size={18} strokeWidth={2} />
           </span>
           <div>
-            <span className="eyebrow">创作工作室 / 文案与混剪</span>
-            <h1>文案创作台</h1>
-            <p>编辑文案，确认定稿，继续制作。</p>
+            <span className="eyebrow">{selectedProjectID && projectView ? "创作工作室 / 文案与混剪 / 项目" : "创作工作室 / 文案与混剪"}</span>
+            {/* 打开项目后页头跟着切换；h1 的可访问名称保留「文案创作台」，
+                让不打开项目的页面（历史、工作流、实验）仍按原名定位。 */}
+            <h1>{selectedProjectID && projectView ? "项目工作台" : "文案创作台"}</h1>
+            <p>{selectedProjectID && projectView ? "配音、混剪与剪映草稿，按阶段推进。" : "编辑文案，确认定稿，继续制作。"}</p>
           </div>
           <nav className="remix-lab-account-switch" aria-label="账号">
             <label>

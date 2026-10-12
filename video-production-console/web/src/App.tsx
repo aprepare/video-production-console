@@ -413,6 +413,7 @@ function App() {
   // 让「导入成品文案，接着往下走」说到做到；二创路径（有同行原文）仍停在人工确认，
   // 由操作员点主按钮或一键生成。每个文案版本只自动启动一次。
   const spokenAutoKeyRef = useRef("");
+  const startSpokenLinesTask = projectActions.startSpokenLinesTask;
   useEffect(() => {
     if (!montageRoute || !selected || !detail) return;
     if (detail.project.id !== selected.id) return;
@@ -424,8 +425,8 @@ function App() {
     const key = `${detail.project.id}:${continuous.id}`;
     if (spokenAutoKeyRef.current === key) return;
     spokenAutoKeyRef.current = key;
-    void projectActions.startSpokenLinesTask();
-  }, [montageRoute, selected, detail, tasks, projectActions.startSpokenLinesTask]);
+    void startSpokenLinesTask();
+  }, [montageRoute, selected, detail, tasks, startSpokenLinesTask]);
 
   useEffect(() => {
     void (async () => {

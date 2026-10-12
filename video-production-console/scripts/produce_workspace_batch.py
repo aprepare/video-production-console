@@ -23,10 +23,11 @@ def save(data):
  tmp=STATE.with_suffix('.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8');tmp.replace(STATE)
 
 def session():
- jar=http.cookiejar.MozillaCookieJar(str(ROOT/'.tmp_console_cookies.txt'));jar.load(ignore_discard=True,ignore_expires=True)
+ session_dir=ROOT/'video-console-data'/'sessions'
+ jar=http.cookiejar.MozillaCookieJar(str(session_dir/'console_cookies.txt'));jar.load(ignore_discard=True,ignore_expires=True)
  s=requests.Session();s.trust_env=False
  for cookie in jar:s.cookies.set(cookie.name,cookie.value,domain='127.0.0.1',path='/')
- s.headers['X-CSRF-Token']=(ROOT/'.tmp_csrf.txt').read_text('utf-8').strip()
+ s.headers['X-CSRF-Token']=(session_dir/'csrf.txt').read_text('utf-8').strip()
  return s
 
 def api(s,method,path,**kw):

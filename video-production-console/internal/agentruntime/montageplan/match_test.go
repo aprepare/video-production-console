@@ -673,18 +673,21 @@ func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
 	if strings.Contains(joined, "falling back to media index") || strings.Contains(joined, "match_candidates_not_landscape") {
 		t.Fatalf("real finance catalog must not fall back to landscape index: %v", plan.PlannerNotes)
 	}
-	broll := 0
+	// The live library grows over time (generated architecture clips were
+	// added under originals/generated on 2026-10-02), so assert the planner
+	// stayed on catalog-backed broll instead of pinning a sub-directory.
+	catalogBroll := 0
 	for _, shot := range plan.Timeline {
 		path := filepath.ToSlash(shot.SourcePath + " " + shot.SourceID)
 		if strings.Contains(path, "01_Nature_Landscape") || strings.Contains(path, "12_Pexels_Landscape") {
 			t.Fatalf("landscape index path used: %s notes=%v", shot.SourcePath, plan.PlannerNotes)
 		}
-		if strings.Contains(filepath.ToSlash(shot.SourcePath), "originals/broll/") {
-			broll++
+		if shot.MediaKind == "broll" && strings.TrimSpace(shot.ShotID) != "" && strings.Contains(filepath.ToSlash(shot.SourcePath), "/originals/") {
+			catalogBroll++
 		}
 	}
-	if broll == 0 {
-		t.Fatalf("expected originals/broll shots, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
+	if catalogBroll == 0 {
+		t.Fatalf("expected catalog broll shots, first=%#v notes=%v", plan.Timeline[0], plan.PlannerNotes)
 	}
 }
 

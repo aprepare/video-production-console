@@ -24,20 +24,6 @@ type imageVideoJobsHandler struct {
 	service *imagevideo.Service
 }
 
-func NewImageVideoJobsHandler(db *sql.DB, runtime imageRuntimeProvider, starter imageVideoJobStarter, services ...*imagevideo.Service) http.Handler {
-	var service *imagevideo.Service
-	if len(services) > 0 {
-		service = services[0]
-	}
-	h := &imageVideoJobsHandler{repo: store.NewImageVideoJobRepository(db), starter: starter, db: db, runtime: runtime, service: service}
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/image-projects/{id}/image-video-jobs", h.create)
-	mux.HandleFunc("GET /api/image-video-jobs/{id}", h.get)
-	mux.HandleFunc("POST /api/image-video-jobs/{id}/retry-failed", h.retryFailed)
-	mux.HandleFunc("POST /api/image-video-jobs/{id}/cancel", h.cancel)
-	mux.HandleFunc("POST /api/image-video-jobs/{id}/retry-registration", h.retryRegistration)
-	return mux
-}
 
 type createImageVideoJobRequest struct {
 	OutputMode     imagevideo.OutputMode `json:"output_mode"`

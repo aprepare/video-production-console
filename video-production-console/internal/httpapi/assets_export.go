@@ -86,6 +86,22 @@ func (h *assetContentHandler) exportVideoStart(w http.ResponseWriter, r *http.Re
 	if draftName == "" {
 		draftName = filepath.Base(item.Path)
 	}
+	runtime, err := h.runtime.Runtime(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "video_export_unavailable", "Runtime settings are unavailable.")
+		return
+	}
+	// The exporter needs OpenCV/mss/psutil/uiautomation; those ship in the
+	// embedded Python named by the machine profile, not necessarily in the
+	// interpreter found on PATH.
+	python := exportPythonBinary(runtime.MachineProfilePath)
+	// Exports land under the data root so the result is discoverable from
+	// the console instead of a machine-specific folder baked into the script.
+	exportDir := filepath.Join(runtime.DataRoot, "exports")
+	if mkErr := os.MkdirAll(exportDir, 0o755); mkErr != nil {
+		writeError(w, http.StatusInternalServerError, "video_export_unavailable", "The export directory could not be created.")
+		return
+	}
 	j := h.exportJob
 	j.mu.Lock()
 	if j.running {
@@ -97,19 +113,47 @@ func (h *assetContentHandler) exportVideoStart(w http.ResponseWriter, r *http.Re
 	j.status, j.message, j.output = "running", "正在控制剪映导出，期间请不要操作鼠标键盘。", ""
 	j.started, j.finished = time.Now(), time.Time{}
 	j.mu.Unlock()
-	go j.run(script, draftName)
+	go j.run(python, script, draftName, exportDir)
 	writeJSON(w, http.StatusAccepted, j.snapshot())
+}
+
+// exportPythonBinary prefers the machine profile's python_binary (the
+// embedded runtime with the exporter's dependencies) and falls back to the
+// PATH interpreter only when the profile is missing or unreadable.
+func exportPythonBinary(machineProfilePath string) string {
+	machineProfilePath = strings.TrimSpace(machineProfilePath)
+	if machineProfilePath == "" {
+		return "python"
+	}
+	raw, err := os.ReadFile(machineProfilePath)
+	if err != nil {
+		return "python"
+	}
+	var profile struct {
+		PythonBinary string `json:"python_binary"`
+	}
+	if json.Unmarshal(raw, &profile) != nil {
+		return "python"
+	}
+	candidate := strings.TrimSpace(profile.PythonBinary)
+	if candidate == "" || !filepath.IsAbs(candidate) {
+		return "python"
+	}
+	if info, statErr := os.Stat(candidate); statErr != nil || !info.Mode().IsRegular() {
+		return "python"
+	}
+	return candidate
 }
 
 func (h *assetContentHandler) exportVideoStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.exportJob.snapshot())
 }
 
-func (j *videoExportJob) run(script, draftName string) {
+func (j *videoExportJob) run(python, script, draftName, exportDir string) {
 	// Renders can legitimately take tens of minutes for long timelines.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "python", "-u", script, draftName)
+	cmd := exec.CommandContext(ctx, python, "-u", script, draftName, "--export-dir", exportDir)
 	cmd.Dir = filepath.Dir(script)
 	// Piped Python stdout defaults to the ANSI code page on Windows, which
 	// would mangle the Chinese file paths the script prints.

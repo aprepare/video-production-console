@@ -155,6 +155,8 @@ describe("production workflow view model", () => {
     expect(
       missingProductionInputs(detail("script", { continuous_script: "ready", spoken_script: "ready" }, undefined, "stale")),
     ).toEqual(["narration", "subtitle_srt", "account_background"]);
+    // Once every formal input is ready the mixing stage has nothing left to
+    // collect: the draft it produces is an output, not a missing input.
     expect(
       missingProductionInputs(
         detail(
@@ -164,7 +166,7 @@ describe("production workflow view model", () => {
           "ready",
         ),
       ),
-    ).toEqual(["mix_draft"]);
+    ).toEqual([]);
     expect(missingProductionInputs(detail("review", { mix_draft: "ready" }))).toEqual([]);
   });
 
@@ -196,7 +198,7 @@ describe("production workflow view model", () => {
     ).toEqual(["continuous_script"]);
   });
 
-  test("ignores legacy final_video missing hints from the backend", () => {
+  test("ignores legacy final_video and mix_draft missing hints from the backend", () => {
     expect(
       missingProductionInputs(
         detail(
@@ -211,7 +213,7 @@ describe("production workflow view model", () => {
           ["final_video", "mix_draft"],
         ),
       ),
-    ).toEqual(["mix_draft"]);
+    ).toEqual([]);
   });
 
   test("maps active workflow steps to a disabled primary action", () => {

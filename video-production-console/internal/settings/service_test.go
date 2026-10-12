@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -1325,4 +1326,44 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		MontageStyle:           domain.DefaultMontageStyle(),
 	}
 	return NewService(store.NewSettingsRepository(db), protector, options), db, protector, public
+}
+
+func TestRuntimeFallsBackToBundledFFmpegUnderDataRoot(t *testing.T) {
+	service, _, _, public := newSettingsTestService(t, Options{})
+	if _, err := service.PutPublic(t.Context(), public); err != nil {
+		t.Fatal(err)
+	}
+	toolsDir := filepath.Join(public.DataRoot, "tools", "ffmpeg")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	suffix := ""
+	if goruntime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	ffmpeg := filepath.Join(toolsDir, "ffmpeg"+suffix)
+	ffprobe := filepath.Join(toolsDir, "ffprobe"+suffix)
+	for _, path := range []string{ffmpeg, ffprobe} {
+		if err := os.WriteFile(path, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.FFmpegPath != ffmpeg || runtime.FFprobePath != ffprobe {
+		t.Fatalf("runtime binaries=%q/%q, want bundled %q/%q", runtime.FFmpegPath, runtime.FFprobePath, ffmpeg, ffprobe)
+	}
+	view, err := service.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.FFmpegPath != "" || view.Public.FFprobePath != "" {
+		t.Fatalf("persisted binaries=%q/%q, want blank so the fallback stays implicit", view.Public.FFmpegPath, view.Public.FFprobePath)
+	}
+	if view.RestartRequired {
+		t.Fatal("bundled fallback must not flag a restart")
+	}
 }

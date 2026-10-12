@@ -52,16 +52,13 @@ func bgmIndexPath(dataRoot string) string {
 }
 
 // effectiveFFmpeg is the configured ffmpeg, else the copy bundled under
-// <data root>/tools/ffmpeg, else whatever "ffmpeg" resolves to on PATH.
+// <data root>/tools/ffmpeg. The runtime snapshot already applies that
+// fallback; this keeps working for callers that build a Runtime by hand.
 func effectiveFFmpeg(runtime consoleSettings.Runtime) string {
 	if path := strings.TrimSpace(runtime.FFmpegPath); path != "" {
 		return path
 	}
-	bundled := filepath.Join(runtime.DataRoot, "tools", "ffmpeg", "ffmpeg.exe")
-	if stat, err := os.Stat(bundled); err == nil && !stat.IsDir() {
-		return bundled
-	}
-	return ""
+	return consoleSettings.BundledMediaBinary(runtime.DataRoot, "ffmpeg")
 }
 
 // effectiveBGMDir is the configured BGM directory, or <data root>/bgm when

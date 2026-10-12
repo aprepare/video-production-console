@@ -128,6 +128,13 @@ function CopyFieldButton(props: {
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const { detail, loadSourceScriptContent } = props;
   const mixKind = props.mixKind ?? "scenic";
+  const { onMix, onMovieMix, onImageVideoMix, onStartSpokenLines, onStartCaptionKeywords, onGenerateNarration, captionKeywordsDisabled, tasks } = props;
+
+  const startCurrentMix = () => {
+    if (mixKind === "movie") return onMovieMix?.();
+    if (mixKind === "image-video") return onImageVideoMix?.();
+    return onMix();
+  };
   const stage = deriveProductionStage(detail);
   const action = nextPrimaryAction(detail);
   const mixLabel = mixKind === "movie"
@@ -252,39 +259,31 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const captionKeywordsLive = props.tasks.some((task) =>
     task.action === "remix.caption_keywords"
     && isLiveTaskStatus(task.status));
+  const spokenScriptID = detail.assets.spoken_script?.id;
+  const spokenScriptState = detail.assets.spoken_script?.state;
+  const captionKeywordsState = detail.assets.caption_keywords?.state;
   useEffect(() => {
-    if (props.captionKeywordsDisabled) return;
+    if (captionKeywordsDisabled) return;
     if (oneClickArmed) return;
-    if (!props.onStartCaptionKeywords) return;
-    if (detail.assets.spoken_script?.state !== "ready") return;
-    if (detail.assets.caption_keywords?.state === "ready") return;
+    if (!onStartCaptionKeywords) return;
+    if (spokenScriptState !== "ready") return;
+    if (captionKeywordsState === "ready") return;
     if (captionKeywordsLive) return;
-    const versionKey = detail.assets.spoken_script?.id;
+    const versionKey = spokenScriptID;
     if (!versionKey || keywordAutoKey.current === versionKey) return;
     keywordAutoKey.current = versionKey;
     oneClickKeywordKey.current = versionKey;
     // 只试一次：启动失败时 startCaptionKeywordsTask 已给出横幅说明，混剪会回落本地词表。
     // 不做自动重试，避免反复抢项目锁挤掉用户同时发起的其他操作。
     // 失败要记在版本号上，之后用户点「一键生成」时链条才知道跳过关键词，不会干等。
-    void Promise.resolve(props.onStartCaptionKeywords()).then((started) => {
+    void Promise.resolve(onStartCaptionKeywords()).then((started) => {
       if (started === false) setKeywordStartFailedID(versionKey);
     });
-  }, [oneClickArmed, captionKeywordsLive, props.onStartCaptionKeywords, props.captionKeywordsDisabled, detail.assets.spoken_script?.id, detail.assets.spoken_script?.state, detail.assets.caption_keywords?.state]);
+  }, [oneClickArmed, captionKeywordsLive, onStartCaptionKeywords, captionKeywordsDisabled, spokenScriptID, spokenScriptState, captionKeywordsState]);
 
   const narrationGenerating = props.pendingActions.includes("generate-narration");
   const oneClickBusy = projectPending || spokenLinesLive || montageLive || narrationGenerating || sourceRemixLive;
 
-  const startCurrentMix = () => {
-    if (mixKind === "movie") return props.onMovieMix?.();
-    if (mixKind === "image-video") return props.onImageVideoMix?.();
-    return props.onMix();
-  };
-
-  // 控制台重启后任务状态是 interrupted（error_code 才是 interrupted_on_restart），两种都算失败。
-  const failedSinceArm = (action: string) => props.tasks.some((task) =>
-    ["failed", "canceled", "interrupted", "interrupted_on_restart"].includes(task.status)
-    && task.action === action
-    && Date.parse(task.created_at) >= oneClickArmedAt.current - 5000);
 
   // 文案确定后一点：口播稿 → 字幕关键词 → 配音字幕 → 混剪到剪映草稿。
   // 关键词和配音不能并行：项目锁同时只允许一个动作。关键词失败才回落本地词表。
@@ -296,6 +295,16 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       setOneClickArmed(false);
       return;
     }
+    const runMix = () => {
+      if (mixKind === "movie") return onMovieMix?.();
+      if (mixKind === "image-video") return onImageVideoMix?.();
+      return onMix();
+    };
+    // 控制台重启后任务状态是 interrupted（error_code 才是 interrupted_on_restart），两种都算失败。
+    const failedSinceArm = (action: string) => tasks.some((task) =>
+      ["failed", "canceled", "interrupted", "interrupted_on_restart"].includes(task.status)
+      && task.action === action
+      && Date.parse(task.created_at) >= oneClickArmedAt.current - 5000);
 
     const scriptID = detail.assets.continuous_script?.id || "";
     const spokenReady = detail.assets.spoken_script?.state === "ready";
@@ -308,26 +317,26 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
     if (!spokenReady) {
       if (oneClickBusy) return;
-      if (!props.onStartSpokenLines || !scriptID) return;
+      if (!onStartSpokenLines || !scriptID) return;
       if (oneClickSpokenKey.current === scriptID) {
         if (failedSinceArm("remix.spoken_lines")) setOneClickArmed(false);
         return;
       }
       oneClickSpokenKey.current = scriptID;
-      void Promise.resolve(props.onStartSpokenLines()).then((started) => {
+      void Promise.resolve(onStartSpokenLines()).then((started) => {
         // 启动失败已有横幅说明原因；停下一键，等用户处理后再点。
         if (started === false) setOneClickArmed(false);
       });
       return;
     }
 
-    if (!keywordsReady && !keywordsFailed && !props.captionKeywordsDisabled) {
+    if (!keywordsReady && !keywordsFailed && !captionKeywordsDisabled) {
       if (captionKeywordsLive || oneClickBusy) return;
-      if (!props.onStartCaptionKeywords || !spokenID) return;
+      if (!onStartCaptionKeywords || !spokenID) return;
       if (oneClickKeywordKey.current === spokenID || keywordAutoKey.current === spokenID) return;
       oneClickKeywordKey.current = spokenID;
       keywordAutoKey.current = spokenID;
-      void Promise.resolve(props.onStartCaptionKeywords()).then((started) => {
+      void Promise.resolve(onStartCaptionKeywords()).then((started) => {
         // 关键词启动失败不值得停整条链：标记放弃，下一轮直接去配音（混剪回落本地词表）。
         if (started === false) setKeywordStartFailedID(spokenID);
       });
@@ -336,13 +345,13 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
     if (!narrationReady || !srtReady) {
       if (oneClickBusy) return;
-      if (!props.onGenerateNarration || !spokenID) return;
+      if (!onGenerateNarration || !spokenID) return;
       if (oneClickNarrationKey.current === spokenID) {
         setOneClickArmed(false);
         return;
       }
       oneClickNarrationKey.current = spokenID;
-      void Promise.resolve(props.onGenerateNarration()).then((started) => {
+      void Promise.resolve(onGenerateNarration()).then((started) => {
         if (started === false) setOneClickArmed(false);
       });
       return;
@@ -361,7 +370,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       return;
     }
     oneClickMontageKey.current = mixKey;
-    void Promise.resolve(startCurrentMix()).then((started) => {
+    void Promise.resolve(runMix()).then((started) => {
       if (started === false) setOneClickArmed(false);
     });
   }, [
@@ -372,13 +381,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     narrationGenerating,
     detail,
     mixKind,
-    props.tasks,
-    props.onStartSpokenLines,
-    props.onStartCaptionKeywords,
-    props.onGenerateNarration,
-    props.onMix,
-    props.onMovieMix,
-    props.onImageVideoMix,
+    tasks,
+    onStartSpokenLines,
+    onStartCaptionKeywords,
+    onGenerateNarration,
+    onMix,
+    onMovieMix,
+    onImageVideoMix,
+    captionKeywordsDisabled,
   ]);
 
   const oneClickAvailable = canOneClickProduce(detail);

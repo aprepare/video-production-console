@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -548,7 +549,47 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 		}
 		runtime.SecretVersions[key] = version
 	}
+	applyBundledMediaBinaries(&runtime)
 	return runtime, nil
+}
+
+// applyBundledMediaBinaries fills empty ffmpeg/ffprobe paths from the copy
+// shipped under <data root>/tools/ffmpeg. Only the runtime snapshot is
+// touched: the persisted public settings stay blank so the operator can
+// still see that no explicit path was configured. Every consumer that reads
+// Runtime (image-to-video, catalog build, task manifests, BGM import)
+// therefore agrees on the same binary instead of each guessing.
+func applyBundledMediaBinaries(runtime *Runtime) {
+	if runtime == nil || strings.TrimSpace(runtime.DataRoot) == "" {
+		return
+	}
+	if strings.TrimSpace(runtime.FFmpegPath) == "" {
+		if path := bundledMediaBinary(runtime.DataRoot, "ffmpeg"); path != "" {
+			runtime.FFmpegPath = path
+		}
+	}
+	if strings.TrimSpace(runtime.FFprobePath) == "" {
+		if path := bundledMediaBinary(runtime.DataRoot, "ffprobe"); path != "" {
+			runtime.FFprobePath = path
+		}
+	}
+}
+
+// BundledMediaBinary reports the bundled ffmpeg/ffprobe under the data root
+// when it exists, else "". Exported for callers that only hold a data root.
+func BundledMediaBinary(dataRoot, name string) string { return bundledMediaBinary(dataRoot, name) }
+
+func bundledMediaBinary(dataRoot, name string) string {
+	file := name
+	if goruntime.GOOS == "windows" {
+		file += ".exe"
+	}
+	candidate := filepath.Join(dataRoot, "tools", "ffmpeg", file)
+	info, err := os.Stat(candidate)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return candidate
 }
 
 func clonePublic(value domain.PublicSettings) domain.PublicSettings {
@@ -567,6 +608,14 @@ func cloneRuntime(value Runtime) Runtime {
 }
 
 func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
+	// The active runtime carries the bundled ffmpeg/ffprobe fallback while the
+	// persisted settings stay blank; that difference is not a pending change.
+	if strings.TrimSpace(configured.FFmpegPath) == "" {
+		configured.FFmpegPath, active.FFmpegPath = "", ""
+	}
+	if strings.TrimSpace(configured.FFprobePath) == "" {
+		configured.FFprobePath, active.FFprobePath = "", ""
+	}
 	configured.MaxCodexConcurrency, active.MaxCodexConcurrency = 0, 0
 	configured.MaxImageConcurrency, active.MaxImageConcurrency = 0, 0
 	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0

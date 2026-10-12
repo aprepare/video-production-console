@@ -58,10 +58,16 @@ func main() {
 	cookie := "# Netscape HTTP Cookie File\n" +
 		"127.0.0.1\tFALSE\t/\tFALSE\t0\tvideo_console_session\t" + token + "\n" +
 		"127.0.0.1\tFALSE\t/\tFALSE\t0\tvideo_console_csrf\t" + csrf + "\n"
-	if err := os.WriteFile(".tmp_console_cookies.txt", []byte(cookie), 0o600); err != nil {
+	// Session material lives under the (git-ignored) data root, never in the
+	// repository root where it could be picked up by a stray commit.
+	sessionDir := filepath.Join("video-console-data", "sessions")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		panic(err)
 	}
-	if err := os.WriteFile(".tmp_csrf.txt", []byte(csrf), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sessionDir, "console_cookies.txt"), []byte(cookie), 0o600); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "csrf.txt"), []byte(csrf), 0o600); err != nil {
 		panic(err)
 	}
 	os.Stdout.WriteString("session_ok\n")

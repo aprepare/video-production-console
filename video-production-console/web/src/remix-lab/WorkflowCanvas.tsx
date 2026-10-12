@@ -354,10 +354,12 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeExperiment]);
 
+  const liveExperimentID = liveRun?.experimentID;
+  const liveActiveRunID = liveRun?.activeRunID;
   useEffect(() => {
-    if (!liveRun) return;
-    try { window.sessionStorage.setItem(`remix-lab:active-run:${liveRun.experimentID}`, liveRun.activeRunID); } catch { /* optional preference */ }
-  }, [liveRun?.experimentID, liveRun?.activeRunID]);
+    if (!liveExperimentID || !liveActiveRunID) return;
+    try { window.sessionStorage.setItem(`remix-lab:active-run:${liveExperimentID}`, liveActiveRunID); } catch { /* optional preference */ }
+  }, [liveExperimentID, liveActiveRunID]);
 
   // 闸门上选的混剪账号只决定这一稿进哪个号，不切换页面的账号/工作流。
   // 默认跟这一稿自己的账号（运行记录里的）或页面当前账号；都没有就留空让人选。
@@ -646,9 +648,15 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
   };
 
   const pendingConfig = useRef<{ workflow: ReturnType<typeof buildWorkflow>; owner: string } | null>(null);
+  // buildWorkflow reads the latest refs, so a ref keeps the debounce keyed on
+  // the graph itself (nodes/edges/production) instead of on a fresh closure.
+  const buildWorkflowRef = useRef(buildWorkflow);
+  buildWorkflowRef.current = buildWorkflow;
+  const ownerRef = useRef(accountIDProp || accountID);
+  ownerRef.current = accountIDProp || accountID;
   useEffect(() => {
     if (!dirty || !loaded || liveRun) return;
-    const snapshot = { workflow: buildWorkflow(), owner: accountIDProp || accountID };
+    const snapshot = { workflow: buildWorkflowRef.current(), owner: ownerRef.current };
     pendingConfig.current = snapshot;
     const timer = window.setTimeout(() => {
       void saveRef.current().then(ok => {
@@ -658,11 +666,13 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     return () => window.clearTimeout(timer);
   }, [dirty, rfNodes, rfEdges, prodCfg, loaded, liveRun]);
 
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
   useEffect(() => () => {
     const pending = pendingConfig.current;
     pendingConfig.current = null;
     if (pending) void saveRemixLabWorkflow(api, pending.workflow, pending.owner).catch(error => {
-      onMessage(error instanceof Error ? error.message : "工作流保存失败。");
+      onMessageRef.current(error instanceof Error ? error.message : "工作流保存失败。");
     });
   }, [api, accountIDProp]);
 

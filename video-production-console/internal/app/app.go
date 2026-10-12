@@ -175,7 +175,10 @@ func New(options Options) *App {
 			mux.Handle("/api/image-projects/", imageProjectsHandler)
 			mux.Handle("/api/image-videos", imageProjectsHandler)
 			mux.Handle("/api/image-videos/", imageProjectsHandler)
-			mux.Handle("/api/image-video-jobs/", httpapi.NewImageVideoJobsHandler(options.DB, options.Settings, options.ImageVideoStarter, imageVideoService))
+			// The image-projects handler already serves the job routes; mounting
+			// the same instance under the job prefix keeps one repository, one
+			// starter and one in-flight job table instead of two parallel ones.
+			mux.Handle("/api/image-video-jobs/", imageProjectsHandler)
 			catalogService := options.MediaCatalog
 			if catalogService == nil {
 				catalogService = newMediaCatalogService(options.Settings)

@@ -19,7 +19,8 @@ export function RerunDialog({ api, runID, onClose, onCreated }: {
     }).catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : "配置读取失败。"); });
     return () => { cancelled = true; };
   }, [api, runID]);
-  useEffect(() => { if (settings) dialog.current?.querySelector<HTMLInputElement>("input")?.focus(); }, [!!settings]);
+  const settingsLoaded = Boolean(settings);
+  useEffect(() => { if (settingsLoaded) dialog.current?.querySelector<HTMLInputElement>("input")?.focus(); }, [settingsLoaded]);
   async function start() {
     if (!settings || lock.current) return;
     lock.current = true; setBusy(true); setError("");

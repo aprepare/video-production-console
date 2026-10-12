@@ -36,7 +36,9 @@ TPL_SEARCH = os.path.join(HERE, "tpl_search.png")
 TPL_SEARCH_EXPANDED = os.path.join(HERE, "tpl_search_expanded.png")
 TPL_EXPORT = os.path.join(HERE, "tpl_export_btn.png")
 TPL_CLOSE = os.path.join(HERE, "tpl_close_btn.png")
-DEFAULT_EXPORT_DIR = "E:/B\u7ad9\u7d20\u6750/\u6210\u7247"  # E:/B站素材/成片
+# No machine-specific default: the console passes --export-dir explicitly and
+# Jianying must have been pointed at the same folder in its last manual export.
+DEFAULT_EXPORT_DIR = None
 
 
 def log(message):
@@ -145,9 +147,11 @@ def close_success_dialog(editor):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("draft_name")
-    parser.add_argument("--export-dir", default=DEFAULT_EXPORT_DIR)
+    parser.add_argument("--export-dir", default=DEFAULT_EXPORT_DIR, required=DEFAULT_EXPORT_DIR is None)
     parser.add_argument("--timeout-min", type=int, default=30)
     args = parser.parse_args()
+    if not os.path.isdir(args.export_dir):
+        fail(None, f"导出目录不存在：{args.export_dir}（请先在剪映里手动导出一次到该目录，让剪映记住路径）", "export_dir")
 
     auto.SetGlobalSearchTimeout(3)
     editor = open_draft(args.draft_name)

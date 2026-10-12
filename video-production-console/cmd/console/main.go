@@ -129,12 +129,25 @@ func main() {
 	// Repair a stale persisted path from the resolved executable before loading
 	// the runtime snapshot, so App Server and task runners use the same binary.
 	if publicView, viewErr := settingsService.Get(context.Background()); viewErr == nil {
+		repaired := false
 		if _, statErr := os.Stat(publicView.Public.CodexBinaryPath); os.IsNotExist(statErr) {
 			publicView.Public.CodexBinaryPath = settings.CodexBinaryPath
+			repaired = true
+			slog.Info("repairing stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath)
+		}
+		// The 爆款库 MCP executable is an optional external program. A path
+		// that no longer exists (the source tree was moved or deleted) would
+		// otherwise keep failing validation on every settings save.
+		if stale := strings.TrimSpace(publicView.Public.BaokuanMCPExecutable); stale != "" {
+			if _, statErr := os.Stat(stale); os.IsNotExist(statErr) {
+				publicView.Public.BaokuanMCPExecutable = ""
+				repaired = true
+				slog.Warn("cleared missing 爆款库 MCP executable from settings", "baokuan_mcp_executable", stale)
+			}
+		}
+		if repaired {
 			if _, updateErr := settingsService.PutPublic(context.Background(), publicView.Public); updateErr != nil {
-				slog.Error("repair stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath, "error", updateErr)
-			} else {
-				slog.Info("repaired stale Codex binary path", "codex_binary_path", settings.CodexBinaryPath)
+				slog.Error("repair stale settings paths", "error", updateErr)
 			}
 		}
 	}
@@ -738,7 +751,9 @@ func newCodexCommandFactories(settings config.Config, base codex.Config, resolve
 		}
 		cfg := liveTaskCommandConfig(base, refresh, task, root, taskRoot)
 		manifestPath := filepath.Join(taskRoot, "task_manifest.json")
-		if task.Action == domain.ActionMontageExecute {
+		if task.Action == domain.ActionMontageExecute || task.Action == domain.ActionMontagePlan {
+			// Both montage actions share the script runtime; montage.plan
+			// stops after the validated plan (see montagescript.Run).
 			preferred := agentruntime.MontageRuntimeFromEnv()
 			selected := agentruntime.Select(task.Action, preferred)
 			if selected == agentruntime.RuntimeScript {

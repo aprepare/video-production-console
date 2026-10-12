@@ -56,7 +56,9 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
       if (!isBackgroundReady(detail)) computed.push("account_background");
       break;
     case "mixing":
-      computed = isReady(detail, "mix_draft") ? [] : ["mix_draft"];
+      // The mix draft is this stage's output, not an input: every formal
+      // input is already ready once the project derives to "mixing".
+      computed = [];
       break;
     case "review":
       computed = [];
@@ -68,8 +70,9 @@ export function missingProductionInputs(detail: ProjectDetail): string[] {
   const backendMissing = detail.project.stage === derivedStage
     ? detail.missing_assets || []
     : [];
-  // final_video is intentionally out of the workbench; ignore legacy backend hints.
-  return [...new Set([...backendMissing, ...computed])].filter((type) => type !== "final_video");
+  // final_video is intentionally out of the workbench; ignore legacy backend
+  // hints. mix_draft is an output of the mixing stage and never an input.
+  return [...new Set([...backendMissing, ...computed])].filter((type) => type !== "final_video" && type !== "mix_draft");
 }
 
 export function montageInputsReady(detail: ProjectDetail): boolean {
