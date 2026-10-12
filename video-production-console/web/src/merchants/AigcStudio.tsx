@@ -18,7 +18,13 @@ export type AigcJob = {
   created_at: string;
   updated_at: string;
 };
-type LineageStep = { id: string; filename: string; kind: string; step: string; created_at: string };
+export type LineageStep = {
+  id: string;
+  filename: string;
+  kind: string;
+  step: string;
+  created_at: string;
+};
 
 const kindLabels: Record<AigcJobKind, string> = { extract_frames: "抽关键帧", restyle: "AI 重绘", image_to_video: "图生视频" };
 const statusLabels: Record<AigcJobStatus, { label: string; tone: string }> = {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"video-production-console/internal/aigc"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
@@ -43,6 +44,8 @@ var responseContracts = []struct {
 	{"order project", store.OrderProject{}, "merchants/MerchantsPage.tsx", "OrderProject"},
 	{"business overview", store.BusinessOverview{}, "merchants/MerchantsPage.tsx", "BusinessOverview"},
 	{"reference post", store.ReferencePost{}, "references/ReferencesPage.tsx", "ReferencePost"},
+	{"aigc job", store.AIGCJob{}, "merchants/AigcStudio.tsx", "AigcJob"},
+	{"aigc lineage", aigc.LineageEntry{}, "merchants/AigcStudio.tsx", "LineageStep"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

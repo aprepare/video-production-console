@@ -539,7 +539,9 @@ test("imports remix JSON through the finished-script dialog and auto-starts spok
     }
   }));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，接着生成口播稿" }));
+  // The import button mounts only after the project list, detail and task
+  // queries resolve; the 1s default flaked on loaded machines.
+  fireEvent.click(await screen.findByRole("button", { name: "导入成品文案，接着生成口播稿" }, { timeout: 5000 }));
   fireEvent.change(await screen.findByLabelText("成品文案"), { target: { value: remixJSON } });
   fireEvent.click(screen.getByRole("button", { name: "保存并生成口播稿" }));
 
