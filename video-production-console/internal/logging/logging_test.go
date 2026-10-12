@@ -29,7 +29,17 @@ func TestInitEmitsJSONAndHonoursLevel(t *testing.T) {
 	restore := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
-	logger := Init(func(string) (string, bool) { return "warn", true })
+	// Answer only the level key: returning "warn" for every key would also
+	// set the log-file path and create a file named "warn" in this package.
+	logger := Init(func(key string) (string, bool) {
+		switch key {
+		case LevelEnvironmentKey:
+			return "warn", true
+		case FileEnvironmentKey:
+			return "off", true
+		}
+		return "", false
+	})
 	if logger == nil {
 		t.Fatal("Init returned no logger")
 	}
