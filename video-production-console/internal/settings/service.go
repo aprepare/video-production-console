@@ -40,6 +40,7 @@ const (
 	SecretVisionAPIKey     = "vision_api_key"
 	SecretEmbeddingAPIKey  = "embedding_api_key"
 	SecretPixabayAPIKey    = "pixabay_api_key"
+	SecretPlatformAPIToken = "platform_api_token"
 
 	secretMask                     = "********"
 	defaultImageModel              = "gpt-image-2"
@@ -75,7 +76,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey}
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey, SecretPlatformAPIToken}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -149,6 +150,7 @@ type Runtime struct {
 	VisionAPIKey     string           `json:"-"`
 	EmbeddingAPIKey  string           `json:"-"`
 	PixabayAPIKey    string           `json:"-"`
+	PlatformAPIToken string           `json:"-"`
 	SecretVersions   map[string]int64 `json:"-"`
 }
 
@@ -363,6 +365,7 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	// manifests, so they hot-apply without a restart.
 	s.active.MontageStyle = configured.MontageStyle
 	s.active.BGMDir = configured.BGMDir
+	s.active.PlatformAPIBaseURL = configured.PlatformAPIBaseURL
 	copyVoiceHotSettings(s.active, configured)
 }
 
@@ -414,7 +417,7 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 	if s.active == nil {
 		return
 	}
-	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey} {
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken} {
 		value, ok := secrets[key]
 		if !ok || value == "" {
 			continue
@@ -424,6 +427,8 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 			s.active.AuraSTDTTsAPIKey = value
 		case SecretVolcSpeechAPIKey:
 			s.active.VolcSpeechAPIKey = value
+		case SecretPlatformAPIToken:
+			s.active.PlatformAPIToken = value
 		}
 		_, version, configured, err := s.secretValue(ctx, key)
 		if err != nil || !configured {
@@ -546,6 +551,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.EmbeddingAPIKey = value
 		case SecretPixabayAPIKey:
 			runtime.PixabayAPIKey = value
+		case SecretPlatformAPIToken:
+			runtime.PlatformAPIToken = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -621,6 +628,7 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0
 	configured.MontageStyle, active.MontageStyle = domain.MontageStyle{}, domain.MontageStyle{}
 	configured.BGMDir, active.BGMDir = "", ""
+	configured.PlatformAPIBaseURL, active.PlatformAPIBaseURL = "", ""
 	clearVoiceHotSettings(&configured)
 	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
@@ -856,6 +864,12 @@ func validatePublic(value domain.PublicSettings) error {
 		parsed, err := parseHTTPURL(value.ImageTextBaseURL)
 		if len(value.ImageTextBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
 			return invalid("image_text_base_url")
+		}
+	}
+	if value.PlatformAPIBaseURL != "" {
+		parsed, err := parseHTTPURL(value.PlatformAPIBaseURL)
+		if len(value.PlatformAPIBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("platform_api_base_url")
 		}
 	}
 	if value.ImageTextModel != strings.TrimSpace(value.ImageTextModel) || len(value.ImageTextModel) > 128 {
@@ -1207,6 +1221,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
 		"max_external_results_per_query": strconv.Itoa(value.MaxExternalResultsPerQuery),
 		"bgm_dir":                        value.BGMDir,
+		"platform_api_base_url":          value.PlatformAPIBaseURL,
 		"montage_style":                  encodeMontageStyle(value.MontageStyle),
 	}
 }
@@ -1468,6 +1483,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
 		MaxExternalResultsPerQuery: externalResults,
 		BGMDir:                     strings.TrimSpace(values["bgm_dir"]),
+		PlatformAPIBaseURL:         strings.TrimSpace(values["platform_api_base_url"]),
 		MontageStyle:               montageStyleFromValue(values["montage_style"]),
 	}
 }

@@ -1,9 +1,9 @@
-import { Clapperboard, Images, LogOut, Moon, PenLine, Settings2, Sun } from "lucide-react";
+import { Clapperboard, Images, LogOut, Moon, PenLine, Radar, Settings2, Sun } from "lucide-react";
 import type { Theme } from "../types";
 import "./console-navigation.css";
 
 type Props = {
-  active: "remix" | "image" | null;
+  active: "remix" | "image" | "references" | null;
   theme: Theme;
   onNavigate: (href: string) => void;
   onThemeChange: (theme: Theme) => void;
@@ -12,6 +12,7 @@ type Props = {
 };
 
 const workspaces = [
+  { id: "references", href: "/references", label: "对标采集", description: "爆款口播与热评", icon: Radar },
   { id: "remix", href: "/", label: "文案与混剪", description: "从灵感到成片", icon: PenLine },
   { id: "image", href: "/image-projects", label: "图文制作", description: "让内容被看见", icon: Images },
 ] as const;

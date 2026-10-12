@@ -21,6 +21,7 @@ import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
+import { ReferencesPage } from "./references/ReferencesPage";
 import { clearRetiredFeatureDrafts } from "./shell/retiredFeatureDrafts";
 import {
   isShieldedProductionPath,
@@ -583,6 +584,7 @@ function App() {
       || route.view === "image-videos"
       || route.view === "image-video"
       || route.view === "remix-lab"
+      || route.view === "references"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -973,7 +975,7 @@ function App() {
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : route.view === "references" ? "references" : remixShell ? "remix" : null}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
@@ -986,6 +988,8 @@ function App() {
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
+      ) : route.view === "references" ? (
+        <ReferencesPage api={api} onNavigate={navigate} onOpenSettings={() => void settingsPanel.openDialog()} />
       ) : imageRoute ? (
         <>
           <ImageModeWorkbench

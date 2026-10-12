@@ -65,6 +65,7 @@ var publicFieldLabels = map[string]string{
 	"ffmpeg_path":                    "FFmpeg 路径",
 	"ffprobe_path":                   "FFprobe 路径",
 	"bgm_dir":                        "BGM 目录",
+	"platform_api_base_url":          "平台接口地址",
 	"montage_style":                  "混剪样式",
 }
 

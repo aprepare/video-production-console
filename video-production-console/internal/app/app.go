@@ -23,6 +23,7 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
+	"video-production-console/internal/references"
 	"video-production-console/internal/remixlab"
 	"video-production-console/internal/remixproducer"
 	"video-production-console/internal/security"
@@ -96,6 +97,17 @@ type App struct {
 	close   func()
 	// resumeProductions 重启后续跑生产段（监听起来后调用）。
 	resumeProductions func()
+	// background holds long-running loops (对标转写轮询) started by
+	// RunBackground once the server is up; they stop with ctx.
+	background []func(context.Context)
+}
+
+// RunBackground starts the application's long-running loops; each returns
+// when ctx is cancelled.
+func (a *App) RunBackground(ctx context.Context) {
+	for _, run := range a.background {
+		go run(ctx)
+	}
 }
 
 // ResumeProductions 在 HTTP 监听就绪后调用：把重启前进行到一半的生产接着跑。
@@ -108,6 +120,7 @@ func (a *App) ResumeProductions() {
 // New constructs the application and its routes.
 func New(options Options) *App {
 	var resumeProductions func()
+	var background []func(context.Context)
 	mux := http.NewServeMux()
 	removedFeature := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -220,6 +233,13 @@ func New(options Options) *App {
 				resumeProductions = producer.ResumeAll
 			}
 			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
+
+			referenceRepo := store.NewReferenceRepository(options.DB)
+			referenceService := references.New(referenceRepo, options.Settings)
+			referencesHandler := httpapi.NewReferencesHandler(referenceService, referenceRepo)
+			mux.Handle("/api/references", referencesHandler)
+			mux.Handle("/api/references/", referencesHandler)
+			background = append(background, referenceService.Run)
 		}
 
 		if options.Scheduler != nil {
@@ -268,7 +288,7 @@ func New(options Options) *App {
 	})
 	mux.Handle("/", webui.Handler())
 	if options.AuthService == nil {
-		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions}
+		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions, background: background}
 	}
 	authHandler := httpapi.NewAuthHandler(options.AuthService)
 	mux.Handle("/api/auth/", authHandler)
@@ -288,7 +308,7 @@ func New(options Options) *App {
 			return
 		}
 		protected.ServeHTTP(w, r)
-	})), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions}
+	})), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions, background: background}
 }
 
 func isLoopbackRemote(remoteAddr string) bool {

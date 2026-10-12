@@ -1268,6 +1268,109 @@ CREATE INDEX remix_lab_productions_experiment_idx ON remix_lab_productions(exper
 		run_id TEXT PRIMARY KEY REFERENCES remix_lab_runs(id) ON DELETE CASCADE,
 		workflow_json TEXT NOT NULL
 	);`,
+	// 对标素材库：从抖音/小红书/视频号采集的同行内容。口播只来自通义听悟
+	// 转写（transcript），分享文案（caption）永远不是口播。
+	`CREATE TABLE reference_posts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL CHECK (platform IN ('douyin', 'xhs', 'channels')),
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    caption TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    cover_url TEXT NOT NULL DEFAULT '',
+    video_url TEXT NOT NULL DEFAULT '',
+    duration_s REAL NOT NULL DEFAULT 0,
+    likes INTEGER NOT NULL DEFAULT 0,
+    comments INTEGER NOT NULL DEFAULT 0,
+    shares INTEGER NOT NULL DEFAULT 0,
+    collects INTEGER NOT NULL DEFAULT 0,
+    plays INTEGER NOT NULL DEFAULT 0,
+    posted_at INTEGER NOT NULL DEFAULT 0,
+    keyword TEXT NOT NULL DEFAULT '',
+    merchant_id TEXT NOT NULL DEFAULT '',
+    transcript_status TEXT NOT NULL DEFAULT 'none' CHECK (transcript_status IN ('none', 'running', 'completed', 'failed')),
+    transcript_task_id TEXT NOT NULL DEFAULT '',
+    transcript TEXT NOT NULL DEFAULT '',
+    transcript_json TEXT NOT NULL DEFAULT '',
+    transcript_error TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE (platform, external_id)
+);
+CREATE INDEX reference_posts_created_idx ON reference_posts(created_at DESC, id);
+CREATE INDEX reference_posts_transcript_idx ON reference_posts(transcript_status);`,
+	// 商户交付：商户、授权素材台账、订单（含约定交付范围）、订单成本流水。
+	// 项目通过 projects.order_id 归到订单，用于工时/接口费用/返工核算。
+	`CREATE TABLE merchants (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '',
+    contact TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    selling_points TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    account_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'prospect' CHECK (status IN ('prospect', 'trial', 'active', 'paused', 'churned')),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX merchants_status_idx ON merchants(status, updated_at DESC);
+
+CREATE TABLE merchant_materials (
+    id TEXT PRIMARY KEY,
+    merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('video', 'image', 'audio', 'document', 'other')),
+    filename TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    license_source TEXT NOT NULL DEFAULT 'merchant_shot' CHECK (license_source IN ('merchant_shot', 'team_shot', 'licensed_stock', 'ai_generated', 'unknown')),
+    license_scope TEXT NOT NULL DEFAULT '',
+    license_expires_at TEXT NOT NULL DEFAULT '',
+    license_proof TEXT NOT NULL DEFAULT '',
+    parent_material_id TEXT NOT NULL DEFAULT '',
+    provenance_json TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL
+);
+CREATE INDEX merchant_materials_merchant_idx ON merchant_materials(merchant_id, created_at DESC);
+
+CREATE TABLE orders (
+    id TEXT PRIMARY KEY,
+    merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    package TEXT NOT NULL DEFAULT 'custom' CHECK (package IN ('trial', 'monthly', 'premium', 'custom')),
+    price_cents INTEGER NOT NULL DEFAULT 0,
+    paid_cents INTEGER NOT NULL DEFAULT 0,
+    video_quota INTEGER NOT NULL DEFAULT 0,
+    max_duration_s INTEGER NOT NULL DEFAULT 0,
+    revision_rounds INTEGER NOT NULL DEFAULT 0,
+    due_date TEXT NOT NULL DEFAULT '',
+    scope_notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'signed', 'producing', 'delivered', 'closed', 'cancelled')),
+    renewal_of TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX orders_merchant_idx ON orders(merchant_id, created_at DESC);
+
+CREATE TABLE order_costs (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('labor', 'api', 'material', 'revision', 'other')),
+    minutes INTEGER NOT NULL DEFAULT 0,
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    occurred_at DATETIME NOT NULL
+);
+CREATE INDEX order_costs_order_idx ON order_costs(order_id, occurred_at DESC);
+
+ALTER TABLE projects ADD COLUMN order_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN delivered_at DATETIME;`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

@@ -346,6 +346,7 @@ func main() {
 	defer application.Close()
 	server := newServer(settings.ListenAddr, application.Handler())
 	slog.Info("video production console listening", "listen_addr", settings.ListenAddr, "version", buildinfo.String())
+	application.RunBackground(serveCtx)
 	// 监听起来后续跑重启前进行到一半的生产段（驱动器走回环 HTTP）。
 	go func() {
 		time.Sleep(3 * time.Second)

@@ -42,6 +42,7 @@ var publicSettingKeys = map[string]struct{}{
 	"vision_base_url": {}, "vision_model": {}, "embedding_base_url": {}, "embedding_model": {},
 	"pexels_api_base_url": {}, "pixabay_api_base_url": {}, "max_external_results_per_query": {},
 	"bgm_dir": {}, "montage_style": {},
+	"platform_api_base_url": {},
 }
 
 type EncryptedSecret struct {

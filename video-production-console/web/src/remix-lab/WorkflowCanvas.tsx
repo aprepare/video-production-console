@@ -225,7 +225,17 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     try { window.sessionStorage.setItem(sourceKey, value); } catch { /* Storage may be unavailable. */ }
   };
   useEffect(() => {
-    try { setSourceValue(window.sessionStorage.getItem(sourceKey) || ""); } catch { setSourceValue(""); }
+    // 对标采集「送进二创」留下的一次性原文优先于账号暂存，读到即清除。
+    try {
+      const pending = window.sessionStorage.getItem("remix-lab:pending-source");
+      if (pending) {
+        window.sessionStorage.removeItem("remix-lab:pending-source");
+        window.sessionStorage.setItem(sourceKey, pending);
+        setSourceValue(pending);
+        return;
+      }
+      setSourceValue(window.sessionStorage.getItem(sourceKey) || "");
+    } catch { setSourceValue(""); }
   }, [sourceKey]);
   const [draftScript, setDraftScript] = useState("");
   const [draftBoardTitle, setDraftBoardTitle] = useState("");

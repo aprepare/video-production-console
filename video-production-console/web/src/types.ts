@@ -156,6 +156,7 @@ export type PublicSettings = {
   max_external_results_per_query: number;
   bgm_dir?: string;
   montage_style?: MontageStyle;
+  platform_api_base_url?: string;
 };
 
 export type MontageStyle = {
