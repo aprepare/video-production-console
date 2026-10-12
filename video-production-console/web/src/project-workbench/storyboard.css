@@ -1,0 +1,20 @@
+.storyboard { display: grid; gap: var(--space-3); padding: var(--space-4) var(--space-5); border: 1px solid var(--ds-border); border-radius: var(--radius-lg); background: var(--ds-surface); }
+.storyboard > header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-2); }
+.storyboard h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 16px; }
+.storyboard__kicker { margin: 0; color: var(--ds-accent); font: 700 10px/1.2 var(--font-mono); letter-spacing: .13em; }
+.storyboard__meta, .storyboard__note { margin: 0; color: var(--ds-text-muted); font-size: 12px; }
+.storyboard__strip { display: grid; grid-auto-flow: column; grid-auto-columns: 168px; gap: var(--space-2); margin: 0; padding: 2px 2px var(--space-2); overflow-x: auto; list-style: none; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.storyboard__shot { display: grid; gap: 6px; scroll-snap-align: start; }
+.storyboard__frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--radius-sm); background: var(--ds-surface-muted); }
+.storyboard__shot[data-reused="true"] .storyboard__frame { outline: 2px solid var(--ds-warning); outline-offset: -2px; }
+.storyboard__frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.storyboard__frame-missing { display: grid; place-items: center; height: 100%; color: var(--ds-text-muted); }
+.storyboard__time, .storyboard__len { position: absolute; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgb(0 0 0 / 62%); color: #fff; font: 600 10px/1.4 var(--font-mono); }
+.storyboard__time { left: 4px; }
+.storyboard__len { right: 4px; }
+.storyboard__caption { display: grid; gap: 2px; font-size: 12px; }
+.storyboard__caption strong { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font: 650 12px/1.3 var(--font-mono); }
+.storyboard__caption em { padding: 0 5px; border-radius: 4px; background: var(--ds-surface-muted); color: var(--ds-text-muted); font: 600 10px/1.6 var(--font-body); font-style: normal; }
+.storyboard__caption em[data-level="exact"], .storyboard__caption em[data-level="semantic"] { color: var(--ds-success); }
+.storyboard__caption em[data-level="fallback"], .storyboard__caption em[data-level="reused"] { color: var(--ds-warning); }
+.storyboard__caption span { display: -webkit-box; overflow: hidden; color: var(--ds-text-muted); -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

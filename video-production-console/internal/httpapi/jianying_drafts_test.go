@@ -367,3 +367,40 @@ func main() {
 	}
 	return exe
 }
+
+func TestJianyingStoryboardSurfacesMatchAndRefusesOutsideSources(t *testing.T) {
+	data := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "elsewhere.mp4")
+	if err := os.WriteFile(outside, []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := openStoryboardDB(t)
+	taskID := "44444444-4444-4444-8444-444444444444"
+	output := filepath.Join(data, "out")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSONFile(t, filepath.Join(data, "manifest.json"), map[string]any{"output_dir": output})
+	writeJSONFile(t, filepath.Join(output, "production_plan.json"), map[string]any{
+		"plan_version": "2.0", "project_duration_s": 3, "project_name": "t",
+		"timeline": []any{map[string]any{
+			"shot_no": 1, "start_s": 0, "end_s": 3, "media_kind": "broll", "source_path": outside,
+			"match": map[string]any{"level": "metaphor", "reason": "城市高楼呼应换房"},
+		}},
+	})
+	if _, err := db.Exec(`INSERT INTO codex_tasks(id, manifest_path) VALUES(?, ?)`, taskID, filepath.Join(data, "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewJianyingDraftsHandler(jianyingRuntimeStub{runtime: runtimeWith(data, "", buildFakeFFmpeg(t))}, db)
+
+	board := httptest.NewRecorder()
+	handler.ServeHTTP(board, httptest.NewRequest(http.MethodGet, "/api/jianying-drafts/storyboard?task_id="+taskID, nil))
+	if board.Code != http.StatusOK || !strings.Contains(board.Body.String(), `"match_level":"metaphor"`) || !strings.Contains(board.Body.String(), "城市高楼呼应换房") {
+		t.Fatalf("storyboard=%d %s", board.Code, board.Body.String())
+	}
+	frame := httptest.NewRecorder()
+	handler.ServeHTTP(frame, httptest.NewRequest(http.MethodGet, "/api/jianying-drafts/storyboard/frame?task_id="+taskID+"&shot=1", nil))
+	if frame.Code != http.StatusForbidden || !strings.Contains(frame.Body.String(), "storyboard_source_forbidden") {
+		t.Fatalf("frame=%d %s", frame.Code, frame.Body.String())
+	}
+}

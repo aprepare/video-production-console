@@ -325,6 +325,10 @@ type storyboardPlan struct {
 		SourcePath string   `json:"source_path"`
 		SourceInS  *float64 `json:"source_in_s"`
 		SourceOutS *float64 `json:"source_out_s"`
+		Match      struct {
+			Level  string `json:"level"`
+			Reason string `json:"reason"`
+		} `json:"match"`
 	} `json:"timeline"`
 	Graphics struct {
 		Title struct {
@@ -349,6 +353,10 @@ type storyboardShot struct {
 	SourceOutS *float64 `json:"source_out_s,omitempty"`
 	MediaKind  string   `json:"media_kind"`
 	Caption    string   `json:"caption,omitempty"`
+	// MatchLevel/MatchReason explain why the planner picked this shot so the
+	// operator can review choices before opening Jianying.
+	MatchLevel  string `json:"match_level,omitempty"`
+	MatchReason string `json:"match_reason,omitempty"`
 }
 
 type storyboardView struct {
@@ -370,7 +378,14 @@ func (h *jianyingDraftsHandler) storyboard(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, storyboardFromPlan(loaded.plan))
 }
 
-var storyboardFrameMu sync.Mutex
+// storyboardFrameLocks serialises extraction per cached frame so a long
+// strip renders in parallel while one frame is never extracted twice.
+var storyboardFrameLocks sync.Map
+
+func storyboardFrameLock(dest string) *sync.Mutex {
+	lock, _ := storyboardFrameLocks.LoadOrStore(dest, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
 
 func (h *jianyingDraftsHandler) storyboardFrame(w http.ResponseWriter, r *http.Request) {
 	loaded, ok := h.loadStoryboard(w, r)
@@ -400,6 +415,10 @@ func (h *jianyingDraftsHandler) storyboardFrame(w http.ResponseWriter, r *http.R
 		return
 	}
 	source := strings.TrimSpace(shot.SourcePath)
+	if !pathUnderRoot(loaded.runtime.MediaRoot, source) && !pathUnderRoot(loaded.runtime.DataRoot, source) {
+		writeError(w, http.StatusForbidden, "storyboard_source_forbidden", "镜头素材不在素材库或数据目录内。")
+		return
+	}
 	info, err := os.Stat(source)
 	if err != nil || info.IsDir() {
 		writeError(w, http.StatusUnprocessableEntity, "storyboard_source_missing", "镜头素材不在这台电脑上。")
@@ -434,8 +453,9 @@ func (h *jianyingDraftsHandler) storyboardFrame(w http.ResponseWriter, r *http.R
 	if seek < 0 {
 		seek = 0
 	}
-	storyboardFrameMu.Lock()
-	defer storyboardFrameMu.Unlock()
+	frameLock := storyboardFrameLock(dest)
+	frameLock.Lock()
+	defer frameLock.Unlock()
 	if cached, statErr := os.Stat(dest); statErr == nil && cached.Mode().IsRegular() && cached.Size() > 0 {
 		http.ServeFile(w, r, dest)
 		return
@@ -561,6 +581,7 @@ func shotFromPlan(plan storyboardPlan, index int) storyboardShot {
 		ShotNo: item.ShotNo, StartS: item.StartS, EndS: item.EndS,
 		SourcePath: item.SourcePath, SourceInS: item.SourceInS, SourceOutS: item.SourceOutS,
 		MediaKind: item.MediaKind, Caption: captionForShot(plan, item.StartS, item.EndS),
+		MatchLevel: strings.TrimSpace(item.Match.Level), MatchReason: strings.TrimSpace(item.Match.Reason),
 	}
 	return shot
 }

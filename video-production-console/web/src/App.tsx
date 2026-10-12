@@ -1036,6 +1036,7 @@ function App() {
           projectView={
             routedProjectID && selected && detail && detailReady && selected.id === routedProjectID ? (
         <ProjectWorkbench
+          api={api}
           detail={detail as WorkbenchProjectDetail}
           tasks={tasks}
           accountName={accountName(selected.account_id, accounts)}

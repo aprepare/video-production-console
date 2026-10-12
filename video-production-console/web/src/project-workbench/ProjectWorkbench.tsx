@@ -17,6 +17,7 @@ import type { RuntimeStatus } from "../runtime/useRuntimeQuery";
 import type { TaskModelDefaults, TaskModelOverride } from "../taskModel";
 import type { MontagePlanQC, ProjectAsset, ProjectDetail, ProjectTask, ProductionStage } from "./types";
 import { canOneClickProduce, canRemakeMontage, deriveProductionStage, isLiveTaskStatus, missingProductionInputs, montageInputsReady, nextPrimaryAction } from "./workflow";
+import { StoryboardPanel } from "./StoryboardPanel";
 import { ProductionRail } from "./ProductionRail";
 import { ProjectAssets } from "./ProjectAssets";
 import type { AssetUploadRequest, ProjectAssetUploadType } from "./ProjectAssets";
@@ -30,6 +31,8 @@ type UploadAssetType = "narration" | "subtitle_srt";
 
 export type ProjectWorkbenchProps = {
   detail: ProjectDetail;
+  /** Authenticated request helper; enables the storyboard preview. */
+  api?: (path: string, init?: RequestInit) => Promise<Response>;
   tasks: ProjectTask[];
   accountName: string;
   message?: string;
@@ -979,6 +982,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         ) : null}
 
         {detail.montage_qc ? <MontagePlanQCCard qc={detail.montage_qc} /> : null}
+
+        {props.api && registeredDraftTask && readyMixDraft ? <StoryboardPanel api={props.api} taskID={registeredDraftTask.id} /> : null}
 
         <ProjectAssets
           detail={detail}

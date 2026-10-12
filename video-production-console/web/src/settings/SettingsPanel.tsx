@@ -8,6 +8,7 @@ import { modelOptionsList, reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { BgmLibrary, BgmTrack, MontageStyle, PublicSettings, Settings } from "../types";
 import { formatTrackDuration, montageFonts, normalizeStyleColor, withMontageStyleDefaults } from "./montageStyle";
+import { JianyingHealthCard } from "./JianyingHealthCard";
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
   listen_addr: "监听地址",
@@ -678,6 +679,7 @@ export function SettingsPanel({
               <Field label="混剪机器配置" wide>
                 <input value={draft.machine_profile_path || ""} placeholder="machine profile JSON" onChange={setText("machine_profile_path")} />
               </Field>
+              {api ? <JianyingHealthCard api={api} /> : null}
             </>
           ) : null}
           {tab === "style" ? (

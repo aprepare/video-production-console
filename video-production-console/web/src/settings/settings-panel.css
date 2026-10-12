@@ -31,3 +31,17 @@
   .settings-modal .settings-actions button { flex: 1; padding-inline: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { .settings-modal *, .settings-modal *::before, .settings-modal *::after { animation: none !important; transition: none !important; } }
+
+/* 剪映连接 card in the 混剪 tab */
+.jianying-health { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--ds-border); border-radius: var(--radius-md); background: var(--ds-surface-muted); }
+.jianying-health__title { display: flex; align-items: center; gap: 6px; font-weight: 650; }
+.jianying-health__facts { display: grid; gap: 4px; margin: 0; font-size: 13px; }
+.jianying-health__facts div { display: grid; grid-template-columns: 84px 1fr; gap: var(--space-2); }
+.jianying-health__facts dt { color: var(--ds-text-muted); }
+.jianying-health__facts dd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.jianying-health__prune { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: 13px; }
+.settings-inline-button { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--ds-border); border-radius: var(--radius-sm); background: var(--ds-surface); color: var(--ds-text); font: 600 12px/1.2 var(--font-body); cursor: pointer; }
+.settings-inline-button:disabled { opacity: .55; cursor: not-allowed; }
+.settings-inline-button--danger { border-color: color-mix(in srgb, var(--ds-danger) 40%, var(--ds-border)); color: var(--ds-danger); }
+.settings-feedback { margin: 0; color: var(--ds-text-muted); font-size: 12px; }
+.settings-feedback--error { color: var(--ds-danger); }
