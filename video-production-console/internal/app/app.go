@@ -240,6 +240,11 @@ func New(options Options) *App {
 			mux.Handle("/api/references", referencesHandler)
 			mux.Handle("/api/references/", referencesHandler)
 			background = append(background, referenceService.Run)
+
+			merchantsHandler := httpapi.NewMerchantsHandler(options.DB, options.Config.DataRoot)
+			for _, prefix := range []string{"/api/merchants", "/api/merchants/", "/api/materials/", "/api/orders", "/api/orders/", "/api/order-costs/", "/api/business/"} {
+				mux.Handle(prefix, merchantsHandler)
+			}
 		}
 
 		if options.Scheduler != nil {
