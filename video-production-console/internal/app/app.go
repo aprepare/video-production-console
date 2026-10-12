@@ -200,7 +200,7 @@ func New(options Options) *App {
 			bgmHandler := httpapi.NewBGMLibraryHandler(options.Settings)
 			mux.Handle("/api/bgm-library", bgmHandler)
 			mux.Handle("/api/bgm-library/", bgmHandler)
-			draftsHandler := httpapi.NewJianyingDraftsHandler(options.Settings)
+			draftsHandler := httpapi.NewJianyingDraftsHandler(options.Settings, options.DB)
 			mux.Handle("/api/jianying-drafts", draftsHandler)
 			mux.Handle("/api/jianying-drafts/", draftsHandler)
 		}

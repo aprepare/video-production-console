@@ -99,7 +99,7 @@ func TestPickDraftFontDropsWenYueTitle(t *testing.T) {
 func TestFontFromPath(t *testing.T) {
 	cases := map[string]string{
 		`D:/JianyingPro/Resources/Font/新青年体.ttf`:               "新青年体",
-		`C:\fonts\新青年体-文跃新青年体.ttf`:                          "新青年体",
+		`C:\fonts\新青年体-文跃新青年体.ttf`:                             "新青年体",
 		`D:/JianyingPro/Resources/Font/字语咏宏体 .ttf`:             "字语咏宏体",
 		`D:/JianyingPro/Resources/Font/SystemFont/zh-hans.ttf`: "",
 	}
