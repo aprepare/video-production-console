@@ -112,7 +112,7 @@ try {
     $consoleStarted = Start-ConsoleProgram -LogSuffix "visual-$stamp"
     if (-not (Test-ConsoleHealth -ExpectedProcessId $consoleStarted.Id)) { throw 'New program failed its health check.' }
     Write-Host "Restarted successfully. PID: $($consoleStarted.Id)"
-    Write-Host 'Open http://127.0.0.1:2030/ai-shorts'
+    Write-Host 'Open http://127.0.0.1:2030/'
     Write-Host "Backup: $consoleBackup"
 } catch {
     $restartError = $_

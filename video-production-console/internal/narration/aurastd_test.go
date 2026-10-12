@@ -2,6 +2,7 @@ package narration
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -134,5 +135,64 @@ func TestAuraSTDHexAndSubtitleInOneResponse(t *testing.T) {
 	}
 	if string(result.Audio) != "ID3" {
 		t.Errorf("hex audio = %q", result.Audio)
+	}
+}
+
+func TestAuraSTDChunkingForLongText(t *testing.T) {
+	var receivedTexts []string
+	callCount := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/tts", func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var body auraSTDRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		receivedTexts = append(receivedTexts, body.Text)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"audio":         "http://" + r.Host + fmt.Sprintf("/audio%d.mp3", callCount),
+			"subtitle_file": "http://" + r.Host + fmt.Sprintf("/subs%d.json", callCount),
+			"extra_info":    map[string]any{"usage_characters": len([]rune(body.Text))},
+		})
+	})
+	mux.HandleFunc("/audio1.mp3", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("CHUNK1_AUDIO"))
+	})
+	mux.HandleFunc("/subs1.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"text":"第一段","time_begin":0,"time_end":1500}]`))
+	})
+	mux.HandleFunc("/audio2.mp3", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("CHUNK2_AUDIO"))
+	})
+	mux.HandleFunc("/subs2.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"text":"第二段","time_begin":0,"time_end":1200}]`))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client := &AuraSTDClient{BaseURL: server.URL, APIKey: "test-key", HTTPClient: server.Client()}
+	// 构造一个 2000 字的长文案
+	partA := strings.Repeat("中", 1200) + "。"
+	partB := strings.Repeat("华", 800) + "！"
+	longText := partA + partB
+
+	result, err := client.Synthesize(t.Context(), Request{Text: longText, SpeakerID: "voice_id"})
+	if err != nil {
+		t.Fatalf("Synthesize long text: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 chunks called, got %d", callCount)
+	}
+	if string(result.Audio) != "CHUNK1_AUDIOCHUNK2_AUDIO" {
+		t.Errorf("merged audio = %q", string(result.Audio))
+	}
+	if len(result.Words) != 2 {
+		t.Fatalf("expected 2 words, got %d", len(result.Words))
+	}
+	// Chunk1 end_time 是 1.5 秒
+	if result.Words[0].StartTime != 0 || result.Words[0].EndTime != 1.5 {
+		t.Errorf("word 0 = %+v", result.Words[0])
+	}
+	// Chunk2 偏移量应为 1.5 秒，begin: 1.5, end: 2.7
+	if result.Words[1].StartTime != 1.5 || result.Words[1].EndTime != 2.7 {
+		t.Errorf("word 1 = %+v", result.Words[1])
 	}
 }

@@ -65,6 +65,7 @@ type ProductionPlanV2 struct {
 	MediaMixPolicy   MediaMixPolicyV2 `json:"media_mix_policy"`
 	Timeline         []TimelineShotV2 `json:"timeline"`
 	Graphics         GraphicsV2       `json:"graphics"`
+	Editorial        *EditorialPlan   `json:"editorial,omitempty"`
 	// StyleOverrides adjusts size/color/y/font of the spoken caption styles
 	// in the skill's verified text_styles; absent means policy defaults.
 	StyleOverrides     map[string]map[string]any `json:"style_overrides,omitempty"`
@@ -246,6 +247,8 @@ type ApprovalV2 struct {
 // outright per plan §5.4 instead of silently using the default.
 func mixPolicyForPreset(preset string) (mixPolicy, string, error) {
 	switch strings.TrimSpace(preset) {
+	case mixPresetScenicSemantic:
+		return scenicMixPolicy(), mixPresetScenicSemantic, nil
 	case "", mixPresetMovieMix:
 		return movieMixPolicy(), mixPresetMovieMix, nil
 	case mixPresetImageVideo:
@@ -316,7 +319,10 @@ func BuildV2(opts Options) error {
 	var closer func()
 	var candidates []rankedCandidate
 	var intents []NarrativeIntent
-	if movieCatalogSelect(opts) {
+	semanticScenic := opts.MixPreset == mixPresetScenicSemantic
+	if semanticScenic {
+		closer = func() {}
+	} else if movieCatalogSelect(opts) {
 		var resolveErr error
 		catalog, closer, resolveErr = resolveCatalog(opts)
 		if resolveErr != nil {
@@ -343,12 +349,12 @@ func BuildV2(opts Options) error {
 			analyzer = LocalIntentAnalyzer{}
 		}
 		var intentErr error
-		intents, intentErr = analyzer.Analyze(context.Background(), sentences)
+		intents, intentErr = analyzer.Analyze(plannerContext(opts), sentences)
 		if intentErr != nil || len(intents) == 0 {
-			intents, _ = LocalIntentAnalyzer{}.Analyze(context.Background(), sentences)
+			intents, _ = LocalIntentAnalyzer{}.Analyze(plannerContext(opts), sentences)
 		}
 		intents = enrichIntentsWithSpokenCues(intents, false)
-		ranked, matchWarnings, rankErr := rankLibrary(context.Background(), intents, catalog, opts.Embedder)
+		ranked, matchWarnings, rankErr := rankLibrary(plannerContext(opts), intents, catalog, opts.Embedder)
 		if rankErr != nil {
 			return rankErr
 		}
@@ -356,7 +362,7 @@ func BuildV2(opts Options) error {
 		// embedding scan has already happened inside rankLibrary.
 		if opts.ShotSelector != nil {
 			jobs := buildShotSelectJobs(intents, ranked)
-			if picks, pickErr := opts.ShotSelector.SelectShots(context.Background(), jobs); pickErr == nil {
+			if picks, pickErr := opts.ShotSelector.SelectShots(plannerContext(opts), jobs); pickErr == nil {
 				var pickNotes []string
 				ranked, pickNotes = applyShotSelections(ranked, picks)
 				notes = append(notes, pickNotes...)
@@ -366,14 +372,16 @@ func BuildV2(opts Options) error {
 		}
 		candidates = resolveCandidatePaths(ranked, ctx.mediaRoot)
 		notes = append(notes, matchWarnings...)
-		padded, padNotes, padErr := padCatalogCandidates(context.Background(), catalog, candidates, ctx.duration)
+		padded, padNotes, padErr := padCatalogCandidates(plannerContext(opts), catalog, candidates, ctx.duration)
 		if padErr != nil {
 			return padErr
 		}
 		candidates = resolveCandidatePaths(padded, ctx.mediaRoot)
 		notes = append(notes, padNotes...)
 	}
-	if movieCatalogSelect(opts) {
+	if semanticScenic {
+		// Dedicated China imagery pool is loaded below; no whole-catalog scan.
+	} else if movieCatalogSelect(opts) {
 		if len(candidates) == 0 {
 			return fmt.Errorf("movie catalog produced no usable shots")
 		}
@@ -383,7 +391,7 @@ func BuildV2(opts Options) error {
 			return sampleErr
 		}
 		candidates = rankedFromIndex(clips)
-		merged, mergeNotes, mergeErr := mergeScenicCatalogBroll(context.Background(), catalog, candidates, ctx.mediaRoot)
+		merged, mergeNotes, mergeErr := mergeScenicCatalogBroll(plannerContext(opts), catalog, candidates, ctx.mediaRoot)
 		if mergeErr != nil {
 			notes = append(notes, "scenic_catalog_recall_failed: "+mergeErr.Error())
 		} else {
@@ -394,11 +402,22 @@ func BuildV2(opts Options) error {
 			return fmt.Errorf("scenic pool produced no Nature_Landscape clips")
 		}
 	}
-	selection, quotaWarnings, err := selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
+	var timeline []TimelineShotV2
+	var quotaWarnings []quotaWarning
+	if semanticScenic {
+		var semanticNotes []string
+		timeline, semanticNotes, err = buildScenicSemanticPlan(opts, ctx)
+		notes = append(notes, semanticNotes...)
+	} else {
+		var selection []plannedMedia
+		selection, quotaWarnings, err = selectTimelineV2(candidates, ctx.duration, ctx.manifest.TaskID, policy, intents)
+		if err == nil {
+			timeline = buildV2Timeline(selection)
+		}
+	}
 	if err != nil {
 		return err
 	}
-	timeline := buildV2Timeline(selection)
 
 	captions := CaptionPolicy{Mode: mode, Items: []CaptionItem{}}
 	var captionWarnings []string
@@ -540,6 +559,14 @@ func BuildV2(opts Options) error {
 		Approval:           ApprovalV2{ApprovedBy: "video-console-script-runtime", ApprovedAt: "auto"},
 	}
 
+	if semanticScenic {
+		plan.ExecutionActions = []string{"Validate local China source paths", "Apply source windows at 1.0x speed", "Honor per-shot hard cuts (null) and verified dissolves", "按口播时间轴添加画面文字与账号背景", "Validate source ranges, repetition and draft structure"}
+	}
+	if semanticScenic {
+		if err := buildEditorialPlan(opts, ctx, &plan); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(opts.PlanPath), 0o755); err != nil {
 		return err
 	}

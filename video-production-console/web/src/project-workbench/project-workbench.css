@@ -6,7 +6,7 @@
   --workbench-navy: var(--ds-surface-muted);
   --workbench-navy-raised: var(--ds-surface);
   --workbench-teal: var(--ds-accent);
-  --workbench-teal-dark: #0f6959;
+  --workbench-teal-dark: var(--teal-700);
   --workbench-teal-soft: var(--teal-050);
   --workbench-amber: var(--ds-warning);
   --workbench-amber-soft: var(--amber-050);
@@ -440,7 +440,7 @@
   border: 0;
   border-radius: 10px;
   background: var(--workbench-teal);
-  color: #fff;
+  color: var(--ds-on-accent);
   text-align: left;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(20, 125, 105, 0.2);
@@ -528,7 +528,7 @@
   border: 0;
   border-radius: 9px;
   background: var(--workbench-teal);
-  color: #fff;
+  color: var(--ds-on-accent);
   cursor: pointer;
   font-weight: 700;
 }
@@ -639,7 +639,7 @@
 .source-script-dialog__save { min-height: 40px; border-radius: 9px; }
 .source-script-dialog__close { width: 40px; display: grid; place-items: center; border: 1px solid var(--workbench-line); color: var(--workbench-muted); background: transparent; }
 .source-script-dialog__cancel { padding: 0 16px; border: 1px solid var(--workbench-line); color: var(--workbench-ink); background: transparent; }
-.source-script-dialog__save { padding: 0 18px; border: 0; color: #fff; background: var(--workbench-teal); font-weight: 700; }
+.source-script-dialog__save { padding: 0 18px; border: 0; color: var(--ds-on-accent); background: var(--workbench-teal); font-weight: 700; }
 .source-script-dialog__save:disabled { opacity: .55; cursor: wait; }
 .source-script-dialog footer small { color: var(--workbench-muted); }
 
@@ -2229,7 +2229,7 @@
 .project-workbench .production-rail { min-height: 88px; flex-basis: 88px; border-radius: 12px; box-shadow: none; }
 .project-workbench .production-rail__heading { border-left: 3px solid var(--ds-accent); }
 .project-workbench .production-rail__line { top: 28px; }
-.project-workbench .production-rail__stage--current .production-rail__node { color: white; border-color: var(--ds-accent); background: var(--ds-accent); box-shadow: 0 0 0 4px var(--workbench-teal-soft); }
+.project-workbench .production-rail__stage--current .production-rail__node { color: var(--ds-on-accent); border-color: var(--ds-accent); background: var(--ds-accent); box-shadow: 0 0 0 4px var(--workbench-teal-soft); }
 .project-workbench .production-rail__stage--current .production-rail__label, .project-workbench .production-rail__stage--current .production-rail__state { color: var(--ds-accent); }
 .project-workbench .primary-action-panel { border-top: 3px solid var(--ds-accent); }
 .project-workbench .primary-action-panel__stage { color: var(--ds-text-muted); font-size: 13px; }

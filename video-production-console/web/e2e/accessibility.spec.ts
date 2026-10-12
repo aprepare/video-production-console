@@ -160,12 +160,12 @@ test("project workbench keeps its desktop dark-theme visual contract", async ({ 
   const assets = page.getByRole("region", { name: "当前项目资产" });
   const taskSummary = page.getByRole("region", { name: "当前任务摘要" });
 
-  await expect(title).toHaveCSS("color", "rgb(228, 237, 247)");
-  await expect(page.locator(".project-workbench")).toHaveCSS("background-color", "rgb(15, 25, 41)");
-  await expect(assets).toHaveCSS("background-color", "rgb(25, 39, 59)");
-  await expect(assets).toHaveCSS("color", "rgb(228, 237, 247)");
-  await expect(taskSummary).toHaveCSS("background-color", "rgb(25, 39, 59)");
-  await expect(taskSummary).toHaveCSS("color", "rgb(228, 237, 247)");
+  await expect(title).toHaveCSS("color", "rgb(231, 235, 245)");
+  await expect(page.locator(".project-workbench")).toHaveCSS("background-color", "rgb(20, 25, 39)");
+  await expect(assets).toHaveCSS("background-color", "rgb(29, 36, 54)");
+  await expect(assets).toHaveCSS("color", "rgb(231, 235, 245)");
+  await expect(taskSummary).toHaveCSS("background-color", "rgb(29, 36, 54)");
+  await expect(taskSummary).toHaveCSS("color", "rgb(231, 235, 245)");
 
   const measurements = await page.evaluate(() =>
     [

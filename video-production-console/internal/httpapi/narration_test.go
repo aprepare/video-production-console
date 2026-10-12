@@ -420,6 +420,48 @@ func TestNarrationAppliesOptionalBodyOverrides(t *testing.T) {
 	}
 }
 
+func TestNarrationOptionallyPreservesChineseYearsInProducerScript(t *testing.T) {
+	const continuous = "零零年互联网泡沫，二零二零年疫情冲击，零八年金融危机，零九年四月份，二零二六财富觉醒方法论；涨了百分之六十七，金额四十万。"
+	for _, tt := range []struct {
+		name string
+		body any
+		want string
+	}{
+		{
+			name: "default digitizes years",
+			body: nil,
+			want: "零零年互联网泡沫，2020年疫情冲击，零八年金融危机，零九年四月份，二零二六财富觉醒方法论；涨了67%，金额40万。",
+		},
+		{
+			name: "opt in preserves Chinese years only",
+			body: map[string]any{"preserve_chinese_years": true},
+			want: "零零年互联网泡沫，二零二零年疫情冲击，零八年金融危机，零九年四月份，二零二六财富觉醒方法论；涨了67%，金额40万。",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			projectID := uuid.NewString()
+			repository := &narrationTestStore{project: domain.Project{ID: projectID, Stage: domain.StageAssets}}
+			var got narration.ProduceRequest
+			handler, service, _ := newNarrationTestHandler(t, repository,
+				narrationTestSettings{runtime: configuredNarrationRuntime()},
+				func(_ context.Context, request narration.ProduceRequest) (narration.Delivery, error) {
+					got = request
+					return narrationDelivery(request.Provider), nil
+				})
+			seedNarrationInputs(t, service, repository, projectID, continuous, continuous)
+
+			response := performJSON(t, handler, http.MethodPost, "/api/projects/"+projectID+"/narration", tt.body)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusCreated {
+				t.Fatalf("status = %d, body = %s", response.StatusCode, readResponseBody(t, response))
+			}
+			if got.Script != tt.want {
+				t.Fatalf("producer script = %q, want %q", got.Script, tt.want)
+			}
+		})
+	}
+}
+
 func TestNarrationReportsMissingVendorConfiguration(t *testing.T) {
 	projectID := uuid.NewString()
 	for _, tt := range []struct {

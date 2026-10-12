@@ -1,0 +1,58 @@
+{
+  "stamp": "头尾锁定v5.1 用户修订 2026-09-10 11:28",
+  "source_sha256": "54e74e773938af21dae0ddb86d26503009fe88042e8c1bf431e61b3339e13078",
+  "prompt_sha256": "6b25c1ff337e850c8e2944e2a289b81993c22a5b5038804fe346d1cd796fe044",
+  "backup": "C:\\Users\\prepare\\.codex\\worktrees\\视频号混剪\\video-production-console\\video-production-console\\video-console-data\\remix_lab\\backup-user-prompt-20260910-112820",
+  "files": [
+    {
+      "path": "workflow.json",
+      "before_sha256": "7323c5be9b27a706b040e5e1a4ae861b543bfe2f93b7752e8b18e896c0fa75bf",
+      "after_sha256": "5de5185e416e6ae6e22c0bd5e1b62d91d3d0f01360dd8f8079298ff61d764745"
+    },
+    {
+      "path": "workflows\\04bbe3a0-2496-47b8-acb7-9c1862ef6850.json",
+      "before_sha256": "5f62bea2b0ad7c2f136efd23501c82ad7216f830fee965732798efea57bf7e54",
+      "after_sha256": "8c8256b592b1710932718283179b44a68a6154d37fc3ee7f26eed44af0d96a80"
+    },
+    {
+      "path": "workflows\\41469c17-fe4a-486b-a733-9ff4ce163ca5.json",
+      "before_sha256": "6c719d1e426e6ef8bc4551fb73906212df7fca1e32ec96e7f08dfd2621f5d1ea",
+      "after_sha256": "66d375f22395795a83200a630587a199621cccbf0d57cb9acfbb58d8a84117ce"
+    },
+    {
+      "path": "workflows\\66dfed1b-1e0c-4b6c-85bf-cebdd562bf6f.json",
+      "before_sha256": "c3240843eaac9c55458669422c91df01c6320610cd31d3f9826455dc67f2c1a0",
+      "after_sha256": "d93cbf21d49fc4113553afcc935d565e475580cdeaa604c4d823e06df0e26675"
+    },
+    {
+      "path": "workflows\\8c232ac1-a2e2-424e-866e-77fe8be1195d.json",
+      "before_sha256": "48e741c72fa2ebf86654414147024a2df8f16921a9ea004605d26c72c9393474",
+      "after_sha256": "daba41e5039ede0bda4b1ccd03f9b6a64824c066520f23714292cb279a85743d"
+    },
+    {
+      "path": "workflows\\b953bbba-25ff-4660-a056-f165e8e39027.json",
+      "before_sha256": "5ac28bc554b5dfc0815a9daa707d1222b31f91842eed37c9a76547e0280255ca",
+      "after_sha256": "2dc2b3ddfdb6e1aabbaec39d59b240ead3c6ca55240435c5868d16acb8e5320d"
+    },
+    {
+      "path": "workflows\\c7a0d74a-4617-47a5-881b-7f8d44758115.json",
+      "before_sha256": "8c9f17d0a62f3141a7ebec297a28f6db20bf5da40fa645ab1e6fdd10177d20c7",
+      "after_sha256": "3b49d2f06d35739cad74ddee7c503e8441c5f31d32c410f713a4060b3799804b"
+    },
+    {
+      "path": "workflows\\d57748b3-6218-49a9-8239-a5ea7bd2ccf9.json",
+      "before_sha256": "b36e88004d9ae42be481451c2c82ea8b29e1d1e52a9880b5ce6f88352b5a1f34",
+      "after_sha256": "64192a10287ea81b71c67241737ae2340182edd735b9e7b13269f8d7b1c73a7e"
+    },
+    {
+      "path": "active_prompt.json",
+      "before_sha256": "a17188bc9d84674bee112911aa02bc0a87d14a80800dde30d61633c799aec208",
+      "after_sha256": "01b2612f18bb6ca6f3db05b4f8a61d1dc68a4687f468661ccc6f7ea934dced80"
+    },
+    {
+      "path": "library.json",
+      "before_sha256": "d30dcffa0070eac407d0a61f26c68d965f824dde9129cdad9eca89116522f110",
+      "after_sha256": "b791ecea27f24d3de80706527a0b5ad8bdc24619e21de603c48bc6d368fdc0af"
+    }
+  ]
+}

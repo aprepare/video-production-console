@@ -18,11 +18,18 @@ test("navigation marks the active workspace and preserves modified link clicks",
   expect(navigate).toHaveBeenCalledTimes(1);
 });
 
+test("only copy and image workspaces remain in navigation", () => {
+  render(<ConsoleNavigation active="remix" theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
+  expect(screen.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/", "/image-projects"]);
+  expect(screen.queryByRole("link", { name: "二创文档" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "AI短片" })).toBeNull();
+});
+
 test("global controls remain available in every workspace", () => {
   const settings = vi.fn();
   const theme = vi.fn();
   const logout = vi.fn();
-  render(<ConsoleNavigation active="ai" theme="dark" onNavigate={vi.fn()} onThemeChange={theme} onOpenSettings={settings} onLogout={logout} />);
+  render(<ConsoleNavigation active="image" theme="dark" onNavigate={vi.fn()} onThemeChange={theme} onOpenSettings={settings} onLogout={logout} />);
   fireEvent.click(screen.getByRole("button", { name: "设置" }));
   fireEvent.change(screen.getByRole("combobox", { name: "选择界面主题" }), { target: { value: "light" } });
   fireEvent.click(screen.getByRole("button", { name: "退出" }));

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Eye, EyeOff, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { Eye, EyeOff, Play, RefreshCw, Trash2, X, FileText, PenLine, ShieldCheck } from "lucide-react";
 import {
   fetchRemixLabExperiment,
   fetchRemixLabExperiments,
@@ -8,7 +8,8 @@ import {
   type RemixLabExperiment,
   type RemixLabExperimentSummary,
 } from "./api";
-import { ModelMultiSelect } from "../ModelSelect";
+import { ModelCombo, ModelMultiSelect } from "../ModelSelect";
+import "./accounts-overview.css";
 import type { Account } from "../types";
 
 // 账号总览：一次贴原文、勾选账号批量开跑二创，并集中跟踪每个账号
@@ -22,6 +23,7 @@ type AccountsOverviewProps = {
   onOpenAccount: (accountID: string, experimentID?: string) => void;
   /** 账号停用成功后通知宿主把它从账号列表里拿掉。 */
   onAccountDeactivated: (accountID: string) => void;
+  onAccountRenamed: (account: Account) => void;
   onMessage: (text: string) => void;
 };
 
@@ -87,13 +89,40 @@ function formatTime(iso: string): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAccountDeactivated, onMessage }: AccountsOverviewProps) {
+export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAccountDeactivated, onAccountRenamed, onMessage }: AccountsOverviewProps) {
+  const [editingID, setEditingID] = useState("");
+  const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState("");
+  const rename = async (account: Account) => {
+    if (!newName.trim() || renaming) return;
+    setRenaming(true);
+    setRenameError("");
+    try {
+      const response = await api(`/api/accounts/${account.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      if (!response.ok) throw new Error(response.status === 409 ? "已有同名账号，请换一个名称。" : `改名失败：${response.status}`);
+      onAccountRenamed(await response.json() as Account);
+      setEditingID("");
+      onMessage("账号名称已更新。");
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : "账号改名失败。");
+    } finally {
+      setRenaming(false);
+    }
+  };
   const [source, setSource] = useState("");
   const [runCount, setRunCount] = useState(1);
   const [auto, setAuto] = useState(false);
   // 空 = 用默认档（写手节点覆盖 > 模型配置槽1 > 全局二创设置）；多选 = 每个
   // 账号里各模型各出一稿并行，快的先看、慢的再比。
   const [models, setModels] = useState<string[]>([]);
+  const [reviewMode, setReviewMode] = useState("inherit");
+  const [reviewModel, setReviewModel] = useState("");
+  const [reviewEffort, setReviewEffort] = useState("high");
+  const [reviewFast, setReviewFast] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [launching, setLaunching] = useState(false);
   const [launchResults, setLaunchResults] = useState<Record<string, LaunchResult>>({});
@@ -190,20 +219,20 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
   const [deactivating, setDeactivating] = useState("");
   // 停用是软删除：账号从列表消失，它名下的项目、实验、工作流都留着。
   const deactivate = async (account: Account) => {
-    if (!window.confirm(`停用账号「${account.name}」？它会从所有列表里消失，历史项目和实验保留。`)) return;
+    if (!window.confirm(`删除账号「${account.name}」？账号将从可选列表移除，历史项目和文案保留。`)) return;
     setDeactivating(account.id);
     try {
       const response = await api(`/api/accounts/${account.id}`, { method: "DELETE" });
-      if (!response.ok) throw new Error(`停用失败：${response.status}`);
+      if (!response.ok) throw new Error(`删除失败：${response.status}`);
       onAccountDeactivated(account.id);
       setSelected((current) => {
         const next = new Set(current);
         next.delete(account.id);
         return next;
       });
-      onMessage(`账号「${account.name}」已停用。`);
+      onMessage(`账号「${account.name}」已删除，历史项目和文案保留。`);
     } catch (error) {
-      onMessage(error instanceof Error ? error.message : "账号停用失败。");
+      onMessage(error instanceof Error ? error.message : "账号删除失败。");
     } finally {
       setDeactivating("");
     }
@@ -238,12 +267,19 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
       onMessage("全自动混剪只支持每号跑 1 次、单个模型。");
       return;
     }
+    if (reviewMode === "custom" && !reviewModel.trim()) {
+      onMessage("请选择或输入本次审稿模型。");
+      return;
+    }
+    const reviewer = reviewMode === "inherit" ? undefined : reviewMode === "off" ? { model: "" } : {
+      model: reviewModel.trim(), reasoning_effort: reviewEffort, service_tier: reviewFast ? "priority" : "default",
+    };
     setLaunching(true);
     const results: Record<string, LaunchResult> = {};
     // 逐个账号提交：每个账号用自己的工作流快照各跑一个实验。
     for (const account of chosen) {
       try {
-        const exp = await runRemixLabWorkflow(api, text, runCount, account.id, auto, models);
+        const exp = await runRemixLabWorkflow(api, text, runCount, account.id, auto, models, reviewer);
         results[account.id] = { ok: true, detail: exp.id };
       } catch (error) {
         results[account.id] = {
@@ -267,7 +303,8 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="preview-modal remix-lab-modal remix-lab-modal--wide remix-lab-overview"
+        className="preview-modal remix-lab-modal remix-lab-modal--wide remix-lab-overview batch-studio notranslate"
+        translate="no"
         role="dialog"
         aria-modal="true"
         aria-labelledby="remix-lab-overview-title"
@@ -277,6 +314,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
           <div>
             <span className="muted">矩阵账号统一管理</span>
             <h2 id="remix-lab-overview-title">账号总览</h2>
+            <p className="batch-studio__subtitle">一篇原文，多账号协作。写手与审稿，由本次任务决定。</p>
           </div>
           <button type="button" className="close" aria-label="关闭账号总览" onClick={onClose}>
             <X size={20} aria-hidden="true" />
@@ -284,18 +322,25 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
         </div>
 
         <section className="remix-lab-overview__launch" aria-label="批量开跑">
+          <div className="batch-studio__source">
+          <div className="batch-studio__section-title"><FileText size={18} /><h3>原文素材</h3><span>{source.length.toLocaleString()} 字符</span></div>
           <label>
-            爆款原文（一次粘贴，勾选的账号各自开跑）
+            同一篇原文，按各账号的提示词分别创作
             <textarea
               aria-label="批量二创原文"
-              rows={5}
+              rows={11}
+              disabled={launching}
               value={source}
               onChange={(event) => setSource(event.target.value)}
               placeholder="把对标爆款文案整篇贴进来……"
             />
           </label>
+          <div className="batch-studio__route"><span>原文</span><span>写手重构</span><span>{reviewMode === "custom" ? "指定模型审稿" : reviewMode === "off" ? "直接定稿" : "按账号流程定稿"}</span></div>
+          </div>
+          <fieldset className="batch-studio__settings" disabled={launching}>
+          <legend className="sr-only">本次模型与执行设置</legend>
           <div className="remix-lab-overview__models">
-            <span className="remix-lab-muted">写手模型（不勾 = 各账号写手节点配置；勾多个 = 每个账号各模型各出一稿并行对比）</span>
+            <div className="batch-studio__section-title"><PenLine size={18} /><h3>写手模型</h3><span>可多选对比</span></div>
             <ModelMultiSelect
               value={models}
               onChange={(next) => {
@@ -305,7 +350,23 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
               inheritedLabel="各账号写手节点配置"
             />
           </div>
+          <div className="batch-studio__review">
+            <div className="batch-studio__section-title"><ShieldCheck size={18} /><h3>审稿模型</h3><span>仅本次生效</span></div>
+            <label>审稿方式<select aria-label="审稿方式" value={reviewMode} onChange={(event) => setReviewMode(event.target.value)}>
+              <option value="inherit">沿用各账号配置</option><option value="off">不审稿，写手直接定稿</option><option value="custom">指定本次审稿模型</option>
+            </select></label>
+            {reviewMode === "custom" ? <div className="batch-studio__review-fields">
+              <label>模型<ModelCombo id="batch-review-model" aria-label="批量审稿模型" value={reviewModel} onChange={setReviewModel} placeholder="选择或输入模型名称" /></label>
+              <label>思考强度<select aria-label="审稿思考强度" value={reviewEffort} onChange={(event) => setReviewEffort(event.target.value)}>
+                {["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+              </select></label>
+              <label className="batch-studio__inline"><input type="checkbox" checked={reviewFast} onChange={(event) => setReviewFast(event.target.checked)} />Fast 加速</label>
+            </div> : null}
+            <p className="model-multi-hint">{reviewMode === "inherit" ? "账号没有审稿节点时，写手直接定稿。" : reviewMode === "off" ? "本次跳过审稿，保留写手自查。" : "所有选中账号使用此审稿模型，不修改账号默认流程。"}</p>
+          </div>
+          </fieldset>
           <div className="remix-lab-overview__launch-row">
+            <div className="batch-studio__estimate"><strong>{selectedCount * runCount * Math.max(models.length, 1)}</strong><span>份待生成稿件<br />{selectedCount} 个账号 · {Math.max(models.length, 1)} 路写手</span></div>
             <label className="remix-lab-overview__count">
               每号跑
               <input
@@ -335,7 +396,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
             <button
               type="button"
               className="remix-lab-start"
-              disabled={launching || selectedCount === 0}
+              disabled={launching || selectedCount === 0 || !source.trim() || (reviewMode === "custom" && !reviewModel.trim())}
               onClick={() => void launch()}
             >
               <Play size={14} strokeWidth={2} aria-hidden="true" />
@@ -346,7 +407,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
 
         <section className="remix-lab-overview__table" aria-label="账号进度">
           <div className="remix-lab-overview__table-head">
-            <h3>账号进度</h3>
+            <h3>投放账号 <small>已选 {selectedCount} / {visibleAccounts.length}</small></h3>
             <div className="remix-lab-overview__table-actions">
             <button type="button" className="header-button remix-lab-icon-btn"
               aria-expanded={hiddenManagerOpen} aria-controls="overview-hidden-accounts"
@@ -395,7 +456,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                 <th>二创进度</th>
                 <th>混剪进度</th>
                 <th>更新时间</th>
-                <th></th>
+                <th>账号管理</th>
               </tr>
             </thead>
             <tbody>
@@ -419,7 +480,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                   const open = expandedAccount === account.id;
                   return (
                     <Fragment key={account.id}>
-                    <tr>
+                    <tr className={selected.has(account.id) ? "is-selected" : undefined}>
                       <td className="remix-lab-overview__check">
                         <input
                           type="checkbox"
@@ -430,6 +491,15 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                         />
                       </td>
                       <td>
+                        {editingID === account.id ? (
+                          <form onSubmit={(event) => { event.preventDefault(); void rename(account); }}>
+                            <input aria-label="新账号名称" value={newName} autoFocus disabled={renaming}
+                              onChange={(event) => setNewName(event.target.value)} />
+                            <button type="submit" className="header-button" disabled={renaming || !newName.trim()}>{renaming ? "保存中…" : "保存名称"}</button>
+                            <button type="button" className="header-button" disabled={renaming} onClick={() => setEditingID("")}>取消改名</button>
+                            {renameError ? <p role="alert" className="remix-lab-overview__error">{renameError}</p> : null}
+                          </form>
+                        ) : null}
                         <button
                           type="button"
                           className="remix-lab-overview__account"
@@ -468,6 +538,9 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                       </td>
                       <td>
                         <div className="remix-lab-overview__account-actions">
+                        <button type="button" className="header-button" aria-label={`改名账号 ${account.name}`}
+                          disabled={launching || renaming || Boolean(deactivating)}
+                          onClick={() => { setEditingID(account.id); setNewName(account.name); setRenameError(""); }}>改名</button>
                         <button type="button" className="header-button remix-lab-icon-btn"
                           aria-label={`隐藏账号 ${account.name}`} title="在账号总览中隐藏，可随时恢复显示"
                           disabled={launching || deactivating === account.id} onClick={() => hideAccount(account.id)}>
@@ -476,13 +549,13 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                         <button
                           type="button"
                           className="header-button remix-lab-icon-btn remix-lab-overview__deactivate"
-                          aria-label={`停用账号 ${account.name}`}
-                          title="停用后从所有列表消失，历史项目和实验保留"
-                          disabled={launching || deactivating === account.id}
+                          aria-label={`删除账号 ${account.name}`}
+                          title="从可选账号中移除，历史项目和文案保留"
+                          disabled={launching || renaming || Boolean(deactivating)}
                           onClick={() => void deactivate(account)}
                         >
                           <Trash2 size={13} strokeWidth={2} />
-                          {deactivating === account.id ? "停用中…" : "停用"}
+                          {deactivating === account.id ? "删除中…" : "删除账号"}
                         </button>
                         </div>
                       </td>

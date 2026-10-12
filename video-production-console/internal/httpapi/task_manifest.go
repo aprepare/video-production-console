@@ -243,6 +243,12 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 		}
 		decision := skillregistry.DecideMontagePlanVersion(snapshot)
 		settings.MontagePlanVersion = decision.Version
+		if task.Type == "montage" && decision.Version == "2.0" {
+			settings.MixPreset = "scenic_semantic"
+			if strings.TrimSpace(task.ModelName) != "" {
+				settings.RemixModel = task.ModelName
+			}
+		}
 		if decision.Warning != "" {
 			logging.LoggerFrom(ctx).Warn("montage capability degraded to v1",
 				"task_id", task.ID, "skill_snapshot_id", snapshot.ID, "warning", decision.Warning)
@@ -271,7 +277,7 @@ func (p *taskManifestPreparer) Prepare(ctx context.Context, task domain.CodexTas
 					"media_catalog_path", settings.MediaCatalogPath, "error", err)
 				return fmt.Errorf("movie catalog preflight: %w", err)
 			}
-		} else if err := montageplan.ValidateMediaLibrary(settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
+		} else if err := montageplan.ValidateMediaLibraryForPreset(settings.MixPreset, settings.MediaIndexPath, settings.MediaRoot, settings.MachineProfilePath); err != nil {
 			logging.LoggerFrom(ctx).Error("montage media preflight rejected",
 				"task_id", task.ID, "action", string(task.Action), "phase", "preflight",
 				"media_index_path", settings.MediaIndexPath, "media_root", settings.MediaRoot,

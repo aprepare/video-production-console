@@ -7,6 +7,7 @@ import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate } from "../types";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
 import { DEFAULT_IMAGE_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
+import { ImageProjectLibrary } from "./ImageProjectLibrary";
 import "./image-mode.css";
 
 type API = (path: string, init?: RequestInit) => Promise<Response>;
@@ -51,7 +52,6 @@ const concurrencyOptions = Array.from({ length: 18 }, (_, index) => index + 1);
 const attemptOptions = [1, 2, 3, 4];
 const phaseOrder = ["planning", "prompting", "imaging", "completed"] as const;
 
-const projectStatusLabels: Record<string, string> = { draft: "待生成", ready: "图片就绪", generating: "生成中", running: "生成中", completed: "已完成", failed: "生成失败", interrupted: "已中断", pending: "等待生成", planning: "分析文案中", prompting: "生成提示词中", imaging: "生成图片中" };
 function readCreationDraft() {
   try { return JSON.parse(sessionStorage.getItem("console:image-advanced-draft") || "{}") as { title?: string; script?: string }; } catch { return {}; }
 }
@@ -141,6 +141,7 @@ export function ImageModeWorkbench({
   const [message, setMessage] = useState("");
   const [routeState, setRouteState] = useState<"idle" | "loading" | "error404" | "error">("idle");
   const routeRequestRef = useRef(0);
+  const listRequestRef = useRef(0);
   const loadedDetailRef = useRef<ImageProjectDetail | null>(null);
   const inFlightIDRef = useRef<string | null>(null);
   const editedDefaults = useRef({ ratio: false, style: false, concurrency: false, reasoningEffort: false, imageAttempts: false, textModel: false, imageModel: false });
@@ -198,17 +199,17 @@ export function ImageModeWorkbench({
   }, [previewItem]);
 
   const refreshList = useCallback(async (signal?: AbortSignal) => {
+    const requestID = ++listRequestRef.current;
     setListState("loading");
     try {
       const response = await api("/api/image-projects", signal ? { signal } : undefined);
       if (!response.ok) throw new Error("list failed");
       const loaded = await response.json() as ImageProject[];
+      if (requestID !== listRequestRef.current) return;
       setListState("ready");
-      setProjects((current) => {
-        const currentIDs = new Set(current.map((project) => project.id));
-        return [...current, ...loaded.filter((project) => !currentIDs.has(project.id))];
-      });
+      setProjects(loaded);
     } catch (error) {
+      if (requestID !== listRequestRef.current) return;
       if (error instanceof DOMException && error.name === "AbortError") return;
       setListState("error");
     }
@@ -570,8 +571,8 @@ export function ImageModeWorkbench({
     [projects],
   );
 
-  if (routeState === "loading") return <main className="image-mode-workbench"><div className="image-mode-notice">正在读取图文项目…</div></main>;
-  if (routeState === "error404" || routeState === "error") return <main className="image-mode-workbench"><div className="image-mode-notice" role="alert"><p>{routeState === "error404" ? "图文项目不存在（404）" : "图文项目读取失败"}</p><button type="button" onClick={() => initialProjectID && void loadProject(initialProjectID)}>重试</button></div></main>;
+  if (routeState === "loading") return <main className="image-mode-workbench" id="studio-content" tabIndex={-1}><div className="image-mode-notice">正在读取图文项目…</div></main>;
+  if (routeState === "error404" || routeState === "error") return <main className="image-mode-workbench" id="studio-content" tabIndex={-1}><div className="image-mode-notice" role="alert"><p>{routeState === "error404" ? "图文项目不存在（404）" : "图文项目读取失败"}</p><button type="button" onClick={() => initialProjectID && void loadProject(initialProjectID)}>重试</button></div></main>;
   if (detail) {
     const isQuick = detail.project.run_mode === "quick";
     const hideEditors = isQuick && !showAdvancedEdit;
@@ -579,7 +580,7 @@ export function ImageModeWorkbench({
     const allReady = detail.items.length > 0 && detail.items.every((item) => item.status === "ready");
     const primaryAction = canResume ? "resume" : allReady ? "download" : "generate";
     return (
-    <main className="image-mode-workbench">
+    <main className="image-mode-workbench" id="studio-content" tabIndex={-1}>
       <div className="image-mode-head">
         <div>
           <span className="eyebrow">图文模式</span>
@@ -679,24 +680,13 @@ export function ImageModeWorkbench({
     );
   }
 
-  const projectList = (
-    <section className="image-project-list" aria-labelledby="image-project-list-title">
-      <h2 id="image-project-list-title">已有图文项目</h2>
-      {listState === "loading" ? <p role="status">正在读取项目列表…</p> : listState === "error" ? <div role="alert"><p>图文项目列表读取失败，已填写的文案会保留。</p><button type="button" onClick={() => void refreshList()}>重试读取项目列表</button></div> : null}
-      {sortedProjects.length ? sortedProjects.map((project) => (
-        <button type="button" key={project.id} disabled={Boolean(busy)} onClick={() => void openProject(project)}>
-          <strong>{project.title}</strong>
-          <span>{project.image_count} 张 · {project.ratio} · {projectStatusLabels[project.status] ?? "处理中"}</span>
-        </button>
-      )) : listState === "ready" ? <p>还没有图文项目。粘贴定稿后开始制作。</p> : null}
-    </section>
-  );
+  const projectList = <ImageProjectLibrary projects={sortedProjects} state={listState} busy={Boolean(busy)} onOpen={project => void openProject(project)} onRetry={() => void refreshList()} />;
 
   return (
-    <main className="image-mode-workbench">
+    <main className="image-mode-workbench" id="studio-content" tabIndex={-1}>
       <div className="image-mode-head">
         <div>
-          <span className="eyebrow">图文模式</span>
+          <span className="eyebrow">创作工作室 / 图文制作</span>
           <h1>图文项目</h1>
           <p>{mode === "quick" ? "粘贴最终文案后直接生成图片。项目名称由模型生成，无需确认分段。" : "粘贴最终文案，先看 AI 分段建议，确认后再生成提示词和图片。最多 18 张，第一张是封面。"}</p>
         </div>

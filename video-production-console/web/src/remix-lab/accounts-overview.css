@@ -1,0 +1,61 @@
+.preview-modal.batch-studio {
+  --batch-accent: var(--ds-accent);
+  width: min(1380px, 96vw);
+  max-width: 1380px;
+  padding: 28px;
+  border-radius: var(--radius-lg);
+  background: var(--ds-surface);
+}
+.batch-studio .modal-head { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--ds-border); }
+.batch-studio .modal-head h2 { font-size: 28px; letter-spacing: -.7px; margin: 5px 0; }
+.batch-studio__subtitle { color: var(--ds-text-muted); font-size: 13px; margin: 8px 0 0; }
+.batch-studio .remix-lab-overview__launch { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: 20px; }
+.batch-studio__source, .batch-studio__settings { min-width: 0; border: 1px solid var(--ds-border); border-radius: 14px; padding: 20px; margin: 0; background: var(--ds-surface-muted, #f6f8fb); }
+.batch-studio__settings > legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.batch-studio__source { display: flex; flex-direction: column; }
+.batch-studio__source > label { flex: 1; }
+.batch-studio .remix-lab-overview__launch textarea { flex: 1; min-height: 280px; font-size: 14px; line-height: 1.9; border: 0; padding: 16px; margin-top: 8px; border-radius: 8px; }
+.batch-studio__section-title { display: flex; align-items: center; gap: 9px; color: var(--batch-accent); margin-bottom: 14px; }
+.batch-studio__section-title h3 { color: var(--ds-text); font-size: 15px; margin: 0; }
+.batch-studio__section-title > span { margin-left: auto; font-size: 11px; color: var(--ds-text-muted); }
+.batch-studio__route { display: flex; margin-top: 18px; gap: 12px; color: var(--ds-text-muted); font-size: 11px; }
+.batch-studio__route span + span { border-left: 1px solid var(--ds-border); padding-left: 12px; }
+.batch-studio .model-multi-option { flex-direction: row; align-items: center; justify-content: flex-start; width: 100%; border-radius: 7px; padding: 9px 11px; gap: 9px; font-size: 12px; overflow-wrap: anywhere; background: var(--ds-surface); }
+.batch-studio .model-multi-option.is-checked { border-color: var(--batch-accent); background: color-mix(in srgb, var(--batch-accent) 8%, var(--ds-surface)); color: var(--ds-text); }
+.batch-studio input[type=checkbox] { accent-color: var(--batch-accent); width: 15px; height: 15px; flex-shrink: 0; }
+.batch-studio .model-multi-custom { display: flex; width: 100%; gap: 6px; }
+.batch-studio .model-multi-custom input { width: 100%; min-width: 0; }
+.batch-studio .model-multi-custom button { flex-shrink: 0; white-space: nowrap; }
+.batch-studio .model-multi-hint { margin: 7px 0 0; font-size: 11px; line-height: 1.6; }
+.batch-studio__review { border-top: 1px solid var(--ds-border); margin-top: 17px; padding-top: 17px; }
+.batch-studio select, .batch-studio input:not([type=checkbox]) { background: var(--ds-surface); color: var(--ds-text); border: 1px solid var(--ds-border); border-radius: 7px; padding: 9px 10px; font: inherit; min-width: 0; }
+.batch-studio__review-fields { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 10px; margin-top: 10px; }
+.batch-studio__review-fields .model-combo { display: flex; min-width: 0; }
+.batch-studio__review-fields input { width: 100%; }
+.batch-studio .batch-studio__inline { flex-direction: row; align-items: center; }
+.batch-studio .remix-lab-overview__launch-row { grid-column: 1 / -1; padding: 16px 18px; gap: 20px; border-radius: 12px; background: color-mix(in srgb, var(--batch-accent) 7%, var(--ds-surface)); }
+.batch-studio__estimate { display: flex; align-items: center; gap: 10px; padding-right: 18px; border-right: 1px solid var(--ds-border); }
+.batch-studio__estimate strong { font-size: 30px; color: var(--batch-accent); line-height: 1; font-variant-numeric: tabular-nums; }
+.batch-studio__estimate span { color: var(--ds-text-muted); font-size: 11px; line-height: 1.6; }
+.batch-studio .remix-lab-overview__count, .batch-studio .remix-lab-overview__auto { flex-direction: row; align-items: center; }
+.batch-studio .remix-lab-overview__count input { width: 56px; }
+.batch-studio .remix-lab-start { margin-left: auto; border-radius: 8px; box-shadow: none; min-height: 44px; }
+.batch-studio button:disabled { opacity: .45; cursor: not-allowed; }
+.batch-studio .remix-lab-overview__table { margin-top: 26px; }
+.batch-studio .remix-lab-overview__table-head h3 { font-size: 16px; }
+.batch-studio .remix-lab-overview__table-head h3 small { margin-left: 12px; color: var(--ds-text-muted); font-size: 12px; font-weight: 400; }
+.batch-studio .remix-lab-overview__table th { padding: 12px 10px; background: var(--ds-surface-muted, #f6f8fb); font-size: 11px; }
+.batch-studio .remix-lab-overview__table td { padding: 15px 10px; }
+.batch-studio tr.is-selected td { background: color-mix(in srgb, var(--batch-accent) 5%, var(--ds-surface)); }
+.batch-studio .remix-lab-overview__account-actions { flex-wrap: nowrap; gap: 5px; }
+.batch-studio .remix-lab-overview__account-actions button { padding: 6px 8px; min-height: 30px; font-size: 11px; border-radius: 6px; white-space: nowrap; box-shadow: none; }
+.batch-studio .remix-lab-overview__title { max-width: 230px; }
+.batch-studio :is(input, textarea, select, button):focus-visible { outline: 2px solid var(--batch-accent); outline-offset: 2px; }
+@media (max-width: 850px) {
+  .preview-modal.batch-studio { padding: 16px; width: 97vw; }
+  .batch-studio .remix-lab-overview__launch { grid-template-columns: minmax(0, 1fr); }
+  .batch-studio .remix-lab-overview__launch-row { flex-direction: row; align-items: center; }
+  .batch-studio .remix-lab-start { width: 100%; margin: 0; }
+  .batch-studio .remix-lab-overview__table { overflow-x: auto; }
+  .batch-studio .remix-lab-overview__table table { min-width: 820px; }
+}

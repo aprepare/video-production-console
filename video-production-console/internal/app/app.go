@@ -30,7 +30,6 @@ import (
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
-	"video-production-console/internal/workspace"
 )
 
 type remixLabRuntimeAdapter struct {
@@ -110,6 +109,14 @@ func (a *App) ResumeProductions() {
 func New(options Options) *App {
 	var resumeProductions func()
 	mux := http.NewServeMux()
+	removedFeature := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "feature_removed", "message": "此功能已移除。"})
+	})
+	for _, path := range []string{"/api/workspace", "/api/workspace/", "/api/ai-shorts", "/api/ai-shorts/"} {
+		mux.Handle(path, removedFeature)
+	}
 	mux.HandleFunc("GET /api/health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]string{"status": "ok"})
@@ -122,12 +129,6 @@ func New(options Options) *App {
 		accounts := httpapi.NewAccountsHandler(options.DB, assetService)
 		mux.Handle("/api/accounts", accounts)
 		mux.Handle("/api/accounts/", accounts)
-		if options.Settings != nil {
-			// AI 短片：分镜 → 生图 → 图生视频 → 配音 → 剪映草稿。
-			aiShorts := httpapi.NewAIShortsHandler(options.Config.DataRoot, options.Settings, store.NewAccountRepository(options.DB))
-			mux.Handle("/api/ai-shorts", aiShorts)
-			mux.Handle("/api/ai-shorts/", aiShorts)
-		}
 		var models httpapi.TaskModelResolver
 		if options.Settings != nil {
 			models = options.Settings
@@ -217,7 +218,6 @@ func New(options Options) *App {
 			}
 			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
 		}
-		mux.Handle("/api/workspace/", httpapi.NewWorkspaceHandler(workspace.Store{}))
 
 		if options.Scheduler != nil {
 			mux.HandleFunc("GET /api/runtime", func(w http.ResponseWriter, _ *http.Request) {

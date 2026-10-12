@@ -254,7 +254,7 @@ func nearestSafeCut(runes []rune, target, lower, upper int) int {
 
 // BreaksSpokenWord reports whether cutting a caption between runes[at-1] and
 // runes[at] would split a word, a number from its unit, a book title, or a
-// connective. Shared with the AI-short caption wrapper so both pipelines break
+// connective. Used by the caption wrapper to break
 // lines the same way as the QC-approved montage 口播稿.
 func BreaksSpokenWord(runes []rune, at int) bool { return breaksSpokenWord(runes, at) }
 

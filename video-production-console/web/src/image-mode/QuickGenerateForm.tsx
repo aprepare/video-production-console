@@ -127,7 +127,7 @@ export function QuickGenerateForm({
     <form className="quick-generate-form" onSubmit={(event) => void submit(event)}>
       <section className="quick-generate-script">
         <header className="quick-generate-script__head">
-          <p className="image-kicker">一键生成</p>
+          <p className="image-kicker">文案输入</p>
           <h2>把定稿文案放进来</h2>
           <p>系统按原文出图，不二创。项目名称会在分析文案时生成。</p>
         </header>
@@ -140,6 +140,7 @@ export function QuickGenerateForm({
             placeholder="例如：钱去哪了。银行流水里藏着家庭真正的现金流。"
           />
         </label>
+        <div className="quick-generate-script__foot"><span>{Array.from(script).length.toLocaleString()} 字符</span><span>原文保留 · 自动分段与配图</span></div>
       </section>
       <aside className="quick-generate-rail">
         <p className="image-kicker">日常参数</p>

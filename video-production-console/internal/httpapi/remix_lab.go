@@ -247,19 +247,20 @@ func (h *remixLabHandler) putWorkflow(w http.ResponseWriter, r *http.Request) {
 // runWorkflow 用当前工作流开跑一个实验（可带生产账号与全自动开关）。
 func (h *remixLabHandler) runWorkflow(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Source    string   `json:"source"`
-		RunCount  int      `json:"run_count"`
-		AccountID string   `json:"account_id"`
-		Auto      bool     `json:"auto"`
-		Model     string   `json:"model"`
-		Models    []string `json:"models"` // 多模型对比开跑；与 model 合并
+		Source    string               `json:"source"`
+		RunCount  int                  `json:"run_count"`
+		AccountID string               `json:"account_id"`
+		Auto      bool                 `json:"auto"`
+		Model     string               `json:"model"`
+		Models    []string             `json:"models"` // 多模型对比开跑；与 model 合并
+		Reviewer  *remixlab.RerunModel `json:"reviewer"`
 	}
 	if err := decodeJSON(w, r, maxRemixLabRequestSize, &in); err != nil {
 		writeDecodeError(w, err, "invalid_remix_lab", "A valid run payload is required.")
 		return
 	}
 	models := append([]string{in.Model}, in.Models...)
-	exp, err := h.svc.CreateWorkflowExperiment(r.Context(), in.Source, in.RunCount, in.AccountID, in.Auto, models...)
+	exp, err := h.svc.CreateWorkflowExperimentWithReviewer(r.Context(), in.Source, in.RunCount, in.AccountID, in.Auto, in.Reviewer, models...)
 	if err != nil {
 		writeRemixLabError(w, err)
 		return

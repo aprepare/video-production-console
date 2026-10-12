@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 落盘的账号工作流必须能过校验（审稿接在自检后、定稿接在审稿后）。
+// 落盘工作流允许单写手；临时指定审稿后仍须通过拓扑校验。
 // 数据目录不存在时跳过，不影响 CI。
 func TestLiveWorkflowFilesValidateWithReviewer(t *testing.T) {
 	root := filepath.Join("..", "..", "video-console-data", "remix_lab")
@@ -33,8 +33,9 @@ func TestLiveWorkflowFilesValidateWithReviewer(t *testing.T) {
 		if err := ValidateWorkflow(wf); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
-		if workflowReviewer(wf) == nil {
-			t.Fatalf("%s: reviewer node missing", path)
+		withReview, err := withBatchReviewer(wf, &RerunModel{Model: "test-reviewer", ReasoningEffort: "high"})
+		if err != nil || workflowReviewer(withReview) == nil {
+			t.Fatalf("%s: cannot add run-scoped reviewer: %v", path, err)
 		}
 	}
 }

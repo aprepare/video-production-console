@@ -2,6 +2,7 @@ package montageplan
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -49,6 +50,7 @@ type DurationFunc func(path string) (float64, error)
 // Options configures deterministic plan generation.
 // CaptionMode and MixPreset only affect BuildV2; Build (v1) ignores them.
 type Options struct {
+	Context      context.Context
 	ManifestPath string
 	PlanPath     string
 	Duration     DurationFunc
@@ -67,6 +69,13 @@ type Options struct {
 	LineBreaker LineBreaker
 	// SelectMode is landscape (method one, default) or movie_catalog (method three).
 	SelectMode string
+}
+
+func plannerContext(opts Options) context.Context {
+	if opts.Context != nil {
+		return opts.Context
+	}
+	return context.Background()
 }
 
 type manifestFile struct {

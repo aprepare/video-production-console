@@ -8,15 +8,16 @@ export type AppLocation =
   | { view: "image-video"; projectID: string }
   | { view: "remix-lab" }
   | { view: "remix-lab"; experimentID: string }
-  | { view: "ai-shorts" }
-  | { view: "ai-shorts"; shortID: string }
-  | { view: "workspace" }
   | { view: "not-found" };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export function isRemovedWorkspacePath(pathname: string): boolean {
+  return ["/workspace", "/ai-shorts"].some(path => pathname === path || pathname.startsWith(`${path}/`));
+}
+
 export function parseLocation(pathname: string): AppLocation {
-  if (pathname === "/") return { view: "remix-lab" };
+  if (pathname === "/" || isRemovedWorkspacePath(pathname)) return { view: "remix-lab" };
   if (pathname === "/image-projects" || pathname === "/image-projects/") {
     return { view: "image-projects" };
   }
@@ -33,17 +34,6 @@ export function parseLocation(pathname: string): AppLocation {
   const videoMatch = pathname.match(/^\/image-videos\/([^/]+)\/?$/);
   if (videoMatch && uuidPattern.test(videoMatch[1])) {
     return { view: "image-video", projectID: videoMatch[1].toLowerCase() };
-  }
-  if (pathname === "/ai-shorts" || pathname === "/ai-shorts/") {
-    return { view: "ai-shorts" };
-  }
-  const shortMatch = pathname.match(/^\/ai-shorts\/([^/]+)\/?$/);
-  if (shortMatch) {
-    if (!uuidPattern.test(shortMatch[1])) return { view: "not-found" };
-    return { view: "ai-shorts", shortID: shortMatch[1].toLowerCase() };
-  }
-  if (pathname === "/workspace" || pathname === "/workspace/") {
-    return { view: "workspace" };
   }
   if (pathname === "/remix-lab" || pathname === "/remix-lab/") {
     return { view: "remix-lab" };

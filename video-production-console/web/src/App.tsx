@@ -14,14 +14,14 @@ import { useSettingsDialog } from "./settings/useSettingsDialog";
 import { useConsoleData } from "./console/useConsoleData";
 import { queryKeys } from "./query/keys";
 import "./App.css";
-import { parseLocation } from "./project-workbench/routes";
+import "./shell/studio-primitives.css";
+import { isRemovedWorkspacePath, parseLocation } from "./project-workbench/routes";
 import { ProjectWorkbench } from "./project-workbench/ProjectWorkbench";
 import { accountName } from "./projects/stages";
 import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
-import { WorkspacePage } from "./workspace/WorkspacePage";
-import { AiShortsPage } from "./ai-shorts/AiShortsPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
+import { clearRetiredFeatureDrafts } from "./shell/retiredFeatureDrafts";
 import {
   isShieldedProductionPath,
   visibleMontageKind,
@@ -104,10 +104,7 @@ function App() {
   const route = parseLocation(isShieldedProductionPath(rawPathname) ? "/projects" : rawPathname);
   const montageKind = visibleMontageKind(window.location.search);
   const imageRoute = route.view === "image-projects" || route.view === "image-project" || route.view === "image-projects-advanced";
-  const aiShortsRoute = route.view === "ai-shorts";
-  const workspaceRoute = route.view === "workspace";
   const remixShell = route.view === "remix-lab" || route.view === "projects" || route.view === "project";
-  const workspaceFile = workspaceRoute ? new URLSearchParams(window.location.search).get("file") || undefined : undefined;
   const montageRoute = route.view === "projects" || route.view === "project";
   const routedProjectID = route.view === "project" ? route.projectID : undefined;
   const imageProjectID = route.view === "image-project" ? route.projectID : undefined;
@@ -137,6 +134,9 @@ function App() {
   const videoExportAssetRef = useRef("");
   const [urlRevision, setURLRevision] = useState(0);
   useEffect(() => {
+    try { clearRetiredFeatureDrafts(window.sessionStorage); } catch { /* Browser storage may be unavailable. */ }
+  }, []);
+  useEffect(() => {
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
   }, [rawPathname]);
@@ -152,7 +152,7 @@ function App() {
     const pausedPath = isShieldedProductionPath(url.pathname);
     const mode = url.searchParams.get("mode");
     const pausedMode = mode === "movie" || mode === "image-video";
-    if (!pausedPath && !pausedMode) return;
+    if (!pausedPath && !pausedMode && !isRemovedWorkspacePath(url.pathname)) return;
     navigate("/", "replace");
   }, [authenticated, navigate, urlRevision]);
   const handledURLRevisionRef = useRef(0);
@@ -582,8 +582,6 @@ function App() {
       || route.view === "image-videos"
       || route.view === "image-video"
       || route.view === "remix-lab"
-      || route.view === "ai-shorts"
-      || route.view === "workspace"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -972,8 +970,9 @@ function App() {
   return (
     <ModelOptionsProvider options={modelOptionsList(settings?.public?.model_options)}>
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
+      <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : aiShortsRoute ? "ai" : workspaceRoute ? "workspace" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : remixShell ? "remix" : null}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
@@ -981,28 +980,13 @@ function App() {
         onLogout={() => void logout()}
       />
       {route.view === "not-found" ? (
-        <main className="notice" role="alert">
+        <main className="notice" role="alert" id="studio-content" tabIndex={-1}>
           <h1>404</h1>
           <p>页面不存在</p>
           <button type="button" onClick={() => navigate("/")}>返回工作流</button>
         </main>
-      ) : workspaceRoute ? (
-        <WorkspacePage api={api} file={workspaceFile} onNavigate={navigate} />
-      ) : aiShortsRoute ? (
-        <AiShortsPage
-          api={api}
-          shortID={route.view === "ai-shorts" && "shortID" in route ? route.shortID : undefined}
-          onNavigate={navigate}
-          theme={theme}
-          onThemeChange={setTheme}
-          onOpenSettings={() => void settingsPanel.openDialog()}
-          onLogout={() => void logout()}
-        />
       ) : imageRoute ? (
         <>
-          <header className="console-page-header">
-            <div><span className="eyebrow">IMAGE STUDIO · 图文工作室</span><h1>图文制作</h1><p>从一段文案，制作一组风格统一的图文。</p></div>
-          </header>
           <ImageModeWorkbench
             api={api}
             mode={route.view === "image-projects-advanced" ? "advanced" : "quick"}

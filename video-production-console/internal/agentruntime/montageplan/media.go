@@ -36,6 +36,15 @@ type mediaItem struct {
 	Mood             string    `json:"mood,omitempty"`
 	Subtype          string    `json:"subtype,omitempty"`
 	Origin           string    `json:"origin,omitempty"`
+	Title            string    `json:"title,omitempty"`
+	Keywords         string    `json:"keywords,omitempty"`
+	SHA256           string    `json:"sha256,omitempty"`
+	Geography        string    `json:"geography,omitempty"`
+	Creator          string    `json:"creator,omitempty"`
+	SourceURL        string    `json:"source_url,omitempty"`
+	Width            int       `json:"width,omitempty"`
+	Height           int       `json:"height,omitempty"`
+	FrameHashes      []string  `json:"frame_hashes,omitempty"`
 	AbsPath          string    `json:"-"`
 }
 

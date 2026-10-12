@@ -1,0 +1,18 @@
+/* Shared interaction primitives; visual tokens remain in App.css. */
+.studio-skip-link { position: fixed; top: 12px; left: 12px; z-index: 100; padding: 12px 18px; border-radius: var(--radius-sm); background: var(--ds-accent); color: var(--ds-on-accent); font-weight: 600; text-decoration: none; transform: translateY(-160%); }
+.studio-skip-link:focus { transform: translateY(0); }
+.studio-search { position: relative; display: flex; align-items: center; min-width: 0; color: var(--ds-text-muted); }
+.studio-search > svg { position: absolute; left: 11px; pointer-events: none; }
+.studio-search input { width: 100%; padding-left: 34px !important; }
+.studio-status { display: inline-flex; align-items: center; gap: 5px; width: max-content; padding: 3px 7px; border-radius: 5px; font-size: 11px; line-height: 1.4; color: var(--ds-text-muted); background: var(--ds-surface-muted); }
+.studio-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.studio-status[data-status="ready"] { color: var(--ds-success); background: color-mix(in srgb, var(--ds-success) 9%, var(--ds-surface)); }
+.studio-status[data-status="working"] { color: var(--ds-accent); background: var(--ds-accent-soft); }
+.studio-status[data-status="attention"] { color: var(--ds-danger); background: color-mix(in srgb, var(--ds-danger) 8%, var(--ds-surface)); }
+:where(input, textarea)::placeholder { color: var(--ds-text-muted); opacity: .7; }
+:where(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 3px; }
+:where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--ds-accent); }
+:where(.remix-lab__history, .fixed-flow-steps, .fixed-flow-details, .settings-modal, .image-project-list__items) { scrollbar-width: thin; scrollbar-color: var(--ds-border-strong) transparent; }
+#studio-content { scroll-margin-top: 124px; }
+#studio-content:focus { outline: none; }
+@media (prefers-reduced-motion: reduce) { .studio-skip-link { transition: none; } }

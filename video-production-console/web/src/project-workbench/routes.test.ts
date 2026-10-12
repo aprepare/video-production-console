@@ -23,14 +23,20 @@ describe("application routes", () => {
       view: "image-video",
       projectID,
     });
-    expect(parseLocation("/workspace")).toEqual({ view: "workspace" });
-    expect(parseLocation("/workspace/")).toEqual({ view: "workspace" });
     expect(parseLocation("/remix-lab")).toEqual({ view: "remix-lab" });
     expect(parseLocation("/remix-lab/")).toEqual({ view: "remix-lab" });
     expect(parseLocation(`/remix-lab/${projectID}`)).toEqual({
       view: "remix-lab",
       experimentID: projectID,
     });
+  });
+
+  test("retired workspace and AI short bookmarks return to the copy workspace", () => {
+    for (const pathname of ["/workspace", "/workspace/", "/ai-shorts", "/ai-shorts/", `/ai-shorts/${projectID}`]) {
+      expect(parseLocation(pathname)).toEqual({ view: "remix-lab" });
+    }
+    expect(parseLocation("/workspace-old")).toEqual({ view: "not-found" });
+    expect(parseLocation("/ai-shorts-old")).toEqual({ view: "not-found" });
   });
 
   test("rejects malformed and extra route segments", () => {

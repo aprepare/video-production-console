@@ -245,7 +245,7 @@ func prepareMontageManifestFixture(t *testing.T, withPublishingPackage bool) (*t
 		t.Fatal(err)
 	}
 	mediaIndex := filepath.Join(mediaRoot, "media-index.json")
-	if err := os.WriteFile(mediaIndex, []byte(`[{"id":"clip-1","category":"Nature_Landscape","relative_path":"clip.mp4","duration_seconds":20}]`), 0o600); err != nil {
+	if err := os.WriteFile(mediaIndex, []byte(`[{"id":"clip-1","category":"Nature_Landscape","title":"China countryside","relative_path":"clip.mp4","duration_seconds":20}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	machineProfile := filepath.Join(root, "machine-profile.json")

@@ -1,0 +1,57 @@
+{
+  "version": "头尾锁定v5.0 单写手·中段深度重构 2026-09-10",
+  "applied": true,
+  "files": [
+    {
+      "path": "workflow.json",
+      "before_sha256": "75113df17babdb800364dde852c31529e5ce8a952f0d9c06b76d642a9916f3a5",
+      "after_sha256": "7323c5be9b27a706b040e5e1a4ae861b543bfe2f93b7752e8b18e896c0fa75bf"
+    },
+    {
+      "path": "active_prompt.json",
+      "before_sha256": "1e6d7f0b9ddf0da024f3a56672534eb38206378e5430c90222f2e2cab0cff3d0",
+      "after_sha256": "a17188bc9d84674bee112911aa02bc0a87d14a80800dde30d61633c799aec208"
+    },
+    {
+      "path": "library.json",
+      "before_sha256": "a6f2583934ad5a700c2e9fc28ec4805efa18e0c38ff8edb9f343a79e997d6405",
+      "after_sha256": "d30dcffa0070eac407d0a61f26c68d965f824dde9129cdad9eca89116522f110"
+    },
+    {
+      "path": "workflows\\04bbe3a0-2496-47b8-acb7-9c1862ef6850.json",
+      "before_sha256": "c25304f8a6c96cfde0daf2536d5a99d7879749cecfffd294ddaa5255c86e7d23",
+      "after_sha256": "5f62bea2b0ad7c2f136efd23501c82ad7216f830fee965732798efea57bf7e54"
+    },
+    {
+      "path": "workflows\\41469c17-fe4a-486b-a733-9ff4ce163ca5.json",
+      "before_sha256": "5fac4235c2b1990d88816a24436f39730ae0a067601a22b265c02162cf6087a3",
+      "after_sha256": "6c719d1e426e6ef8bc4551fb73906212df7fca1e32ec96e7f08dfd2621f5d1ea"
+    },
+    {
+      "path": "workflows\\66dfed1b-1e0c-4b6c-85bf-cebdd562bf6f.json",
+      "before_sha256": "017566f3051e1e1e51b61db221fbc23859174f4d0caedd91a89d27e92d1e82f3",
+      "after_sha256": "c3240843eaac9c55458669422c91df01c6320610cd31d3f9826455dc67f2c1a0"
+    },
+    {
+      "path": "workflows\\8c232ac1-a2e2-424e-866e-77fe8be1195d.json",
+      "before_sha256": "a0ce37732aff9088d17d41052326f6439da29c83522588e9fe725c6bcf5a2c24",
+      "after_sha256": "48e741c72fa2ebf86654414147024a2df8f16921a9ea004605d26c72c9393474"
+    },
+    {
+      "path": "workflows\\b953bbba-25ff-4660-a056-f165e8e39027.json",
+      "before_sha256": "712f22470815887acc20e886dc520ecdcb567d965185ad3a9cdb389db755f163",
+      "after_sha256": "5ac28bc554b5dfc0815a9daa707d1222b31f91842eed37c9a76547e0280255ca"
+    },
+    {
+      "path": "workflows\\c7a0d74a-4617-47a5-881b-7f8d44758115.json",
+      "before_sha256": "c7a1f59d7d0db1dceb22f16f9fd5080f97f681cc0bdd69ae62ebfb2b27e602fe",
+      "after_sha256": "8c9f17d0a62f3141a7ebec297a28f6db20bf5da40fa645ab1e6fdd10177d20c7"
+    },
+    {
+      "path": "workflows\\d57748b3-6218-49a9-8239-a5ea7bd2ccf9.json",
+      "before_sha256": "1066ecfb42dda90f319b6b6fbb5997d09efa824195a3e17b6e9929f0c9dc6a9f",
+      "after_sha256": "b36e88004d9ae42be481451c2c82ea8b29e1d1e52a9880b5ce6f88352b5a1f34"
+    }
+  ],
+  "backup": "C:\\Users\\prepare\\.codex\\worktrees\\视频号混剪\\video-production-console\\video-production-console\\video-console-data\\remix_lab\\backup-single-writer-20260910-111558"
+}

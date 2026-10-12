@@ -130,29 +130,43 @@ func (r *Repository) hydrateShotIDs(ctx context.Context, query string, args ...a
 	if r == nil || r.db == nil {
 		return nil, ErrCatalogUnavailable
 	}
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
 	}
-	defer rows.Close()
-	ids := make([]string, 0, recallMaxCandidates)
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
+	}
+	var ids []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
 	}
 	out := make([]RecalledShot, 0, len(ids))
-	for _, id := range ids {
-		recalled, err := r.loadRecalledShot(ctx, id)
-		if err != nil {
-			return nil, err
+	for start := 0; start < len(ids); start += 400 {
+		end := start + 400
+		if end > len(ids) {
+			end = len(ids)
 		}
-		out = append(out, recalled)
+		batch, e := hydrateRecallBatch(ctx, tx, ids[start:end])
+		if e != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, e)
+		}
+		out = append(out, batch...)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

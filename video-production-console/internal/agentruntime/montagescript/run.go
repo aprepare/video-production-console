@@ -2,18 +2,21 @@ package montagescript
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"video-production-console/internal/agentruntime/montageplan"
 )
 
 // Options configures the local montage script orchestration.
 type Options struct {
+	Context           context.Context
 	ManifestPath      string
 	SkillRoot         string
 	OutputLastMessage string
@@ -31,6 +34,12 @@ type Options struct {
 // Run validates inputs, builds a deterministic plan, executes the skill script,
 // and writes a result envelope to OutputLastMessage.
 func Run(opts Options) error {
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	runCtx, cancel := context.WithTimeout(parent, 45*time.Minute)
+	defer cancel()
 	manifestPath := strings.TrimSpace(opts.ManifestPath)
 	skillRoot := strings.TrimSpace(opts.SkillRoot)
 	outPath := strings.TrimSpace(opts.OutputLastMessage)
@@ -48,7 +57,8 @@ func Run(opts Options) error {
 	run := opts.CommandRunner
 	if run == nil {
 		run = func(name string, args ...string) ([]byte, error) {
-			cmd := exec.Command(name, args...)
+			cmd := exec.CommandContext(runCtx, name, args...)
+			cmd.WaitDelay = 5 * time.Second
 			cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -62,7 +72,7 @@ func Run(opts Options) error {
 		durationFn = func(path string) (float64, error) {
 			// Prefer AudioMaterial microseconds so plan duration matches the
 			// draft backend; ffprobe float seconds can disagree by hundreds of µs.
-			if value, err := probeDurationViaSkill(python, skillRoot, path); err == nil {
+			if value, err := probeDurationViaSkill(runCtx, python, skillRoot, path); err == nil {
 				return value, nil
 			}
 			return montageplan.ProbeDuration(path)
@@ -80,6 +90,7 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, err)
 	}
 	planOpts := montageplan.Options{
+		Context:      runCtx,
 		ManifestPath: manifestPath,
 		PlanPath:     planPath,
 		Duration:     durationFn,
@@ -98,8 +109,12 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-plan: %w", err))
 	}
 
-	raw, err := run(python, script, "execute", "--manifest", manifestPath, "--plan", planPath)
 	resultFile := filepath.Join(filepath.Dir(planPath), "result.json")
+	// An earlier attempt must never turn a failed execution into stale success.
+	if removeErr := os.Remove(resultFile); removeErr != nil && !os.IsNotExist(removeErr) {
+		return writeFailure(outPath, manifestPath, removeErr)
+	}
+	raw, err := run(python, script, "execute", "--manifest", manifestPath, "--plan", planPath)
 	if fileRaw, readErr := os.ReadFile(resultFile); readErr == nil {
 		if writeErr := writeRawEnvelope(outPath, fileRaw); writeErr == nil {
 			return nil
@@ -117,21 +132,25 @@ func Run(opts Options) error {
 	return nil
 }
 
-func probeDurationViaSkill(pythonBinary, skillRoot, audioPath string) (float64, error) {
+func probeDurationViaSkill(ctx context.Context, pythonBinary, skillRoot, audioPath string) (float64, error) {
 	// AudioMaterial reports integer microseconds; dividing yields the plan seconds
 	// that DeterministicDraftBackend will re-resolve from the same material.
 	code := "" +
 		"import sys\n" +
+		"from pathlib import Path\n" +
 		"path = sys.argv[1]\n" +
 		"try:\n" +
-		"    from pyJianYingDraft.local_materials import AudioMaterial\n" +
-		"    print(AudioMaterial(path).duration / 1_000_000)\n" +
-		"except Exception:\n" +
-		"    from pathlib import Path\n" +
 		"    sys.path.insert(0, r'''" + filepath.Join(skillRoot, "scripts") + "''')\n" +
 		"    from run_montage_job import audio_duration_seconds\n" +
-		"    print(audio_duration_seconds(Path(path)))\n"
-	cmd := exec.Command(pythonBinary, "-c", code, audioPath)
+		"    print(audio_duration_seconds(Path(path)))\n" +
+		"except Exception:\n" +
+		"    from pyJianYingDraft.local_materials import AudioMaterial\n" +
+		"    print(AudioMaterial(path).duration / 1_000_000)\n"
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, pythonBinary, "-c", code, audioPath)
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("python duration probe: %w: %s", err, strings.TrimSpace(string(out)))
@@ -236,13 +255,9 @@ func writeRawEnvelope(path string, raw []byte) error {
 	if trimmed == "" {
 		return fmt.Errorf("empty script result")
 	}
-	// CombinedOutput may include logs before the final JSON object.
-	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start < 0 || end <= start {
-		return fmt.Errorf("script result is not JSON")
-	}
-	candidate := []byte(trimmed[start : end+1])
+	// stdout fallback is accepted only when it is a single JSON envelope.
+	// Logs with braces must not be mistaken for a machine protocol message.
+	candidate := []byte(trimmed)
 	var probe map[string]any
 	if err := json.Unmarshal(candidate, &probe); err != nil {
 		// Windows Python may emit GBK text inside JSON; rewrite as UTF-8.

@@ -13,6 +13,45 @@ const listResponse = (path: string, init?: RequestInit) => path === "/api/image-
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 describe("ImageModeWorkbench", () => {
+  test("refreshing the library updates existing project names and progress", async () => {
+    let reads = 0;
+    const api = vi.fn(async (path: string) => {
+      if (path !== "/api/image-projects") throw new Error(path);
+      reads += 1;
+      return json([{ ...project, title: reads === 1 ? "待完成项目" : "已完成项目", status: reads === 1 ? "draft" : "ready" }]);
+    });
+    render(<ImageModeWorkbench api={api} />);
+    await screen.findByRole("button", { name: /待完成项目/ });
+    fireEvent.click(screen.getByRole("button", { name: "刷新项目列表" }));
+    await screen.findByRole("button", { name: /已完成项目.*图片就绪/ });
+    expect(screen.queryByRole("button", { name: /待完成项目/ })).toBeNull();
+  });
+
+  test("refreshing the library removes projects deleted on the server", async () => {
+    let reads = 0;
+    const api = vi.fn(async (path: string) => {
+      if (path !== "/api/image-projects") throw new Error(path);
+      reads += 1;
+      return json(reads === 1 ? [project] : []);
+    });
+    render(<ImageModeWorkbench api={api} />);
+    await screen.findByRole("button", { name: /Project.*待生成/ });
+    fireEvent.click(screen.getByRole("button", { name: "刷新项目列表" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Project.*待生成/ })).toBeNull());
+    expect(screen.getByText("还没有图文项目")).toBeTruthy();
+  });
+
+  test("an older list read cannot overwrite the latest list", async () => {
+    let resolveOld!: (response: Response) => void;
+    const oldRead = new Promise<Response>(resolve => { resolveOld = resolve; });
+    const view = render(<ImageModeWorkbench api={async () => oldRead} />);
+    const latestAPI = vi.fn(async () => json([{ ...project, title: "最新项目" }]));
+    view.rerender(<ImageModeWorkbench api={latestAPI} />);
+    await screen.findByRole("button", { name: /最新项目/ });
+    await act(async () => { resolveOld(json([{ ...project, title: "旧项目" }])); await oldRead; });
+    expect(screen.queryByRole("button", { name: /旧项目/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /最新项目/ })).toBeTruthy();
+  });
   test("defaults and preview/create payload include reasoning_effort and image_count", async () => {
     const bodies: any[] = [];
     const api = vi.fn(async (path: string, init?: RequestInit) => {
@@ -26,7 +65,7 @@ describe("ImageModeWorkbench", () => {
     fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "2" } });
     fireEvent.submit(document.querySelector("form")!);
     await screen.findByText(/001/);
-    const buttons = screen.getAllByRole("button"); fireEvent.click(buttons[buttons.length - 1]);
+    fireEvent.click(screen.getByRole("button", { name: "确认分段并生成提示词" }));
     await waitFor(() => expect(bodies.some((b) => b.reasoning_effort === "high" && b.image_count === 2 && b.image_attempts === 3 && b.text_model === "gpt-5.6-sol")).toBe(true));
   });
 
@@ -234,6 +273,7 @@ describe("ImageModeWorkbench", () => {
     const api = vi.fn(async (path: string) => path === "/api/image-projects/p" ? json({ project: quick, items: [readyItem], publishing_candidates: candidates }) : path === "/api/image-projects" ? json([]) : json({}));
     render(<ImageModeWorkbench api={api} initialProjectID="p" />);
     await screen.findByRole("article");
+    await waitFor(() => expect((screen.getByLabelText("图文项目名称") as HTMLInputElement).value).toBe("Project"));
     expect(screen.queryByLabelText("对应原文")).toBeNull();
     expect(screen.queryByLabelText(/提示词/)).toBeNull();
     expect(screen.getByLabelText("图片名称")).toBeTruthy();

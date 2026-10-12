@@ -92,7 +92,7 @@ type ModelSelectProps = {
 };
 
 // ModelCombo：既能从设置里的模型清单挑，也能直接敲任意模型名；空值表示用默认。
-// 给不想跑去设置页加模型的场合用（AI 短片的拆分镜模型）。
+// 支持在制作流程中直接输入模型名。
 export function ModelCombo({
   value,
   onChange,

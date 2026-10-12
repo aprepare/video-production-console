@@ -891,9 +891,9 @@ export function RemixLabPage({
             <PenLine size={18} strokeWidth={2} />
           </span>
           <div>
-            <span className="eyebrow">视频生产控制台</span>
+            <span className="eyebrow">创作工作室 / 文案与混剪</span>
             <h1>文案创作台</h1>
-            <p>从原文到定稿，让每一次交付都有迹可循。</p>
+            <p>编辑文案，确认定稿，继续制作。</p>
           </div>
           <nav className="remix-lab-account-switch" aria-label="账号">
             <label>
@@ -981,6 +981,7 @@ export function RemixLabPage({
             type="button"
             className="header-button remix-lab-icon-btn remix-lab__rail-toggle"
             aria-label={historyCollapsed ? "展开历史" : "收起历史"}
+            aria-expanded={!historyCollapsed}
             title={historyCollapsed ? "展开历史" : "收起历史"}
             onClick={() => {
               writeCollapsed("remix-lab:history-collapsed", !historyCollapsed);
@@ -1061,7 +1062,7 @@ export function RemixLabPage({
           ) : null}
           {filteredExperiments.length === 0 && orphanProjects.length === 0 ? (
             <p className="remix-lab__history-empty">
-              {accountID ? "这个账号还没有内容。贴原文开跑后会出现在这里。" : "还没有内容。中间贴原文开跑。"}
+              {historyQuery.trim() ? "没有匹配的项目，请调整搜索词。" : accountID ? "这个账号还没有内容。贴原文开跑后会出现在这里。" : "还没有内容。中间贴原文开跑。"}
             </p>
           ) : null}
           {visibleProjects.length > 0 ? (
@@ -1114,19 +1115,13 @@ export function RemixLabPage({
             </div>
           ) : null}
         </aside>
-        <main className="remix-lab__main">
+        <main className="remix-lab__main" id="studio-content" tabIndex={-1}>
           {projectView && !experimentID ? (
             <div className="remix-lab__project">{projectView}</div>
           ) : (
             <section className="remix-lab__designer" aria-label="工作流设计">
-              <div className="wf-page-actions">
-                <div className="remix-lab-prompts__head-actions">
-                  <button type="button" className="header-button" onClick={() => void openLibrary()}>
-                    提示词库
-                  </button>
-                </div>
-              </div>
               <WorkflowCanvas
+                onOpenLibrary={() => void openLibrary()}
                 modelDefaults={defaults}
                 onOpenConnections={() => setSlotConfigOpen(true)}
                 defaultServiceTier={defaults?.presets[0]?.service_tier || ""}
@@ -1331,6 +1326,9 @@ export function RemixLabPage({
           onAccountDeactivated={(id) => {
             setAccounts((current) => current.filter((item) => item.id !== id));
             if (accountID === id) pickAccount("");
+          }}
+          onAccountRenamed={(updated) => {
+            setAccounts((current) => current.map((item) => item.id === updated.id ? updated : item));
           }}
         />
       ) : null}

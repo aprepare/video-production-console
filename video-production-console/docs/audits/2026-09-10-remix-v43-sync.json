@@ -1,0 +1,62 @@
+{
+  "version": "骨肉分离v4.3 深度重构·按题开头·自然转化 2026-09-10",
+  "applied": true,
+  "files": [
+    {
+      "path": "active_prompt.json",
+      "before_sha256": "06f6618b96e3c8f1236bdef7e3fdcebc09c4e2233080d95f21d6091af16009ce",
+      "after_sha256": "1e6d7f0b9ddf0da024f3a56672534eb38206378e5430c90222f2e2cab0cff3d0"
+    },
+    {
+      "path": "library.json",
+      "before_sha256": "024e13631fe8adc0a0a35a07ef190ddf3d4c60df8a3acd8b5490d3a22952e1b0",
+      "after_sha256": "a6f2583934ad5a700c2e9fc28ec4805efa18e0c38ff8edb9f343a79e997d6405"
+    },
+    {
+      "path": "agent_prompts.json",
+      "before_sha256": "182cea8d7b110e31670296bb597de4cbf1cb698157668027e5a8434ca0501123",
+      "after_sha256": "2be562af9e7df7802f1557d65384efad8e313df931751c844a44384281d45cc2"
+    },
+    {
+      "path": "workflow.json",
+      "before_sha256": "e38158bc2472eea0f20d23c910ef0503e34eaba051b9818dd1003a87473135a6",
+      "after_sha256": "75113df17babdb800364dde852c31529e5ce8a952f0d9c06b76d642a9916f3a5"
+    },
+    {
+      "path": "workflows\\04bbe3a0-2496-47b8-acb7-9c1862ef6850.json",
+      "before_sha256": "c2b8b55d36e76f7804b73bf47bdd8e75ea6589e7687563a786018e9891cd36e0",
+      "after_sha256": "6bbe10eede9af570b01470301220048e2419af268a571db20c56309aefb59b63"
+    },
+    {
+      "path": "workflows\\41469c17-fe4a-486b-a733-9ff4ce163ca5.json",
+      "before_sha256": "f375362736e457c9b0f4caf4eb557806a182f37b0e52494a5ed9a80b6fe14e55",
+      "after_sha256": "5fac4235c2b1990d88816a24436f39730ae0a067601a22b265c02162cf6087a3"
+    },
+    {
+      "path": "workflows\\66dfed1b-1e0c-4b6c-85bf-cebdd562bf6f.json",
+      "before_sha256": "ff6acf3e98fac1054fd4ad9787cc6a06d4cf258c6e55450bba5097bd8856c999",
+      "after_sha256": "017566f3051e1e1e51b61db221fbc23859174f4d0caedd91a89d27e92d1e82f3"
+    },
+    {
+      "path": "workflows\\8c232ac1-a2e2-424e-866e-77fe8be1195d.json",
+      "before_sha256": "54f540eab46a549326390b83ec27bd3ad16b8a1e831364eb6f88680d339f5ac2",
+      "after_sha256": "fa0cf136876f7e45cdc077542cfaaecf4430a1d719e7e94069498314f4947740"
+    },
+    {
+      "path": "workflows\\b953bbba-25ff-4660-a056-f165e8e39027.json",
+      "before_sha256": "3bcc2dcf997b4717288f1de6d546d88f2cd79374754ffa598584b232a4b62f9d",
+      "after_sha256": "712f22470815887acc20e886dc520ecdcb567d965185ad3a9cdb389db755f163"
+    },
+    {
+      "path": "workflows\\c7a0d74a-4617-47a5-881b-7f8d44758115.json",
+      "before_sha256": "ca500aaedb8088becd56aa45ec4f4f31631a030d5fa51d8299621369f63a104c",
+      "after_sha256": "c7a1f59d7d0db1dceb22f16f9fd5080f97f681cc0bdd69ae62ebfb2b27e602fe"
+    },
+    {
+      "path": "workflows\\d57748b3-6218-49a9-8239-a5ea7bd2ccf9.json",
+      "before_sha256": "401bdf332d2bbcd2cf47c7a2768060437178f8f042209d69b615a9859dd5c027",
+      "after_sha256": "1066ecfb42dda90f319b6b6fbb5997d09efa824195a3e17b6e9929f0c9dc6a9f"
+    }
+  ],
+  "backup": "C:\\Users\\prepare\\.codex\\worktrees\\视频号混剪\\video-production-console\\video-production-console\\video-console-data\\remix_lab\\backup-prompt-text-20260910-104123"
+}

@@ -115,6 +115,7 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.inFlight.Delete(id)
+	overrides := readNarrationOverrides(r)
 
 	scriptText, code, err := h.readContinuousScript(r.Context(), id)
 	if err != nil {
@@ -134,13 +135,16 @@ func (h *narrationHandler) create(w http.ResponseWriter, r *http.Request) {
 	// TTS reads the continuous script (natural punctuation, no artificial line
 	// breaks); the 口播稿 lines only cut the subtitles against the word timings.
 	speech := spokenlines.SpeechFromScript(scriptText)
+	if overrides.PreserveChineseYears {
+		speech = spokenlines.SpeechFromScriptPreservingChineseYears(scriptText)
+	}
 	lines := spokenlines.Lines(formatted)
 	request, code, err := h.produceRequest(r.Context(), speech, h.accountVoice(r.Context(), project.AccountID))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, code, err.Error())
 		return
 	}
-	applyNarrationOverrides(&request, readNarrationOverrides(r))
+	applyNarrationOverrides(&request, overrides)
 	request.SpokenLines = lines
 	ctx, cancel := context.WithTimeout(r.Context(), narrationTimeout)
 	defer cancel()
@@ -357,13 +361,14 @@ func (h *narrationHandler) produceRequest(ctx context.Context, script string, vo
 }
 
 type narrationOverrides struct {
-	VoiceID   string   `json:"voice_id"`
-	SpeakerID string   `json:"speaker_id"`
-	Model     string   `json:"model"`
-	Emotion   string   `json:"emotion"`
-	Speed     *float64 `json:"speed"`
-	Volume    *float64 `json:"volume"`
-	Pitch     *int     `json:"pitch"`
+	VoiceID              string   `json:"voice_id"`
+	SpeakerID            string   `json:"speaker_id"`
+	Model                string   `json:"model"`
+	Emotion              string   `json:"emotion"`
+	Speed                *float64 `json:"speed"`
+	Volume               *float64 `json:"volume"`
+	Pitch                *int     `json:"pitch"`
+	PreserveChineseYears bool     `json:"preserve_chinese_years"`
 }
 
 func readNarrationOverrides(r *http.Request) narrationOverrides {

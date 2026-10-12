@@ -119,6 +119,16 @@ func SpeechFromScript(raw string) string {
 	return digitize(strings.TrimSpace(raw))
 }
 
+// SpeechFromScriptPreservingChineseYears keeps Chinese digit-by-digit years
+// for voices that pronounce them correctly while retaining the established
+// percent, large-number, and bare Arabic-year normalization.
+func SpeechFromScriptPreservingChineseYears(raw string) string {
+	text := strings.TrimSpace(raw)
+	text = convertPercents(text)
+	text = convertLargeNumbers(text)
+	return appendYearToBareYears(text)
+}
+
 // attachingParticles must not begin a subtitle line: they attach to the word
 // on the previous line (的人、的那天、了、吗…) and read broken on screen.
 // 地 and 得 are deliberately absent — at a line start they are usually real

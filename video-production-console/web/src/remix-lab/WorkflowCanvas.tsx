@@ -43,6 +43,7 @@ import { RoleModelsDialog } from "./RoleModelsDialog";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 
 type WorkflowCanvasProps = {
+  onOpenLibrary?: () => void;
   modelDefaults?: RemixLabDefaults | null;
   onOpenConnections?: () => void;
   defaultServiceTier?: string;
@@ -206,7 +207,7 @@ function toRfEdges(workflow: RemixLabWorkflow): Edge[] {
   }));
 }
 
-export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun, onRerunCreated, modelDefaults, onOpenConnections, defaultServiceTier = "" }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun, onRerunCreated, modelDefaults, onOpenConnections, onOpenLibrary, defaultServiceTier = "" }: WorkflowCanvasProps) {
   const [meta, setMeta] = useState<{ version: number; name: string }>({ version: 1, name: "默认二创工作流" });
   const [rfNodes, setRfNodes] = useState<Node[]>([]);
   const [rfEdges, setRfEdges] = useState<Edge[]>([]);
@@ -738,6 +739,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
           <strong>{meta.name}</strong>
         </div>
         <div className="wf-designer__actions">
+          {onOpenLibrary ? <button type="button" className="header-button remix-lab-icon-btn" onClick={onOpenLibrary}><BookOpenText size={14} aria-hidden="true" />提示词库</button> : null}
           {loaded ? (
             <button type="button" className="header-button" onClick={() => void openPromptEditor()}>
               编辑二创提示词

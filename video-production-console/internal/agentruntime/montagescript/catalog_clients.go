@@ -33,6 +33,7 @@ type catalogManifestLite struct {
 		EmbeddingBaseURL     string `json:"embedding_base_url"`
 		EmbeddingModel       string `json:"embedding_model"`
 		MontagePlanVersion   string `json:"montage_plan_version"`
+		MixPreset            string `json:"mix_preset"`
 	} `json:"non_secret_settings"`
 }
 
@@ -65,6 +66,9 @@ func attachCatalogClients(opts *Options) {
 		opts.Analyzer = montageplan.LocalIntentAnalyzer{}
 		baseURL := firstNonEmpty(os.Getenv(envIntentBaseURL), manifest.NonSecretSettings.RemixBaseURL, manifest.NonSecretSettings.GrokBaseURL)
 		model := firstNonEmpty(os.Getenv(envIntentModel), manifest.NonSecretSettings.RemixModel, manifest.NonSecretSettings.GrokModel)
+		if manifest.NonSecretSettings.MixPreset == "scenic_semantic" {
+			model = firstNonEmpty(manifest.NonSecretSettings.RemixModel, os.Getenv(envIntentModel), manifest.NonSecretSettings.GrokModel)
+		}
 		if baseURL != "" && model != "" {
 			analyzer := montageplan.NewHTTPIntentAnalyzer(montageplan.IntentAnalyzerConfig{
 				BaseURL:         baseURL,

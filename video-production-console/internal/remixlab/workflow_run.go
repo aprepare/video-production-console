@@ -21,6 +21,10 @@ import (
 // produceAccountID/auto 是生产段参数：账号决定定稿进哪个号的混剪；auto=true
 // 时跳过确认闸门直接一步到剪映草稿（要求已选账号且总运行数=1）。
 func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, runCount int, produceAccountID string, auto bool, models ...string) (Experiment, error) {
+	return s.CreateWorkflowExperimentWithReviewer(ctx, source, runCount, produceAccountID, auto, nil, models...)
+}
+
+func (s *Service) CreateWorkflowExperimentWithReviewer(ctx context.Context, source string, runCount int, produceAccountID string, auto bool, reviewer *RerunModel, models ...string) (Experiment, error) {
 	n := utf8.RuneCountInString(source)
 	if n < 1 || n > 20000 {
 		return Experiment{}, ErrInvalidSource
@@ -51,6 +55,10 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 		return Experiment{}, err
 	}
 	wf, err := s.WorkflowForAccount(produceAccountID)
+	if err != nil {
+		return Experiment{}, err
+	}
+	wf, err = withBatchReviewer(wf, reviewer)
 	if err != nil {
 		return Experiment{}, err
 	}

@@ -192,6 +192,7 @@ export async function runRemixLabWorkflow(
   accountID: string,
   auto: boolean,
   models?: string[],
+  reviewer?: { model: string; reasoning_effort?: string; service_tier?: string },
 ): Promise<RemixLabExperiment> {
   const response = await api("/api/remix-lab/workflow/run", {
     method: "POST",
@@ -199,6 +200,7 @@ export async function runRemixLabWorkflow(
     body: JSON.stringify({
       source, run_count: runCount, account_id: accountID, auto,
       models: (models ?? []).map((item) => item.trim()).filter(Boolean),
+      reviewer,
     }),
   });
   if (!response.ok) throw new Error(await readAPIError(response, "工作流开跑失败。"));

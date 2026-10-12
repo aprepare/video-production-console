@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ const (
 	DefaultAuraSTDBaseURL = "https://tts.aurastd.com"
 	DefaultAuraSTDModel   = "speech-2.8-hd"
 	auraSTDTTsPath        = "/api/v1/tts"
+	defaultAuraSTDMaxRunesPerChunk = 1500
 )
 
 // AuraSTDClient calls the Aura Studio MiniMax-compatible TTS API.
@@ -169,7 +171,58 @@ type auraSTDCue struct {
 }
 
 // Synthesize renders text with a cloned MiniMax voice and word-level timings.
+// Synthesize renders text with a cloned MiniMax voice and word-level timings.
+// When the script exceeds defaultAuraSTDMaxRunesPerChunk, it transparently chunks
+// the input to stay within Aura Studio's per-request limit and merges the output.
 func (c *AuraSTDClient) Synthesize(ctx context.Context, req Request) (Result, error) {
+	trimmed := strings.TrimSpace(req.Text)
+	if trimmed == "" {
+		return Result{}, fmt.Errorf("narration text is empty")
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= defaultAuraSTDMaxRunesPerChunk {
+		return c.synthesizeSingle(ctx, req)
+	}
+	chunks := splitTextIntoChunks(trimmed, defaultAuraSTDMaxRunesPerChunk)
+	if len(chunks) <= 1 {
+		return c.synthesizeSingle(ctx, req)
+	}
+
+	var mergedAudio []byte
+	var mergedWords []Word
+	totalBilled := 0
+	timeOffset := 0.0
+
+	for _, chunkText := range chunks {
+		chunkReq := req
+		chunkReq.Text = chunkText
+		chunkRes, err := c.synthesizeSingle(ctx, chunkReq)
+		if err != nil {
+			return Result{}, err
+		}
+		mergedAudio = append(mergedAudio, chunkRes.Audio...)
+		totalBilled += chunkRes.BilledWords
+		for _, w := range chunkRes.Words {
+			mergedWords = append(mergedWords, Word{
+				Text:       w.Text,
+				StartTime:  w.StartTime + timeOffset,
+				EndTime:    w.EndTime + timeOffset,
+				Confidence: w.Confidence,
+			})
+		}
+		if len(chunkRes.Words) > 0 {
+			timeOffset += chunkRes.Words[len(chunkRes.Words)-1].EndTime
+		}
+	}
+	if len(mergedAudio) > 0 {
+		if cleaned, err := repackageConcatenatedMP3(ctx, mergedAudio); err == nil && len(cleaned) > 0 {
+			mergedAudio = cleaned
+		}
+	}
+	return Result{Audio: mergedAudio, Words: mergedWords, BilledWords: totalBilled}, nil
+}
+
+func (c *AuraSTDClient) synthesizeSingle(ctx context.Context, req Request) (Result, error) {
 	if strings.TrimSpace(req.Text) == "" {
 		return Result{}, fmt.Errorf("narration text is empty")
 	}
@@ -394,4 +447,89 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func splitTextIntoChunks(text string, maxRunes int) []string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return []string{text}
+	}
+	var chunks []string
+	start := 0
+	total := len(runes)
+	delims := map[rune]bool{
+		'。': true, '！': true, '？': true, '；': true, '\n': true,
+		'.': true, '!': true, '?': true, ';': true,
+	}
+	secondaryDelims := map[rune]bool{
+		'，': true, ',': true, '、': true,
+	}
+
+	for start < total {
+		if total-start <= maxRunes {
+			chunk := strings.TrimSpace(string(runes[start:]))
+			if chunk != "" {
+				chunks = append(chunks, chunk)
+			}
+			break
+		}
+
+		end := start + maxRunes
+		splitAt := -1
+
+		lookback := 400
+		if lookback > maxRunes/2 {
+			lookback = maxRunes / 2
+		}
+		searchStart := end - lookback
+		if searchStart < start {
+			searchStart = start
+		}
+
+		for i := end - 1; i >= searchStart; i-- {
+			if delims[runes[i]] {
+				splitAt = i + 1
+				break
+			}
+		}
+
+		if splitAt == -1 {
+			for i := end - 1; i >= searchStart; i-- {
+				if secondaryDelims[runes[i]] {
+					splitAt = i + 1
+					break
+				}
+			}
+		}
+
+		if splitAt == -1 {
+			for i := end - 1; i >= searchStart; i-- {
+				if runes[i] == ' ' || runes[i] == '\t' {
+					splitAt = i + 1
+					break
+				}
+			}
+		}
+
+		if splitAt <= start {
+			splitAt = end
+		}
+
+		chunk := strings.TrimSpace(string(runes[start:splitAt]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		start = splitAt
+	}
+	return chunks
+}
+func repackageConcatenatedMP3(ctx context.Context, rawMP3 []byte) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-f", "mp3", "-i", "pipe:0", "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "32000", "-f", "mp3", "pipe:1")
+	cmd.Stdin = bytes.NewReader(rawMP3)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
