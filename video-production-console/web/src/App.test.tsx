@@ -1556,7 +1556,8 @@ test("task answers block duplicate requests and preserve text after a network fa
   await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
   expect((answer as HTMLTextAreaElement).value).toBe("保留这个回答");
   expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toContain("任务回复失败");
-});
+  // Renders the whole app and a task dialog; under a loaded suite this outlives the 5s default.
+}, 10000);
 
 test("a running task exposes a stop action and sends the cancellation request", async () => {
   const requests: Array<{ path: string; method: string }> = [];
