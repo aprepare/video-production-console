@@ -86,7 +86,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 				return profileFailure(err, true)
 			}
 			if len(profile.CachePaths) == 0 {
-				return checkResult{"warn", "尚未登记混剪音效和转场缓存，请在剪映中下载素材并更新机器档案。", "settings:system"}
+				return checkResult{"warn", "尚未登记混剪音效和转场缓存，请在剪映中下载素材并更新机器档案。", "none"}
 			}
 			missing := 0
 			for _, path := range profile.CachePaths {
@@ -95,7 +95,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 				}
 			}
 			if missing > 0 {
-				return checkResult{"warn", fmt.Sprintf("%d 个混剪音效/转场缓存缺失，换电脑后需要在剪映里重新下载。", missing), "settings:system"}
+				return checkResult{"warn", fmt.Sprintf("%d 个混剪音效/转场缓存缺失，换电脑后需要在剪映里重新下载。", missing), "none"}
 			}
 			return checkResult{"ok", "已登记的剪映缓存齐全，可以继续混剪。", "none"}
 		}},
