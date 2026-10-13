@@ -41,6 +41,8 @@
 
 ```powershell
 git archive --format=zip -o 极影智造-源码.zip HEAD
+# 不带财经样片（压缩后约 5MB，带上约 76MB）：
+git archive --format=zip -o 极影智造-源码.zip HEAD -- . ":(exclude)二创工作区/参考库/画面测试"
 ```
 
 界面配色与字体见 [DESIGN.md](DESIGN.md)。
