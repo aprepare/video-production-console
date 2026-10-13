@@ -435,6 +435,27 @@ func TestRemixLabDeleteExperimentHTTP(t *testing.T) {
 	if err := json.Unmarshal(createRes.Body.Bytes(), &exp); err != nil {
 		t.Fatal(err)
 	}
+	// 先让异步夹具结束，再验证删除协议；否则后台写文件会与
+	// Windows 的 TempDir 清理竞争，也可能继续访问已关闭的数据库。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		poll := httptest.NewRecorder()
+		handler.ServeHTTP(poll, httptest.NewRequest(http.MethodGet, "/api/remix-lab/experiments/"+exp.ID, nil))
+		if poll.Code != http.StatusOK {
+			t.Fatalf("poll before delete status=%d", poll.Code)
+		}
+		var current remixlab.Experiment
+		if err := json.Unmarshal(poll.Body.Bytes(), &current); err != nil {
+			t.Fatal(err)
+		}
+		if current.Status == "completed" || current.Status == "partial" || current.Status == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for experiment before deletion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/remix-lab/experiments/"+exp.ID, nil)
 	delRes := httptest.NewRecorder()

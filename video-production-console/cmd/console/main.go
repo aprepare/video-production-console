@@ -41,6 +41,7 @@ import (
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
+	"video-production-console/internal/setup"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/taskcompletion"
@@ -151,6 +152,8 @@ func main() {
 			}
 		}
 	}
+	// 首启预置必须先于运行快照，才能在本次启动中生效。
+	initializeSetup(context.Background(), settingsService, setup.NewService(settingsService, setup.Options{}), slog.Default())
 	runtimeSettings, err := settingsService.Runtime(context.Background())
 	if err != nil {
 		fatal("load runtime settings", "error", err)

@@ -31,6 +31,7 @@ import (
 	"video-production-console/internal/remixproducer"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
+	"video-production-console/internal/setup"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
 	"video-production-console/internal/webui"
@@ -188,6 +189,10 @@ func New(options Options) *App {
 		if options.Settings != nil {
 			mux.Handle("/api/settings", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
 			mux.Handle("/api/settings/", httpapi.NewSettingsHandler(settingsWithScheduler{service: options.Settings, scheduler: options.Scheduler}))
+			setupHandler := httpapi.NewSetupHandler(setup.NewService(options.Settings, setup.Options{}), options.Settings)
+			mux.Handle("/api/setup/", setupHandler)
+			mux.Handle("/api/jianying-drafts/detect", setupHandler)
+			mux.Handle("/api/jianying-drafts/detect/", setupHandler)
 			imageVideoService := options.ImageVideoService
 			if imageVideoService == nil {
 				imageVideoService = imagevideo.NewService(store.NewImageProjectRepository(options.DB), store.NewImageVideoJobRepository(options.DB), imagevideoruntime.Provider{Inner: options.Settings}, nil)
