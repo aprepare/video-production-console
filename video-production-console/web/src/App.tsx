@@ -24,6 +24,7 @@ import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import { ReferencesPage } from "./references/ReferencesPage";
 import { MerchantsPage } from "./merchants/MerchantsPage";
 import { SetupPage, type SetupStatus } from "./setup/SetupPage";
+import { GuidePage } from "./guide/GuidePage";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { clearRetiredFeatureDrafts } from "./shell/retiredFeatureDrafts";
 import {
@@ -99,6 +100,7 @@ const textAssets = new Set([
   "subtitle_srt",
 ]);
 const noTasks: Task[] = [];
+const GUIDE_SEEN_KEY = "console:guide-seen";
 
 function App() {
   const client = useQueryClient();
@@ -235,6 +237,16 @@ function App() {
     })();
     return () => controller.abort();
   }, [api, authenticated, updateSetupStatus]);
+
+  // 没打开过新手引导时，导航上的入口带一个提示点；打开一次后消失。只改显示，不跳页。
+  const [guideSeen, setGuideSeen] = useState(() => {
+    try { return Boolean(window.localStorage.getItem(GUIDE_SEEN_KEY)); } catch { return true; }
+  });
+  useEffect(() => {
+    if (route.view !== "guide" || guideSeen) return;
+    try { window.localStorage.setItem(GUIDE_SEEN_KEY, "1"); } catch { /* storage unavailable */ }
+    setGuideSeen(true);
+  }, [route.view, guideSeen]);
 
   useEffect(() => {
     if (consoleDataFailed) setMessage("控制台服务尚未连接");
@@ -609,6 +621,7 @@ function App() {
       || route.view === "merchants"
       || route.view === "merchant"
       || route.view === "setup"
+      || route.view === "guide"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
@@ -999,8 +1012,9 @@ function App() {
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : route.view === "references" ? "references" : route.view === "setup" ? "setup" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : route.view === "references" ? "references" : route.view === "setup" ? "setup" : route.view === "guide" ? "guide" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
         setupPending={setupPending}
+        guideUnseen={!guideSeen}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
@@ -1022,6 +1036,8 @@ function App() {
           initialMerchantID={route.view === "merchant" ? route.merchantID : undefined}
           onNavigate={navigate}
         />
+      ) : route.view === "guide" ? (
+        <GuidePage api={api} onNavigate={navigate} />
       ) : route.view === "setup" ? (
         <SetupPage api={api} onOpenSettings={() => void settingsPanel.openDialog()} onStatusChange={updateSetupStatus} />
       ) : route.view === "references" ? (

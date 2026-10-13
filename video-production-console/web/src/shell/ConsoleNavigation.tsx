@@ -1,10 +1,10 @@
-import { Clapperboard, Images, LogOut, Moon, PenLine, Radar, Settings2, ShieldCheck, Store, Sun } from "lucide-react";
+import { Clapperboard, Compass, Images, LogOut, Moon, PenLine, Radar, Settings2, ShieldCheck, Store, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Theme } from "../types";
 import "./console-navigation.css";
 
 type Props = {
-  active: "remix" | "image" | "references" | "merchants" | "setup" | null;
+  active: "remix" | "image" | "references" | "merchants" | "setup" | "guide" | null;
   theme: Theme;
   onNavigate: (href: string) => void;
   onThemeChange: (theme: Theme) => void;
@@ -14,6 +14,8 @@ type Props = {
   footerSlot?: ReactNode;
   /** Number of required setup items that are not ready; shows a dot on 配置体检. */
   setupPending?: number;
+  /** The guide has never been opened; shows a dot on 新手引导. */
+  guideUnseen?: boolean;
 };
 
 const workspaces = [
@@ -23,7 +25,7 @@ const workspaces = [
   { id: "image", href: "/image-projects", label: "图文制作", description: "让内容被看见", icon: Images },
 ] as const;
 
-export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, onOpenSettings, onLogout, footerSlot, setupPending = 0 }: Props) {
+export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, onOpenSettings, onLogout, footerSlot, setupPending = 0, guideUnseen = false }: Props) {
   return <aside className="console-nav" aria-label="控制台导航">
     <div className="console-nav__brand">
       <span className="console-nav__mark"><Clapperboard size={23} strokeWidth={1.8} aria-hidden="true" /></span>
@@ -43,6 +45,18 @@ export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, on
       ><Icon size={20} strokeWidth={1.8} aria-hidden="true" /><span><strong>{label}</strong><small>{description}</small></span></a>)}
     </nav>
     <div className="console-nav__footer">
+      <a
+        href="/guide"
+        className="console-nav__utility console-nav__setup"
+        aria-current={active === "guide" ? "page" : undefined}
+        aria-label={guideUnseen ? "新手引导，第一次使用先看这里" : "新手引导"}
+        title="新手引导"
+        onClick={(event) => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          onNavigate("/guide");
+        }}
+      ><Compass size={18} aria-hidden="true" /><span>新手引导</span>{guideUnseen ? <span className="console-nav__dot console-nav__dot--info" aria-hidden="true" /> : null}</a>
       {footerSlot}
       <a
         href="/setup"

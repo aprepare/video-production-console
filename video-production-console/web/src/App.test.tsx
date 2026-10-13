@@ -1393,6 +1393,10 @@ function baseFetch(
     if (path === "/api/accounts")
       return json([{ id: "account-1", name: "认知觉醒" }]);
     if (path === "/api/runtime") return json({ Limit: 4, Running: 0, Queued: 0 });
+    // Background checks the shell makes after login (setup dot, first-run guide).
+    if (path === "/api/setup/status") return json({ ready: true, items: [] });
+    if (path === "/api/business/overview") return json({ merchants_by_status: { active: 1 }, orders_by_status: {} });
+    if (path === "/api/remix-lab/experiments") return json([]);
     if (path === "/api/settings")
       return json({ public: publicSettings, settings_version: 1, secrets: {} });
     if (path === "/api/remix-lab/defaults")
