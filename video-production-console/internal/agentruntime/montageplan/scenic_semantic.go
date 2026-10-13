@@ -21,28 +21,81 @@ const mixPresetScenicSemantic = "scenic_semantic"
 // ScenicPolicy is independent of the immutable machine profile. Each task
 // freezes this policy and its history before selection so retries are stable.
 type ScenicPolicy struct {
-	Version        int     `json:"version"`
-	ChinaOnly      bool    `json:"china_only"`
-	Orientation    string  `json:"orientation"`
-	PlaybackSpeed  float64 `json:"playback_speed"`
-	OpeningMin     float64 `json:"opening_min_s"`
-	OpeningMax     float64 `json:"opening_max_s"`
-	BodyMin        float64 `json:"body_min_s"`
-	BodyMax        float64 `json:"body_max_s"`
-	DissolveRatio  float64 `json:"dissolve_ratio"`
-	MaxSourceUses  int     `json:"max_source_uses"`
-	ReuseGap       int     `json:"reuse_gap"`
-	HistoryWindow  int     `json:"history_window"`
-	ModelSelection bool    `json:"model_selection"`
-	EditorVersion  int     `json:"editor_version"`
+	ContentScope      string   `json:"content_scope,omitempty"`
+	AllowedCategories []string `json:"allowed_categories,omitempty"`
+	Version           int      `json:"version"`
+	ChinaOnly         bool     `json:"china_only"`
+	Orientation       string   `json:"orientation"`
+	PlaybackSpeed     float64  `json:"playback_speed"`
+	OpeningMin        float64  `json:"opening_min_s"`
+	OpeningMax        float64  `json:"opening_max_s"`
+	BodyMin           float64  `json:"body_min_s"`
+	BodyMax           float64  `json:"body_max_s"`
+	DissolveRatio     float64  `json:"dissolve_ratio"`
+	MaxSourceUses     int      `json:"max_source_uses"`
+	ReuseGap          int      `json:"reuse_gap"`
+	HistoryWindow     int      `json:"history_window"`
+	ModelSelection    bool     `json:"model_selection"`
+	EditorVersion     int      `json:"editor_version"`
 }
 
 func defaultScenicPolicy() ScenicPolicy {
-	return ScenicPolicy{1, true, "landscape", 1, 6, 8, 6, 9, .45, 1, 5, 12, true, 1}
+	return ScenicPolicy{Version: 1, ChinaOnly: true, Orientation: "landscape", PlaybackSpeed: 1,
+		OpeningMin: 6, OpeningMax: 8, BodyMin: 6, BodyMax: 9, DissolveRatio: .45,
+		MaxSourceUses: 1, ReuseGap: 5, HistoryWindow: 12, ModelSelection: true, EditorVersion: 1}
 }
 func (p ScenicPolicy) validate() error {
-	if p.Version != 1 || !p.ChinaOnly || p.Orientation != "landscape" || p.PlaybackSpeed != 1 || p.OpeningMin < 3 || p.OpeningMax < p.OpeningMin || p.OpeningMax > 9 || p.BodyMin < 3 || p.BodyMax < p.BodyMin || p.BodyMax > 12 || p.DissolveRatio < 0 || p.DissolveRatio > .5 || p.MaxSourceUses < 1 || p.MaxSourceUses > 2 || p.ReuseGap < 3 || p.HistoryWindow < 0 || p.HistoryWindow > 50 {
-		return fmt.Errorf("invalid scenic policy: this board requires China-only landscape footage at normal speed")
+	invalid := func(format string, args ...any) error {
+		return fmt.Errorf("invalid scenic policy v%d: %s", p.Version, fmt.Sprintf(format, args...))
+	}
+	switch p.Version {
+	case 1:
+		if !p.ChinaOnly {
+			return invalid("china_only must be true")
+		}
+	case 2:
+		if p.ContentScope != "architecture_city_only" {
+			return invalid("content_scope %q is not supported", p.ContentScope)
+		}
+	default:
+		return invalid("version %d is not supported", p.Version)
+	}
+	if p.Orientation != "landscape" {
+		return invalid("orientation %q must be landscape", p.Orientation)
+	}
+	if p.PlaybackSpeed != 1 {
+		return invalid("playback_speed must be 1")
+	}
+	if p.OpeningMin < 3 {
+		return invalid("opening_min_s must be >= 3")
+	}
+	if p.OpeningMax < p.OpeningMin || p.OpeningMax > 9 {
+		return invalid("opening_max_s must be between opening_min_s and 9")
+	}
+	if p.BodyMin < 3 {
+		return invalid("body_min_s must be >= 3")
+	}
+	if p.BodyMax < p.BodyMin || p.BodyMax > 12 {
+		return invalid("body_max_s must be between body_min_s and 12")
+	}
+	if p.DissolveRatio < 0 || p.DissolveRatio > .5 {
+		return invalid("dissolve_ratio must be between 0 and 0.5")
+	}
+	if p.MaxSourceUses < 1 || p.MaxSourceUses > 2 {
+		return invalid("max_source_uses must be between 1 and 2")
+	}
+	if p.ReuseGap < 3 {
+		return invalid("reuse_gap must be >= 3")
+	}
+	if p.HistoryWindow < 0 || p.HistoryWindow > 50 {
+		return invalid("history_window must be between 0 and 50")
+	}
+	if p.Version == 2 {
+		for _, category := range p.AllowedCategories {
+			if !cityCategory(category) {
+				return invalid("allowed_categories contains unsupported category %q", category)
+			}
+		}
 	}
 	return nil
 }
@@ -384,6 +437,17 @@ func nearSame(a, b mediaItem) bool {
 	return hits >= 2
 }
 func buildScenicSemanticPlan(opts Options, ctx *planContext) ([]TimelineShotV2, []string, error) {
+	p, err := cityLibraryPolicy(ctx.mediaIndex, ctx.mediaRoot, opts.PlanPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cityLibraryMode(ctx.mediaRoot, p) {
+		return buildCityLibraryPlan(opts, ctx, p)
+	}
+	return buildChinaScenicSemanticPlan(opts, ctx)
+}
+
+func buildChinaScenicSemanticPlan(opts Options, ctx *planContext) ([]TimelineShotV2, []string, error) {
 	runCtx := opts.Context
 	if runCtx == nil {
 		runCtx = context.Background()

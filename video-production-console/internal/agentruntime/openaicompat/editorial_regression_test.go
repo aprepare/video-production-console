@@ -81,7 +81,10 @@ func TestEditorialReviewRejectsAddedRateEvenIfOldRateRemains(t *testing.T) {
 }
 
 func TestEditorialArchivedDrafts(t *testing.T) {
-	root := filepath.Join("..", "..", "..", "video-console-data", "remix-lab")
+	root := os.Getenv("EDITORIAL_TEST_ARCHIVE_ROOT")
+	if root == "" {
+		t.Skip("set EDITORIAL_TEST_ARCHIVE_ROOT to an isolated archive")
+	}
 	dir := filepath.Join(root, "babb99f5-cbb0-46c7-8d77-1b960cf4b5e6", "115170b4-231a-4053-ba76-88363d3c2b32")
 	source, err := os.ReadFile(filepath.Join(dir, "source.txt"))
 	if os.IsNotExist(err) {

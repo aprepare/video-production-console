@@ -11,6 +11,15 @@ func ValidateMediaLibraryForPreset(preset, indexPath, mediaRoot, profilePath str
 	if preset != mixPresetScenicSemantic {
 		return ValidateMediaLibrary(indexPath, mediaRoot, profilePath)
 	}
+	if strings.TrimSpace(mediaRoot) != "" {
+		path, err := CityLibraryPath(indexPath, mediaRoot)
+		if err != nil {
+			return err
+		}
+		if path != "" {
+			return validateCityCatalog(path)
+		}
+	}
 	if strings.TrimSpace(profilePath) != "" && (strings.TrimSpace(indexPath) == "" || strings.TrimSpace(mediaRoot) == "") {
 		root, index, err := readProfilePaths(profilePath)
 		if err != nil {
@@ -21,6 +30,15 @@ func ValidateMediaLibraryForPreset(preset, indexPath, mediaRoot, profilePath str
 		}
 		if strings.TrimSpace(indexPath) == "" {
 			indexPath = index
+		}
+	}
+	if strings.TrimSpace(mediaRoot) != "" {
+		path, err := CityLibraryPath(indexPath, mediaRoot)
+		if err != nil {
+			return err
+		}
+		if path != "" {
+			return validateCityCatalog(path)
 		}
 	}
 	if strings.TrimSpace(mediaRoot) == "" || strings.TrimSpace(indexPath) == "" {

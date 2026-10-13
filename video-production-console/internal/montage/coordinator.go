@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"video-production-console/internal/agentruntime/montageplan"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/logging"
 	"video-production-console/internal/store"
@@ -257,6 +258,7 @@ func (c *Coordinator) HandleCompleted(ctx context.Context, input taskcompletion.
 		if failErr := c.repo.Fail(context.Background(), attempt.ID, "registration_enqueue_cancelled", "Registration could not be queued."); failErr != nil {
 			c.reportFailure(attempt.TaskID, "registration_enqueue_failure_persist_failed", failErr)
 		}
+		c.finishCityReservation(attempt, false)
 		return true, err
 	}
 	return true, nil
@@ -527,6 +529,8 @@ func (c *Coordinator) process(job registrationJob) {
 		c.reportFailure(job.Attempt.TaskID, "registration_start_failed", err)
 		return
 	}
+	registered := false
+	defer func() { c.finishCityReservation(job.Attempt, registered) }()
 	if _, err := c.verifyWorkspaceDigest(ctx, job.Attempt); err != nil {
 		if failErr := c.repo.Fail(context.Background(), job.Attempt.ID, "plaintext_workspace_changed", err.Error()); failErr != nil {
 			c.reportFailure(job.Attempt.TaskID, "workspace_digest_failure_persist_failed", failErr)
@@ -539,6 +543,17 @@ func (c *Coordinator) process(job registrationJob) {
 			c.reportFailure(job.Attempt.TaskID, "registration_failure_persist_failed", failErr)
 		}
 		return
+	}
+	if err := montageplan.EnsureCityLibraryReservation(ctx, cityReceiptForAttempt(job.Attempt)); err != nil {
+		if recovered {
+			// The draft is already registered; a ledger error must not undo success.
+			c.reportFailure(job.Attempt.TaskID, "citylib_recovery_failed", err)
+		} else {
+			if failErr := c.repo.Fail(context.Background(), job.Attempt.ID, "citylib_reservation_unavailable", err.Error()); failErr != nil {
+				c.reportFailure(job.Attempt.TaskID, "registration_failure_persist_failed", failErr)
+			}
+			return
+		}
 	}
 	if !recovered {
 		runtime, resolveErr := c.resolveRuntime(job.Attempt)
@@ -563,6 +578,7 @@ func (c *Coordinator) process(job registrationJob) {
 		}
 		return
 	}
+	registered = true
 	if err := c.repo.Succeed(ctx, store.RegistrationSuccess{AttemptID: job.Attempt.ID, RegisteredPath: result.RegisteredPath, ReceiptPath: result.ReceiptPath, DraftID: result.DraftID, SHA256: result.DirectorySHA256, WorkspaceSHA256: workspaceDigest, Filename: result.DisplayName}); err != nil {
 		if failErr := c.repo.FailCommit(context.Background(), job.Attempt.ID, err.Error()); failErr != nil {
 			c.reportFailure(job.Attempt.TaskID, "registration_commit_reconcile_failed", failErr)

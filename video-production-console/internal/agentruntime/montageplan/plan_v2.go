@@ -282,10 +282,20 @@ func movieCatalogSelect(opts Options) bool {
 // tasks recall from catalog.db with intent/embedding match. Scenic tasks
 // sample media_index 风景/城市/财经 clips and merge catalog B-roll into
 // the same pool — no narration matching. CaptionMode defaults to off.
-func BuildV2(opts Options) error {
+func BuildV2(opts Options) (resultErr error) {
 	ctx, err := loadPlanContext(opts)
 	if err != nil {
 		return err
+	}
+	if ctx.cityLibrary {
+		defer func() {
+			if resultErr != nil {
+				path := filepath.Join(filepath.Dir(opts.PlanPath), "citylib_reservation.json")
+				if err := FinalizeCityLibraryReservation(context.Background(), path, false); err != nil {
+					recordCityWarning(path, "城市素材预占释放失败: "+err.Error())
+				}
+			}
+		}()
 	}
 	if movieCatalogSelect(opts) && strings.TrimSpace(opts.MixPreset) == "" {
 		opts.MixPreset = mixPresetMovieCatalog
@@ -561,8 +571,14 @@ func BuildV2(opts Options) error {
 
 	if semanticScenic {
 		plan.ExecutionActions = []string{"Validate local China source paths", "Apply source windows at 1.0x speed", "Honor per-shot hard cuts (null) and verified dissolves", "按口播时间轴添加画面文字与账号背景", "Validate source ranges, repetition and draft structure"}
+		if ctx.cityLibrary {
+			plan.ExecutionActions[0] = "Validate reserved architecture-city source paths"
+		}
 	}
 	if semanticScenic {
+		if ctx.cityLibrary {
+			opts.ShotSelector = nil
+		}
 		if err := buildEditorialPlan(opts, ctx, &plan); err != nil {
 			return err
 		}

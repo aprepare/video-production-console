@@ -98,6 +98,7 @@ type manifestFile struct {
 		BoardSubtitle      string               `json:"board_subtitle"`
 		MediaCatalogPath   string               `json:"media_catalog_path"`
 		FFprobePath        string               `json:"ffprobe_path"`
+		FFmpegPath         string               `json:"ffmpeg_path"`
 		DataRoot           string               `json:"data_root"`
 		MontageStyle       *domain.MontageStyle `json:"montage_style"`
 		MontageBGM         *manifestBGM         `json:"montage_bgm"`
@@ -125,6 +126,7 @@ type planContext struct {
 	timing       *narration.WordTimingDocument
 	keywords     *spokenlines.KeywordDoc
 	keywordsNote string
+	cityLibrary  bool
 }
 
 // loadPlanContext validates the options, decodes the manifest, measures the
@@ -216,6 +218,17 @@ func loadPlanContext(opts Options) (*planContext, error) {
 			mediaIndex = profileIndex
 		}
 	}
+	cityLibrary := false
+	if opts.MixPreset == mixPresetScenicSemantic && mediaRoot != "" {
+		p, err := cityLibraryPolicy(mediaIndex, mediaRoot, opts.PlanPath)
+		if err != nil {
+			return nil, err
+		}
+		cityLibrary = cityLibraryMode(mediaRoot, p)
+		if cityLibrary {
+			mediaIndex = cityCatalogPath(mediaRoot)
+		}
+	}
 	if mediaRoot == "" || mediaIndex == "" {
 		return nil, fmt.Errorf("media_root and media_index_path are required")
 	}
@@ -224,18 +237,19 @@ func loadPlanContext(opts Options) (*planContext, error) {
 		return nil, err
 	}
 	ctx := &planContext{
-		manifest:   manifest,
-		narration:  narrationPath,
-		background: background,
-		scriptPath: roles["continuous_script"],
-		srtPath:    roles["subtitle_srt"],
-		duration:   duration,
-		mediaRoot:  mediaRoot,
-		mediaIndex: mediaIndex,
-		resources:  resources,
-		limit:      limit,
-		timingPath: timingPath,
-		timing:     timing,
+		manifest:    manifest,
+		narration:   narrationPath,
+		background:  background,
+		scriptPath:  roles["continuous_script"],
+		srtPath:     roles["subtitle_srt"],
+		duration:    duration,
+		mediaRoot:   mediaRoot,
+		mediaIndex:  mediaIndex,
+		resources:   resources,
+		limit:       limit,
+		cityLibrary: cityLibrary,
+		timingPath:  timingPath,
+		timing:      timing,
 	}
 	// Keyword annotations are optional and never block a montage: a missing
 	// or malformed file just falls back to the local keyword list.

@@ -13,6 +13,7 @@ import (
 
 	"video-production-console/internal/domain"
 	"video-production-console/internal/jianyingdraft"
+	"video-production-console/internal/medialibrary"
 	"video-production-console/internal/platformapi"
 	"video-production-console/internal/settings"
 )
@@ -113,6 +114,11 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 			}
 			if info, err := os.Stat(root); err != nil || !info.IsDir() {
 				return checkResult{"error", "素材目录不存在或无法读取，请在系统设置中重新选择目录。", "settings:system"}
+			}
+			if destination, err := medialibrary.MigrationDestination(root); err != nil {
+				return checkResult{"warn", err.Error(), "settings:montage"}
+			} else if destination != "" {
+				return checkResult{"warn", "素材库已迁移到 " + destination + "，请把媒体素材目录改成新库", "settings:montage"}
 			}
 			return checkResult{"ok", "素材目录可用，可以导入素材并继续制作。", "none"}
 		}},

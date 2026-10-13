@@ -8,9 +8,12 @@ import (
 )
 
 // 落盘工作流允许单写手；临时指定审稿后仍须通过拓扑校验。
-// 数据目录不存在时跳过，不影响 CI。
+// 仅显式指定隔离档案时运行，不自动探测生产数据。
 func TestLiveWorkflowFilesValidateWithReviewer(t *testing.T) {
-	root := filepath.Join("..", "..", "video-console-data", "remix_lab")
+	root := os.Getenv("REMIX_TEST_WORKFLOW_ROOT")
+	if root == "" {
+		t.Skip("set REMIX_TEST_WORKFLOW_ROOT to an isolated workflow archive")
+	}
 	entries, err := os.ReadDir(filepath.Join(root, "workflows"))
 	if err != nil {
 		t.Skip("no live workflow directory")

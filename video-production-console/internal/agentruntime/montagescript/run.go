@@ -79,16 +79,29 @@ func Run(opts Options) error {
 		}
 	}
 
-	if _, err := run(python, script, "validate-inputs", "--manifest", manifestPath); err != nil {
-		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-inputs: %w", err))
-	}
-
-	attachCatalogClients(&opts)
-
 	planPath, err := planPathFromManifest(manifestPath)
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
+	awaitingRegistration := false
+	defer func() {
+		finishCityTask(filepath.Join(filepath.Dir(planPath), "citylib_reservation.json"), outPath, awaitingRegistration)
+	}()
+	scriptManifest, err := prepareCityScriptManifest(manifestPath, planPath)
+	if err != nil {
+		return writeFailure(outPath, manifestPath, err)
+	}
+	cityMode := scriptManifest != manifestPath
+	inputResult, err := run(python, script, "validate-inputs", "--manifest", scriptManifest)
+	if err != nil {
+		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-inputs: %w", err))
+	}
+	if cityMode && !scriptResultCompleted(inputResult) {
+		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-inputs: script result is not completed"))
+	}
+
+	attachCatalogClients(&opts)
+
 	planOpts := montageplan.Options{
 		Context:      runCtx,
 		ManifestPath: manifestPath,
@@ -105,8 +118,12 @@ func Run(opts Options) error {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("build plan: %w", err))
 	}
 
-	if _, err := run(python, script, "validate-plan", "--manifest", manifestPath, "--plan", planPath); err != nil {
+	validationResult, err := run(python, script, "validate-plan", "--manifest", scriptManifest, "--plan", planPath)
+	if err != nil {
 		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-plan: %w", err))
+	}
+	if cityMode && !scriptResultCompleted(validationResult) {
+		return writeFailure(outPath, manifestPath, fmt.Errorf("validate-plan: script result is not completed"))
 	}
 
 	// montage.plan is the review-only variant: the validated plan is the
@@ -120,11 +137,20 @@ func Run(opts Options) error {
 	if removeErr := os.Remove(resultFile); removeErr != nil && !os.IsNotExist(removeErr) {
 		return writeFailure(outPath, manifestPath, removeErr)
 	}
-	raw, err := run(python, script, "execute", "--manifest", manifestPath, "--plan", planPath)
+	raw, err := run(python, script, "execute", "--manifest", scriptManifest, "--plan", planPath)
+	if cityMode && err != nil {
+		return writeFailure(outPath, manifestPath, fmt.Errorf("execute: %w", err))
+	}
 	if fileRaw, readErr := os.ReadFile(resultFile); readErr == nil {
 		if writeErr := writeRawEnvelope(outPath, fileRaw); writeErr == nil {
+			// This result certifies the plaintext workspace. Coordinator owns the
+			// later registration and commits usage only after registration succeeds.
+			awaitingRegistration = err == nil && scriptResultCompleted(fileRaw)
 			return nil
 		}
+	}
+	if cityMode {
+		return writeFailure(outPath, manifestPath, fmt.Errorf("execute: 缺少有效的 result.json，城市素材预占将释放"))
 	}
 	if err != nil {
 		if writeErr := writeRawEnvelope(outPath, raw); writeErr == nil {

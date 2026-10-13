@@ -609,7 +609,10 @@ func TestBuildV2ScenicIgnoresMissingCatalog(t *testing.T) {
 }
 
 func TestBuildV2RealFinanceCatalogPrefersBroll(t *testing.T) {
-	mediaRoot := `E:\B站素材\AI_Media_Library`
+	mediaRoot := os.Getenv("MONTAGE_TEST_MEDIA_ROOT")
+	if mediaRoot == "" {
+		t.Skip("set MONTAGE_TEST_MEDIA_ROOT to an isolated finance catalog")
+	}
 	catalogPath := filepath.Join(mediaRoot, "catalog.db")
 	indexPath := filepath.Join(mediaRoot, "00_INDEX", "media_index.json")
 	if _, err := os.Stat(catalogPath); err != nil {
@@ -732,7 +735,10 @@ func TestBuildV2PadsCatalogFillersForLongNarration(t *testing.T) {
 }
 
 func TestBuildV2RealFinanceCatalogCoversLongNarration(t *testing.T) {
-	mediaRoot := `E:\B站素材\AI_Media_Library`
+	mediaRoot := os.Getenv("MONTAGE_TEST_MEDIA_ROOT")
+	if mediaRoot == "" {
+		t.Skip("set MONTAGE_TEST_MEDIA_ROOT to an isolated finance catalog")
+	}
 	catalogPath := filepath.Join(mediaRoot, "catalog.db")
 	indexPath := filepath.Join(mediaRoot, "00_INDEX", "media_index.json")
 	if _, err := os.Stat(catalogPath); err != nil {
