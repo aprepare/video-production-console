@@ -90,7 +90,7 @@ func statusServer(t *testing.T) *httptest.Server {
 		case "/models":
 			_, _ = w.Write([]byte(`{"data":[{"id":"writer"},{"id":"search"}]}`))
 		case "/api/status":
-			_, _ = w.Write([]byte(`{"ok":true,"apps":[{"id":"douyin","name":"抖音","ready":true},{"id":"xhs","name":"小红书","ready":true},{"id":"channels","name":"视频号","ready":false,"need_you":true,"msg":"private-upstream-marker"}]}`))
+			_, _ = w.Write([]byte(`{"ok":true,"apps":[{"id":"douyin","name":"抖音","ready":true},{"id":"xhs","name":"小红书","ready":true,"need_you":true},{"id":"channels","name":"视频号","ready":false,"need_you":true,"msg":"private-upstream-marker"}]}`))
 		default:
 			w.WriteHeader(404)
 		}

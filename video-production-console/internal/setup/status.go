@@ -215,8 +215,10 @@ func (s *Service) platformCheck(ctx context.Context, base string) checkResult {
 		if name == "" {
 			continue
 		}
+		// need_you 只是网关提醒服务商 Cookie/dump 文件放久了，平台仍可用；
+		// 客户处理不了，这里只看 ready。
 		state := "可用"
-		if !app.Ready || app.NeedYou {
+		if !app.Ready {
 			state = "需维护"
 			needsHelp = true
 		}
