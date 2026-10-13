@@ -260,7 +260,8 @@ func (c *Client) Resolve(ctx context.Context, link string) (Post, error) {
 			Text:     text,
 			Author:   str(raw["author"]),
 			VideoURL: str(raw["video_url"]),
-			CoverURL: str(raw["cover_short"]),
+			// cover_short is a human-readable summary, not a fetchable URL.
+			CoverURL: firstURL(str(raw["cover_url"]), str(raw["cover"])),
 		}
 		post.CreatedAt = num(raw["createtime"])
 		if counts, ok := raw["counts"].(map[string]any); ok {
@@ -704,6 +705,17 @@ func num(value any) int64 {
 		return int64(f * multiplier)
 	}
 	return 0
+}
+
+// firstURL returns the first value that parses as an absolute http(s) URL.
+func firstURL(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if parsed, err := url.Parse(value); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -128,15 +129,45 @@ func (s *Service) cacheMediaFiles(ctx context.Context, post store.ReferencePost)
 	if err := s.repo.CompleteMedia(ctx, post.ID, filepath.Join(rootPath, post.ID, "source.mp4"), size); err != nil {
 		return err
 	}
+	// A slow or failed cover must not hide an already cached video.
+	coverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	coverPath := filepath.Join(rootPath, post.ID, "cover.jpg")
+	covered := false
 	if strings.TrimSpace(post.CoverURL) != "" {
-		// A slow or failed cover must not hide an already cached video.
-		coverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		if _, err := downloadMediaFile(coverCtx, client, platformapi.Platform(post.Platform), post.CoverURL, dir, "cover.jpg", 20<<20); err == nil {
-			_ = s.repo.SetCoverPath(coverCtx, post.ID, filepath.Join(rootPath, post.ID, "cover.jpg"))
-		}
+		_, err := downloadMediaFile(coverCtx, client, platformapi.Platform(post.Platform), post.CoverURL, dir, "cover.jpg", 20<<20)
+		covered = err == nil
+	}
+	if !covered {
+		// Some platforms expose no fetchable cover; a frame of the source works everywhere.
+		covered = s.coverFromSource(coverCtx, filepath.Join(rootPath, post.ID, "source.mp4"), coverPath) == nil
+	}
+	if covered {
+		_ = s.repo.SetCoverPath(coverCtx, post.ID, coverPath)
 	}
 	return nil
+}
+
+// coverFromSource writes one JPEG frame from the cached video next to it.
+func (s *Service) coverFromSource(ctx context.Context, source, target string) error {
+	runtime, err := s.runtime.Runtime(ctx)
+	if err != nil {
+		return err
+	}
+	ffmpeg := strings.TrimSpace(runtime.FFmpegPath)
+	if ffmpeg == "" {
+		return errors.New("ffmpeg is not configured")
+	}
+	part := target + ".part.jpg"
+	defer os.Remove(part)
+	cmd := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.5", "-i", source, "-frames:v", "1", "-vf", "scale='min(720,iw)':-2", "-q:v", "4", part)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if info, err := os.Stat(part); err != nil || info.Size() == 0 {
+		return errors.New("cover frame is empty")
+	}
+	return os.Rename(part, target)
 }
 
 func downloadMediaFile(ctx context.Context, client Platform, platform platformapi.Platform, rawURL string, dir *os.Root, name string, limit int64) (int64, error) {

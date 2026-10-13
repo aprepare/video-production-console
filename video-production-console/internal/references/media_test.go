@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -382,4 +383,44 @@ func waitMediaStatus(t *testing.T, repo *store.ReferenceRepository, id, status s
 	}
 	t.Fatalf("media %s did not become %s", id, status)
 	return store.ReferencePost{}
+}
+
+// 视频号等平台没有可直接下载的封面时，从缓存的原片截一帧当封面。
+func TestCacheMediaFallsBackToSourceFrameForCover(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	sample := filepath.Join(t.TempDir(), "sample.mp4")
+	if out, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=1", "-pix_fmt", "yuv420p", sample).CombinedOutput(); err != nil {
+		t.Fatalf("make sample: %v %s", err, out)
+	}
+	video, err := os.ReadFile(sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := &fakePlatform{download: func(_ context.Context, _ platformapi.Platform, _ string, w io.Writer, _ int64) (int64, error) {
+		n, err := w.Write(video)
+		return int64(n), err
+	}}
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := store.NewReferenceRepository(db)
+	svc := New(repo, fakeRuntime{root: root, ffmpeg: ffmpeg}).WithPlatform(func(string, string) (Platform, error) { return platform, nil }, time.Hour)
+	post, err := repo.Upsert(context.Background(), store.ReferencePost{ID: "no-cover", Platform: "channels", ExternalID: "c1", VideoURL: "https://finder/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.CacheMedia(context.Background(), post.ID)
+	if err != nil || got.MediaStatus != "ready" || got.CoverPath == "" {
+		t.Fatalf("cached=%+v err=%v", got, err)
+	}
+	info, err := os.Stat(got.CoverPath)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("cover frame missing: %v", err)
+	}
 }

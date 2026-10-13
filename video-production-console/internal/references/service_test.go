@@ -13,12 +13,13 @@ import (
 	"video-production-console/internal/store"
 )
 
-type fakeRuntime struct{ root string }
+type fakeRuntime struct{ root, ffmpeg string }
 
 func (f fakeRuntime) Runtime(context.Context) (consoleSettings.Runtime, error) {
 	runtime := consoleSettings.Runtime{PlatformAPIToken: "t"}
 	runtime.PlatformAPIBaseURL = "http://gateway"
 	runtime.DataRoot = f.root
+	runtime.FFmpegPath = f.ffmpeg
 	return runtime, nil
 }
 
