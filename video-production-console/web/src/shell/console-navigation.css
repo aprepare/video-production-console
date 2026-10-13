@@ -55,3 +55,7 @@
   .console-nav__theme select { position: absolute; inset: 0; opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .console-nav * { transition: none; } }
+
+.console-nav__setup { position: relative; text-decoration: none; }
+.console-nav__setup[aria-current="page"] { background: var(--ds-surface-muted); color: var(--ds-text); }
+.console-nav__dot { position: absolute; top: 9px; left: 25px; width: 8px; height: 8px; border-radius: 50%; background: var(--ds-danger); box-shadow: 0 0 0 2px var(--ds-surface); }

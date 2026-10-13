@@ -11,6 +11,7 @@ export type AppLocation =
   | { view: "references" }
   | { view: "merchants" }
   | { view: "merchant"; merchantID: string }
+  | { view: "setup" }
   | { view: "not-found" };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,6 +23,7 @@ export function isRemovedWorkspacePath(pathname: string): boolean {
 export function parseLocation(pathname: string): AppLocation {
   if (pathname === "/" || isRemovedWorkspacePath(pathname)) return { view: "remix-lab" };
   if (pathname === "/references" || pathname === "/references/") return { view: "references" };
+  if (pathname === "/setup" || pathname === "/setup/") return { view: "setup" };
   if (pathname === "/merchants" || pathname === "/merchants/") return { view: "merchants" };
   const merchantMatch = pathname.match(/^\/merchants\/([^/]+)\/?$/);
   if (merchantMatch) return uuidPattern.test(merchantMatch[1]) ? { view: "merchant", merchantID: merchantMatch[1].toLowerCase() } : { view: "not-found" };

@@ -110,7 +110,97 @@ export type RemixLabWorkflow = {
   nodes: RemixLabWorkflowNode[];
   edges: Array<[string, string]>;
   production?: RemixLabWorkflowProduction;
+  /** 应用的风格模板 ID；旧工作流为空，按财经卖课处理。 */
+  style?: string;
+  /** 内容简报：行业、受众、卖点、转化动作等事实与要求。 */
+  brief?: RemixLabBrief;
 };
+
+export type RemixLabBrief = {
+  industry: string;
+  audience: string;
+  offer: string;
+  selling_points: string;
+  conversion: string;
+  persona: string;
+  platform: "" | "douyin" | "xhs" | "channels";
+  duration_s: number;
+  banned: string;
+  notes: string;
+};
+
+export const emptyBrief: RemixLabBrief = {
+  industry: "", audience: "", offer: "", selling_points: "", conversion: "",
+  persona: "", platform: "", duration_s: 0, banned: "", notes: "",
+};
+
+export type RemixLabStyle = {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  best_for: string[];
+  planner: string;
+  writer: string;
+  writer_user: string;
+  reviewer: string;
+  rules: string;
+  finance: boolean;
+  builtin: boolean;
+};
+
+function accountQuery(accountID?: string): string {
+  const id = (accountID ?? "").trim();
+  return id ? `?account_id=${encodeURIComponent(id)}` : "";
+}
+
+export async function fetchRemixLabStyles(api: RemixLabApi): Promise<RemixLabStyle[]> {
+  const response = await api("/api/remix-lab/styles");
+  if (!response.ok) throw new Error(await readAPIError(response, "风格模板读取失败。"));
+  const body = (await response.json()) as { styles?: RemixLabStyle[] };
+  return body.styles ?? [];
+}
+
+export async function saveRemixLabStyle(api: RemixLabApi, style: Partial<RemixLabStyle>): Promise<RemixLabStyle> {
+  const response = await api("/api/remix-lab/styles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(style),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "风格模板保存失败。"));
+  return (await response.json()) as RemixLabStyle;
+}
+
+export async function deleteRemixLabStyle(api: RemixLabApi, id: string): Promise<void> {
+  const response = await api(`/api/remix-lab/styles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await readAPIError(response, "风格模板删除失败。"));
+}
+
+/** 把风格模板和简报应用到账号工作流：重写写手/策划/审稿提示词与公共规则。 */
+export async function applyRemixLabStyle(
+  api: RemixLabApi,
+  styleID: string,
+  brief: RemixLabBrief,
+  accountID?: string,
+): Promise<RemixLabWorkflowPrompts> {
+  const response = await api(`/api/remix-lab/workflow/style${accountQuery(accountID)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ style_id: styleID, brief }),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "应用风格失败。"));
+  return (await response.json()) as RemixLabWorkflowPrompts;
+}
+
+/** 只更新简报，不动提示词。 */
+export async function saveRemixLabBrief(api: RemixLabApi, brief: RemixLabBrief, accountID?: string): Promise<void> {
+  const response = await api(`/api/remix-lab/workflow/brief${accountQuery(accountID)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(brief),
+  });
+  if (!response.ok) throw new Error(await readAPIError(response, "简报保存失败。"));
+}
 
 export type RemixLabWorkflowPrompts = {
   workflow: RemixLabWorkflow;

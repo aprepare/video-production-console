@@ -1,0 +1,58 @@
+.preview-modal.style-picker { position: relative; display: flex; width: min(1180px, calc(100vw - 32px)); max-height: min(920px, calc(100dvh - 32px)); padding: 0; overflow: hidden; flex-direction: column; border: 1px solid var(--ds-border); border-radius: 18px; background: var(--ds-surface); box-shadow: var(--shadow-lg); }
+.style-picker__head, .style-picker__foot { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; padding: 16px 22px; background: var(--ds-surface); }
+.style-picker__head { justify-content: space-between; border-bottom: 1px solid var(--ds-border); }
+.style-picker__head h2 { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; font-size: 20px; letter-spacing: -0.02em; }
+.style-picker__eyebrow { color: var(--ds-text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; }
+.style-picker__foot { justify-content: flex-end; border-top: 1px solid var(--ds-border); }
+.style-picker__summary { flex: 1; color: var(--ds-text-muted); font-size: 13px; }
+.style-picker__summary strong { color: var(--ds-text); }
+.style-picker__state, .style-picker__error { margin: 0; padding: 14px 22px; font-size: 13px; }
+.style-picker__error { color: var(--ds-danger); }
+.style-picker__body { display: grid; grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr); min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--ds-canvas) 72%, var(--ds-surface)); }
+.style-picker__styles, .style-picker__brief { min-height: 0; padding: 18px 22px 24px; overflow-y: auto; scrollbar-width: thin; }
+.style-picker__styles { border-right: 1px solid var(--ds-border); }
+.style-picker__body h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 15px; }
+.style-picker__body h3 small { color: var(--ds-text-muted); font-size: 12px; font-weight: 500; }
+.style-picker__group + .style-picker__group { margin-top: 14px; }
+.style-picker__group h4 { margin: 0 0 6px; color: var(--ds-text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; }
+.style-picker__group ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.style-picker__group li { position: relative; }
+.style-card { display: grid; gap: 4px; width: 100%; padding: 10px 56px 10px 12px; border: 1px solid var(--ds-border); border-radius: 10px; background: var(--ds-surface); color: var(--ds-text); font: inherit; text-align: left; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
+.style-card:hover { border-color: var(--ds-border-strong); }
+.style-card[aria-pressed="true"] { border-color: var(--ds-accent); background: var(--ds-accent-soft); box-shadow: inset 0 0 0 1px var(--ds-accent); }
+.style-card strong { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.style-card > span { color: var(--ds-text-muted); font-size: 12px; line-height: 1.5; }
+.style-card__current { padding: 0 7px; border-radius: 99px; background: var(--ds-success); color: #fff; font-size: 10px; font-weight: 700; line-height: 18px; }
+.style-card__tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.style-card__tags em { padding: 0 6px; border-radius: 5px; background: var(--ds-surface-muted); color: var(--ds-text-muted); font-size: 11px; font-style: normal; }
+.style-card__tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; }
+.style-card__tools button { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ds-text-muted); cursor: pointer; }
+.style-card__tools button:hover { background: var(--ds-surface-muted); color: var(--ds-text); }
+.style-picker__new { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; }
+.style-picker__presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; color: var(--ds-text-muted); font-size: 12px; }
+.style-picker__presets button { padding: 3px 10px; border: 1px solid var(--ds-border); border-radius: 99px; background: var(--ds-surface); color: var(--ds-text); font-size: 12px; cursor: pointer; }
+.style-picker__presets button:hover { border-color: var(--ds-accent); }
+.style-picker__hint { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--ds-surface-muted); color: var(--ds-text-muted); font-size: 12px; }
+.style-picker__fields, .style-editor__fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.style-picker__fields label, .style-editor__fields label { display: grid; gap: 4px; color: var(--ds-text-muted); font-size: 12px; font-weight: 650; }
+.style-picker__fields .wide, .style-editor__fields .wide { grid-column: 1 / -1; }
+.style-picker__fields :where(input, select, textarea), .style-editor__fields :where(input, textarea) { width: 100%; padding: 8px 10px; border: 1px solid var(--ds-border); border-radius: 8px; background: var(--ds-surface); color: var(--ds-text); font: 13px/1.5 var(--font-body); }
+.style-picker__fields textarea, .style-editor__fields textarea { resize: vertical; }
+.style-editor { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--ds-surface); }
+.style-editor > header { padding: 16px 22px; border-bottom: 1px solid var(--ds-border); }
+.style-editor > header h3 { margin: 0 0 4px; font-size: 17px; }
+.style-editor > header p { margin: 0; color: var(--ds-text-muted); font-size: 12px; }
+.style-editor__fields { flex: 1; min-height: 0; padding: 16px 22px; overflow-y: auto; align-content: start; }
+.style-editor__fields details { display: grid; gap: 10px; }
+.style-editor__fields details > summary { color: var(--ds-text-muted); font-size: 12px; font-weight: 650; cursor: pointer; }
+.style-editor__fields details[open] > summary { margin-bottom: 10px; }
+.style-editor__fields details label + label { margin-top: 10px; }
+.style-editor__fields textarea { font-family: var(--font-mono); font-size: 12px; }
+.style-editor > footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--ds-border); }
+@media (max-width: 900px) {
+  .style-picker__body { grid-template-columns: 1fr; overflow-y: auto; }
+  .style-picker__styles { border-right: 0; border-bottom: 1px solid var(--ds-border); }
+  .style-picker__styles, .style-picker__brief { overflow: visible; }
+  .style-picker__fields, .style-editor__fields { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .style-card { transition: none; } }

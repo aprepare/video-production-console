@@ -13,6 +13,7 @@ import {
   Play,
   Redo2,
   ScanSearch,
+  Sparkles,
   Stamp,
   Trash2,
   Undo2,
@@ -34,6 +35,7 @@ import {
   type RemixLabWorkflow,
   type RemixLabWorkflowNode,
   type RemixLabWorkflowProduction,
+  type RemixLabWorkflowPrompts,
 } from "./api";
 import { RunFlowPanel } from "./RunFlow";
 import { ModelMultiSelect } from "../ModelSelect";
@@ -41,6 +43,7 @@ import { FastModeButton } from "./FastModeButton";
 import { RerunDialog } from "./RerunDialog";
 import { RoleModelsDialog } from "./RoleModelsDialog";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
+import { StylePicker } from "./StylePicker";
 
 type WorkflowCanvasProps = {
   onOpenLibrary?: () => void;
@@ -250,6 +253,9 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
   const [rerunID, setRerunID] = useState("");
   const [modelWorkflow, setModelWorkflow] = useState<RemixLabWorkflow | null>(null);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [stylePickerOpen, setStylePickerOpen] = useState(false);
+  // 风格与简报不在画布上编辑，但保存工作流时必须原样带回，否则会被清掉。
+  const styleRef = useRef<Pick<RemixLabWorkflow, "style" | "brief">>({});
   const [runStatus, setRunStatus] = useState("queued");
   const [production, setProduction] = useState<RemixLabProduction | null>(null);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
@@ -326,6 +332,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
         const workflow = await fetchRemixLabWorkflow(api, accountIDProp);
         if (cancelled) return;
         setMeta({ version: workflow.version, name: workflow.name });
+        styleRef.current = { style: workflow.style, brief: workflow.brief };
         setRfNodes(toRfNodes(workflow));
         setRfEdges(toRfEdges(workflow));
         setProdCfg(normalizeProduction(workflow.production));
@@ -527,6 +534,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     })),
     edges: edgesRef.current.map((edge) => [edge.source, edge.target] as [string, string]),
     production: prodRef.current,
+    ...styleRef.current,
   });
 
   const saveRef = useRef<() => Promise<boolean>>(async () => false);
@@ -559,6 +567,42 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     if (dirty && !await save()) return;
     pendingConfig.current = null;
     setModelWorkflow(buildWorkflow());
+  };
+
+  const applySavedPrompts = (result: RemixLabWorkflowPrompts, notice = "二创提示词已保存，后续新跑和重新二创使用新配置。") => {
+    const saved = result.workflow;
+    styleRef.current = { style: saved.style, brief: saved.brief };
+    const nextNodes = toRfNodes(saved);
+    const nextEdges = toRfEdges(saved);
+    const nextProd = normalizeProduction(saved.production);
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    prodRef.current = nextProd;
+    editorialRulesRef.current = saved.editorial_rules;
+    setRfNodes(nextNodes);
+    setRfEdges(nextEdges);
+    setProdCfg(nextProd);
+    setEditorialRules(saved.editorial_rules);
+    setMeta({ version: saved.version, name: saved.name });
+    setSelectedID((current) => saved.nodes.some((node) => node.id === current) ? current : "");
+    setDirty(false);
+    pendingConfig.current = null;
+    historyRef.current = [];
+    futureRef.current = [];
+    setHistTick((tick) => tick + 1);
+    setPromptEditorOpen(false);
+    setStylePickerOpen(false);
+    if (notice) onMessage(notice);
+  };
+
+  const openStylePicker = async () => {
+    if (savingRef.current) {
+      onMessage("正在保存工作流，请稍后再选风格。");
+      return;
+    }
+    if (dirty && !await save()) return;
+    pendingConfig.current = null;
+    setStylePickerOpen(true);
   };
 
   const openPromptEditor = async () => {
@@ -761,6 +805,11 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
         <div className="wf-designer__actions">
           {onOpenLibrary ? <button type="button" className="header-button remix-lab-icon-btn" onClick={onOpenLibrary}><BookOpenText size={14} aria-hidden="true" />提示词库</button> : null}
           {loaded ? (
+            <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void openStylePicker()}>
+              <Sparkles size={14} aria-hidden="true" />风格与简报
+            </button>
+          ) : null}
+          {loaded ? (
             <button type="button" className="header-button" onClick={() => void openPromptEditor()}>
               编辑二创提示词
             </button>
@@ -953,35 +1002,23 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
         ownerLabel={accounts.find(account => account.id === (accountIDProp ?? accountID))?.name || "当前工作流"}
         onClose={() => setModelWorkflow(null)} onSave={saveModels}
         onConnections={onOpenConnections ? () => { setModelWorkflow(null); onOpenConnections(); } : undefined} /> : null}
+      {stylePickerOpen ? (
+        <StylePicker
+          api={api}
+          accountID={accountIDProp ?? accountID}
+          ownerLabel={accounts.find(account => account.id === (accountIDProp ?? accountID))?.name || "当前工作流"}
+          onClose={() => setStylePickerOpen(false)}
+          onApplied={(result) => applySavedPrompts(result, "")}
+          onMessage={onMessage}
+        />
+      ) : null}
       {promptEditorOpen ? (
         <WorkflowPromptEditor
           api={api}
           accountID={accountIDProp ?? accountID}
           ownerLabel={accounts.find(account => account.id === (accountIDProp ?? accountID))?.name || "当前工作流"}
           onClose={() => setPromptEditorOpen(false)}
-          onSaved={(result) => {
-            const saved = result.workflow;
-            const nextNodes = toRfNodes(saved);
-            const nextEdges = toRfEdges(saved);
-            const nextProd = normalizeProduction(saved.production);
-            nodesRef.current = nextNodes;
-            edgesRef.current = nextEdges;
-            prodRef.current = nextProd;
-            editorialRulesRef.current = saved.editorial_rules;
-            setRfNodes(nextNodes);
-            setRfEdges(nextEdges);
-            setProdCfg(nextProd);
-            setEditorialRules(saved.editorial_rules);
-            setMeta({ version: saved.version, name: saved.name });
-            setSelectedID((current) => saved.nodes.some((node) => node.id === current) ? current : "");
-            setDirty(false);
-            pendingConfig.current = null;
-            historyRef.current = [];
-            futureRef.current = [];
-            setHistTick((tick) => tick + 1);
-            setPromptEditorOpen(false);
-            onMessage("二创提示词已保存，后续新跑和重新二创使用新配置。");
-          }}
+          onSaved={applySavedPrompts}
         />
       ) : null}
       {rerunID ? <RerunDialog key={rerunID} api={api} runID={rerunID} onClose={() => setRerunID("")} onCreated={result => {

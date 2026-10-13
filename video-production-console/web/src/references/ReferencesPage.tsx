@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, Heart, Link2, MessageCircle, RefreshCw, Search, Send, Trash2, Wand2 } from "lucide-react";
+import { ArrowUpRight, Heart, Link2, MessageCircle, RefreshCw, Search, Send, Trash2, Video, Wand2 } from "lucide-react";
+import { ReferenceMedia, type Sentence } from "./ReferenceMedia";
+import { ReferenceAnalysis } from "./ReferenceAnalysis";
 import "../shell/studio-page.css";
 import "./references.css";
 
@@ -47,6 +49,12 @@ export type ReferencePost = {
   transcript_error: string;
   notes: string;
   created_at: string;
+  media_status?: "none" | "downloading" | "ready" | "failed";
+  media_size?: number;
+  media_error?: string;
+  has_video?: boolean;
+  has_cover?: boolean;
+  sentences?: Sentence[];
 };
 
 type GatewayStatus = { configured: boolean; reachable?: boolean; message?: string; apps: Array<{ id: string; name: string; ready: boolean; msg: string }> };
@@ -114,8 +122,8 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
     })();
   }, [api, loadList]);
 
-  // Keep polling while any transcription is running.
-  const running = posts.some((post) => post.transcript_status === "running");
+  // Keep polling while any transcription or download is running.
+  const running = posts.some((post) => post.transcript_status === "running" || post.media_status === "downloading");
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => void loadList(), 6000);
@@ -140,7 +148,7 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
       <div>
         <p className="studio-kicker">创作工作室 / 对标采集</p>
         <h1>对标采集</h1>
-        <p>粘贴抖音、小红书、视频号链接或按关键词搜索，转写出口播原文后一键送进二创。分享文案只是标题和话题，口播以转写为准。</p>
+        <p>粘贴抖音、小红书、视频号链接或按关键词搜索。原视频自动存到本机，可播放、下载、拆解；口播转写完成后一键送进二创。</p>
       </div>
       <GatewayBadges status={status} />
     </header>
@@ -177,7 +185,7 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
           <ul className="studio-list references-list">
             {filtered.map((post) => <li key={post.id}>
               <button type="button" className="reference-item" aria-current={post.id === selectedID ? "true" : undefined} onClick={() => setSelectedID(post.id)}>
-                <span className="reference-item__top"><span className="reference-platform" data-platform={post.platform}>{platformLabels[post.platform]}</span><span className="studio-status" data-status={transcriptLabels[post.transcript_status].status}>{transcriptLabels[post.transcript_status].label}</span></span>
+                <span className="reference-item__top"><span className="reference-platform" data-platform={post.platform}>{platformLabels[post.platform]}{post.media_status === "ready" ? <Video size={11} aria-label="原视频已下载" /> : null}</span><span className="studio-status" data-status={transcriptLabels[post.transcript_status].status}>{transcriptLabels[post.transcript_status].label}</span></span>
                 <strong>{post.title || post.caption.slice(0, 40) || "（无标题）"}</strong>
                 <span className="studio-metrics"><span>{post.author || "未知作者"}</span><span><Heart size={11} aria-hidden="true" /> {formatCount(post.likes)}</span><span><MessageCircle size={11} aria-hidden="true" /> {formatCount(post.comments)}</span>{post.duration_s ? <span>{Math.round(post.duration_s)}s</span> : null}</span>
               </button>
@@ -189,7 +197,7 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
       <section className="studio-panel reference-detail" aria-label="对标详情">
         {selected
           ? <ReferenceDetail key={selected.id} api={api} post={selected} onChange={upsertLocal} onDeleted={(id) => { setPosts((current) => current.filter((item) => item.id !== id)); setSelectedID(""); }} onNavigate={onNavigate} onMessage={setMessage} />
-          : <div className="studio-empty"><Wand2 size={28} strokeWidth={1.5} aria-hidden="true" /><strong>选择一条对标</strong><span>口播转写完成后，可以直接编辑原文并送进文案创作台。</span></div>}
+          : <div className="studio-empty"><Wand2 size={28} strokeWidth={1.5} aria-hidden="true" /><strong>选择一条对标</strong><span>可以看原视频、按句跳转口播、做拆解分析，再把口播送进二创。</span></div>}
       </section>
     </div>
   </main>;
@@ -338,6 +346,8 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
   const [notes, setNotes] = useState(post.notes);
   const [busy, setBusy] = useState<"" | "save" | "transcribe" | "delete" | "comments">("");
   const [comments, setComments] = useState<Array<{ author: string; text: string; likes: number }> | null>(null);
+  const [view, setView] = useState<"source" | "analysis" | "comments">("source");
+  const seekRef = useRef<((seconds: number) => void) | null>(null);
   useEffect(() => { setTranscript(post.transcript); }, [post.transcript]);
   const dirty = transcript.trim() !== post.transcript.trim() || notes.trim() !== post.notes.trim();
 
@@ -399,6 +409,11 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
   };
 
   const label = transcriptLabels[post.transcript_status];
+  const seek = (seconds: number) => {
+    setView("source");
+    // The player mounts with the source tab; wait a frame before seeking.
+    window.requestAnimationFrame(() => seekRef.current?.(seconds));
+  };
   return <>
     <header>
       <div>
@@ -412,36 +427,52 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
       </div>
     </header>
 
-    {post.caption ? <details className="reference-caption"><summary>分享文案（不是口播）</summary><p>{post.caption}</p></details> : null}
+    <div className="studio-tabs reference-views" role="tablist" aria-label="对标详情视图">
+      <button type="button" role="tab" aria-selected={view === "source"} onClick={() => setView("source")}>原片与口播</button>
+      <button type="button" role="tab" aria-selected={view === "analysis"} onClick={() => setView("analysis")}>拆解分析</button>
+      {post.platform !== "channels" ? <button type="button" role="tab" aria-selected={view === "comments"} onClick={() => { setView("comments"); if (!comments && busy !== "comments") void loadComments(); }}>热评</button> : null}
+    </div>
 
-    <div className="reference-transcript">
-      <div className="studio-row">
-        <strong>口播原文</strong>
-        <span className="studio-status" data-status={label.status}>{label.label}</span>
-        <span className="grow" />
-        {post.transcript_status !== "running" ? <button type="button" className="studio-button studio-button--quiet" disabled={Boolean(busy)} onClick={() => void transcribe()}>{post.transcript_status === "completed" ? "重新转写" : busy === "transcribe" ? "提交中…" : "转写口播"}</button> : null}
+    {view === "source" ? <>
+      <ReferenceMedia api={api} post={post} onChange={onChange} onMessage={onMessage} seekRef={seekRef} />
+
+      {post.caption ? <details className="reference-caption"><summary>分享文案（不是口播）</summary><p>{post.caption}</p></details> : null}
+
+      <div className="reference-transcript">
+        <div className="studio-row">
+          <strong>口播原文</strong>
+          <span className="studio-status" data-status={label.status}>{label.label}</span>
+          <span className="grow" />
+          {post.transcript_status !== "running" && post.has_video !== false ? <button type="button" className="studio-button studio-button--quiet" disabled={Boolean(busy)} onClick={() => void transcribe()}>{post.transcript_status === "completed" ? "重新转写" : busy === "transcribe" ? "提交中…" : "转写口播"}</button> : null}
+        </div>
+        {post.transcript_status === "failed" ? <p className="studio-notice" data-tone="error" role="alert">{post.transcript_error || "转写失败。"}</p> : null}
+        {post.transcript_status === "running" ? <p className="studio-notice" role="status">通义听悟正在转写，完成后自动出现，不用刷新。</p> : null}
+        <label className="studio-field">
+          <span className="visually-hidden">口播原文</span>
+          <textarea rows={8} value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder={post.transcript_status === "running" ? "转写中…" : "转写完成后这里是口播全文；也可以手动粘贴或校对。"} aria-label="口播原文" />
+        </label>
+        <span className="studio-metrics">{transcript.trim().length} 字</span>
       </div>
-      {post.transcript_status === "failed" ? <p className="studio-notice" data-tone="error" role="alert">{post.transcript_error || "转写失败。"}</p> : null}
-      {post.transcript_status === "running" ? <p className="studio-notice" role="status">通义听悟正在转写，完成后自动出现，不用刷新。</p> : null}
-      <label className="studio-field">
-        <span className="visually-hidden">口播原文</span>
-        <textarea rows={12} value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder={post.transcript_status === "running" ? "转写中…" : "转写完成后这里是口播全文；也可以手动粘贴或校对。"} aria-label="口播原文" />
-      </label>
-      <span className="studio-metrics">{transcript.trim().length} 字</span>
-    </div>
 
-    <label className="studio-field">备注<textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="为什么值得对标：开头钩子、选题角度、评论区痛点…" /></label>
+      <label className="studio-field">备注<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="为什么值得对标：开头钩子、选题角度、评论区痛点…" /></label>
 
-    <div className="studio-row reference-actions">
-      <button type="button" className="studio-button" disabled={!dirty || Boolean(busy)} onClick={() => void save()}>{busy === "save" ? "正在保存…" : "保存修改"}</button>
-      {post.platform !== "channels" ? <button type="button" className="studio-button" disabled={Boolean(busy)} onClick={() => void loadComments()}><MessageCircle size={15} aria-hidden="true" />{busy === "comments" ? "读取中…" : "看热评"}</button> : null}
-      <span className="grow" />
-      <button type="button" className="studio-button studio-button--primary" disabled={!transcript.trim()} onClick={sendToRemix}><Send size={15} aria-hidden="true" />送进二创</button>
-    </div>
+      <div className="studio-row reference-actions">
+        <button type="button" className="studio-button" disabled={!dirty || Boolean(busy)} onClick={() => void save()}>{busy === "save" ? "正在保存…" : "保存修改"}</button>
+        <span className="grow" />
+        <button type="button" className="studio-button studio-button--primary" disabled={!transcript.trim()} onClick={sendToRemix}><Send size={15} aria-hidden="true" />送进二创</button>
+      </div>
+    </> : null}
 
-    {comments ? <section className="reference-comments" aria-label="热评">
-      <h3>热评 {comments.length}</h3>
-      {comments.length ? <ol className="studio-list">{comments.map((comment, index) => <li key={index}><span className="studio-metrics"><span>{comment.author}</span><span><Heart size={11} aria-hidden="true" /> {formatCount(comment.likes)}</span></span><p>{comment.text}</p></li>)}</ol> : <p className="studio-empty">没有读取到评论。</p>}
+    {view === "analysis" ? <ReferenceAnalysis api={api} post={post} onSeek={seek} onMessage={onMessage} /> : null}
+
+    {view === "comments" ? <section className="reference-comments" aria-label="热评">
+      <div className="studio-row">
+        <h3>热评{comments ? ` ${comments.length}` : ""}</h3>
+        <span className="grow" />
+        <button type="button" className="studio-button studio-button--quiet" disabled={Boolean(busy)} onClick={() => void loadComments()}><MessageCircle size={15} aria-hidden="true" />{busy === "comments" ? "读取中…" : "刷新"}</button>
+      </div>
+      {busy === "comments" && !comments ? <p className="studio-empty" role="status">正在读取…</p> : null}
+      {comments ? comments.length ? <ol className="studio-list">{comments.map((comment, index) => <li key={index}><span className="studio-metrics"><span>{comment.author}</span><span><Heart size={11} aria-hidden="true" /> {formatCount(comment.likes)}</span></span><p>{comment.text}</p></li>)}</ol> : <p className="studio-empty">没有读取到评论。</p> : null}
     </section> : null}
   </>;
 }

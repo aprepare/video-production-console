@@ -23,6 +23,7 @@ import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import { ReferencesPage } from "./references/ReferencesPage";
 import { MerchantsPage } from "./merchants/MerchantsPage";
+import { SetupPage, type SetupStatus } from "./setup/SetupPage";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { clearRetiredFeatureDrafts } from "./shell/retiredFeatureDrafts";
 import {
@@ -217,6 +218,23 @@ function App() {
 
   const settingsPanel = useSettingsDialog({ api, readSettings, setMessage });
   const { open: settingsOpen, setOpen: setSettingsOpen } = settingsPanel;
+
+  // 配置体检：登录后查一次，导航上的红点提示还有几项必需配置没就绪。
+  const [setupPending, setSetupPending] = useState(0);
+  const updateSetupStatus = useCallback((status: SetupStatus) => {
+    setSetupPending(status.items.filter((item) => item.required && item.status !== "ok").length);
+  }, []);
+  useEffect(() => {
+    if (authenticated !== true) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await api("/api/setup/status", { signal: controller.signal });
+        if (response.ok) updateSetupStatus(await response.json());
+      } catch { /* the setup check is advisory */ }
+    })();
+    return () => controller.abort();
+  }, [api, authenticated, updateSetupStatus]);
 
   useEffect(() => {
     if (consoleDataFailed) setMessage("控制台服务尚未连接");
@@ -980,7 +998,8 @@ function App() {
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : route.view === "references" ? "references" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : route.view === "references" ? "references" : route.view === "setup" ? "setup" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
+        setupPending={setupPending}
         theme={theme}
         onNavigate={navigate}
         onThemeChange={setTheme}
@@ -1002,6 +1021,8 @@ function App() {
           initialMerchantID={route.view === "merchant" ? route.merchantID : undefined}
           onNavigate={navigate}
         />
+      ) : route.view === "setup" ? (
+        <SetupPage api={api} onOpenSettings={() => void settingsPanel.openDialog()} onStatusChange={updateSetupStatus} />
       ) : route.view === "references" ? (
         <ReferencesPage api={api} onNavigate={navigate} onOpenSettings={() => void settingsPanel.openDialog()} />
       ) : imageRoute ? (
