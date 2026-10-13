@@ -379,6 +379,13 @@ func applyLocalCopyFixes(script string) (string, []string) {
 	return script, notes
 }
 
+func applyLocalCopyFixesFor(script string, mode flowSpec) (string, []string) {
+	if !mode.FinanceMode() {
+		return script, nil
+	}
+	return applyLocalCopyFixes(script)
+}
+
 func stripForbiddenDepositRange(script string) (string, bool) {
 	orig := script
 	replacements := []string{
@@ -431,6 +438,13 @@ func inspectCopyIssues(script, source string) []string {
 		issues = append(issues, "开场切口和原稿同类：不要再问2万亿去了哪儿，也不要用不是买房不是炒股黄金没接住这套切入口")
 	}
 	return issues
+}
+
+func inspectCopyIssuesFor(script, source string, mode flowSpec) []string {
+	if !mode.FinanceMode() {
+		return nil
+	}
+	return inspectCopyIssues(script, source)
 }
 
 func hasForbiddenDepositRange(script string) bool {
@@ -530,9 +544,16 @@ func appendCheckNote(note string, extra string) string {
 // repairRemixDraft 先做原文重合质检，再查课名、开头、结尾和卖课钩子。
 // 能本地改的直接改稿保存；改不干净的再交给质检模型返工。
 func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user, source, content string) (string, []string, string, error) {
+	return repairRemixDraftFor(client, model, checkModel, effort, system, user, source, content, flowSpec{})
+}
+
+func repairRemixDraftFor(client ChatClient, model, checkModel, effort, system, user, source, content string, mode flowSpec) (string, []string, string, error) {
 	content, warnings, note, err := repairSourceOverlap(client, model, checkModel, effort, system, user, source, content)
 	if err != nil {
 		return content, warnings, note, err
+	}
+	if !mode.FinanceMode() {
+		return content, warnings, note, nil
 	}
 	draft, parseErr := parseRemixDraft(content)
 	if parseErr != nil || strings.TrimSpace(draft.ContinuousScript) == "" {
@@ -540,12 +561,12 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 	}
 	raw := content
 	raw, yearStripped := stripCourseYear(raw)
-	script, localNotes := applyLocalCopyFixes(draft.ContinuousScript)
+	script, localNotes := applyLocalCopyFixesFor(draft.ContinuousScript, mode)
 	if yearStripped && !containsString(localNotes, "课名去掉年份") {
 		localNotes = append([]string{"课名去掉年份"}, localNotes...)
 	}
 	content = replaceDraftScript(raw, script)
-	issues := inspectCopyIssues(script, source)
+	issues := inspectCopyIssuesFor(script, source, mode)
 	if len(localNotes) > 0 {
 		note = appendCheckNote(note, "本地已改："+strings.Join(localNotes, "；")+"。")
 	}
@@ -580,9 +601,9 @@ func repairRemixDraft(client ChatClient, model, checkModel, effort, system, user
 	if parseErr != nil || utf8.RuneCountInString(strings.TrimSpace(retryDraft.ContinuousScript)) < 40 {
 		return content, warnings, appendCheckNote(note, fmt.Sprintf("文案质检（%s）返工结果无效，已保存本地修改。", checkModel)), nil
 	}
-	retryScript, moreLocal := applyLocalCopyFixes(retryDraft.ContinuousScript)
+	retryScript, moreLocal := applyLocalCopyFixesFor(retryDraft.ContinuousScript, mode)
 	retry = replaceDraftScript(retry, retryScript)
-	retryIssues := inspectCopyIssues(retryScript, source)
+	retryIssues := inspectCopyIssuesFor(retryScript, source, mode)
 	if len(moreLocal) > 0 {
 		note = appendCheckNote(note, "返工后再改："+strings.Join(moreLocal, "；")+"。")
 	}

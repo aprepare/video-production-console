@@ -71,6 +71,60 @@ func publishFieldIssues(draft remixDraft) []string {
 	return issues
 }
 
+func publishFieldIssuesFor(draft remixDraft, mode flowSpec) []string {
+	if mode.FinanceMode() {
+		return publishFieldIssues(draft)
+	}
+	var issues []string
+	if len(nonBlank(draft.Titles)) > 0 {
+		issues = append(issues, "titles 应为 []")
+	}
+	shorts, descs, topics := nonBlank(draft.ShortTitles), nonBlank(draft.Descriptions), nonBlank(draft.Topics)
+	if len(shorts) != 3 {
+		issues = append(issues, fmt.Sprintf("short_titles 有 %d 条，需要恰好 3 条", len(shorts)))
+	}
+	for _, title := range shorts {
+		if strings.Contains(title, "#") {
+			issues = append(issues, "short_titles 不带 #")
+		}
+		if n := utf8.RuneCountInString(title); n < 6 || n > 20 {
+			issues = append(issues, fmt.Sprintf("短标题「%s」为 %d 个字，short_titles 每条需 6 到 20 个字", title, n))
+		}
+	}
+	if len(descs) < 2 || len(descs) > 3 {
+		issues = append(issues, fmt.Sprintf("descriptions 有 %d 条，需要 2 到 3 条", len(descs)))
+	}
+	for _, description := range descs {
+		if strings.Contains(description, "#") {
+			issues = append(issues, "descriptions 不带 #")
+		}
+		if utf8.RuneCountInString(description) > 60 {
+			issues = append(issues, fmt.Sprintf("描述「%s…」超过 60 个字，压成一句", clipRunes(description, 0, 18)))
+		}
+	}
+	if len(topics) < 3 || len(topics) > 5 {
+		issues = append(issues, fmt.Sprintf("topics 有 %d 个，需要 3 到 5 个带#的话题", len(topics)))
+	}
+	for _, topic := range topics {
+		if !strings.HasPrefix(topic, "#") || topic == "#" {
+			issues = append(issues, fmt.Sprintf("topics 话题「%s」需要有效的 # 前缀话题", topic))
+		}
+	}
+	fields := append([]string{draft.CTA}, draft.Titles...)
+	fields = append(fields, shorts...)
+	fields = append(fields, descs...)
+	fields = append(fields, topics...)
+	for _, term := range mode.Brief.bannedTerms() {
+		for _, field := range fields {
+			if strings.Contains(field, term) {
+				issues = append(issues, "发布字段出现禁用词："+term)
+				break
+			}
+		}
+	}
+	return issues
+}
+
 func nonBlank(items []string) []string {
 	out := make([]string, 0, len(items))
 	for _, item := range items {
@@ -94,13 +148,30 @@ func buildPublishFieldsRepairPrompt(issues []string) string {
 	return b.String()
 }
 
+func buildPublishFieldsRepairPromptFor(issues []string, mode flowSpec) string {
+	if mode.FinanceMode() {
+		return buildPublishFieldsRepairPrompt(issues)
+	}
+	var b strings.Builder
+	b.WriteString("发布字段不合格，只补发布字段，continuous_script 一个字不动，按上一条回复相同的 JSON 结构返回完整结果：\n")
+	for i, issue := range issues {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, issue)
+	}
+	b.WriteString("要求：titles=[]；short_titles 恰好 3 条、每条 6 到 20 个字、不带 #，使用数字/结果、反常识/疑问、人群/场景三种不同钩子，能当封面主标题；descriptions 2 到 3 条，每条不超过 60 字，口语化，各带一个具体看点，不写 #；topics 3 到 5 个、全部带 #，包含一个平台常用大类词，其余为正文出现的具体名词，禁止 #干货 #分享 #日常；cta 摘自正文最后的行动引导句，按简报的转化动作，不新增承诺。遵守简报禁用词，不用极限词，食品不宣称功效。\n")
+	if brief := mode.Brief.render(); brief != "" {
+		b.WriteString("\n" + brief)
+	}
+	return b.String()
+}
+
 // repairPublishFields 发布字段不合格时打一轮定向返工；返工失败或没改好就原样返回。
 func repairPublishFields(client ChatClient, model, effort, system, user, content, outputDir string) (string, string) {
 	draft, err := parseRemixDraft(content)
 	if err != nil {
 		return content, ""
 	}
-	issues := publishFieldIssues(draft)
+	mode := loadEditorialContext(outputDir).mode()
+	issues := publishFieldIssuesFor(draft, mode)
 	if len(issues) == 0 {
 		return content, ""
 	}
@@ -113,7 +184,7 @@ func repairPublishFields(client ChatClient, model, effort, system, user, content
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 			{Role: "assistant", Content: content},
-			{Role: "user", Content: buildPublishFieldsRepairPrompt(issues)},
+			{Role: "user", Content: buildPublishFieldsRepairPromptFor(issues, mode)},
 		},
 	})
 	if chatErr != nil || len(resp.Choices) == 0 {
@@ -128,7 +199,7 @@ func repairPublishFields(client ChatClient, model, effort, system, user, content
 	if strings.TrimSpace(retryDraft.ContinuousScript) != strings.TrimSpace(draft.ContinuousScript) {
 		retryDraft.ContinuousScript = draft.ContinuousScript
 	}
-	after := publishFieldIssues(retryDraft)
+	after := publishFieldIssuesFor(retryDraft, mode)
 	if len(after) >= len(issues) {
 		return content, "发布字段返工未见改善，按现有字段交付。"
 	}

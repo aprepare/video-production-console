@@ -172,6 +172,8 @@ func Run(opts Options) error {
 	if err != nil {
 		return writeFailure(outPath, manifestPath, err)
 	}
+	spec, hasSpec := parseFlowSpec(opts.WorkflowJSON)
+	brief := spec.Brief.render()
 	stamp := promptStamp(style)
 	if override := strings.TrimSpace(manifest.NonSecretSettings.RemixPromptStamp); override != "" {
 		stamp = override
@@ -180,10 +182,13 @@ func Run(opts Options) error {
 	if override := strings.TrimSpace(manifest.NonSecretSettings.RemixSystemPrompt); override != "" {
 		system = override
 		if tmpl := strings.TrimSpace(manifest.NonSecretSettings.RemixUserPrompt); tmpl != "" {
-			user = renderWriterUserTemplate(tmpl, source, manifest.NonSecretSettings.RevisionNotes)
+			user = renderWriterUserTemplate(tmpl, source, manifest.NonSecretSettings.RevisionNotes, brief)
 		} else {
-			user = buildWriterUser(style, manifest, source)
+			user = injectBrief(buildWriterUser(style, manifest, source), brief)
 		}
+	} else if !spec.FinanceMode() {
+		system = "依据原文与内容简报完成连续口播。"
+		user = renderWriterUserTemplate("{{BRIEF}}\n{{NOTES}}\n# 同行原文\n{{SOURCE}}", source, manifest.NonSecretSettings.RevisionNotes, brief)
 	} else if style == PromptStyleCopy {
 		copyClient := opts.CopyClient
 		if copyClient == nil {
@@ -194,25 +199,24 @@ func Run(opts Options) error {
 			return writeFailure(outPath, manifestPath, err)
 		}
 		system = buildAssemblePrompt()
-		user = buildAssembleUser(manifest, source, hooks, scripts)
+		user = injectBrief(buildAssembleUser(manifest, source, hooks, scripts), brief)
 	} else {
 		// rewrite（默认 A 语感回流）或 rewrite_sharp（B 锋利优先）
 		system = buildWriterPrompt(style)
-		user = buildWriterUser(style, manifest, source)
+		user = injectBrief(buildWriterUser(style, manifest, source), brief)
 	}
 	client := opts.Client
 	if client == nil {
 		client = &HTTPChatClient{BaseURL: baseURL, APIKey: apiKey}
 	}
 	pipeline := strings.ToLower(strings.TrimSpace(opts.Pipeline))
-	spec, hasSpec := parseFlowSpec(opts.WorkflowJSON)
 	if hasSpec {
 		if node := spec.writer(); node != nil {
 			if strings.TrimSpace(node.Config.SystemPrompt) != "" {
 				system = node.Config.SystemPrompt
 			}
 			if strings.TrimSpace(node.Config.UserTemplate) != "" {
-				user = renderWriterUserTemplate(node.Config.UserTemplate, source, manifest.NonSecretSettings.RevisionNotes)
+				user = renderWriterUserTemplate(node.Config.UserTemplate, source, manifest.NonSecretSettings.RevisionNotes, brief)
 			}
 		}
 	}
@@ -228,8 +232,8 @@ func Run(opts Options) error {
 			}
 		}
 	}
-	if style == PromptStyleRewrite {
-		ctx := currentEditorialContext(manifest.OutputDir)
+	if style == PromptStyleRewrite || hasSpec {
+		ctx := currentEditorialContextFor(manifest.OutputDir, spec)
 		if hasSpec && spec.EditorialRules != nil {
 			ctx.Policy = *spec.EditorialRules
 			ctx.CustomPolicy = true
@@ -238,16 +242,22 @@ func Run(opts Options) error {
 			ctx.ReviewerUser = node.Config.UserTemplate
 		}
 		_, _, _, reviewerPrompt := resolveReviewerSettings(opts, specOrNil(spec, hasSpec), model, opts.ReasoningEffort)
-		ctx.ReviewerPrompt = override(reviewerPrompt, reviewerRolePrompt)
+		ctx.ReviewerPrompt = override(reviewerPrompt, ctx.ReviewerPrompt)
 		if err := saveEditorialContext(manifest.OutputDir, ctx); err != nil {
 			return writeFailure(outPath, manifestPath, err)
 		}
-		system = withEditorialPolicy(system, ctx.Policy)
-		system += "\n\n" + WriterJSONContract
+		if style == PromptStyleRewrite || !spec.FinanceMode() {
+			system = withEditorialPolicy(system, ctx.Policy)
+			system += "\n\n" + WriterJSONContract
+		}
+	}
+	if terms := spec.Brief.bannedTerms(); len(terms) > 0 {
+		system += "\n\n禁用表达：" + strings.Join(terms, "、")
 	}
 	captureWriterPrompts(manifest.OutputDir, system, user)
 	appendRemixRunLog(manifest.OutputDir, map[string]any{
 		"event": "prompt_selected", "prompt_style": style, "prompt_stamp": stamp,
+		"style":    spec.Style,
 		"pipeline": pipeline, "system_bytes": len(system), "user_bytes": len(user),
 	})
 
@@ -295,6 +305,7 @@ func Run(opts Options) error {
 				ReasoningEffort: reviewerEffort,
 				SystemPrompt:    reviewerPrompt,
 				EditorialRules:  spec.EditorialRules,
+				WorkflowJSON:    opts.WorkflowJSON,
 				Source:          source,
 				DraftJSON:       content,
 				OutputDir:       manifest.OutputDir,
@@ -572,17 +583,24 @@ func buildAssembleUser(manifest manifestLite, source, hooks, scripts string) str
 	return b.String()
 }
 
-func renderWriterUserTemplate(tmpl, source, notes string) string {
+func renderWriterUserTemplate(tmpl, source, notes string, briefs ...string) string {
+	brief := ""
+	if len(briefs) > 0 {
+		brief = briefs[0]
+	}
 	noteText := ""
 	if strings.TrimSpace(notes) != "" {
 		noteText = "修改要求：\n" + notes + "\n"
 	}
-	out := strings.NewReplacer("{{SOURCE}}", source, "{{NOTES}}", noteText).Replace(tmpl)
+	out := strings.NewReplacer("{{SOURCE}}", source, "{{NOTES}}", noteText, "{{BRIEF}}", brief).Replace(tmpl)
 	if !strings.Contains(tmpl, "{{SOURCE}}") {
 		out += "\n\n# 同行原文\n" + source
 	}
 	if !strings.Contains(tmpl, "{{NOTES}}") && noteText != "" {
 		out += "\n\n" + noteText
+	}
+	if !strings.Contains(tmpl, "{{BRIEF}}") {
+		out = injectBrief(out, brief)
 	}
 	return out
 }

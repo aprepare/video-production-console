@@ -42,9 +42,17 @@ type flowNode struct {
 }
 
 type flowSpec struct {
+	Style          string      `json:"style"`
+	Brief          *briefSpec  `json:"brief"`
+	Finance        bool        `json:"finance,omitempty"`
 	EditorialRules *string     `json:"editorial_rules,omitempty"`
 	Nodes          []flowNode  `json:"nodes"`
 	Edges          [][2]string `json:"edges"`
+}
+
+// 老快照没有 style 字段，继续按财经处理；自定义财经副本冻结 finance 标记。
+func (s flowSpec) FinanceMode() bool {
+	return s.Style == "" || s.Style == "finance_course" || s.Finance
 }
 
 func (s flowSpec) writer() *flowNode {
@@ -430,11 +438,19 @@ func renderFlowTemplate(node flowNode, source string, upstream map[string]string
 				b.WriteString(content)
 			}
 		}
+		if brief := spec.Brief.render(); brief != "" {
+			b.WriteString("\n\n" + brief)
+		}
 		return b.String()
 	}
-	out := strings.ReplaceAll(tmpl, "{{source}}", source)
+	brief := spec.Brief.render()
+	pairs := []string{"{{source}}", source, "{{brief}}", brief}
 	for id, content := range upstream {
-		out = strings.ReplaceAll(out, "{{node:"+id+"}}", content)
+		pairs = append(pairs, "{{node:"+id+"}}", content)
+	}
+	out := strings.NewReplacer(pairs...).Replace(tmpl)
+	if !strings.Contains(tmpl, "{{brief}}") && brief != "" {
+		out += "\n\n" + brief
 	}
 	return out
 }

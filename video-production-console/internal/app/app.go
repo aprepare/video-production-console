@@ -228,6 +228,14 @@ func New(options Options) *App {
 		mux.Handle("/api/ideas/", ideasHandler)
 		if options.Settings != nil {
 			projectRepo := store.NewProjectRepository(options.DB)
+			existingAccounts, migrationErr := store.NewAccountRepository(options.DB).List(context.Background())
+			if migrationErr == nil {
+				ids := make([]string, 0, len(existingAccounts))
+				for _, account := range existingAccounts {
+					ids = append(ids, account.ID)
+				}
+				migrationErr = (remixlab.Store{DataRoot: options.Config.DataRoot}).MigrateExistingAccountWorkflows(ids)
+			}
 			remixLabSvc := remixlab.NewService(
 				store.NewRemixLabRepository(options.DB),
 				remixLabRuntimeAdapter{inner: options.Settings},
@@ -241,12 +249,21 @@ func New(options Options) *App {
 				slog.Error("remix lab stale runs", "error", err)
 			}
 			// 生产驱动器：确认闸门放行后回环调用自身 API 串起混剪链路。
-			if options.InternalToken != "" {
+			if options.InternalToken != "" && migrationErr == nil {
 				producer := remixproducer.New(store.NewRemixLabRepository(options.DB), options.Config.ListenAddr, options.InternalToken)
 				remixLabSvc.SetProducer(producer)
 				resumeProductions = producer.ResumeAll
 			}
-			mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
+			if migrationErr != nil {
+				slog.Error("migrate remix workflows", "error", migrationErr)
+				mux.HandleFunc("/api/remix-lab/", func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_ = json.NewEncoder(w).Encode(map[string]string{"code": "workflow_migration_failed", "message": "账号工作流迁移失败，请检查服务日志后重启。"})
+				})
+			} else {
+				mux.Handle("/api/remix-lab/", httpapi.NewRemixLabHandler(remixLabSvc, projectRepo, store.NewTaskRepository(options.DB)))
+			}
 
 			referenceRepo := store.NewReferenceRepository(options.DB)
 			referenceService := references.New(referenceRepo, options.Settings)

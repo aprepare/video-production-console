@@ -38,14 +38,18 @@ func SeparateEditorialPrompt(prompt string) string {
 	return strings.TrimSpace(prompt)
 }
 
-func reviewUserFromTemplate(template, source, draft, annotations, facts, plan string) string {
+func reviewUserFromTemplate(template, source, draft, annotations, facts, plan string, briefs ...string) string {
+	brief := ""
+	if len(briefs) > 0 {
+		brief = briefs[0]
+	}
 	if strings.TrimSpace(template) == "" {
 		template = ReviewerUserTemplate
 	}
 	// A single replacement pass prevents placeholders inside source material from expanding.
-	result := strings.NewReplacer("{{source}}", source, "{{draft}}", draft, "{{annotations}}", annotations, "{{facts}}", facts, "{{writing_plan}}", plan).Replace(template)
+	result := strings.NewReplacer("{{source}}", source, "{{draft}}", draft, "{{annotations}}", annotations, "{{facts}}", facts, "{{writing_plan}}", plan, "{{brief}}", brief).Replace(template)
 	// Core evidence is always supplied even if the operator removes a placeholder.
-	for _, item := range []struct{ key, label, value string }{{"{{source}}", "同行原文", source}, {"{{draft}}", "待审成稿", draft}, {"{{annotations}}", "操作员批注", annotations}, {"{{facts}}", "事实核查结论", facts}} {
+	for _, item := range []struct{ key, label, value string }{{"{{source}}", "同行原文", source}, {"{{draft}}", "待审成稿", draft}, {"{{annotations}}", "操作员批注", annotations}, {"{{facts}}", "事实核查结论", facts}, {"{{brief}}", "内容简报", brief}} {
 		if !strings.Contains(template, item.key) && strings.TrimSpace(item.value) != "" {
 			result += "\n\n【" + item.label + "】\n" + item.value
 		}

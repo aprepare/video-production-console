@@ -67,3 +67,20 @@ func structureAdvisories(script string) []string {
 	}
 	return hints
 }
+
+func structureAdvisoriesFor(script string, mode flowSpec) []string {
+	if mode.FinanceMode() {
+		return structureAdvisories(script)
+	}
+	if mode.Brief == nil || strings.TrimSpace(mode.Brief.Conversion) == "" {
+		return nil
+	}
+	tail := []rune(script)
+	if len(tail) > 700 {
+		tail = tail[len(tail)-700:]
+	}
+	if strings.Contains(string(tail), strings.TrimSpace(mode.Brief.Conversion)) {
+		return nil
+	}
+	return []string{"转化动作待检查：结尾是否给出了简报里的转化动作「" + mode.Brief.Conversion + "」；这是字面线索，按完整语意判断。"}
+}

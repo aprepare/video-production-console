@@ -53,6 +53,8 @@ type WorkflowNodeConfig struct {
 	InjectRule  string `json:"inject_rule,omitempty"`
 	// PromptID 写手节点用：提示词库条目；空=当前日产（active prompt）。
 	PromptID string `json:"prompt_id,omitempty"`
+	// FrozenPromptID 标记节点正文的库来源；旧文件没有此字段时仍保留已存正文。
+	FrozenPromptID string `json:"frozen_prompt_id,omitempty"`
 	// 仅供解码旧快照，机械审查已停用，不再读取这些阈值。
 	OverlapMaxPct  int     `json:"overlap_max_pct,omitempty"`
 	OverlapHardPct int     `json:"overlap_hard_pct,omitempty"`
@@ -71,6 +73,10 @@ type WorkflowNode struct {
 }
 
 type Workflow struct {
+	Style string `json:"style,omitempty"`
+	Brief *Brief `json:"brief,omitempty"`
+	// Finance 让另存的自定义财经风格也能冻结专用检查，不依赖运行时模板库。
+	Finance        bool           `json:"finance,omitempty"`
 	EditorialRules *string        `json:"editorial_rules,omitempty"`
 	Version        int            `json:"version"`
 	Name           string         `json:"name"`
@@ -126,6 +132,11 @@ func DefaultWorkflow(overrides AgentPrompts) Workflow {
 // agent 只能挂在 input/agent 之后、
 // 汇入 writer 或别的 agent；整图必须无环。
 func ValidateWorkflow(w Workflow) error {
+	if w.Brief != nil {
+		if err := ValidateBrief(*w.Brief); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidWorkflow, err)
+		}
+	}
 	if err := validateEditablePrompts(w); err != nil {
 		return err
 	}
@@ -308,7 +319,8 @@ func (s Store) LoadWorkflow() (Workflow, error) {
 	return s.loadWorkflowFile(s.workflowPath())
 }
 
-// LoadWorkflowForAccount 读该账号最新一版工作流。还没存过就回落全局默认（不落盘）。
+// LoadWorkflowForAccount 读账号最新工作流；新账号回落通用默认（不落盘）。
+// 已有账号在启动迁移时保存原全局工作流，继续沿用原来的财经配置。
 func (s Store) LoadWorkflowForAccount(accountID string) (Workflow, error) {
 	id, err := normalizeWorkflowAccountID(accountID)
 	if err != nil {
@@ -320,7 +332,7 @@ func (s Store) LoadWorkflowForAccount(accountID string) (Workflow, error) {
 	raw, err := os.ReadFile(s.accountWorkflowPath(id))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s.LoadWorkflow()
+			return DefaultUniversalWorkflow(), nil
 		}
 		return Workflow{}, fmt.Errorf("read account workflow: %w", err)
 	}
@@ -365,6 +377,18 @@ func (s Store) SaveWorkflowForAccount(accountID string, w Workflow) error {
 }
 
 func (s Store) writeWorkflowFile(path, dir string, w Workflow) error {
+	w.Nodes = append([]WorkflowNode(nil), w.Nodes...)
+	w.Style = strings.TrimSpace(w.Style)
+	if w.Brief != nil {
+		brief, err := NormalizeBrief(*w.Brief)
+		if err != nil {
+			return err
+		}
+		w.Brief = &brief
+	}
+	if err := s.prepareWriterSelection(path, &w); err != nil {
+		return err
+	}
 	w = withReferenceDefaults(w)
 	if err := ValidateWorkflow(w); err != nil {
 		return err
@@ -409,10 +433,11 @@ func (s *Service) SaveWorkflowDefinitionForAccount(accountID string, w Workflow)
 	if w.Version == 0 {
 		w.Version = 1
 	}
-	if err := (Store{DataRoot: s.dataRoot}).SaveWorkflowForAccount(accountID, w); err != nil {
+	st := Store{DataRoot: s.dataRoot}
+	if err := st.SaveWorkflowForAccount(accountID, w); err != nil {
 		return Workflow{}, err
 	}
-	return withoutMechanicalReview(w), nil
+	return st.LoadWorkflowForAccount(accountID)
 }
 
 // workflowReviewer 返回快照里的审稿节点（没有则 nil）。

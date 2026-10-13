@@ -470,9 +470,18 @@ func writeRemixDeliverable(outputDir, taskID, action, modelText string, warnings
 		return fmt.Errorf("%s", truncate(script, 240))
 	}
 	pkg := publishingPackageFromDraft(draft, script)
+	ctx := loadEditorialContext(outputDir)
+	cta := map[string]string{"course": "《财富觉醒方法论》", "entry": "主页橱窗", "energy": pkg["cta"].(string)}
+	if !ctx.mode().FinanceMode() {
+		conversion := ""
+		if ctx.Brief != nil {
+			conversion = ctx.Brief.Conversion
+		}
+		cta = map[string]string{"conversion": conversion, "energy": pkg["cta"].(string)}
+	}
 	if err := writeJSONFile(filepath.Join(outputDir, "viral_analysis.json"), map[string]any{
 		"action": action, "source_role": "primary_source", "research_used": false,
-		"cta": map[string]string{"course": "《财富觉醒方法论》", "entry": "主页橱窗", "energy": pkg["cta"].(string)},
+		"cta": cta,
 	}); err != nil {
 		return err
 	}

@@ -10,6 +10,10 @@ import (
 )
 
 type editorialContext struct {
+	Style            string          `json:"style"`
+	BriefHash        string          `json:"brief_hash"`
+	Brief            *briefSpec      `json:"brief,omitempty"`
+	Finance          bool            `json:"finance,omitempty"`
 	CustomPolicy     bool            `json:"custom_policy,omitempty"`
 	ReviewerUser     string          `json:"reviewer_user,omitempty"`
 	Version          string          `json:"version"`
@@ -103,6 +107,25 @@ func readEditorialFacts(dir string) string {
 
 func currentEditorialContext(dir string) editorialContext {
 	return editorialContext{Version: EditorialPolicyVersion, Policy: SharedEditorialPolicy, Facts: json.RawMessage(readEditorialFacts(dir)), Limits: defaultSelfCheckLimits(), ReviewerPrompt: reviewerRolePrompt, WritingPlan: readWritingPlan(dir), PlannedStructure: true}
+}
+
+func currentEditorialContextFor(dir string, spec flowSpec) editorialContext {
+	ctx := currentEditorialContext(dir)
+	ctx.Style, ctx.Brief, ctx.Finance = spec.Style, spec.Brief, spec.Finance
+	ctx.BriefHash = spec.Brief.hash()
+	if !spec.FinanceMode() {
+		// 通用规则已在工作流冻结；缺失时也不能回落财经课程规则。
+		ctx.Policy, ctx.CustomPolicy = "", true
+		ctx.ReviewerPrompt = universalReviewerPrompt
+	}
+	if spec.EditorialRules != nil {
+		ctx.Policy, ctx.CustomPolicy = *spec.EditorialRules, true
+	}
+	return ctx
+}
+
+func (ctx editorialContext) mode() flowSpec {
+	return flowSpec{Style: ctx.Style, Brief: ctx.Brief, Finance: ctx.Finance}
 }
 
 func loadEditorialContext(dir string) editorialContext {
@@ -229,8 +252,10 @@ func reviewRegression(source string, before, after remixDraft, ctx editorialCont
 			return fmt.Sprintf("修订篇幅 %.2f→%.2f 倍，越过篇幅目标且继续恶化，保留审前稿。", a.lenRatio, b.lenRatio)
 		}
 	}
-	old := checkLockNumbersWithFacts(source, before.ContinuousScript, string(ctx.Facts))
-	next := checkLockNumbersWithFacts(source, after.ContinuousScript, string(ctx.Facts))
+	mode := ctx.mode()
+	evidence := sourceWithBriefFacts(source, mode)
+	old := checkLockNumbersWithFacts(evidence, before.ContinuousScript, string(ctx.Facts))
+	next := checkLockNumbersWithFacts(evidence, after.ContinuousScript, string(ctx.Facts))
 	for _, v := range next.ForeignYears {
 		if !containsExact(old.ForeignYears, v) {
 			return "修订新增未经事实表支持的年份：" + v
@@ -241,13 +266,13 @@ func reviewRegression(source string, before, after remixDraft, ctx editorialCont
 			return "修订丢失或违背核准数字：" + v
 		}
 	}
-	for _, v := range unsupportedNumericValues(source, after.ContinuousScript, string(ctx.Facts)) {
-		if !containsExact(unsupportedNumericValues(source, before.ContinuousScript, string(ctx.Facts)), v) {
+	for _, v := range unsupportedNumericValuesFor(source, after.ContinuousScript, string(ctx.Facts), mode) {
+		if !containsExact(unsupportedNumericValuesFor(source, before.ContinuousScript, string(ctx.Facts), mode), v) {
 			return "修订新增未获事实支持的数值：" + v
 		}
 	}
-	oldFields := publicationIssueCounts(before)
-	for rule, count := range publicationIssueCounts(after) {
+	oldFields := publicationIssueCountsFor(before, mode)
+	for rule, count := range publicationIssueCountsFor(after, mode) {
 		if count > oldFields[rule] {
 			return "修订新增发布字段问题，保留审前稿。"
 		}
@@ -256,12 +281,17 @@ func reviewRegression(source string, before, after remixDraft, ctx editorialCont
 }
 
 var numericFactRe = regexp.MustCompile(`\d+(?:\.\d+)?(?:[%％]|万亿元|万亿|亿元|万元|亿|万|元|块)`)
+var universalNumericFactRe = regexp.MustCompile(`\d+(?:\.\d+)?(?:[%％]|万亿元|万亿|亿元|万元|亿|万|元|块|平方米|平米|㎡|年)`)
 var issueQuoteRe = regexp.MustCompile(`「[^」]*」`)
 var issueNumberRe = regexp.MustCompile(`\d+`)
 
 func publicationIssueCounts(draft remixDraft) map[string]int {
+	return publicationIssueCountsFor(draft, flowSpec{})
+}
+
+func publicationIssueCountsFor(draft remixDraft, mode flowSpec) map[string]int {
 	counts := map[string]int{}
-	for _, issue := range publishFieldIssues(draft) {
+	for _, issue := range publishFieldIssuesFor(draft, mode) {
 		counts[issueNumberRe.ReplaceAllString(issueQuoteRe.ReplaceAllString(issue, ""), "N")]++
 	}
 	return counts
@@ -270,13 +300,33 @@ func publicationIssueCounts(draft remixDraft) map[string]int {
 // Detect explicit monetary/rate values; leave unlabelled counts and Chinese
 // numerals to semantic review rather than treating every rhetorical number as fact.
 func unsupportedNumericValues(source, draft, facts string) []string {
-	allowed := numericValues(source)
-	for _, v := range []string{"5元", "5块"} {
+	return unsupportedNumericValuesFor(source, draft, facts, flowSpec{})
+}
+
+func sourceWithBriefFacts(source string, mode flowSpec) string {
+	if !mode.FinanceMode() && mode.Brief != nil {
+		return source + "\n" + mode.Brief.SellingPoints
+	}
+	return source
+}
+
+func unsupportedNumericValuesFor(source, draft, facts string, mode flowSpec) []string {
+	numbers := numericFactRe
+	if !mode.FinanceMode() {
+		numbers = universalNumericFactRe
+	}
+	allowed := map[string]bool{}
+	for v := range lockNumberTokens(sourceWithBriefFacts(source, mode), numbers) {
 		allowed[numericValueKey(v)] = true
+	}
+	if mode.FinanceMode() {
+		for _, v := range []string{"5元", "5块"} {
+			allowed[numericValueKey(v)] = true
+		}
 	}
 	for _, f := range checkedFacts(facts) {
 		if f.Status == "成立" || f.Status == "纠错" || f.Status == "已过时" {
-			for v := range lockNumberTokens(f.Value+" "+f.Latest, numericFactRe) {
+			for v := range lockNumberTokens(f.Value+" "+f.Latest, numbers) {
 				allowed[numericValueKey(v)] = true
 			}
 		}
@@ -291,13 +341,13 @@ func unsupportedNumericValues(source, draft, facts string) []string {
 	_ = json.Unmarshal([]byte(facts), &doc)
 	for _, f := range doc.Fresh {
 		if supportedSource(f.Source) {
-			for v := range lockNumberTokens(f.Fact+" "+f.Value, numericFactRe) {
+			for v := range lockNumberTokens(f.Fact+" "+f.Value, numbers) {
 				allowed[numericValueKey(v)] = true
 			}
 		}
 	}
 	var issues []string
-	for _, v := range sortedKeys(lockNumberTokens(draft, numericFactRe)) {
+	for _, v := range sortedKeys(lockNumberTokens(draft, numbers)) {
 		if !allowed[numericValueKey(v)] {
 			issues = append(issues, v)
 		}
@@ -317,12 +367,14 @@ func containsExact(items []string, s string) bool {
 // Used after field repair as well as by the reviewer guard. Semantic course
 // boundaries remain the reviewer's job; do not guess the transition from a regex.
 func editorialWarnings(source string, draft remixDraft, ctx editorialContext) []string {
-	warnings := publishFieldIssues(draft)
-	issues := checkLockNumbersWithFacts(source, draft.ContinuousScript, string(ctx.Facts))
+	mode := ctx.mode()
+	warnings := publishFieldIssuesFor(draft, mode)
+	warnings = append(warnings, bannedWordWarnings(draft.ContinuousScript, ctx.Brief)...)
+	issues := checkLockNumbersWithFacts(sourceWithBriefFacts(source, mode), draft.ContinuousScript, string(ctx.Facts))
 	if !issues.empty() {
 		warnings = append(warnings, "数字待复核："+lockNumberSummary(issues))
 	}
-	if values := unsupportedNumericValues(source, draft.ContinuousScript, string(ctx.Facts)); len(values) > 0 {
+	if values := unsupportedNumericValuesFor(source, draft.ContinuousScript, string(ctx.Facts), mode); len(values) > 0 {
 		warnings = append(warnings, "未获事实支持的金额或利率："+strings.Join(values, "、"))
 	}
 	for i, topic := range draft.Topics {
@@ -334,7 +386,7 @@ func editorialWarnings(source string, draft remixDraft, ctx editorialContext) []
 		warnings = append(warnings, "事实结论不可用，关键数据待人工复核。")
 	}
 	if ctx.PlannedStructure {
-		warnings = append(warnings, structureAdvisories(draft.ContinuousScript)...)
+		warnings = append(warnings, structureAdvisoriesFor(draft.ContinuousScript, mode)...)
 	}
 	stats := selfCheckMeasure(source, draft.ContinuousScript)
 	if stats.sourceRunes >= selfCheckMinSourceRunes && (!stats.passes(ctx.Limits) || stats.lenRatio > 1.2) {

@@ -40,6 +40,8 @@ type ReviewRecord struct {
 }
 
 type ReviewOptions struct {
+	// WorkflowJSON 让旧运行返工也使用该轮冻结的风格和简报。
+	WorkflowJSON    string
 	EditorialRules  *string
 	UserTemplate    string
 	Client          ChatClient
@@ -129,18 +131,31 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 		annotations = "（无，本轮为发稿前自动终审）"
 	}
 	ctx := loadEditorialContext(opts.OutputDir)
+	if spec, ok := parseFlowSpec(opts.WorkflowJSON); ok {
+		ctx.Style, ctx.Brief, ctx.Finance = spec.Style, spec.Brief, spec.Finance
+		ctx.BriefHash = spec.Brief.hash()
+		if spec.EditorialRules != nil {
+			ctx.Policy, ctx.CustomPolicy = *spec.EditorialRules, true
+		} else if !spec.FinanceMode() && !ctx.CustomPolicy {
+			ctx.Policy, ctx.CustomPolicy = "", true
+		}
+	}
 	// 旧运行续审沿用事实与自定义编辑要求，使用现行规则；不修改历史上下文文件。
 	if opts.EditorialRules != nil {
 		ctx.Policy = *opts.EditorialRules
 		ctx.CustomPolicy = true
-	} else if !ctx.CustomPolicy {
+	} else if !ctx.CustomPolicy && ctx.mode().FinanceMode() {
 		ctx.Policy = SharedEditorialPolicy
 	}
 	if strings.TrimSpace(opts.UserTemplate) != "" {
 		ctx.ReviewerUser = opts.UserTemplate
 	}
 	if _, err := os.Stat(filepath.Join(opts.OutputDir, "editorial_context.json")); err != nil || opts.OutputDir == "" {
-		ctx.ReviewerPrompt = override(opts.SystemPrompt, reviewerRolePrompt)
+		fallback := reviewerRolePrompt
+		if !ctx.mode().FinanceMode() {
+			fallback = universalReviewerPrompt
+		}
+		ctx.ReviewerPrompt = override(opts.SystemPrompt, fallback)
 		if strings.TrimSpace(opts.FactsJSON) != "" {
 			ctx.Facts = json.RawMessage(normalizeFacts(opts.FactsJSON))
 		}
@@ -152,7 +167,8 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 	}
 	facts := string(ctx.Facts)
 	system := withEditorialPolicy(ctx.ReviewerPrompt, ctx.Policy) + "\n\n" + ReviewerJSONContract
-	user := reviewUserFromTemplate(ctx.ReviewerUser, opts.Source, string(canonical), annotations, facts, string(ctx.WritingPlan))
+	user := reviewUserFromTemplate(ctx.ReviewerUser, opts.Source, string(canonical), annotations, facts, string(ctx.WritingPlan), ctx.Brief.render())
+	record.Warnings = bannedWordWarnings(draft.ContinuousScript, ctx.Brief)
 	if opts.OutputDir != "" {
 		_ = os.WriteFile(filepath.Join(opts.OutputDir, fmt.Sprintf("review_prompt_system_round_%d.txt", round)), []byte(system), 0644)
 		_ = os.WriteFile(filepath.Join(opts.OutputDir, fmt.Sprintf("review_prompt_user_round_%d.txt", round)), []byte(user), 0644)
@@ -233,6 +249,7 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 	}
 	record.Verdict = "fixed"
 	record.Revised = &revised
+	record.Warnings = bannedWordWarnings(revised.ContinuousScript, ctx.Brief)
 	return finish(string(revisedJSON))
 }
 

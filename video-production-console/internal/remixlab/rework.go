@@ -269,6 +269,7 @@ func (s *Service) executeRework(exp store.RemixLabExperimentRecord, slot store.R
 		}
 	}
 	outcome := openaicompat.ReviewRemixDraft(openaicompat.ReviewOptions{
+		WorkflowJSON:    exp.WorkflowJSON,
 		BaseURL:         slot.BaseURL,
 		APIKey:          key,
 		Model:           reviewerModel,
