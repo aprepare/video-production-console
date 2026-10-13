@@ -40,6 +40,7 @@ var publicSettingKeys = map[string]struct{}{
 	"aurastd_modify_timbre": {}, "aurastd_sound_effects": {},
 	"media_catalog_path": {}, "ffmpeg_path": {}, "ffprobe_path": {},
 	"vision_base_url": {}, "vision_model": {}, "embedding_base_url": {}, "embedding_model": {},
+	"analysis_base_url": {}, "analysis_model": {},
 	"pexels_api_base_url": {}, "pixabay_api_base_url": {}, "max_external_results_per_query": {},
 	"bgm_dir": {}, "montage_style": {},
 	"platform_api_base_url": {},

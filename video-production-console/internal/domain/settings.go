@@ -63,6 +63,8 @@ type PublicSettings struct {
 	FFprobePath                 string   `json:"ffprobe_path"`
 	VisionBaseURL               string   `json:"vision_base_url"`
 	VisionModel                 string   `json:"vision_model"`
+	AnalysisBaseURL             string   `json:"analysis_base_url"`
+	AnalysisModel               string   `json:"analysis_model"`
 	EmbeddingBaseURL            string   `json:"embedding_base_url"`
 	EmbeddingModel              string   `json:"embedding_model"`
 	PexelsAPIBaseURL            string   `json:"pexels_api_base_url"`

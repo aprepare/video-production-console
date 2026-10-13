@@ -1391,6 +1391,22 @@ ALTER TABLE reference_posts ADD COLUMN media_path TEXT NOT NULL DEFAULT '';
 ALTER TABLE reference_posts ADD COLUMN media_size INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE reference_posts ADD COLUMN media_error TEXT NOT NULL DEFAULT '';
 ALTER TABLE reference_posts ADD COLUMN cover_path TEXT NOT NULL DEFAULT '';`,
+	// 对标视频拆解分析记录。
+	`CREATE TABLE reference_analyses (
+    id TEXT PRIMARY KEY,
+    reference_id TEXT NOT NULL REFERENCES reference_posts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),
+    model TEXT NOT NULL DEFAULT '',
+    focus TEXT NOT NULL DEFAULT '',
+    frame_count INTEGER NOT NULL DEFAULT 0,
+    report_json TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX reference_analyses_reference_idx ON reference_analyses(reference_id, created_at DESC);
+CREATE UNIQUE INDEX reference_analyses_active_idx ON reference_analyses(reference_id)
+    WHERE status IN ('queued','running');`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

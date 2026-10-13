@@ -59,7 +59,7 @@ func newRemixLabTestEnv(t *testing.T) (*sql.DB, http.Handler) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	dataRoot := t.TempDir()
+	dataRoot := remixLabDataRoot(t)
 	projectRepo := store.NewProjectRepository(db)
 	svc := remixlab.NewService(
 		store.NewRemixLabRepository(db),
@@ -77,6 +77,26 @@ func newRemixLabTestEnv(t *testing.T) (*sql.DB, http.Handler) {
 		projectRepo,
 	)
 	return db, NewRemixLabHandler(svc, projectRepo)
+}
+
+// remixLabDataRoot outlives the request: experiment runs keep writing in the
+// background after a handler returns, so cleanup retries instead of failing
+// the test the way t.TempDir does on a directory that is still being written.
+func remixLabDataRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "remixlab-http-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for attempt := 0; attempt < 40; attempt++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+	return dir
 }
 
 func assertNoSecretLeak(t *testing.T, body string) {

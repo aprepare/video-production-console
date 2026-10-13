@@ -66,6 +66,8 @@ var publicFieldLabels = map[string]string{
 	"ffprobe_path":                   "FFprobe 路径",
 	"bgm_dir":                        "BGM 目录",
 	"platform_api_base_url":          "平台接口地址",
+	"analysis_base_url":              "拆解模型地址",
+	"analysis_model":                 "拆解模型名",
 	"montage_style":                  "混剪样式",
 }
 

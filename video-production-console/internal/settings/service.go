@@ -38,6 +38,7 @@ const (
 	SecretImageAPIKey      = "image_api_key"
 	SecretImageTextAPIKey  = "image_text_api_key"
 	SecretVisionAPIKey     = "vision_api_key"
+	SecretAnalysisAPIKey   = "analysis_api_key"
 	SecretEmbeddingAPIKey  = "embedding_api_key"
 	SecretPixabayAPIKey    = "pixabay_api_key"
 	SecretPlatformAPIToken = "platform_api_token"
@@ -76,7 +77,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey, SecretPlatformAPIToken}
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretAnalysisAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey, SecretPlatformAPIToken}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -148,6 +149,7 @@ type Runtime struct {
 	ImageAPIKey      string           `json:"-"`
 	ImageTextAPIKey  string           `json:"-"`
 	VisionAPIKey     string           `json:"-"`
+	AnalysisAPIKey   string           `json:"-"`
 	EmbeddingAPIKey  string           `json:"-"`
 	PixabayAPIKey    string           `json:"-"`
 	PlatformAPIToken string           `json:"-"`
@@ -366,6 +368,8 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.MontageStyle = configured.MontageStyle
 	s.active.BGMDir = configured.BGMDir
 	s.active.PlatformAPIBaseURL = configured.PlatformAPIBaseURL
+	s.active.AnalysisBaseURL = configured.AnalysisBaseURL
+	s.active.AnalysisModel = configured.AnalysisModel
 	copyVoiceHotSettings(s.active, configured)
 }
 
@@ -417,7 +421,7 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 	if s.active == nil {
 		return
 	}
-	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken} {
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken, SecretAnalysisAPIKey} {
 		value, ok := secrets[key]
 		if !ok || value == "" {
 			continue
@@ -429,6 +433,8 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 			s.active.VolcSpeechAPIKey = value
 		case SecretPlatformAPIToken:
 			s.active.PlatformAPIToken = value
+		case SecretAnalysisAPIKey:
+			s.active.AnalysisAPIKey = value
 		}
 		_, version, configured, err := s.secretValue(ctx, key)
 		if err != nil || !configured {
@@ -547,6 +553,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.ImageTextAPIKey = value
 		case SecretVisionAPIKey:
 			runtime.VisionAPIKey = value
+		case SecretAnalysisAPIKey:
+			runtime.AnalysisAPIKey = value
 		case SecretEmbeddingAPIKey:
 			runtime.EmbeddingAPIKey = value
 		case SecretPixabayAPIKey:
@@ -629,6 +637,8 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.MontageStyle, active.MontageStyle = domain.MontageStyle{}, domain.MontageStyle{}
 	configured.BGMDir, active.BGMDir = "", ""
 	configured.PlatformAPIBaseURL, active.PlatformAPIBaseURL = "", ""
+	configured.AnalysisBaseURL, active.AnalysisBaseURL = "", ""
+	configured.AnalysisModel, active.AnalysisModel = "", ""
 	clearVoiceHotSettings(&configured)
 	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
@@ -680,6 +690,8 @@ func validateSecretUpdate(key, value string) error {
 }
 
 func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
+	value.AnalysisBaseURL = strings.TrimSpace(value.AnalysisBaseURL)
+	value.AnalysisModel = strings.TrimSpace(value.AnalysisModel)
 	value.RemixModel = strings.TrimSpace(value.RemixModel)
 	value.RemixReasoningEffort = strings.ToLower(strings.TrimSpace(value.RemixReasoningEffort))
 	value.RemixCheckModel = strings.TrimSpace(value.RemixCheckModel)
@@ -901,6 +913,15 @@ func validatePublic(value domain.PublicSettings) error {
 		if len(value.VisionBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
 			return invalid("vision_base_url")
 		}
+	}
+	if value.AnalysisBaseURL != "" {
+		parsed, err := parseHTTPURL(value.AnalysisBaseURL)
+		if len(value.AnalysisBaseURL) > 2048 || err != nil || parsed.RawQuery != "" {
+			return invalid("analysis_base_url")
+		}
+	}
+	if len(value.AnalysisModel) > 256 {
+		return invalid("analysis_model")
 	}
 	if value.VisionModel != strings.TrimSpace(value.VisionModel) || len(value.VisionModel) > 128 {
 		return invalid("vision_model")
@@ -1216,6 +1237,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"media_catalog_path":       value.MediaCatalogPath,
 		"ffmpeg_path":              value.FFmpegPath, "ffprobe_path": value.FFprobePath,
 		"vision_base_url": value.VisionBaseURL, "vision_model": value.VisionModel,
+		"analysis_base_url": value.AnalysisBaseURL, "analysis_model": value.AnalysisModel,
 		"embedding_base_url": value.EmbeddingBaseURL, "embedding_model": value.EmbeddingModel,
 		"pexels_api_base_url":            value.PexelsAPIBaseURL,
 		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
@@ -1479,6 +1501,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		MediaCatalogPath:       values["media_catalog_path"],
 		FFmpegPath:             values["ffmpeg_path"], FFprobePath: values["ffprobe_path"],
 		VisionBaseURL: values["vision_base_url"], VisionModel: strings.TrimSpace(values["vision_model"]),
+		AnalysisBaseURL: strings.TrimSpace(values["analysis_base_url"]), AnalysisModel: strings.TrimSpace(values["analysis_model"]),
 		EmbeddingBaseURL: values["embedding_base_url"], EmbeddingModel: strings.TrimSpace(values["embedding_model"]),
 		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
 		MaxExternalResultsPerQuery: externalResults,

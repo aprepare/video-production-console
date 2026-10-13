@@ -25,6 +25,7 @@ import (
 	"video-production-console/internal/logging"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
+	"video-production-console/internal/refanalysis"
 	"video-production-console/internal/references"
 	"video-production-console/internal/remixlab"
 	"video-production-console/internal/remixproducer"
@@ -123,6 +124,12 @@ func (a *App) ResumeProductions() {
 func New(options Options) *App {
 	var resumeProductions func()
 	var background []func(context.Context)
+	closers := []func(){closeImageVideo(options.ImageVideoCloser)}
+	closeServices := func() {
+		for _, closeService := range closers {
+			closeService()
+		}
+	}
 	mux := http.NewServeMux()
 	removedFeature := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -243,6 +250,17 @@ func New(options Options) *App {
 			mux.Handle("/api/references/", referencesHandler)
 			background = append(background, referenceService.Run)
 
+			analysisService := refanalysis.New(store.NewReferenceAnalysisRepository(options.DB), referenceRepo, options.Settings)
+			resumeCtx, cancelResume := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := analysisService.Resume(resumeCtx); err != nil {
+				slog.Error("恢复对标拆解状态失败")
+			}
+			cancelResume()
+			analysesHandler := httpapi.NewReferenceAnalysesHandler(analysisService)
+			mux.Handle("/api/reference-analyses", analysesHandler)
+			mux.Handle("/api/reference-analyses/", analysesHandler)
+			closers = append(closers, analysisService.Close)
+
 			merchantsHandler := httpapi.NewMerchantsHandler(options.DB, options.Config.DataRoot)
 			for _, prefix := range []string{"/api/merchants", "/api/merchants/", "/api/materials/", "/api/orders", "/api/orders/", "/api/order-costs/", "/api/business/"} {
 				mux.Handle(prefix, merchantsHandler)
@@ -306,7 +324,7 @@ func New(options Options) *App {
 	})
 	mux.Handle("/", webui.Handler())
 	if options.AuthService == nil {
-		return &App{handler: logging.RequestID(mux), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions, background: background}
+		return &App{handler: logging.RequestID(mux), close: closeServices, resumeProductions: resumeProductions, background: background}
 	}
 	authHandler := httpapi.NewAuthHandler(options.AuthService)
 	mux.Handle("/api/auth/", authHandler)
@@ -326,7 +344,7 @@ func New(options Options) *App {
 			return
 		}
 		protected.ServeHTTP(w, r)
-	})), close: closeImageVideo(options.ImageVideoCloser), resumeProductions: resumeProductions, background: background}
+	})), close: closeServices, resumeProductions: resumeProductions, background: background}
 }
 
 func isLoopbackRemote(remoteAddr string) bool {
