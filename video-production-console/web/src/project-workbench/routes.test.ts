@@ -58,6 +58,8 @@ describe("application routes", () => {
 
 test("parses the business workspaces", () => {
   expect(parseLocation("/references")).toEqual({ view: "references" });
+  expect(parseLocation("/setup")).toEqual({ view: "setup" });
+  expect(parseLocation("/setup/")).toEqual({ view: "setup" });
   expect(parseLocation("/merchants")).toEqual({ view: "merchants" });
   expect(parseLocation("/merchants/814EBFDE-7470-418A-A703-A33596F7E8FE")).toEqual({ view: "merchant", merchantID: "814ebfde-7470-418a-a703-a33596f7e8fe" });
   expect(parseLocation("/merchants/not-a-uuid")).toEqual({ view: "not-found" });

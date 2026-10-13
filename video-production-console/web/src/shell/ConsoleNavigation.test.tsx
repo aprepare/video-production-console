@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ConsoleNavigation } from "./ConsoleNavigation";
 
@@ -20,7 +20,8 @@ test("navigation marks the active workspace and preserves modified link clicks",
 
 test("navigation lists the merchant, reference, copy and image workspaces only", () => {
   render(<ConsoleNavigation active="remix" theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
-  expect(screen.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/image-projects"]);
+  const workspaces = within(screen.getByRole("navigation", { name: "制作空间" }));
+  expect(workspaces.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/image-projects"]);
   expect(screen.getByRole("link", { name: "文案与混剪" }).getAttribute("aria-current")).toBe("page");
   expect(screen.queryByRole("link", { name: "二创文档" })).toBeNull();
   expect(screen.queryByRole("link", { name: "AI短片" })).toBeNull();
@@ -37,4 +38,14 @@ test("global controls remain available in every workspace", () => {
   expect(settings).toHaveBeenCalledOnce();
   expect(theme).toHaveBeenCalledWith("light");
   expect(logout).toHaveBeenCalledOnce();
+});
+
+test("配置体检 shows a dot only while required setup items are pending", () => {
+  const navigate = vi.fn();
+  const { rerender } = render(<ConsoleNavigation active={null} theme="light" onNavigate={navigate} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} setupPending={2} />);
+  const link = screen.getByRole("link", { name: "配置体检，2 项未就绪" });
+  fireEvent.click(link);
+  expect(navigate).toHaveBeenCalledWith("/setup");
+  rerender(<ConsoleNavigation active="setup" theme="light" onNavigate={navigate} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} setupPending={0} />);
+  expect(screen.getByRole("link", { name: "配置体检" }).getAttribute("aria-current")).toBe("page");
 });

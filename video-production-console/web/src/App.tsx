@@ -608,6 +608,7 @@ function App() {
       || route.view === "references"
       || route.view === "merchants"
       || route.view === "merchant"
+      || route.view === "setup"
     ) {
       handledURLRevisionRef.current = urlRevision;
       return;
