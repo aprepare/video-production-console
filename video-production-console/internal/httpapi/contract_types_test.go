@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"maps"
 	"os"
 	"path/filepath"
@@ -82,6 +83,21 @@ func goJSONKeys(t *testing.T, typ reflect.Type) map[string]struct{} {
 		t.Fatalf("expected a struct, got %s", typ.Kind())
 	}
 	keys := map[string]struct{}{}
+	// A custom MarshalJSON may add computed keys; read them from real output.
+	if typ.Implements(reflect.TypeFor[json.Marshaler]()) {
+		raw, err := json.Marshal(reflect.Zero(typ).Interface())
+		if err != nil {
+			t.Fatalf("marshal %s: %v", typ, err)
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &object); err != nil {
+			t.Fatalf("%s does not marshal to an object: %v", typ, err)
+		}
+		for key := range object {
+			keys[key] = struct{}{}
+		}
+		return keys
+	}
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		if !field.IsExported() {
