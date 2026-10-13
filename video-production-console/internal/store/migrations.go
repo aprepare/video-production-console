@@ -1385,6 +1385,12 @@ ALTER TABLE projects ADD COLUMN delivered_at DATETIME;`,
     updated_at DATETIME NOT NULL
 );
 CREATE INDEX aigc_jobs_merchant_idx ON aigc_jobs(merchant_id, created_at DESC);`,
+	// 对标原片缓存与本地封面。
+	`ALTER TABLE reference_posts ADD COLUMN media_status TEXT NOT NULL DEFAULT 'none' CHECK (media_status IN ('none', 'downloading', 'ready', 'failed'));
+ALTER TABLE reference_posts ADD COLUMN media_path TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_posts ADD COLUMN media_size INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE reference_posts ADD COLUMN media_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_posts ADD COLUMN cover_path TEXT NOT NULL DEFAULT '';`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

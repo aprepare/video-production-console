@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"video-production-console/internal/platformapi"
 )
 
 var ErrReferenceNotFound = errors.New("reference post not found")
@@ -24,6 +27,11 @@ type ReferencePost struct {
 	Author           string    `json:"author"`
 	CoverURL         string    `json:"cover_url"`
 	VideoURL         string    `json:"-"`
+	MediaStatus      string    `json:"media_status"`
+	MediaPath        string    `json:"-"`
+	MediaSize        int64     `json:"media_size"`
+	MediaError       string    `json:"media_error"`
+	CoverPath        string    `json:"-"`
 	DurationS        float64   `json:"duration_s"`
 	Likes            int64     `json:"likes"`
 	Comments         int64     `json:"comments"`
@@ -43,8 +51,24 @@ type ReferencePost struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// HasVideo reports whether a playable URL was captured for transcription.
-func (p ReferencePost) HasVideo() bool { return strings.TrimSpace(p.VideoURL) != "" }
+// HasVideo reports whether a video URL or a cached source is available.
+func (p ReferencePost) HasVideo() bool {
+	return strings.TrimSpace(p.VideoURL) != "" || p.MediaStatus == "ready"
+}
+
+func (p ReferencePost) MarshalJSON() ([]byte, error) {
+	type record ReferencePost
+	sentences := []platformapi.Sentence{}
+	if err := json.Unmarshal([]byte(p.TranscriptJSON), &sentences); err != nil || sentences == nil {
+		sentences = []platformapi.Sentence{}
+	}
+	return json.Marshal(struct {
+		record
+		HasVideo  bool                   `json:"has_video"`
+		HasCover  bool                   `json:"has_cover"`
+		Sentences []platformapi.Sentence `json:"sentences"`
+	}{record(p), p.HasVideo(), strings.TrimSpace(p.CoverURL) != "" || p.CoverPath != "", sentences})
+}
 
 type ReferenceRepository struct{ db *sql.DB }
 
@@ -52,19 +76,21 @@ func NewReferenceRepository(db *sql.DB) *ReferenceRepository { return &Reference
 
 const referenceColumns = `id, platform, external_id, url, title, caption, author, cover_url, video_url, duration_s,
 	likes, comments, shares, collects, plays, posted_at, keyword, merchant_id, transcript_status, transcript_task_id,
-	transcript, transcript_json, transcript_error, notes, created_at, updated_at`
+	transcript, transcript_json, transcript_error, notes, created_at, updated_at,
+	media_status, media_path, media_size, media_error, cover_path`
 
 func scanReference(row interface{ Scan(...any) error }) (ReferencePost, error) {
 	var p ReferencePost
 	err := row.Scan(&p.ID, &p.Platform, &p.ExternalID, &p.URL, &p.Title, &p.Caption, &p.Author, &p.CoverURL, &p.VideoURL, &p.DurationS,
 		&p.Likes, &p.Comments, &p.Shares, &p.Collects, &p.Plays, &p.PostedAt, &p.Keyword, &p.MerchantID, &p.TranscriptStatus, &p.TranscriptTaskID,
-		&p.Transcript, &p.TranscriptJSON, &p.TranscriptError, &p.Notes, &p.CreatedAt, &p.UpdatedAt)
+		&p.Transcript, &p.TranscriptJSON, &p.TranscriptError, &p.Notes, &p.CreatedAt, &p.UpdatedAt,
+		&p.MediaStatus, &p.MediaPath, &p.MediaSize, &p.MediaError, &p.CoverPath)
 	return p, err
 }
 
 // Upsert stores a post keyed by (platform, external_id). Re-collecting the
 // same post refreshes its counts and media URL but never discards an
-// existing transcript, notes or merchant link.
+// existing transcript, notes, merchant link or cached media.
 func (r *ReferenceRepository) Upsert(ctx context.Context, p ReferencePost) (ReferencePost, error) {
 	now := time.Now().UTC()
 	if p.CreatedAt.IsZero() {
@@ -74,8 +100,11 @@ func (r *ReferenceRepository) Upsert(ctx context.Context, p ReferencePost) (Refe
 	if p.TranscriptStatus == "" {
 		p.TranscriptStatus = "none"
 	}
+	if p.MediaStatus == "" {
+		p.MediaStatus = "none"
+	}
 	_, err := r.db.ExecContext(ctx, `INSERT INTO reference_posts(`+referenceColumns+`)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(platform, external_id) DO UPDATE SET
 			url=excluded.url, title=excluded.title, caption=excluded.caption, author=excluded.author,
 			cover_url=excluded.cover_url,
@@ -86,7 +115,8 @@ func (r *ReferenceRepository) Upsert(ctx context.Context, p ReferencePost) (Refe
 			updated_at=excluded.updated_at`,
 		p.ID, p.Platform, p.ExternalID, p.URL, p.Title, p.Caption, p.Author, p.CoverURL, p.VideoURL, p.DurationS,
 		p.Likes, p.Comments, p.Shares, p.Collects, p.Plays, p.PostedAt, p.Keyword, p.MerchantID, p.TranscriptStatus, p.TranscriptTaskID,
-		p.Transcript, p.TranscriptJSON, p.TranscriptError, p.Notes, p.CreatedAt, p.UpdatedAt)
+		p.Transcript, p.TranscriptJSON, p.TranscriptError, p.Notes, p.CreatedAt, p.UpdatedAt,
+		p.MediaStatus, p.MediaPath, p.MediaSize, p.MediaError, p.CoverPath)
 	if err != nil {
 		return ReferencePost{}, fmt.Errorf("upsert reference post: %w", err)
 	}
@@ -166,6 +196,38 @@ func (r *ReferenceRepository) CompleteTranscript(ctx context.Context, id, text, 
 
 func (r *ReferenceRepository) FailTranscript(ctx context.Context, id, message string) error {
 	return r.update(ctx, `transcript_status='failed', transcript_error=?`, id, message)
+}
+
+func (r *ReferenceRepository) MarkMediaDownloading(ctx context.Context, id string) error {
+	return r.update(ctx, `media_status='downloading', media_error=''`, id)
+}
+
+func (r *ReferenceRepository) CompleteMedia(ctx context.Context, id, path string, size int64) error {
+	return r.update(ctx, `media_status='ready', media_path=?, media_size=?, media_error=''`, id, path, size)
+}
+
+func (r *ReferenceRepository) FailMedia(ctx context.Context, id, message string) error {
+	return r.update(ctx, `media_status='failed', media_path='', media_size=0, media_error=?`, id, message)
+}
+
+func (r *ReferenceRepository) SetCoverPath(ctx context.Context, id, path string) error {
+	return r.update(ctx, `cover_path=?`, id, path)
+}
+
+// FailInterruptedMedia leaves downloads started in this process untouched.
+func (r *ReferenceRepository) FailInterruptedMedia(ctx context.Context, active []string) error {
+	query := `UPDATE reference_posts SET media_status='failed', media_error=?, updated_at=? WHERE media_status='downloading'`
+	args := []any{"控制台重启，下载中断，请点重新下载", time.Now().UTC()}
+	if len(active) > 0 {
+		query += ` AND id NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(active)), ",") + `)`
+		for _, id := range active {
+			args = append(args, id)
+		}
+	}
+	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("fail interrupted reference media: %w", err)
+	}
+	return nil
 }
 
 // UpdateEditable changes the operator-owned fields.

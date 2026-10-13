@@ -2,6 +2,7 @@ package references
 
 import (
 	"context"
+	"io"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,11 +13,12 @@ import (
 	"video-production-console/internal/store"
 )
 
-type fakeRuntime struct{}
+type fakeRuntime struct{ root string }
 
-func (fakeRuntime) Runtime(context.Context) (consoleSettings.Runtime, error) {
+func (f fakeRuntime) Runtime(context.Context) (consoleSettings.Runtime, error) {
 	runtime := consoleSettings.Runtime{PlatformAPIToken: "t"}
 	runtime.PlatformAPIBaseURL = "http://gateway"
+	runtime.DataRoot = f.root
 	return runtime, nil
 }
 
@@ -25,6 +27,7 @@ type fakePlatform struct {
 	polls    int
 	started  []string
 	resolved platformapi.Post
+	download func(context.Context, platformapi.Platform, string, io.Writer, int64) (int64, error)
 }
 
 func (f *fakePlatform) Status(context.Context) ([]platformapi.AppStatus, error) { return nil, nil }
@@ -36,6 +39,13 @@ func (f *fakePlatform) Resolve(context.Context, string) (platformapi.Post, error
 }
 func (f *fakePlatform) Comments(context.Context, platformapi.Platform, string, int) ([]platformapi.Comment, error) {
 	return nil, nil
+}
+func (f *fakePlatform) Download(ctx context.Context, platform platformapi.Platform, rawURL string, w io.Writer, limit int64) (int64, error) {
+	if f.download != nil {
+		return f.download(ctx, platform, rawURL, w, limit)
+	}
+	n, err := io.WriteString(w, "video")
+	return int64(n), err
 }
 func (f *fakePlatform) StartTranscription(_ context.Context, videoURL string) (platformapi.Transcript, error) {
 	f.mu.Lock()
@@ -55,13 +65,30 @@ func (f *fakePlatform) Transcription(context.Context, string) (platformapi.Trans
 
 func newService(t *testing.T, platform *fakePlatform) (*Service, *store.ReferenceRepository) {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	repo := store.NewReferenceRepository(db)
-	svc := New(repo, fakeRuntime{}).WithPlatform(func(string, string) (Platform, error) { return platform, nil }, 10*time.Millisecond)
+	svc := New(repo, fakeRuntime{root: root}).WithPlatform(func(string, string) (Platform, error) { return platform, nil }, 10*time.Millisecond)
+	t.Cleanup(func() {
+		svc.mu.Lock()
+		jobs := make([]*mediaDownload, 0, len(svc.downloads))
+		for _, job := range svc.downloads {
+			job.cancel()
+			jobs = append(jobs, job)
+		}
+		svc.mu.Unlock()
+		for _, job := range jobs {
+			select {
+			case <-job.done:
+			case <-time.After(3 * time.Second):
+				t.Error("background download did not stop")
+			}
+		}
+	})
 	return svc, repo
 }
 
@@ -84,7 +111,9 @@ func TestCollectSubmitsTranscriptionAndPollerCompletesIt(t *testing.T) {
 	if post.Caption != "#地道海鲜" || post.Transcript != "" {
 		t.Fatalf("caption must not become transcript: %+v", post)
 	}
-	go svc.Run(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); svc.Run(ctx) }()
+	defer func() { cancel(); <-done }()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		got, _ := repo.Get(ctx, post.ID)

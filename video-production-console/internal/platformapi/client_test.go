@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,6 +125,54 @@ func TestDownloadProxiesGatewayPathsWithToken(t *testing.T) {
 	}
 	if _, err := client.Download(context.Background(), XHS, "/api/img?u=x", &bytes.Buffer{}, 3); err == nil {
 		t.Fatal("size limit not enforced")
+	}
+}
+
+func TestDownloadReturnsHTTPStatusWithoutSignedURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	client, _ := New(srv.URL, "private-token", srv.Client())
+	_, err := client.Download(context.Background(), Douyin, srv.URL+"/video?signature=private-signature", io.Discard, 1024)
+	var status *DownloadHTTPError
+	if !errors.As(err, &status) || status.StatusCode != 403 {
+		t.Fatalf("HTTP error=%v", err)
+	}
+	if strings.Contains(err.Error(), "private-") || strings.Contains(err.Error(), srv.URL) {
+		t.Fatalf("unsafe error=%v", err)
+	}
+}
+
+func TestDownloadUsesPlatformUAAndRedactsNetworkErrors(t *testing.T) {
+	for _, tc := range []struct {
+		platform Platform
+		ua       string
+	}{{Douyin, "com.ss.android.ugc.aweme"}, {Channels, "MicroMessenger"}} {
+		t.Run(string(tc.platform), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.Contains(r.UserAgent(), tc.ua) {
+					t.Error("platform UA missing")
+				}
+				if r.Header.Get("Authorization") != "" {
+					t.Error("gateway token sent to CDN")
+				}
+				_, _ = io.WriteString(w, "video")
+			}))
+			defer srv.Close()
+			client, _ := New(srv.URL, "private-token", srv.Client())
+			if _, err := client.Download(context.Background(), tc.platform, srv.URL+"/video", io.Discard, 5); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Download(context.Background(), tc.platform, srv.URL+"/video", io.Discard, 4); !errors.Is(err, ErrMediaTooLarge) {
+				t.Fatalf("limit error=%v", err)
+			}
+			srv.Close()
+			_, err := client.Download(context.Background(), tc.platform, srv.URL+"/video?signature=private-signature", io.Discard, 5)
+			if err == nil || strings.Contains(err.Error(), "private-") || strings.Contains(err.Error(), srv.URL) {
+				t.Fatalf("network error=%v", err)
+			}
+		})
 	}
 }
 

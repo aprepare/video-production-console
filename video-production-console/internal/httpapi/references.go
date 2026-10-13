@@ -3,8 +3,10 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"video-production-console/internal/platformapi"
 	"video-production-console/internal/references"
@@ -30,6 +32,9 @@ func NewReferencesHandler(service *references.Service, repo *store.ReferenceRepo
 	mux.HandleFunc("DELETE /api/references/{id}", h.delete)
 	mux.HandleFunc("POST /api/references/{id}/transcribe", h.transcribe)
 	mux.HandleFunc("GET /api/references/{id}/comments", h.comments)
+	mux.HandleFunc("GET /api/references/{id}/media", h.media)
+	mux.HandleFunc("POST /api/references/{id}/media", h.cacheMedia)
+	mux.HandleFunc("GET /api/references/{id}/cover", h.cover)
 	return mux
 }
 
@@ -41,6 +46,8 @@ func (h *referencesHandler) platformError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "reference_not_found", "对标内容不存在。")
 	case errors.Is(err, references.ErrNoTranscribableVideo):
 		writeError(w, http.StatusConflict, "no_transcribable_video", "这条内容没有视频，无法转写口播。")
+	case errors.Is(err, references.ErrNoReferenceVideo):
+		writeError(w, http.StatusConflict, "no_reference_video", "这条内容没有视频。")
 	default:
 		writeError(w, http.StatusBadGateway, "platform_api_failed", err.Error())
 	}
@@ -167,7 +174,7 @@ func (h *referencesHandler) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *referencesHandler) delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.repo.Delete(r.Context(), r.PathValue("id")); err != nil {
+	if err := h.service.Delete(r.Context(), r.PathValue("id")); err != nil {
 		h.platformError(w, err)
 		return
 	}
@@ -194,4 +201,91 @@ func (h *referencesHandler) comments(w http.ResponseWriter, r *http.Request) {
 		comments = []platformapi.Comment{}
 	}
 	writeJSON(w, http.StatusOK, comments)
+}
+
+func (h *referencesHandler) cacheMedia(w http.ResponseWriter, r *http.Request) {
+	post, err := h.service.StartMediaCache(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.platformError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, post)
+}
+
+func (h *referencesHandler) media(w http.ResponseWriter, r *http.Request) {
+	h.serveMedia(w, r, false)
+}
+
+func (h *referencesHandler) cover(w http.ResponseWriter, r *http.Request) {
+	h.serveMedia(w, r, true)
+}
+
+func (h *referencesHandler) serveMedia(w http.ResponseWriter, r *http.Request, cover bool) {
+	post, err := h.repo.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.platformError(w, err)
+		return
+	}
+	notReady := func() {
+		if cover {
+			writeError(w, http.StatusNotFound, "reference_cover_not_ready", "封面还没下载好。")
+		} else {
+			writeError(w, http.StatusNotFound, "reference_media_not_ready", "原视频还没下载好。")
+		}
+	}
+	path := post.MediaPath
+	if cover {
+		path = post.CoverPath
+	} else if post.MediaStatus != "ready" {
+		notReady()
+		return
+	}
+	file, err := h.service.OpenMedia(r.Context(), path)
+	if err != nil {
+		notReady()
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		notReady()
+		return
+	}
+	if cover {
+		var head [512]byte
+		n, err := file.ReadAt(head[:], 0)
+		if n == 0 && err != nil {
+			notReady()
+			return
+		}
+		w.Header().Set("Content-Type", http.DetectContentType(head[:n]))
+	} else {
+		w.Header().Set("Content-Type", "video/mp4")
+		if r.URL.Query().Get("download") == "1" {
+			filename := strings.ReplaceAll(url.QueryEscape(referenceMediaFilename(post)), "+", "%20")
+			w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+filename)
+		}
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
+func referenceMediaFilename(post store.ReferencePost) string {
+	clean := func(value string) string {
+		value = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) || strings.ContainsRune(`/\:*?"<>|`, r) {
+				return -1
+			}
+			return r
+		}, value)
+		return strings.Trim(value, " .")
+	}
+	title := []rune(strings.TrimSpace(post.Title))
+	if len(title) > 30 {
+		title = title[:30]
+	}
+	name := clean(string(title))
+	if name == "" {
+		name = clean(post.Platform + "-" + post.ExternalID)
+	}
+	return name + ".mp4"
 }

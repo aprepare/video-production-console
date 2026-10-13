@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ type Platform interface {
 	Comments(ctx context.Context, platform platformapi.Platform, externalID string, limit int) ([]platformapi.Comment, error)
 	StartTranscription(ctx context.Context, videoURL string) (platformapi.Transcript, error)
 	Transcription(ctx context.Context, taskID string) (platformapi.Transcript, error)
+	Download(ctx context.Context, platform platformapi.Platform, rawURL string, w io.Writer, limit int64) (int64, error)
 }
 
 type RuntimeProvider interface {
@@ -47,9 +49,11 @@ type Service struct {
 	factory  func(baseURL, token string) (Platform, error)
 	interval time.Duration
 
-	mu      sync.Mutex
-	polling map[string]bool
-	wake    chan struct{}
+	mu        sync.Mutex
+	polling   map[string]bool
+	wake      chan struct{}
+	downloads map[string]*mediaDownload
+	deleting  map[string]bool
 }
 
 // New builds a service that creates gateway clients from live settings, so a
@@ -61,9 +65,11 @@ func New(repo *store.ReferenceRepository, runtime RuntimeProvider) *Service {
 		factory: func(baseURL, token string) (Platform, error) {
 			return platformapi.New(baseURL, token, nil)
 		},
-		interval: 8 * time.Second,
-		polling:  map[string]bool{},
-		wake:     make(chan struct{}, 1),
+		interval:  8 * time.Second,
+		polling:   map[string]bool{},
+		wake:      make(chan struct{}, 1),
+		downloads: map[string]*mediaDownload{},
+		deleting:  map[string]bool{},
 	}
 }
 
@@ -126,6 +132,11 @@ func (s *Service) Collect(ctx context.Context, link string, post *platformapi.Po
 	saved, err := s.repo.Upsert(ctx, toRecord(resolved, keyword, merchantID))
 	if err != nil {
 		return store.ReferencePost{}, err
+	}
+	if saved.HasVideo() && saved.MediaStatus != "ready" {
+		if caching, cacheErr := s.StartMediaCache(ctx, saved.ID); cacheErr == nil {
+			saved = caching
+		}
 	}
 	if transcribe && saved.HasVideo() && saved.TranscriptStatus != "completed" && saved.TranscriptStatus != "running" {
 		return s.startTranscription(ctx, client, saved)
@@ -199,6 +210,16 @@ func (s *Service) kick() {
 
 // Run polls running transcriptions until ctx ends. Start it once.
 func (s *Service) Run(ctx context.Context) {
+	s.mu.Lock()
+	active := make([]string, 0, len(s.downloads))
+	for id := range s.downloads {
+		active = append(active, id)
+	}
+	err := s.repo.FailInterruptedMedia(ctx, active)
+	s.mu.Unlock()
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("reference interrupted media reset failed")
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {

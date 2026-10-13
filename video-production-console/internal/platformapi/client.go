@@ -21,6 +21,15 @@ import (
 // ErrNotConfigured means the gateway URL or token is missing.
 var ErrNotConfigured = errors.New("platform_api_not_configured")
 
+var ErrMediaTooLarge = errors.New("media exceeds size limit")
+
+// DownloadHTTPError exposes the status without retaining a signed CDN URL.
+type DownloadHTTPError struct{ StatusCode int }
+
+func (e *DownloadHTTPError) Error() string {
+	return fmt.Sprintf("download media: HTTP %d", e.StatusCode)
+}
+
 // Platform identifies the source network of a post.
 type Platform string
 
@@ -432,11 +441,14 @@ func (c *Client) Download(ctx context.Context, platform Platform, rawURL string,
 	}
 	resp, err := c.download.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("download media: %w", redact(err, c.token))
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return 0, fmt.Errorf("download %s media failed", platform)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("download media: HTTP %d", resp.StatusCode)
+		return 0, &DownloadHTTPError{StatusCode: resp.StatusCode}
 	}
 	if limit <= 0 {
 		limit = 1 << 30
@@ -446,7 +458,7 @@ func (c *Client) Download(ctx context.Context, platform Platform, rawURL string,
 		return n, fmt.Errorf("download media: %w", err)
 	}
 	if n > limit {
-		return n, fmt.Errorf("media is larger than %d bytes", limit)
+		return n, ErrMediaTooLarge
 	}
 	return n, nil
 }
