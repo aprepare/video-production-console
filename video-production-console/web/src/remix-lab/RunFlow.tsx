@@ -1,3 +1,4 @@
+import { PublishPackage, type PublishingPackage as PublishingPackageData } from "./PublishPackage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FixedFlowSteps, type FixedFlowStep } from "./FixedFlowSteps";
 import { BookOpenText, Clapperboard, FileText, Gauge, PenLine, ScanSearch, Stamp, X } from "lucide-react";
@@ -162,58 +163,33 @@ function ReviewStageSection({ output, draftV1 }: { output: string; draftV1: stri
   );
 }
 
-/** 发布节点抽屉：复制发布文案（描述/短标题/话题），确认已发布。 */
+/** 发布节点抽屉：短标题、简介、封面，确认已发布。 */
 function ProducePublishSection({
+  api,
+  runID,
   stage,
   projectID,
   projectStage,
   busy,
   onCopy,
+  onMessage,
   onPublish,
 }: {
+  api: RemixLabApi;
+  runID: string;
   stage: RemixLabRunStage;
   projectID: string;
   projectStage: string;
   busy: boolean;
   onCopy: (text: string, label: string) => void;
+  onMessage: (message: string) => void;
   onPublish: (projectID: string) => void;
 }) {
-  const publishing = (stage.extra?.publishing ?? null) as {
-    titles?: string[];
-    short_titles?: string[];
-    descriptions?: string[];
-    topics?: string[];
-  } | null;
+  const publishing = (stage.extra?.publishing ?? null) as PublishingPackageData | null;
   const published = projectStage === "published" || stage.extra?.published === true;
-  const descriptions = publishing?.descriptions ?? [];
   return (
     <section className="run-flow-publish">
-      {publishing?.short_titles?.length ? (
-        <>
-          <h4>短标题（点击复制，第1条板面主标题、第2条副标题）</h4>
-          <div className="run-flow-publish__chips">
-            {publishing.short_titles.map((title, index) => (
-              <button key={index} type="button" className="header-button" onClick={() => onCopy(title, "短标题")}>
-                {title}
-              </button>
-            ))}
-          </div>
-        </>
-      ) : null}
-      {descriptions.length ? (
-        <>
-          <h4>视频描述（已带话题，选一条复制）</h4>
-          {descriptions.map((item, index) => (
-            <div key={index} className="run-flow-publish__desc">
-              <pre className="run-flow-inspector__code run-flow-inspector__code--prose">{item}</pre>
-              <button type="button" className="header-button" onClick={() => onCopy(item, "视频描述")}>
-                复制描述 {index + 1}
-              </button>
-            </div>
-          ))}
-        </>
-      ) : null}
-      {!publishing ? <p className="remix-lab-muted">这次运行没有发布包文案；正文在定稿节点查看。</p> : null}
+      <PublishPackage api={api} runID={runID} publishing={publishing} onCopy={onCopy} onMessage={onMessage} />
       <div className="run-flow-inspector__actions">
         {published ? (
           <p className="remix-lab-muted">项目已标记为已发布。</p>
@@ -222,7 +198,7 @@ function ProducePublishSection({
             {busy ? "提交中…" : "确认已发布"}
           </button>
         ) : (
-          <p className="remix-lab-muted">剪映草稿出来后，在这里复制发布文案并确认发布。</p>
+          <p className="remix-lab-muted">剪映草稿出来后，在这里复制发布文案、出封面，发完点确认已发布。</p>
         )}
       </div>
     </section>
@@ -832,6 +808,9 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
               {produceDetail?.note ? <p className="remix-lab-muted">{produceDetail.note}</p> : null}
               {selected.id === "produce-publish" ? (
                 <ProducePublishSection
+                  api={api}
+                  runID={runID}
+                  onMessage={onMessage}
                   stage={selected}
                   projectID={produceProjectID}
                   projectStage={produceDetail?.projectStage ?? ""}

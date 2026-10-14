@@ -3635,3 +3635,27 @@
 .remix-reference-drafts__list span, .remix-reference-drafts__analysis p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
 .remix-reference-drafts__list button { flex-shrink:0; }
 .remix-reference-drafts__raw { max-height:340px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* 发布包：短标题、简介、封面 */
+.publish-package { display: grid; gap: 14px; }
+.publish-package section { display: grid; gap: 8px; }
+.publish-package h4 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: 13px; }
+.publish-package h4 small { color: var(--ds-text-muted); font-size: 12px; font-weight: 500; }
+.publish-package__titles { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.publish-package__copy { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 1px solid var(--ds-border); border-radius: 10px; background: var(--ds-surface); color: var(--ds-text); font: 600 14px/1.5 var(--font-body); text-align: left; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
+.publish-package__copy:hover { border-color: var(--ds-accent); background: var(--ds-accent-soft); }
+.publish-package__copy > span { flex: 1; min-width: 0; word-break: break-all; }
+.publish-package__copy > small { flex: 0 0 auto; color: var(--ds-text-muted); font: 600 11px/1 var(--font-mono); }
+.publish-package__copy > small[data-warn="true"] { color: var(--ds-danger); }
+.publish-package__copy > svg { flex: 0 0 auto; color: var(--ds-text-muted); }
+.publish-package__lines { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 8px; }
+.publish-package__lines label { display: grid; gap: 4px; color: var(--ds-text-muted); font-size: 12px; font-weight: 650; }
+.publish-package__lines input { min-width: 0; padding: 8px 10px; border: 1px solid var(--ds-border); border-radius: 8px; background: var(--ds-surface); color: var(--ds-text); font: 600 14px/1.4 var(--font-body); }
+.publish-package__lines .remix-lab-start { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.publish-package__preview { display: grid; gap: 8px; margin: 0; }
+.publish-package__preview img { display: block; width: min(240px, 100%); border: 1px solid var(--ds-border); border-radius: 10px; background: #000; }
+.publish-package__preview figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ds-text-muted); font-size: 12px; }
+.publish-package__preview figcaption > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publish-package__preview .header-button { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+@media (max-width: 720px) { .publish-package__lines { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .publish-package__copy { transition: none; } }

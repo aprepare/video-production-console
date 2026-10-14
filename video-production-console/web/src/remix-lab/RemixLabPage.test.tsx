@@ -1822,11 +1822,12 @@ test("produce nodes offer redo, export and publish actions on the canvas", async
   await waitFor(() => expect(redos).toHaveLength(1));
   expect(redos[0]).toEqual({ step: "montage" });
 
-  // 发布节点：发布文案复制入口 + 确认已发布
+  // 发布节点：短标题、简介逐条复制，封面入口 + 确认已发布
   fireEvent.click(screen.getByText("发布"));
   expect(await screen.findByText("视频描述一")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "复制描述 1" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "板题" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /视频描述一/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /板题/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /生成封面/ })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "确认已发布" }));
   await waitFor(() => expect(publishes).toHaveLength(1));
 });
