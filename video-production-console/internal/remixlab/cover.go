@@ -75,7 +75,7 @@ func (s *Service) GenerateCover(ctx context.Context, runID, line1, line2 string)
 	if libraryDir == "" {
 		libraryDir = cover.DefaultOutputDir()
 	}
-	path, err := cover.SaveToLibrary(output, libraryDir, s.now().In(time.Local).Format("2006-01-02"), style.Account, titles[0])
+	path, err := cover.SaveToLibrary(output, libraryDir, s.now().In(time.Local).Format("20060102"), style.Account, titles[0])
 	if err != nil {
 		return CoverView{}, err
 	}
