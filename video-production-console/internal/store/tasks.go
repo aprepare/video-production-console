@@ -879,7 +879,19 @@ func (r *TaskRepository) StartAppServerTurn(ctx context.Context, taskID, session
 	})
 }
 func (r *TaskRepository) List(ctx context.Context, projectID string, status domain.TaskStatus) ([]domain.CodexTask, error) {
+	return r.list(ctx, projectID, status, false)
+}
+
+// ListForCenter 是任务中心用的列表，不含已被移除的任务。
+func (r *TaskRepository) ListForCenter(ctx context.Context, projectID string, status domain.TaskStatus) ([]domain.CodexTask, error) {
+	return r.list(ctx, projectID, status, true)
+}
+
+func (r *TaskRepository) list(ctx context.Context, projectID string, status domain.TaskStatus, hideDismissed bool) ([]domain.CodexTask, error) {
 	q := `SELECT ` + taskColumns + ` FROM codex_tasks WHERE 1=1`
+	if hideDismissed {
+		q += ` AND id NOT IN (SELECT task_id FROM task_center_dismissals)`
+	}
 	args := []any{}
 	if projectID != "" {
 		q += " AND project_id=?"
@@ -1627,4 +1639,37 @@ func (r *TaskRepository) Events(ctx context.Context, taskID string) ([]domain.Ta
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ErrTaskNotDismissible 表示任务还在排队或运行，不能从任务中心移除。
+var ErrTaskNotDismissible = errors.New("task is still active")
+
+// DismissFromCenter 只把已结束的任务从任务中心隐藏；任务、产物和引用关系都保留。
+func (r *TaskRepository) DismissFromCenter(ctx context.Context, ids []string, at time.Time) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	count := 0
+	for _, id := range ids {
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM codex_tasks WHERE id=?`, id).Scan(&status); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return 0, err
+		}
+		if !domain.TaskStatus(status).IsTerminal() {
+			return 0, fmt.Errorf("%w: %s", ErrTaskNotDismissible, id)
+		}
+		result, err := tx.ExecContext(ctx, `INSERT INTO task_center_dismissals(task_id, dismissed_at) VALUES(?, ?) ON CONFLICT(task_id) DO NOTHING`, id, at.UTC())
+		if err != nil {
+			return 0, err
+		}
+		if n, _ := result.RowsAffected(); n > 0 {
+			count++
+		}
+	}
+	return count, tx.Commit()
 }

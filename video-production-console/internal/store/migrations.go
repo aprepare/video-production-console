@@ -1407,6 +1407,10 @@ ALTER TABLE reference_posts ADD COLUMN cover_path TEXT NOT NULL DEFAULT '';`,
 CREATE INDEX reference_analyses_reference_idx ON reference_analyses(reference_id, created_at DESC);
 CREATE UNIQUE INDEX reference_analyses_active_idx ON reference_analyses(reference_id)
     WHERE status IN ('queued','running');`,
+	`CREATE TABLE task_center_dismissals (
+    task_id TEXT PRIMARY KEY REFERENCES codex_tasks(id) ON DELETE CASCADE,
+    dismissed_at DATETIME NOT NULL
+);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

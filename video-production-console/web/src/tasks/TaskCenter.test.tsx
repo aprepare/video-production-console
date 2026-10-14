@@ -27,7 +27,7 @@ test("groups live, recent failures and recent completions", () => {
 
 test("drawer lists failures with their reason and opens the project", async () => {
   vi.setSystemTime(now);
-  const api = vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/tasks"
+  const api = vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/tasks?center=1"
     ? [task("b", "failed", 1, { error_message: "剪映登记失败" })]
     : []), { status: 200 }));
   const onOpenProject = vi.fn();
@@ -38,5 +38,41 @@ test("drawer lists failures with their reason and opens the project", async () =
   expect(screen.getByText("剪映登记失败")).toBeTruthy();
   fireEvent.click(screen.getByText("岚山海鲜 第3条", { exact: false }));
   await waitFor(() => expect(onOpenProject).toHaveBeenCalledWith("p1"));
+  vi.useRealTimers();
+});
+
+test("finished tasks can be removed one by one or cleared, live tasks cannot", async () => {
+  vi.setSystemTime(now);
+  const posted: string[][] = [];
+  const api = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/api/tasks/dismiss") {
+      posted.push(JSON.parse(String(init?.body)).ids);
+      return new Response(JSON.stringify({ dismissed: 1 }));
+    }
+    if (path === "/api/tasks?center=1") return new Response(JSON.stringify([
+      task("live", "running", 0.1), task("f1", "failed", 1), task("f2", "failed", 2), task("ok", "completed", 1),
+    ]));
+    return new Response("[]");
+  });
+  render(<TaskCenter api={api} projects={[{ id: "p1", title: "岚山海鲜" }]} onOpenProject={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /任务中心，1 个进行中/ }));
+  expect(screen.getAllByRole("button", { name: /从任务中心移除/ })).toHaveLength(3);
+  fireEvent.click(screen.getAllByRole("button", { name: /从任务中心移除/ })[2]);
+  await waitFor(() => expect(posted).toEqual([["ok"]]));
+  fireEvent.click(screen.getByRole("button", { name: "清除全部失败任务" }));
+  await waitFor(() => expect(posted[1]).toEqual(["f1", "f2"]));
+  await waitFor(() => expect(screen.getByText("48 小时内没有失败。")).toBeTruthy());
+  vi.useRealTimers();
+});
+
+test("a refused removal shows the server reason", async () => {
+  vi.setSystemTime(now);
+  const api = vi.fn(async (path: string) => path === "/api/tasks/dismiss"
+    ? new Response(JSON.stringify({ message: "还在运行的任务不能移除，请先取消。" }), { status: 409 })
+    : new Response(JSON.stringify(path === "/api/tasks?center=1" ? [task("f1", "failed", 1)] : [])));
+  render(<TaskCenter api={api} projects={[]} onOpenProject={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /任务中心，0 个进行中，1 个失败/ }));
+  fireEvent.click(screen.getByRole("button", { name: /从任务中心移除/ }));
+  await waitFor(() => expect(screen.getByText("还在运行的任务不能移除，请先取消。")).toBeTruthy());
   vi.useRealTimers();
 });

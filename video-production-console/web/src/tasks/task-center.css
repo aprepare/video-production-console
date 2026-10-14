@@ -16,3 +16,11 @@
 .task-center__meta { color: var(--ds-text-muted); font-size: 12px; }
 .task-center__error { display: -webkit-box; overflow: hidden; color: var(--ds-danger); font-size: 12px; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .task-center__empty { margin: 0; color: var(--ds-text-muted); font-size: 13px; }
+.task-center__row { position: relative; }
+.task-center__row .task-center__item { padding-right: 36px; }
+.task-center__dismiss { position: absolute; top: 8px; right: 8px; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ds-text-muted); cursor: pointer; }
+.task-center__dismiss:hover { background: var(--ds-surface-muted); color: var(--ds-text); }
+.task-center__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.task-center__heading h3 { margin: 0; }
+.task-center__clear { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ds-text-muted); font: 600 12px/1.4 var(--font-body); cursor: pointer; }
+.task-center__clear:hover { background: var(--ds-surface-muted); color: var(--ds-danger); }

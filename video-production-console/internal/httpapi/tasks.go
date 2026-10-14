@@ -33,6 +33,7 @@ func NewTasksHandler(db *sql.DB, s codex.Scheduler, preparer TaskManifestPrepare
 	mux.HandleFunc("POST /api/projects/{id}/tasks", h.create)
 	mux.HandleFunc("POST /api/projects/{id}/topic-card", h.commitTopicCard)
 	mux.HandleFunc("GET /api/tasks", h.list)
+	mux.HandleFunc("POST /api/tasks/dismiss", h.dismiss)
 	mux.HandleFunc("GET /api/tasks/{id}/timing/summary", h.timingSummary)
 	mux.HandleFunc("GET /api/tasks/{id}/timing/runs", h.timingRuns)
 	mux.HandleFunc("GET /api/tasks/{id}", h.get)
@@ -279,7 +280,11 @@ func (h *taskAPI) activeTaskSourceVersion(ctx context.Context, taskID string) (s
 }
 
 func (h *taskAPI) list(w http.ResponseWriter, r *http.Request) {
-	ts, e := h.repo.List(r.Context(), r.URL.Query().Get("project_id"), domain.TaskStatus(r.URL.Query().Get("status")))
+	listTasks := h.repo.List
+	if r.URL.Query().Get("center") == "1" {
+		listTasks = h.repo.ListForCenter
+	}
+	ts, e := listTasks(r.Context(), r.URL.Query().Get("project_id"), domain.TaskStatus(r.URL.Query().Get("status")))
 	if e != nil {
 		writeError(w, 500, "tasks_list_failed", e.Error())
 		return
@@ -290,6 +295,37 @@ func (h *taskAPI) list(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+// dismiss 只把已结束的任务从任务中心移除，任务记录与产物保留，项目页仍可查看。
+func (h *taskAPI) dismiss(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(w, r, maxNormalJSONRequest, &in); err != nil {
+		writeDecodeError(w, err, "invalid_dismiss", "请选择要移除的任务。")
+		return
+	}
+	if len(in.IDs) == 0 || len(in.IDs) > 500 {
+		writeError(w, http.StatusBadRequest, "invalid_dismiss", "一次可移除 1 到 500 个任务。")
+		return
+	}
+	for _, id := range in.IDs {
+		if _, err := uuid.Parse(id); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_task_id", "任务编号无效。")
+			return
+		}
+	}
+	count, err := h.repo.DismissFromCenter(r.Context(), in.IDs, time.Now().UTC())
+	if errors.Is(err, store.ErrTaskNotDismissible) {
+		writeError(w, http.StatusConflict, "task_still_active", "还在运行的任务不能移除，请先取消。")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "tasks_dismiss_failed", "任务移除失败。")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"dismissed": count})
+}
+
 func (h *taskAPI) get(w http.ResponseWriter, r *http.Request) {
 	t, e := h.repo.Get(r.Context(), r.PathValue("id"))
 	if errors.Is(e, sql.ErrNoRows) {
