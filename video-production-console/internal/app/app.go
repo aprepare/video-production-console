@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -247,6 +249,9 @@ func New(options Options) *App {
 				assetService,
 				projectRepo,
 			)
+			if script := rhStudioScript(); script != "" {
+				remixLabSvc.SetAICoverRunner(remixlab.RHScriptRunner("python", script))
+			}
 			if err := remixLabSvc.FailStale(context.Background()); err != nil {
 				slog.Error("remix lab stale runs", "error", err)
 			}
@@ -461,4 +466,20 @@ func (a *App) Close() {
 	if a != nil && a.close != nil {
 		a.close()
 	}
+}
+
+// rhStudioScript 找 rh-studio 的 rh.py（RunningHub 出图）；找不到时 AI 封面不可用。
+func rhStudioScript() string {
+	candidate := strings.TrimSpace(os.Getenv("VIDEO_CONSOLE_RH_SCRIPT"))
+	if candidate == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		candidate = filepath.Join(home, ".claude", "skills", "rh-studio", "scripts", "rh.py")
+	}
+	if info, err := os.Stat(candidate); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return candidate
 }

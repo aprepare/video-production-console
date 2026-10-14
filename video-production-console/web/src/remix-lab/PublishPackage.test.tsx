@@ -20,7 +20,7 @@ test("short titles follow the video-account rule: no punctuation, at most sixtee
 
 test("each line copies on click and a bad short title is flagged", () => {
   const onCopy = vi.fn();
-  render(<PublishPackage api={vi.fn()} runID="run-1" publishing={publishing} onCopy={onCopy} onMessage={vi.fn()} />);
+  render(<PublishPackage api={vi.fn(async () => noAIJob())} runID="run-1" publishing={publishing} onCopy={onCopy} onMessage={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: /银行柜台悄悄撤掉了一样东西/ }));
   expect(onCopy).toHaveBeenCalledWith("银行柜台悄悄撤掉了一样东西", "短标题");
   fireEvent.click(screen.getByRole("button", { name: /认知#楼市/ }));
@@ -28,8 +28,10 @@ test("each line copies on click and a bad short title is flagged", () => {
   expect(screen.getByText("有标点或空格")).toBeTruthy();
 });
 
+const noAIJob = () => new Response(JSON.stringify({ status: "none" }));
+
 test("the cover lines prefill from the package and generate a cover for this run", async () => {
-  const api = vi.fn(async () => new Response(JSON.stringify({ path: "C:/Users/me/Videos/封面图/20261014_认知漫步_钱的新去处.png", url: "/api/remix-lab/runs/run-1/cover", width: 1080, height: 1920, account: "认知漫步" })));
+  const api = vi.fn(async (url: string) => url.endsWith("/ai-cover") ? noAIJob() : new Response(JSON.stringify({ path: "C:/Users/me/Videos/封面图/20261014_认知漫步_钱的新去处.png", url: "/api/remix-lab/runs/run-1/cover", width: 1080, height: 1920, account: "认知漫步" })));
   const onMessage = vi.fn();
   render(<PublishPackage api={api} runID="run-1" publishing={publishing} onCopy={vi.fn()} onMessage={onMessage} />);
   expect((screen.getByLabelText("第一行") as HTMLInputElement).value).toBe("钱的新去处");
@@ -41,10 +43,43 @@ test("the cover lines prefill from the package and generate a cover for this run
 });
 
 test("empty cover lines are refused before calling the server", () => {
-  const api = vi.fn();
+  const api = vi.fn(async () => noAIJob());
   const onMessage = vi.fn();
   render(<PublishPackage api={api} runID="run-1" publishing={{ short_titles: [], descriptions: [] }} onCopy={vi.fn()} onMessage={onMessage} />);
   fireEvent.click(screen.getByRole("button", { name: /生成封面/ }));
-  expect(api).not.toHaveBeenCalled();
+  expect(api).not.toHaveBeenCalledWith(expect.stringContaining("/cover"), expect.objectContaining({ method: "POST" }));
   expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("两行大字都要填"));
+});
+
+test("AI cover is submitted to RunningHub, shows the wait, and swaps in the cover when done", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const done = { status: "done", titles: ["钱的新去处", "看懂这一步"], cover: { path: "C:/封面图/ai.png", url: "/api/remix-lab/runs/run-1/cover", width: 1088, height: 1920, account: "认知漫步" } };
+    let status: object = { status: "none" };
+    const api = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        status = { status: "running", titles: ["钱的新去处", "看懂这一步"], started_at: new Date(Date.now() - 3 * 60_000).toISOString() };
+        return new Response(JSON.stringify(status), { status: 202 });
+      }
+      return new Response(JSON.stringify(status));
+    });
+    const onMessage = vi.fn();
+    render(<PublishPackage api={api} runID="run-1" publishing={publishing} onCopy={vi.fn()} onMessage={onMessage} />);
+    fireEvent.click(screen.getByRole("button", { name: /AI 出图/ }));
+    await waitFor(() => expect(screen.getByText(/已等 3 分钟/)).toBeTruthy());
+    expect(api).toHaveBeenCalledWith("/api/remix-lab/runs/run-1/ai-cover", expect.objectContaining({ method: "POST", body: JSON.stringify({ line1: "钱的新去处", line2: "看懂这一步不吃亏" }) }));
+    expect((screen.getByRole("button", { name: /AI 出图中/ }) as HTMLButtonElement).disabled).toBe(true);
+    status = done;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(screen.getByText(/已保存：C:\/封面图\/ai.png/)).toBeTruthy());
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("AI 封面出好了"));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a failed AI cover shows the platform reason", async () => {
+  const api = vi.fn(async () => new Response(JSON.stringify({ status: "failed", error: "提交回执不明，平台可能已经扣费" })));
+  render(<PublishPackage api={api} runID="run-1" publishing={publishing} onCopy={vi.fn()} onMessage={vi.fn()} />);
+  await waitFor(() => expect(screen.getByText(/平台可能已经扣费/)).toBeTruthy());
 });

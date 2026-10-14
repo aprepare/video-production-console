@@ -37,6 +37,17 @@ type AccountStyle struct {
 	Colors         [2]string
 	SeparatorLines [2]float64
 	TitleBox       [2]int
+	// PromptTemplate 是技能里该账号的生图提示词，标题位写作 {{TITLE1}} 或 TITLE1。
+	PromptTemplate string
+}
+
+// FillPrompt 把两行标题填进账号生图模板；模板缺失时按参考图通用描述兜底。
+func (s AccountStyle) FillPrompt(titles [2]string) string {
+	template := strings.TrimSpace(s.PromptTemplate)
+	if template == "" {
+		template = "以参考图为模板制作封面，保持构图、配色、字体感、分隔线和留白不变，只替换两行标题，文字逐字准确，不增加任何其他文字。\n第一行：{{TITLE1}}\n第二行：{{TITLE2}}"
+	}
+	return strings.NewReplacer("{{TITLE1}}", titles[0], "{{TITLE2}}", titles[1], "TITLE1", titles[0], "TITLE2", titles[1]).Replace(template)
 }
 
 // NormalizeTitle 接受粘贴进来的标点；清理后仍须是可放进一行的短标题。
@@ -60,6 +71,7 @@ type accountProfile struct {
 	ConsoleID      string `json:"console_id"`
 	CoverReference string `json:"cover_reference"`
 	CoverStyle     string `json:"cover_style"`
+	CoverPrompt    string `json:"cover_prompt"`
 }
 
 // ResolveAccountStyle 按 console_id 找账号；技能里没登记 console_id 的账号按 accountName 兜底。
@@ -134,6 +146,11 @@ func loadAccountStyle(accountDir string, profile accountProfile) (AccountStyle, 
 	}
 	if err != nil {
 		return AccountStyle{}, fmt.Errorf("read cover reference: %w", err)
+	}
+	if raw, err := os.ReadFile(accountFile(accountDir, profile.CoverPrompt, filepath.Join("cover-style", "prompt-template.txt"))); err == nil {
+		style.PromptTemplate = strings.TrimSpace(string(raw))
+	} else if !os.IsNotExist(err) {
+		return AccountStyle{}, fmt.Errorf("read cover prompt: %w", err)
 	}
 	raw, err := os.ReadFile(accountFile(accountDir, profile.CoverStyle, filepath.Join("cover-style", "style.json")))
 	if os.IsNotExist(err) {

@@ -121,6 +121,10 @@ type RunView struct {
 // Service validates remix-lab experiments, resolves slot keys, and drives runners.
 type Service struct {
 	coverMu   sync.Mutex
+	// aiCover 为 nil 时 AI 出图不可用；aiCoverActive 记录本进程里正在跟的 run，防止重复拉起 rh.py。
+	aiCover       AICoverRunner
+	aiCoverMu     sync.Mutex
+	aiCoverActive map[string]bool
 	repo      *store.RemixLabRepository
 	runtime   RuntimeProvider
 	protector security.Protector

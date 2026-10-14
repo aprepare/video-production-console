@@ -49,6 +49,8 @@ func NewRemixLabHandler(svc *remixlab.Service, projects scenicProjectLookup, tas
 	mux.HandleFunc("GET /api/remix-lab/runs/{id}/package", h.getPackage)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/cover", h.postCover)
 	mux.HandleFunc("GET /api/remix-lab/runs/{id}/cover", h.getCover)
+	mux.HandleFunc("POST /api/remix-lab/runs/{id}/ai-cover", h.postAICover)
+	mux.HandleFunc("GET /api/remix-lab/runs/{id}/ai-cover", h.getAICover)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/rework", h.rework)
 	mux.HandleFunc("POST /api/remix-lab/runs/{id}/retry", h.retryRun)
 	mux.HandleFunc("GET /api/remix-lab/runs/{id}/rerun-options", h.rerunOptions)

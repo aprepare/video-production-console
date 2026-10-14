@@ -22,61 +22,95 @@ type CoverView struct {
 }
 
 func (s *Service) GenerateCover(ctx context.Context, runID, line1, line2 string) (CoverView, error) {
+	titles, err := normalizeCoverTitles(line1, line2)
+	if err != nil {
+		return CoverView{}, err
+	}
+	// 与手工编辑发布包串行，避免生成封面时覆盖刚保存的正文。
+	s.coverMu.Lock()
+	defer s.coverMu.Unlock()
+	target, err := s.coverTarget(ctx, runID)
+	if err != nil {
+		return CoverView{}, err
+	}
+	output := filepath.Join(target.run.OutputDir, "cover.png")
+	result, err := cover.Render(cover.RenderRequest{
+		ReferencePath: target.style.ReferencePath, Titles: titles, Colors: target.style.Colors,
+		SeparatorLines: target.style.SeparatorLines, TitleBox: target.style.TitleBox, OutputPath: output,
+	})
+	if err != nil {
+		return CoverView{}, err
+	}
+	return s.publishCover(ctx, target, output, titles, result.Width, result.Height)
+}
+
+func normalizeCoverTitles(line1, line2 string) ([2]string, error) {
 	var titles [2]string
 	for i, title := range []string{line1, line2} {
 		var err error
 		titles[i], err = cover.NormalizeTitle(title)
 		if err != nil {
-			return CoverView{}, err
+			return titles, err
 		}
 	}
-	// 与手工编辑发布包串行，避免生成封面时覆盖刚保存的正文。
-	s.coverMu.Lock()
-	defer s.coverMu.Unlock()
+	return titles, nil
+}
+
+type coverJobTarget struct {
+	run        store.RemixLabRunRecord
+	style      cover.AccountStyle
+	libraryDir string
+}
+
+func (s *Service) coverTarget(ctx context.Context, runID string) (coverJobTarget, error) {
 	run, err := s.repo.GetRun(ctx, runID)
 	if err != nil {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	if run.Status != "completed" || strings.TrimSpace(run.OutputDir) == "" {
-		return CoverView{}, ErrRunNotReworkable
+		return coverJobTarget{}, ErrRunNotReworkable
 	}
 	exp, _, _, err := s.repo.GetExperiment(ctx, run.ExperimentID)
 	if err != nil {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	accountID := exp.ProduceAccountID
 	production, err := s.repo.GetProduction(ctx, run.ID)
 	if err == nil && strings.TrimSpace(production.AccountID) != "" {
 		accountID = production.AccountID
 	} else if err != nil && !errors.Is(err, store.ErrRemixLabNotFound) {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	rt, err := s.runtime.Runtime(ctx)
 	if err != nil {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	accountName, err := s.repo.AccountName(ctx, accountID)
 	if err != nil {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	style, err := cover.ResolveAccountStyle(rt.CoverSkillRoot, accountID, accountName)
 	if err != nil {
-		return CoverView{}, err
-	}
-	output := filepath.Join(run.OutputDir, "cover.png")
-	result, err := cover.Render(cover.RenderRequest{
-		ReferencePath: style.ReferencePath, Titles: titles, Colors: style.Colors,
-		SeparatorLines: style.SeparatorLines, TitleBox: style.TitleBox, OutputPath: output,
-	})
-	if err != nil {
-		return CoverView{}, err
+		return coverJobTarget{}, err
 	}
 	libraryDir := strings.TrimSpace(rt.CoverOutputDir)
 	if libraryDir == "" {
 		libraryDir = cover.DefaultOutputDir()
 	}
-	path, err := cover.SaveToLibrary(output, libraryDir, s.now().In(time.Local).Format("20060102"), style.Account, titles[0])
+	return coverJobTarget{run: run, style: style, libraryDir: libraryDir}, nil
+}
+
+// publishCover 把 run 目录里的 cover.png 存进封面库，并把路径和标题写回发布包；调用方须持有 coverMu。
+func (s *Service) publishCover(ctx context.Context, target coverJobTarget, output string, titles [2]string, width, height int) (CoverView, error) {
+	run := target.run
+	path, err := cover.SaveToLibrary(output, target.libraryDir, s.now().In(time.Local).Format("20060102"), target.style.Account, titles[0])
 	if err != nil {
+		return CoverView{}, err
+	}
+	// 重新读一次，别覆盖排队出图期间操作员保存的发布包。
+	if fresh, err := s.repo.GetRun(ctx, run.ID); err == nil {
+		run = fresh
+	} else {
 		return CoverView{}, err
 	}
 	packageJSON, err := packageWithCover([]byte(run.PackageJSON), path, titles)
@@ -98,10 +132,10 @@ func (s *Service) GenerateCover(ctx context.Context, runID, line1, line2 string)
 	if err := writeCoverPackage(packagePath, diskJSON); err != nil {
 		return CoverView{}, err
 	}
-	if err := s.repo.UpdateRunPackage(ctx, runID, run.ContinuousScript, run.TitlesJSON, string(packageJSON)); err != nil {
+	if err := s.repo.UpdateRunPackage(ctx, run.ID, run.ContinuousScript, run.TitlesJSON, string(packageJSON)); err != nil {
 		return CoverView{}, err
 	}
-	return CoverView{Path: path, URL: "/api/remix-lab/runs/" + run.ID + "/cover", Width: result.Width, Height: result.Height, Account: style.Account}, nil
+	return CoverView{Path: path, URL: "/api/remix-lab/runs/" + run.ID + "/cover", Width: width, Height: height, Account: target.style.Account}, nil
 }
 
 func packageWithCover(raw []byte, path string, titles [2]string) ([]byte, error) {

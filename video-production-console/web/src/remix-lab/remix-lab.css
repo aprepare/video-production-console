@@ -3659,3 +3659,7 @@
 .publish-package__preview .header-button { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
 @media (max-width: 720px) { .publish-package__lines { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .publish-package__copy { transition: none; } }
+.publish-package__ai { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.publish-package__ai .header-button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.publish-package__ai small { flex: 1 1 240px; color: var(--ds-text-muted); font-size: 12px; line-height: 1.5; }
+.publish-package__ai [data-warn="true"] { color: var(--ds-danger); }
