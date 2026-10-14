@@ -604,3 +604,13 @@ func remixLabExperimentStatusFromRuns(statuses []string) string {
 	}
 	return "partial"
 }
+
+// AccountName 返回账号显示名；账号不存在时返回空串。
+func (r *RemixLabRepository) AccountName(ctx context.Context, id string) (string, error) {
+	var name string
+	err := r.db.QueryRowContext(ctx, `SELECT name FROM accounts WHERE id = ?`, id).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}

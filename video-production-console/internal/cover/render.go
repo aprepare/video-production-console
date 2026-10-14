@@ -25,7 +25,9 @@ type RenderRequest struct {
 	Titles         [2]string
 	Colors         [2]string
 	SeparatorLines [2]float64
-	OutputPath     string
+	// TitleBox 是标定过的标题区 [上, 下)（像素）；为零时自动找分隔线。
+	TitleBox   [2]int
+	OutputPath string
 }
 
 type Result struct {
@@ -86,7 +88,11 @@ func Render(req RenderRequest) (Result, error) {
 	groups := separatorGroups(img)
 	var positions [2]int
 	var top, bottom int
-	if len(groups) >= 2 {
+	if box := req.TitleBox; box[1] > box[0] {
+		// 账号模板标定过标题区（像素）时直接用，横版等特殊版式靠它。
+		top, bottom = max(0, box[0]), min(height, box[1])
+		positions = [2]int{top, bottom}
+	} else if len(groups) >= 2 {
 		positions = [2]int{(groups[0].start + groups[0].end - 1) / 2, (groups[1].start + groups[1].end - 1) / 2}
 		top, bottom = groups[0].end, groups[1].start
 	} else {
@@ -128,27 +134,39 @@ func Render(req RenderRequest) (Result, error) {
 	return Result{Width: width, Height: height, SeparatorLines: positions}, nil
 }
 
+// separatorGroups 找封面上横贯全宽的彩色分隔线（暖金或玫红）。按「一行里
+// 鲜艳像素的占比」判断，比整行平均亮度可靠：暗一些的玫红线也能找到，
+// 夜景里零散的灯光又凑不满一整行。
 func separatorGroups(img *image.NRGBA) []lineGroup {
 	var groups []lineGroup
 	start := -1
+	width := img.Bounds().Dx()
 	for y := 0; y <= img.Bounds().Dy(); y++ {
-		warm := false
+		line := false
 		if y < img.Bounds().Dy() {
-			var red, green, blue float64
-			for x := 0; x < img.Bounds().Dx(); x++ {
+			// 分隔线是一整段连着的鲜艳色；标题笔画虽鲜艳但一行里断成很多小段。
+			run, longest := 0, 0
+			for x := 0; x < width; x++ {
 				c := img.NRGBAAt(x, y)
-				red += float64(c.R)
-				green += float64(c.G)
-				blue += float64(c.B)
+				r, g, b := int(c.R), int(c.G), int(c.B)
+				if r > 110 && (r-b > 40 || r-g > 60) {
+					run++
+					longest = max(longest, run)
+				} else {
+					run = 0
+				}
 			}
-			width := float64(img.Bounds().Dx())
-			red, green, blue = red/width, green/width, blue/width
-			warm = (red+green+blue)/3 > 120 && (red-blue > 20 || green-blue > 20)
+			line = float64(longest) >= float64(width)*0.22
 		}
-		if warm && start < 0 {
+		if line && start < 0 {
 			start = y
 		}
-		if !warm && start >= 0 {
+		if !line && start >= 0 {
+			// 分隔线是细线；连续很多行都鲜艳的是标题大字或灯光，不算。
+			if y-start > 12 {
+				start = -1
+				continue
+			}
 			groups = append(groups, lineGroup{start, y})
 			start = -1
 			if len(groups) == 2 {

@@ -167,14 +167,14 @@ func TestResolveAccountStyleMatchesConsoleIDAndDefaults(t *testing.T) {
 	if err := os.WriteFile(profile, []byte(`{"console_id":"matched"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	style, err := ResolveAccountStyle(root, "matched")
+	style, err := ResolveAccountStyle(root, "matched", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if style.Account != "测试账号" || style.ReferencePath != defaultRef || style.Colors != [2]string{"#FFD166", "#F5F2E9"} || style.SeparatorLines != [2]float64{0.34, 0.53} {
 		t.Fatalf("defaults = %+v", style)
 	}
-	if _, err := ResolveAccountStyle(root, "missing"); !errors.Is(err, ErrNoTemplate) {
+	if _, err := ResolveAccountStyle(root, "missing", ""); !errors.Is(err, ErrNoTemplate) {
 		t.Fatalf("missing account = %v", err)
 	}
 	if err := os.WriteFile(profile, []byte(`{"account":"显示账号名","console_id":"matched","cover_reference":"cover-style/cover-reference.png","cover_style":"custom.json"}`), 0o600); err != nil {
@@ -183,14 +183,23 @@ func TestResolveAccountStyleMatchesConsoleIDAndDefaults(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(accountDir, "custom.json"), []byte(`{"cover":{"title_colors":["#123456","#abcdef"],"separator_lines":[0.25,0.55]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	style, err = ResolveAccountStyle(root, "matched")
+	style, err = ResolveAccountStyle(root, "matched", "")
 	if err != nil || style.Account != "显示账号名" || style.Colors != [2]string{"#123456", "#ABCDEF"} || style.SeparatorLines != [2]float64{0.25, 0.55} {
 		t.Fatalf("custom style = %+v, %v", style, err)
+	}
+	if err := os.WriteFile(profile, []byte(`{"cover_reference":"cover-style/cover-reference.png"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if style, err := ResolveAccountStyle(root, "unregistered", "测试账号"); err != nil || style.ReferencePath != defaultRef {
+		t.Fatalf("name fallback = %+v, %v", style, err)
+	}
+	if _, err := ResolveAccountStyle(root, "unregistered", "别的账号"); !errors.Is(err, ErrNoTemplate) {
+		t.Fatalf("unknown name = %v", err)
 	}
 	if err := os.Remove(defaultRef); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveAccountStyle(root, "matched"); !errors.Is(err, ErrNoTemplate) {
+	if _, err := ResolveAccountStyle(root, "matched", ""); !errors.Is(err, ErrNoTemplate) {
 		t.Fatalf("missing reference = %v", err)
 	}
 }
@@ -206,7 +215,7 @@ func TestResolveAccountStyleDefaultRootUsesUserProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	writePNG(t, filepath.Join(dir, "cover-style", "cover-reference.png"), image.NewRGBA(image.Rect(0, 0, 2, 2)))
-	if style, err := ResolveAccountStyle("", "default"); err != nil || style.Account != "默认账号" {
+	if style, err := ResolveAccountStyle("", "default", ""); err != nil || style.Account != "默认账号" {
 		t.Fatalf("default skill root = %+v, %v", style, err)
 	}
 }

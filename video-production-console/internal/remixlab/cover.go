@@ -55,14 +55,18 @@ func (s *Service) GenerateCover(ctx context.Context, runID, line1, line2 string)
 	if err != nil {
 		return CoverView{}, err
 	}
-	style, err := cover.ResolveAccountStyle(rt.CoverSkillRoot, accountID)
+	accountName, err := s.repo.AccountName(ctx, accountID)
+	if err != nil {
+		return CoverView{}, err
+	}
+	style, err := cover.ResolveAccountStyle(rt.CoverSkillRoot, accountID, accountName)
 	if err != nil {
 		return CoverView{}, err
 	}
 	output := filepath.Join(run.OutputDir, "cover.png")
 	result, err := cover.Render(cover.RenderRequest{
 		ReferencePath: style.ReferencePath, Titles: titles, Colors: style.Colors,
-		SeparatorLines: style.SeparatorLines, OutputPath: output,
+		SeparatorLines: style.SeparatorLines, TitleBox: style.TitleBox, OutputPath: output,
 	})
 	if err != nil {
 		return CoverView{}, err

@@ -36,6 +36,7 @@ type AccountStyle struct {
 	ReferencePath  string
 	Colors         [2]string
 	SeparatorLines [2]float64
+	TitleBox       [2]int
 }
 
 // NormalizeTitle 接受粘贴进来的标点；清理后仍须是可放进一行的短标题。
@@ -54,8 +55,17 @@ func NormalizeTitle(text string) (string, error) {
 	return text, nil
 }
 
-func ResolveAccountStyle(skillRoot, accountID string) (AccountStyle, error) {
-	if strings.TrimSpace(accountID) == "" {
+type accountProfile struct {
+	Account        string `json:"account"`
+	ConsoleID      string `json:"console_id"`
+	CoverReference string `json:"cover_reference"`
+	CoverStyle     string `json:"cover_style"`
+}
+
+// ResolveAccountStyle 按 console_id 找账号；技能里没登记 console_id 的账号按 accountName 兜底。
+func ResolveAccountStyle(skillRoot, accountID, accountName string) (AccountStyle, error) {
+	accountID, accountName = strings.TrimSpace(accountID), strings.TrimSpace(accountName)
+	if accountID == "" && accountName == "" {
 		return AccountStyle{}, ErrNoTemplate
 	}
 	if strings.TrimSpace(skillRoot) == "" {
@@ -80,6 +90,8 @@ func ResolveAccountStyle(skillRoot, accountID string) (AccountStyle, error) {
 	if err != nil {
 		return AccountStyle{}, fmt.Errorf("read cover accounts: %w", err)
 	}
+	var fallbackDir string
+	var fallback accountProfile
 	for _, dir := range dirs {
 		if !dir.IsDir() {
 			continue
@@ -92,70 +104,78 @@ func ResolveAccountStyle(skillRoot, accountID string) (AccountStyle, error) {
 		if err != nil {
 			return AccountStyle{}, fmt.Errorf("read cover profile: %w", err)
 		}
-		var profile struct {
-			Account        string `json:"account"`
-			ConsoleID      string `json:"console_id"`
-			CoverReference string `json:"cover_reference"`
-			CoverStyle     string `json:"cover_style"`
-		}
+		var profile accountProfile
 		if err := json.Unmarshal(raw, &profile); err != nil {
 			return AccountStyle{}, fmt.Errorf("decode cover profile %s: %w", dir.Name(), err)
 		}
-		if strings.TrimSpace(profile.ConsoleID) != strings.TrimSpace(accountID) {
-			continue
+		if profile.Account = strings.TrimSpace(profile.Account); profile.Account == "" {
+			profile.Account = dir.Name()
 		}
-		style := AccountStyle{Account: strings.TrimSpace(profile.Account), Colors: defaultColors, SeparatorLines: defaultSeparators}
-		if style.Account == "" {
-			style.Account = dir.Name()
+		consoleID := strings.TrimSpace(profile.ConsoleID)
+		if accountID != "" && consoleID == accountID {
+			return loadAccountStyle(accountDir, profile)
 		}
-		style.ReferencePath = accountFile(accountDir, profile.CoverReference, filepath.Join("cover-style", "cover-reference.png"))
-		info, err := os.Stat(style.ReferencePath)
-		if os.IsNotExist(err) || (err == nil && !info.Mode().IsRegular()) {
-			return AccountStyle{}, ErrNoTemplate
+		if fallbackDir == "" && consoleID == "" && accountName != "" && (dir.Name() == accountName || profile.Account == accountName) {
+			fallbackDir, fallback = accountDir, profile
 		}
-		if err != nil {
-			return AccountStyle{}, fmt.Errorf("read cover reference: %w", err)
-		}
-		stylePath := accountFile(accountDir, profile.CoverStyle, filepath.Join("cover-style", "style.json"))
-		raw, err = os.ReadFile(stylePath)
-		if os.IsNotExist(err) {
-			return style, nil
-		}
-		if err != nil {
-			return AccountStyle{}, fmt.Errorf("read cover style: %w", err)
-		}
-		var config struct {
-			Cover struct {
-				TitleColors    []string  `json:"title_colors"`
-				SeparatorLines []float64 `json:"separator_lines"`
-			} `json:"cover"`
-		}
-		if err := json.Unmarshal(raw, &config); err != nil {
-			return AccountStyle{}, fmt.Errorf("decode cover style: %w", err)
-		}
-		if len(config.Cover.TitleColors) > 0 {
-			if len(config.Cover.TitleColors) != 2 {
-				return AccountStyle{}, errors.New("cover.title_colors must contain two colors")
-			}
-			for i, value := range config.Cover.TitleColors {
-				if _, err := parseColor(value); err != nil {
-					return AccountStyle{}, err
-				}
-				style.Colors[i] = strings.ToUpper(value)
-			}
-		}
-		if len(config.Cover.SeparatorLines) > 0 {
-			if len(config.Cover.SeparatorLines) != 2 {
-				return AccountStyle{}, errors.New("cover.separator_lines must contain two ratios")
-			}
-			style.SeparatorLines = [2]float64{config.Cover.SeparatorLines[0], config.Cover.SeparatorLines[1]}
-			if !validSeparators(style.SeparatorLines) {
-				return AccountStyle{}, errors.New("cover.separator_lines must be increasing ratios between 0 and 1")
-			}
-		}
-		return style, nil
+	}
+	if fallbackDir != "" {
+		return loadAccountStyle(fallbackDir, fallback)
 	}
 	return AccountStyle{}, ErrNoTemplate
+}
+
+func loadAccountStyle(accountDir string, profile accountProfile) (AccountStyle, error) {
+	style := AccountStyle{Account: profile.Account, Colors: defaultColors, SeparatorLines: defaultSeparators}
+	style.ReferencePath = accountFile(accountDir, profile.CoverReference, filepath.Join("cover-style", "cover-reference.png"))
+	info, err := os.Stat(style.ReferencePath)
+	if os.IsNotExist(err) || (err == nil && !info.Mode().IsRegular()) {
+		return AccountStyle{}, ErrNoTemplate
+	}
+	if err != nil {
+		return AccountStyle{}, fmt.Errorf("read cover reference: %w", err)
+	}
+	raw, err := os.ReadFile(accountFile(accountDir, profile.CoverStyle, filepath.Join("cover-style", "style.json")))
+	if os.IsNotExist(err) {
+		return style, nil
+	}
+	if err != nil {
+		return AccountStyle{}, fmt.Errorf("read cover style: %w", err)
+	}
+	var config struct {
+		Cover struct {
+			TitleColors    []string  `json:"title_colors"`
+			SeparatorLines []float64 `json:"separator_lines"`
+			TitleBox       []int     `json:"title_box"`
+		} `json:"cover"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return AccountStyle{}, fmt.Errorf("decode cover style: %w", err)
+	}
+	if len(config.Cover.TitleColors) > 0 {
+		if len(config.Cover.TitleColors) != 2 {
+			return AccountStyle{}, errors.New("cover.title_colors must contain two colors")
+		}
+		for i, value := range config.Cover.TitleColors {
+			if _, err := parseColor(value); err != nil {
+				return AccountStyle{}, err
+			}
+			style.Colors[i] = strings.ToUpper(value)
+		}
+	}
+	if box := config.Cover.TitleBox; len(box) == 2 && box[1] > box[0] && box[0] >= 0 {
+		style.TitleBox = [2]int{box[0], box[1]}
+	}
+	if len(config.Cover.SeparatorLines) > 0 {
+		if len(config.Cover.SeparatorLines) != 2 {
+			return AccountStyle{}, errors.New("cover.separator_lines must contain two ratios")
+		}
+		style.SeparatorLines = [2]float64{config.Cover.SeparatorLines[0], config.Cover.SeparatorLines[1]}
+		if !validSeparators(style.SeparatorLines) {
+			return AccountStyle{}, errors.New("cover.separator_lines must be increasing ratios between 0 and 1")
+		}
+	}
+	return style, nil
 }
 
 func accountFile(dir, value, fallback string) string {
