@@ -8,6 +8,7 @@ import { modelOptionsList, reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { BgmLibrary, BgmTrack, MontageStyle, PublicSettings, Settings } from "../types";
 import { formatTrackDuration, montageFonts, normalizeStyleColor, withMontageStyleDefaults } from "./montageStyle";
+import { AIAccessCard } from "./AIAccessCard";
 import { JianyingHealthCard } from "./JianyingHealthCard";
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
@@ -907,6 +908,7 @@ export function SettingsPanel({
           ) : null}
           {tab === "system" ? (
             <>
+              {api ? <AIAccessCard api={api} /> : null}
               <p className="settings-section-title">平台接口（对标采集与口播转写）</p>
               <Field label="平台接口地址">
                 <input

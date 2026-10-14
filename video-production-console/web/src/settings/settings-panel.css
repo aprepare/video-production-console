@@ -45,3 +45,7 @@
 .settings-inline-button--danger { border-color: color-mix(in srgb, var(--ds-danger) 40%, var(--ds-border)); color: var(--ds-danger); }
 .settings-feedback { margin: 0; color: var(--ds-text-muted); font-size: 12px; }
 .settings-feedback--error { color: var(--ds-danger); }
+.ai-access__lead { margin: 0; color: var(--ds-text-muted); font-size: 13px; line-height: 1.6; }
+.ai-access .jianying-health__facts code { font: 600 12px/1.4 var(--font-mono); word-break: break-all; }
+.ai-access__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: 13px; }
+.ai-access__actions .settings-inline-button { display: inline-flex; align-items: center; gap: 4px; }

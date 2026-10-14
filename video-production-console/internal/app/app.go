@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"video-production-console/internal/buildinfo"
+	"video-production-console/internal/mcpserver"
 
 	"video-production-console/internal/aigc"
 	"video-production-console/internal/assets"
@@ -359,7 +361,8 @@ func New(options Options) *App {
 	mux.Handle("/api/auth/", authHandler)
 	protected := consoleauth.NewMiddleware(options.AuthService).Protect(mux)
 	internalToken := options.InternalToken
-	return &App{handler: logging.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var gateway http.Handler
+	gateway = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Health and login must remain reachable before a browser has a session.
 		// The auth handler applies its own protection to all remaining auth routes.
 		if r.URL.Path == "/api/health" || strings.HasPrefix(r.URL.Path, "/api/auth/") || !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -373,7 +376,65 @@ func New(options Options) *App {
 			return
 		}
 		protected.ServeHTTP(w, r)
-	})), close: closeServices, resumeProductions: resumeProductions, background: background}
+	})
+	handler := gateway
+	if internalToken != "" {
+		tokens := mcpserver.NewTokenStore(options.Config.DataRoot)
+		mcp := mcpserver.New(gateway, internalToken, tokens.Current, buildinfo.String())
+		mux.Handle("GET /api/mcp/token", mcpTokenHandler(tokens, options.Config.ListenAddr, false))
+		mux.Handle("POST /api/mcp/token/rotate", mcpTokenHandler(tokens, options.Config.ListenAddr, true))
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/mcp" || r.URL.Path == "/mcp/" {
+				mcp.ServeHTTP(w, r)
+				return
+			}
+			gateway.ServeHTTP(w, r)
+		})
+	}
+	return &App{handler: logging.RequestID(handler), close: closeServices, resumeProductions: resumeProductions, background: background}
+}
+
+// mcpTokenHandler 给已登录的操作员看 MCP 令牌和接入配置；AI 走内部令牌调用时拒绝，免得它自己换令牌。
+func mcpTokenHandler(tokens *mcpserver.TokenStore, listenAddr string, rotate bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Token") != "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		token := tokens.Current()
+		if rotate {
+			var err error
+			if token, err = tokens.Rotate(); err != nil {
+				http.Error(w, "令牌重置失败", http.StatusInternalServerError)
+				return
+			}
+		}
+		if token == "" {
+			http.Error(w, "令牌生成失败", http.StatusInternalServerError)
+			return
+		}
+		endpoint := "http://" + mcpHost(listenAddr) + "/mcp"
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token":    token,
+			"endpoint": endpoint,
+			"claude":   `claude mcp add --transport http jiying-console ` + endpoint + ` --header "Authorization: Bearer ` + token + `"`,
+			"codex":    "[mcp_servers.jiying-console]\nurl = \"" + endpoint + "\"\nhttp_headers = { Authorization = \"Bearer " + token + "\" }",
+			"json":     `{"mcpServers":{"jiying-console":{"type":"http","url":"` + endpoint + `","headers":{"Authorization":"Bearer ` + token + `"}}}}`,
+		})
+	})
+}
+
+func mcpHost(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "127.0.0.1:2030"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func isLoopbackRemote(remoteAddr string) bool {
