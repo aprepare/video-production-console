@@ -72,6 +72,9 @@ func publishFieldIssues(draft remixDraft) []string {
 }
 
 func publishFieldIssuesFor(draft remixDraft, mode flowSpec) []string {
+	if mode.ChannelsPublish() {
+		return channelsPublishFieldIssues(draft)
+	}
 	if mode.FinanceMode() {
 		return publishFieldIssues(draft)
 	}
@@ -149,6 +152,15 @@ func buildPublishFieldsRepairPrompt(issues []string) string {
 }
 
 func buildPublishFieldsRepairPromptFor(issues []string, mode flowSpec) string {
+	if mode.ChannelsPublish() {
+		var b strings.Builder
+		b.WriteString("发布字段不合格，只补发布字段，continuous_script 一个字不动，按上一条回复相同的 JSON 结构返回完整结果：\n")
+		for i, issue := range issues {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, issue)
+		}
+		b.WriteString(ChannelsPublishingContract)
+		return b.String()
+	}
 	if mode.FinanceMode() {
 		return buildPublishFieldsRepairPrompt(issues)
 	}
@@ -232,6 +244,7 @@ func replaceDraftFields(content string, next remixDraft) string {
 	}
 	set("titles", next.Titles)
 	set("short_titles", next.ShortTitles)
+	set("cover_titles", next.CoverTitles)
 	set("descriptions", next.Descriptions)
 	set("topics", next.Topics)
 	set("cta", next.CTA)

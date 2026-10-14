@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"video-production-console/internal/cover"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/security"
 	"video-production-console/internal/store"
@@ -367,6 +368,8 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	// manifests, so they hot-apply without a restart.
 	s.active.MontageStyle = configured.MontageStyle
 	s.active.BGMDir = configured.BGMDir
+	s.active.CoverSkillRoot = configured.CoverSkillRoot
+	s.active.CoverOutputDir = coverOutputDir(configured.CoverOutputDir)
 	s.active.PlatformAPIBaseURL = configured.PlatformAPIBaseURL
 	s.active.AnalysisBaseURL = configured.AnalysisBaseURL
 	s.active.AnalysisModel = configured.AnalysisModel
@@ -636,6 +639,8 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.ImageGenerationAttempts, active.ImageGenerationAttempts = 0, 0
 	configured.MontageStyle, active.MontageStyle = domain.MontageStyle{}, domain.MontageStyle{}
 	configured.BGMDir, active.BGMDir = "", ""
+	configured.CoverSkillRoot, active.CoverSkillRoot = "", ""
+	configured.CoverOutputDir, active.CoverOutputDir = "", ""
 	configured.PlatformAPIBaseURL, active.PlatformAPIBaseURL = "", ""
 	configured.AnalysisBaseURL, active.AnalysisBaseURL = "", ""
 	configured.AnalysisModel, active.AnalysisModel = "", ""
@@ -699,6 +704,8 @@ func sanitizePublicModels(value domain.PublicSettings) domain.PublicSettings {
 	value.RemixPromptStyle = normalizeRemixPromptStyleSetting(value.RemixPromptStyle)
 	value.ModelOptions = normalizeModelOptions(value.ModelOptions)
 	value.BGMDir = strings.TrimSpace(value.BGMDir)
+	value.CoverSkillRoot = strings.TrimSpace(value.CoverSkillRoot)
+	value.CoverOutputDir = strings.TrimSpace(value.CoverOutputDir)
 	value.MontageStyle = sanitizeMontageStyle(value.MontageStyle)
 	return value
 }
@@ -1036,6 +1043,11 @@ func validatePublic(value domain.PublicSettings) error {
 			return invalid("bgm_dir")
 		}
 	}
+	for key, path := range map[string]string{"cover_skill_root": value.CoverSkillRoot, "cover_output_dir": value.CoverOutputDir} {
+		if path != "" && (!filepath.IsAbs(path) || filepath.Clean(path) != path || validatePlatformLocalPath(path) != nil) {
+			return invalid(key)
+		}
+	}
 	if err := validateMontageStyle(value.MontageStyle.Normalized()); err != nil {
 		return err
 	}
@@ -1243,6 +1255,8 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"pixabay_api_base_url":           value.PixabayAPIBaseURL,
 		"max_external_results_per_query": strconv.Itoa(value.MaxExternalResultsPerQuery),
 		"bgm_dir":                        value.BGMDir,
+		"cover_skill_root":               value.CoverSkillRoot,
+		"cover_output_dir":               coverOutputDir(value.CoverOutputDir),
 		"platform_api_base_url":          value.PlatformAPIBaseURL,
 		"montage_style":                  encodeMontageStyle(value.MontageStyle),
 	}
@@ -1506,9 +1520,18 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		PexelsAPIBaseURL: pexelsBaseURL, PixabayAPIBaseURL: pixabayBaseURL,
 		MaxExternalResultsPerQuery: externalResults,
 		BGMDir:                     strings.TrimSpace(values["bgm_dir"]),
+		CoverSkillRoot:             strings.TrimSpace(values["cover_skill_root"]),
+		CoverOutputDir:             coverOutputDir(values["cover_output_dir"]),
 		PlatformAPIBaseURL:         strings.TrimSpace(values["platform_api_base_url"]),
 		MontageStyle:               montageStyleFromValue(values["montage_style"]),
 	}
+}
+
+func coverOutputDir(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return cover.DefaultOutputDir()
 }
 
 func (s *Service) TestDependency(ctx context.Context, dependency string) Health {

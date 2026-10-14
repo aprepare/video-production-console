@@ -246,5 +246,11 @@ func BuiltinStyles() []StyleTemplate {
 			[]string{"老板出镜", "品牌故事", "信任感"}, "", bossStoryWriter, bossStoryUser),
 		universal("light_wash", "轻度洗稿", "通用", "结构和顺序不动，每句换说法，商家信息换成你的。",
 			[]string{"快速改写", "保留原结构"}, "", lightWashWriter, lightWashUser),
+		{
+			ID: "finance_v2", Name: "视频号爆款二创 v2", Category: "财经卖课",
+			Description: "面向五十岁以上家庭管钱人，以王立群老年男声口吻二创，采用五段式卖课结尾和视频号短标题规则。",
+			BestFor:     []string{"财经二创", "视频号发布"}, Writer: financeV2Writer(), WriterUser: financeV2WriterUser,
+			Finance: true, Publish: "channels_v2", Builtin: true,
+		},
 	}
 }

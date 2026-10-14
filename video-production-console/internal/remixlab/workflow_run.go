@@ -248,6 +248,7 @@ func (s *Service) ImportDraft(ctx context.Context, in DraftInput) (Experiment, e
 		ContinuousScript: script,
 		Titles:           cleanStringList(in.Titles),
 		ShortTitles:      cleanStringList(in.ShortTitles),
+		CoverTitles:      cleanStringList(in.CoverTitles),
 		Descriptions:     cleanStringList(in.Descriptions),
 		Topics:           cleanStringList(in.Topics),
 		CTA:              strings.TrimSpace(in.CTA),

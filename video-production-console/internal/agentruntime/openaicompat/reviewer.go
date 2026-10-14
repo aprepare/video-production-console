@@ -133,6 +133,7 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 	ctx := loadEditorialContext(opts.OutputDir)
 	if spec, ok := parseFlowSpec(opts.WorkflowJSON); ok {
 		ctx.Style, ctx.Brief, ctx.Finance = spec.Style, spec.Brief, spec.Finance
+		ctx.Publish = spec.Publish
 		ctx.BriefHash = spec.Brief.hash()
 		if spec.EditorialRules != nil {
 			ctx.Policy, ctx.CustomPolicy = *spec.EditorialRules, true
@@ -166,7 +167,13 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 		}
 	}
 	facts := string(ctx.Facts)
-	system := withEditorialPolicy(ctx.ReviewerPrompt, ctx.Policy) + "\n\n" + ReviewerJSONContract
+	system := withEditorialPolicy(ctx.ReviewerPrompt, ctx.Policy)
+	if ctx.mode().ChannelsPublish() {
+		// 历史节点可能内嵌旧发布合同；只替换这一段，保留已保存的审稿要求。
+		system = strings.ReplaceAll(system, PublishingContract, "")
+		system += "\n\n发布字段按以下视频号规则审查，优先于上文的发布字段要求：\n" + ChannelsPublishingContract
+	}
+	system += "\n\n" + ReviewerJSONContract
 	user := reviewUserFromTemplate(ctx.ReviewerUser, opts.Source, string(canonical), annotations, facts, string(ctx.WritingPlan), ctx.Brief.render())
 	record.Warnings = bannedWordWarnings(draft.ContinuousScript, ctx.Brief)
 	if opts.OutputDir != "" {
@@ -226,11 +233,14 @@ func ReviewRemixDraft(opts ReviewOptions) ReviewOutcome {
 		return finish("")
 	}
 	revised := reply.Revised
-	if len(revised.Titles) == 0 {
+	if len(revised.Titles) == 0 && !ctx.mode().ChannelsPublish() {
 		revised.Titles = draft.Titles
 	}
 	if len(revised.ShortTitles) == 0 {
 		revised.ShortTitles = draft.ShortTitles
+	}
+	if len(revised.CoverTitles) == 0 {
+		revised.CoverTitles = draft.CoverTitles
 	}
 	if len(revised.Descriptions) == 0 {
 		revised.Descriptions = draft.Descriptions

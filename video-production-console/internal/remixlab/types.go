@@ -3,6 +3,7 @@ package remixlab
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	"video-production-console/internal/agentruntime/openaicompat"
@@ -26,6 +27,7 @@ type ProjectBinder interface {
 }
 
 type RuntimeView struct {
+	CoverSkillRoot, CoverOutputDir                                        string
 	RemixBaseURL, RemixModel, RemixReasoningEffort, RemixAPIKey, DataRoot string
 	// Grok 搜索通道：多agent管线里事实核查agent用它联网核实与补充数据。
 	GrokBaseURL, GrokModel, GrokAPIKey string
@@ -118,6 +120,7 @@ type RunView struct {
 
 // Service validates remix-lab experiments, resolves slot keys, and drives runners.
 type Service struct {
+	coverMu   sync.Mutex
 	repo      *store.RemixLabRepository
 	runtime   RuntimeProvider
 	protector security.Protector

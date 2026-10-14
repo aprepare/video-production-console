@@ -1,0 +1,2 @@
+# Keep the embedded skill prompt byte-for-byte, including its original CRLF.
+finance_v2_writer.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

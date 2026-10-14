@@ -12,7 +12,7 @@ import (
 
 func TestBuiltinStylesHaveStableIDsAndFinancePrompts(t *testing.T) {
 	styles := BuiltinStyles()
-	wantIDs := []string{"finance_course", "universal_remix", "local_store", "product_seller", "knowledge", "boss_story", "light_wash"}
+	wantIDs := []string{"finance_course", "universal_remix", "local_store", "product_seller", "knowledge", "boss_story", "light_wash", "finance_v2"}
 	if len(styles) != len(wantIDs) {
 		t.Fatalf("builtin count = %d, want %d", len(styles), len(wantIDs))
 	}
@@ -21,10 +21,10 @@ func TestBuiltinStylesHaveStableIDsAndFinancePrompts(t *testing.T) {
 		if got.ID != wantID || !got.Builtin {
 			t.Fatalf("builtin[%d] = %#v, want id %q and builtin", i, got, wantID)
 		}
-		if got.Writer == "" || got.WriterUser == "" || got.Reviewer == "" {
+		if got.Writer == "" || got.WriterUser == "" || (got.ID != "finance_v2" && got.Reviewer == "") {
 			t.Fatalf("builtin %q has an empty required prompt", got.ID)
 		}
-		if got.ID != "finance_course" {
+		if !got.Finance {
 			for _, token := range []string{"{{SOURCE}}", "{{NOTES}}", "{{BRIEF}}"} {
 				if !strings.Contains(got.WriterUser, token) {
 					t.Fatalf("builtin %q writer user missing %s", got.ID, token)

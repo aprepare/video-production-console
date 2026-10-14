@@ -38,6 +38,7 @@ func workflowWithStyle(w Workflow, style StyleTemplate, brief *Brief) (Workflow,
 	w.Nodes = append([]WorkflowNode(nil), w.Nodes...)
 	w.Edges = append([][2]string(nil), w.Edges...)
 	w.Style = style.ID
+	w.Publish = style.Publish
 	w.Finance = style.Finance && style.ID != "finance_course"
 	w.Brief = brief
 	rules := style.Rules

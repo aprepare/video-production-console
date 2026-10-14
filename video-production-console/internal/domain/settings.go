@@ -71,6 +71,8 @@ type PublicSettings struct {
 	PixabayAPIBaseURL           string   `json:"pixabay_api_base_url"`
 	MaxExternalResultsPerQuery  int      `json:"max_external_results_per_query"`
 	BGMDir                      string   `json:"bgm_dir"`
+	CoverSkillRoot              string   `json:"cover_skill_root"`
+	CoverOutputDir              string   `json:"cover_output_dir"`
 	// PlatformAPIBaseURL is the console-api gateway: 抖音/小红书/视频号 parsing
 	// and search plus 通义听悟 transcription. The token lives in secrets.
 	PlatformAPIBaseURL string       `json:"platform_api_base_url"`

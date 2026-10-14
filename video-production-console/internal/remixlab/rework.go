@@ -125,6 +125,8 @@ type PackageInput struct {
 	ContinuousScript string   `json:"continuous_script"`
 	Titles           []string `json:"titles"`
 	ShortTitles      []string `json:"short_titles"`
+	CoverTitles      []string `json:"cover_titles"`
+	CoverPath        string   `json:"cover_path,omitempty"`
 	Descriptions     []string `json:"descriptions"`
 	Topics           []string `json:"topics"`
 	CTA              string   `json:"cta"`
@@ -133,6 +135,8 @@ type PackageInput struct {
 // UpdateRunPackage 保存操作员编辑后的定稿。编辑内容原样入库不做归一化——
 // 操作员的取舍是最终口径；只校验正文非空和板标题（short_titles[0]）在。
 func (s *Service) UpdateRunPackage(ctx context.Context, runID string, input PackageInput) error {
+	s.coverMu.Lock()
+	defer s.coverMu.Unlock()
 	script := strings.TrimSpace(input.ContinuousScript)
 	if script == "" {
 		return ErrInvalidPackage
@@ -141,6 +145,7 @@ func (s *Service) UpdateRunPackage(ctx context.Context, runID string, input Pack
 		ContinuousScript: script,
 		Titles:           cleanStringList(input.Titles),
 		ShortTitles:      cleanStringList(input.ShortTitles),
+		CoverTitles:      cleanStringList(input.CoverTitles),
 		Descriptions:     cleanStringList(input.Descriptions),
 		Topics:           cleanStringList(input.Topics),
 		CTA:              strings.TrimSpace(input.CTA),
@@ -154,6 +159,14 @@ func (s *Service) UpdateRunPackage(ctx context.Context, runID string, input Pack
 	}
 	if run.Status != "completed" {
 		return ErrRunNotReworkable
+	}
+	// 封面路径由生成接口维护；老客户端编辑正文时不会带回这个字段。
+	var existing PackageInput
+	if json.Unmarshal([]byte(run.PackageJSON), &existing) == nil {
+		cleaned.CoverPath = existing.CoverPath
+		if input.CoverTitles == nil {
+			cleaned.CoverTitles = existing.CoverTitles
+		}
 	}
 	packageJSON, err := json.Marshal(cleaned)
 	if err != nil {

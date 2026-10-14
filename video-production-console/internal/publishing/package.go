@@ -22,6 +22,8 @@ type Package struct {
 	Titles       []string              `json:"titles"`
 	TopTitles    []TitleRecommendation `json:"top_titles"`
 	ShortTitles  []string              `json:"short_titles"`
+	CoverTitles  []string              `json:"cover_titles"`
+	CoverPath    string                `json:"cover_path,omitempty"`
 	Descriptions []string              `json:"descriptions"`
 	Description  string                `json:"description"`
 	Topics       []string              `json:"topics"`

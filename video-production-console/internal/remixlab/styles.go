@@ -33,6 +33,7 @@ type StyleTemplate struct {
 	Reviewer    string   `json:"reviewer"`
 	Rules       string   `json:"rules"`
 	Finance     bool     `json:"finance"`
+	Publish     string   `json:"publish,omitempty"`
 	Builtin     bool     `json:"builtin"`
 }
 
@@ -63,6 +64,7 @@ func normalizeStyle(in StyleTemplate) StyleTemplate {
 	in.WriterUser = strings.TrimSpace(in.WriterUser)
 	in.Reviewer = strings.TrimSpace(in.Reviewer)
 	in.Rules = strings.TrimSpace(in.Rules)
+	in.Publish = strings.TrimSpace(in.Publish)
 	for i := range in.BestFor {
 		in.BestFor[i] = strings.TrimSpace(in.BestFor[i])
 	}
@@ -76,7 +78,7 @@ func validateStyle(in StyleTemplate) error {
 	for field, value := range map[string]string{
 		"id": in.ID, "base_id": in.BaseID, "name": in.Name, "category": in.Category,
 		"description": in.Description, "planner": in.Planner, "writer": in.Writer,
-		"writer_user": in.WriterUser, "reviewer": in.Reviewer, "rules": in.Rules,
+		"writer_user": in.WriterUser, "reviewer": in.Reviewer, "rules": in.Rules, "publish": in.Publish,
 	} {
 		if utf8.RuneCountInString(value) > 50000 {
 			return fmt.Errorf("%w: %s exceeds 50000 runes", ErrInvalidStyle, field)

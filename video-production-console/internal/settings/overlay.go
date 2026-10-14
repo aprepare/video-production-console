@@ -65,6 +65,8 @@ var publicFieldLabels = map[string]string{
 	"ffmpeg_path":                    "FFmpeg 路径",
 	"ffprobe_path":                   "FFprobe 路径",
 	"bgm_dir":                        "BGM 目录",
+	"cover_skill_root":               "封面参考技能目录",
+	"cover_output_dir":               "封面图保存目录",
 	"platform_api_base_url":          "平台接口地址",
 	"analysis_base_url":              "拆解模型地址",
 	"analysis_model":                 "拆解模型名",

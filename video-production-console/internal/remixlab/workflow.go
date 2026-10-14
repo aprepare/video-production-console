@@ -77,6 +77,7 @@ type Workflow struct {
 	Brief *Brief `json:"brief,omitempty"`
 	// Finance 让另存的自定义财经风格也能冻结专用检查，不依赖运行时模板库。
 	Finance        bool           `json:"finance,omitempty"`
+	Publish        string         `json:"publish,omitempty"`
 	EditorialRules *string        `json:"editorial_rules,omitempty"`
 	Version        int            `json:"version"`
 	Name           string         `json:"name"`

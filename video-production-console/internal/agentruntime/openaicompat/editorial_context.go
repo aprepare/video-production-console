@@ -14,6 +14,7 @@ type editorialContext struct {
 	BriefHash        string          `json:"brief_hash"`
 	Brief            *briefSpec      `json:"brief,omitempty"`
 	Finance          bool            `json:"finance,omitempty"`
+	Publish          string          `json:"publish,omitempty"`
 	CustomPolicy     bool            `json:"custom_policy,omitempty"`
 	ReviewerUser     string          `json:"reviewer_user,omitempty"`
 	Version          string          `json:"version"`
@@ -112,6 +113,7 @@ func currentEditorialContext(dir string) editorialContext {
 func currentEditorialContextFor(dir string, spec flowSpec) editorialContext {
 	ctx := currentEditorialContext(dir)
 	ctx.Style, ctx.Brief, ctx.Finance = spec.Style, spec.Brief, spec.Finance
+	ctx.Publish = spec.Publish
 	ctx.BriefHash = spec.Brief.hash()
 	if !spec.FinanceMode() {
 		// 通用规则已在工作流冻结；缺失时也不能回落财经课程规则。
@@ -125,7 +127,7 @@ func currentEditorialContextFor(dir string, spec flowSpec) editorialContext {
 }
 
 func (ctx editorialContext) mode() flowSpec {
-	return flowSpec{Style: ctx.Style, Brief: ctx.Brief, Finance: ctx.Finance}
+	return flowSpec{Style: ctx.Style, Brief: ctx.Brief, Finance: ctx.Finance, Publish: ctx.Publish}
 }
 
 func loadEditorialContext(dir string) editorialContext {

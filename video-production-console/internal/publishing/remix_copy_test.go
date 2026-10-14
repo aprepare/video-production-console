@@ -1,9 +1,29 @@
 package publishing
 
 import (
+	"encoding/json"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestCoverFieldsSurviveImportAndPackageRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cover.png")
+	raw, _ := json.Marshal(map[string]any{"continuous_script": "正文", "cover_titles": []string{"守住家底", "存款别乱动"}, "cover_path": path})
+	script, pkg, fromJSON, err := UnwrapContinuousScript(string(raw))
+	if err != nil || !fromJSON || pkg == nil || script != "正文" || pkg.CoverPath != path || !reflect.DeepEqual(pkg.CoverTitles, []string{"守住家底", "存款别乱动"}) {
+		t.Fatalf("import=%+v %v", pkg, err)
+	}
+	file := filepath.Join(t.TempDir(), "publishing_package.json")
+	if err := WriteFile(file, *pkg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Reader{}).Read(file, "")
+	if err != nil || !reflect.DeepEqual(got, *pkg) {
+		t.Fatalf("package round trip=%+v %v", got, err)
+	}
+}
 
 const remixCopyJSON = `{
   "continuous_script": "又一批人要发财了。人民币第三次换锚已经开始。",

@@ -348,6 +348,8 @@ func buildRunPackageJSON(script, packagePath string) string {
 		var pkg struct {
 			Titles       []string `json:"titles"`
 			ShortTitles  []string `json:"short_titles"`
+			CoverTitles  []string `json:"cover_titles"`
+			CoverPath    string   `json:"cover_path"`
 			Descriptions []string `json:"descriptions"`
 			Topics       []string `json:"topics"`
 			CTA          string   `json:"cta"`
@@ -355,6 +357,10 @@ func buildRunPackageJSON(script, packagePath string) string {
 		if err := json.Unmarshal(raw, &pkg); err == nil {
 			draft["titles"] = pkg.Titles
 			draft["short_titles"] = pkg.ShortTitles
+			draft["cover_titles"] = cleanStringList(pkg.CoverTitles)
+			if pkg.CoverPath != "" {
+				draft["cover_path"] = pkg.CoverPath
+			}
 			draft["descriptions"] = pkg.Descriptions
 			draft["topics"] = pkg.Topics
 			draft["cta"] = pkg.CTA

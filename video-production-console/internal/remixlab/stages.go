@@ -495,6 +495,8 @@ func publishingCopyExtra(packageJSON string) map[string]any {
 	var pkg struct {
 		Titles       []string `json:"titles"`
 		ShortTitles  []string `json:"short_titles"`
+		CoverTitles  []string `json:"cover_titles"`
+		CoverPath    string   `json:"cover_path"`
 		Descriptions []string `json:"descriptions"`
 		Topics       []string `json:"topics"`
 	}
@@ -502,6 +504,12 @@ func publishingCopyExtra(packageJSON string) map[string]any {
 		return nil
 	}
 	out := map[string]any{}
+	if len(pkg.CoverTitles) > 0 {
+		out["cover_titles"] = pkg.CoverTitles
+	}
+	if pkg.CoverPath != "" {
+		out["cover_path"] = pkg.CoverPath
+	}
 	if len(pkg.Titles) > 0 {
 		out["titles"] = pkg.Titles
 	}

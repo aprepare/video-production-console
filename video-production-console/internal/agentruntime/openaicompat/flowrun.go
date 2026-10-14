@@ -45,6 +45,7 @@ type flowSpec struct {
 	Style          string      `json:"style"`
 	Brief          *briefSpec  `json:"brief"`
 	Finance        bool        `json:"finance,omitempty"`
+	Publish        string      `json:"publish,omitempty"`
 	EditorialRules *string     `json:"editorial_rules,omitempty"`
 	Nodes          []flowNode  `json:"nodes"`
 	Edges          [][2]string `json:"edges"`
@@ -53,6 +54,10 @@ type flowSpec struct {
 // 老快照没有 style 字段，继续按财经处理；自定义财经副本冻结 finance 标记。
 func (s flowSpec) FinanceMode() bool {
 	return s.Style == "" || s.Style == "finance_course" || s.Finance
+}
+
+func (s flowSpec) ChannelsPublish() bool {
+	return s.Publish == "channels_v2"
 }
 
 func (s flowSpec) writer() *flowNode {

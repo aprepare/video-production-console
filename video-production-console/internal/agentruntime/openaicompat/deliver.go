@@ -26,12 +26,13 @@ var trailingHashtagRun = regexp.MustCompile(`(?:\s*#[^\s#]+)+\s*$`)
 
 // brokenJSONFieldBoundary 匹配烂 JSON 抢救时正文字段的结束边界：
 // 闭引号、逗号、任意空白（可跨空行）、下一个已知字段名。
-var brokenJSONFieldBoundary = regexp.MustCompile(`"\s*,\s*"(?:titles|short_titles|descriptions|topics|cta)"\s*:`)
+var brokenJSONFieldBoundary = regexp.MustCompile(`"\s*,\s*"(?:titles|short_titles|cover_titles|descriptions|topics|cta)"\s*:`)
 
 type remixDraft struct {
 	ContinuousScript string   `json:"continuous_script"`
 	Titles           []string `json:"titles"`
 	ShortTitles      []string `json:"short_titles"`
+	CoverTitles      []string `json:"cover_titles"`
 	Descriptions     []string `json:"descriptions"`
 	Topics           []string `json:"topics"`
 	CTA              string   `json:"cta"`
@@ -282,6 +283,7 @@ func recoverRemixDraftFromBrokenJSON(text string) (remixDraft, bool) {
 		ContinuousScript: script,
 		Titles:           extractBrokenJSONStringArray(text, "titles"),
 		ShortTitles:      extractBrokenJSONStringArray(text, "short_titles"),
+		CoverTitles:      extractBrokenJSONStringArray(text, "cover_titles"),
 		Descriptions:     extractBrokenJSONStringArray(text, "descriptions"),
 		Topics:           extractBrokenJSONStringArray(text, "topics"),
 	}, true
@@ -610,6 +612,7 @@ func publishingPackageFromDraft(draft remixDraft, script string) map[string]any 
 	}
 	return map[string]any{
 		"titles": titles, "top_titles": top, "short_titles": short,
+		"cover_titles": list(draft.CoverTitles),
 		"descriptions": descriptions, "description": description,
 		"topics": topics, "cta": draft.CTA,
 	}

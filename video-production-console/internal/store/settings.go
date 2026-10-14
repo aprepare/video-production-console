@@ -43,6 +43,7 @@ var publicSettingKeys = map[string]struct{}{
 	"analysis_base_url": {}, "analysis_model": {},
 	"pexels_api_base_url": {}, "pixabay_api_base_url": {}, "max_external_results_per_query": {},
 	"bgm_dir": {}, "montage_style": {},
+	"cover_skill_root": {}, "cover_output_dir": {},
 	"platform_api_base_url": {},
 }
 

@@ -52,6 +52,8 @@ func (a remixLabRuntimeAdapter) Runtime(ctx context.Context) (remixlab.RuntimeVi
 		RemixReasoningEffort: rt.RemixReasoningEffort,
 		RemixAPIKey:          rt.RemixAPIKey,
 		DataRoot:             rt.DataRoot,
+		CoverSkillRoot:       rt.CoverSkillRoot,
+		CoverOutputDir:       rt.CoverOutputDir,
 		GrokBaseURL:          rt.GrokBaseURL,
 		GrokModel:            rt.GrokModel,
 		GrokAPIKey:           rt.GrokAPIKey,

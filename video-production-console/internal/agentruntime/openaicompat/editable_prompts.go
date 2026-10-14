@@ -5,7 +5,7 @@ import "strings"
 // Formatting contracts are kept separate from editable editorial requirements.
 const WriterJSONContract = `【系统输出格式：写手】
 只返回一个合法 JSON 对象，不加 Markdown 围栏或解释。结构：
-{"continuous_script":"完整口播正文","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}
+{"continuous_script":"完整口播正文","titles":[],"short_titles":[],"cover_titles":[],"descriptions":[],"topics":[],"cta":""}
 continuous_script、cta 是字符串；其他列出的字段是字符串数组。正文的实际写法和发布字段内容遵循上方用户编审要求。
 字符串中的英文双引号必须写成 \"，换行写成 \n；引用句子优先用中文引号。不要在 JSON 之前输出 Let、思考过程或其他文字。`
 
@@ -13,7 +13,7 @@ const ReviewerJSONContract = `【系统输出格式：审稿；本格式优先�
 只返回一个合法 JSON 对象，不加 Markdown 围栏或解释。无修改时：
 {"verdict":"pass","summary":"审稿结论","issues":[]}
 确有修改时：
-{"verdict":"fixed","summary":"审稿结论","issues":[{"where":"具体位置","problem":"修改依据","fix":"实际改动"}],"revised":{"continuous_script":"完整修订正文","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}}
+{"verdict":"fixed","summary":"审稿结论","issues":[{"where":"具体位置","problem":"修改依据","fix":"实际改动"}],"revised":{"continuous_script":"完整修订正文","titles":[],"short_titles":[],"cover_titles":[],"descriptions":[],"topics":[],"cta":""}}
 verdict 只能为 pass 或 fixed。fixed 必须含完整 revised 正文及至少一条具体修改依据，不得省略正文。revised 中未改字段原样带回。无法核实的事项在 summary 中如实说明，不把未知判为已核实。
 字符串内的英文双引号必须写成 \"，换行写成 \n；引用句子优先用中文引号。不要在 JSON 之前输出 Let、思考过程或其他文字。`
 
@@ -31,7 +31,8 @@ const ReviewerUserTemplate = `按共同底线终审下面的稿子。
 
 // Only remove exact built-in copies, never arbitrary user prose.
 func SeparateEditorialPrompt(prompt string) string {
-	for _, bundled := range []string{SharedEditorialPolicy, EditorialWritingRules, PublishingContract, WriterJSONContract, ReviewerJSONContract} {
+	for _, bundled := range []string{SharedEditorialPolicy, EditorialWritingRules, PublishingContract, WriterJSONContract, ReviewerJSONContract,
+		strings.ReplaceAll(WriterJSONContract, `,"cover_titles":[]`, ""), strings.ReplaceAll(ReviewerJSONContract, `,"cover_titles":[]`, "")} {
 		prompt = strings.ReplaceAll(prompt, bundled, "")
 	}
 	prompt = strings.ReplaceAll(prompt, `只返回 JSON：{verdict:"pass"或"fixed",summary,issues:[{where,problem,fix}],revised:{continuous_script,titles,short_titles,descriptions,topics,cta}}。fixed 时返回完整对象，未改字段原样带回。`, "")

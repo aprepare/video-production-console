@@ -14,6 +14,8 @@ type remixDraft struct {
 	ContinuousScript string   `json:"continuous_script"`
 	Titles           []string `json:"titles"`
 	ShortTitles      []string `json:"short_titles"`
+	CoverTitles      []string `json:"cover_titles"`
+	CoverPath        string   `json:"cover_path"`
 	Descriptions     []string `json:"descriptions"`
 	Topics           []string `json:"topics"`
 	CTA              string   `json:"cta"`
@@ -65,6 +67,8 @@ func packageFromDraft(draft remixDraft) Package {
 		Titles:       titles,
 		TopTitles:    top,
 		ShortTitles:  trimFilled(draft.ShortTitles),
+		CoverTitles:  trimFilled(draft.CoverTitles),
+		CoverPath:    strings.TrimSpace(draft.CoverPath),
 		Descriptions: descriptions,
 		Description:  description,
 		Topics:       trimFilled(draft.Topics),
@@ -73,7 +77,7 @@ func packageFromDraft(draft remixDraft) Package {
 }
 
 func (p Package) empty() bool {
-	return len(p.Titles) == 0 && len(p.ShortTitles) == 0 && len(p.Descriptions) == 0 &&
+	return len(p.Titles) == 0 && len(p.ShortTitles) == 0 && len(p.CoverTitles) == 0 && p.CoverPath == "" && len(p.Descriptions) == 0 &&
 		len(p.Topics) == 0 && strings.TrimSpace(p.CTA) == "" && strings.TrimSpace(p.Description) == ""
 }
 
