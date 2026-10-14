@@ -447,7 +447,8 @@ func runSpokenLines(opts Options, manifest manifestLite, source, outPath string)
 				errs[i] = fmt.Errorf("empty chat choices")
 				return
 			}
-			results[i] = strings.TrimSpace(resp.Choices[0].Message.Content)
+			// 模型偶尔先说一句「正在按规则切分…」再给正文，这句会被配成语音、混进字幕。
+			results[i] = strings.TrimSpace(spokenlines.StripPreamble(resp.Choices[0].Message.Content, chunk))
 		}(i, chunk)
 	}
 	wg.Wait()
