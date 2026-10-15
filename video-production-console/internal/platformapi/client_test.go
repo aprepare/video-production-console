@@ -507,3 +507,13 @@ func TestDouyinImagePostsHaveNoVideo(t *testing.T) {
 		t.Fatalf("video post = %+v", video)
 	}
 }
+
+func TestXHSPostPrefersCDNCoverSource(t *testing.T) {
+	post := xhsPost(map[string]any{"id": "6a3b816f000000000702de81", "cover": "/api/img?u=x", "cover_src": "https://sns-na-i4.xhscdn.com/a?imageView2/2/w/1440/format/jpg"})
+	if post.CoverURL != "https://sns-na-i4.xhscdn.com/a?imageView2/2/w/1440/format/jpg" {
+		t.Fatalf("cover = %q", post.CoverURL)
+	}
+	if fallback := xhsPost(map[string]any{"id": "6a3b816f000000000702de81", "cover": "/api/img?u=x"}); fallback.CoverURL != "/api/img?u=x" {
+		t.Fatalf("fallback cover = %q", fallback.CoverURL)
+	}
+}

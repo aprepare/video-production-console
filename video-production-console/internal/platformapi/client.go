@@ -786,11 +786,12 @@ func xhsPost(item map[string]any) Post {
 	}
 	post := Post{
 		Platform: XHS, ExternalID: id,
-		Title:         firstNonEmpty(title, firstLine(text, 40)),
-		Text:          strings.TrimSpace(title + "\n" + text),
-		Author:        str(item["nick"]),
-		AuthorID:      str(item["user_id"]),
-		CoverURL:      str(item["cover"]),
+		Title:    firstNonEmpty(title, firstLine(text, 40)),
+		Text:     strings.TrimSpace(title + "\n" + text),
+		Author:   str(item["nick"]),
+		AuthorID: str(item["user_id"]),
+		// cover is a gateway path the REST server does not serve; cover_src is the CDN original.
+		CoverURL:      firstNonEmpty(firstURL(str(item["cover_src"])), str(item["cover"])),
 		VideoURL:      videoURL,
 		DurationS:     duration,
 		Likes:         num(item["liked"]),

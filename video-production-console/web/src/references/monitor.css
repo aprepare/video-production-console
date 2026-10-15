@@ -33,7 +33,7 @@ button.preview-thumb:hover .preview-thumb__play { opacity: 1; }
 
 /* 在线预览弹窗 */
 .preview-backdrop { background: rgb(6 8 14 / 72%); }
-.preview-dialog { z-index: var(--layer-modal-dialog); display: grid; grid-template-rows: minmax(0, 1fr) auto; width: min(460px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; border-radius: var(--radius-lg); background: var(--ds-surface); box-shadow: 0 24px 64px rgb(0 0 0 / 40%); outline: none; }
+.preview-dialog { z-index: var(--layer-modal-dialog); display: grid; grid-template-rows: minmax(0, 1fr) auto; width: min(640px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; border-radius: var(--radius-lg); background: var(--ds-surface); box-shadow: 0 24px 64px rgb(0 0 0 / 40%); outline: none; }
 .preview-dialog__stage { display: grid; place-items: center; min-height: 240px; background: #000; }
 .preview-dialog__stage video { display: block; width: 100%; max-height: calc(100dvh - 150px); background: #000; }
 .preview-dialog__failed { display: grid; gap: 4px; padding: var(--space-6) var(--space-4); color: #e5e7eb; text-align: center; font-size: 13px; }
@@ -122,6 +122,7 @@ button.preview-thumb:hover .preview-thumb__play { opacity: 1; }
 
 /* 评论洞察 */
 .insight-report { display: grid; gap: var(--space-3); }
+.insight-report .analysis-card { align-content: start; }
 .insight-sentiment { display: grid; gap: 6px; }
 .insight-sentiment__bar { display: flex; height: 8px; overflow: hidden; border-radius: 99px; background: var(--ds-surface-muted); }
 .insight-sentiment__bar span[data-tone="positive"] { background: var(--ds-success); }

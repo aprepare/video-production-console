@@ -88,6 +88,8 @@ func TestMonitorValidationAndDefaults(t *testing.T) {
 		func(t *store.MonitorTask) { t.SurgeLikeRatio = 11 },
 		func(t *store.MonitorTask) { t.SurgeCommentDelta = -1 },
 		func(t *store.MonitorTask) { t.SurgeMode = "unknown" },
+		func(t *store.MonitorTask) { t.Keyword = "\xe5\xb2\x9a\xc9" },
+		func(t *store.MonitorTask) { t.Keyword = "岚山\ufffd海鲜" },
 	} {
 		invalid := task
 		change(&invalid)

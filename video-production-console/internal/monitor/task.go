@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"video-production-console/internal/store"
 )
@@ -33,6 +34,8 @@ func ValidateTask(t *store.MonitorTask) error {
 		message = "监控只支持抖音和小红书"
 	case len([]rune(t.Keyword)) < 1 || len([]rune(t.Keyword)) > 40:
 		message = "关键词需要 1–40 个字"
+	case !utf8.ValidString(t.Keyword) || strings.ContainsRune(t.Keyword, utf8.RuneError) || !utf8.ValidString(t.Name) || !utf8.ValidString(t.ScoreFocus):
+		message = "关键词或名称含有乱码，请重新输入"
 	case t.IntervalMinutes < 30 || t.IntervalMinutes > 1440:
 		message = "监控间隔需要在 30–1440 分钟之间"
 	case t.Pages < 1 || t.Pages > 3:
