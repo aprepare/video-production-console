@@ -91,12 +91,32 @@ test("batch reviewer selection is sent independently of writer models", async ()
   fireEvent.click(screen.getByRole("checkbox", { name: "选择账号 账号甲" }));
   fireEvent.change(screen.getByRole("textbox", { name: "批量二创原文" }), { target: { value: "本次原文" } });
   fireEvent.change(screen.getByLabelText("审稿方式"), { target: { value: "custom" } });
-  fireEvent.change(screen.getByRole("combobox", { name: "批量审稿模型" }), { target: { value: "review-model" } });
+  fireEvent.change(screen.getByLabelText("批量审稿模型"), { target: { value: "review-model" } });
   fireEvent.change(screen.getByLabelText("审稿思考强度"), { target: { value: "high" } });
   fireEvent.click(screen.getByRole("button", { name: "开跑二创（已选 1 个账号）" }));
   await waitFor(() => expect(props.api.mock.calls.some(([p]) => p === "/api/remix-lab/workflow/run")).toBe(true));
   const call = props.api.mock.calls.find(([p]) => p === "/api/remix-lab/workflow/run")!;
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({ models: [], reviewer: { model: "review-model", reasoning_effort: "high" } });
+});
+
+test("batch writer models send an independent reasoning effort for each selected model", async () => {
+  const { props } = setup();
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择账号 账号甲" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "批量二创原文" }), { target: { value: "本次原文" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "gpt-5.6-sol" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "grok-4.6" }));
+  fireEvent.change(screen.getByLabelText("gpt-5.6-sol 推理强度"), { target: { value: "high" } });
+  fireEvent.change(screen.getByLabelText("grok-4.6 推理强度"), { target: { value: "low" } });
+  fireEvent.click(screen.getByRole("button", { name: "开跑二创（已选 1 个账号）" }));
+  await waitFor(() => expect(props.api.mock.calls.some(([p]) => p === "/api/remix-lab/workflow/run")).toBe(true));
+  const call = props.api.mock.calls.find(([p]) => p === "/api/remix-lab/workflow/run")!;
+  expect(JSON.parse(String(call[1]?.body))).toMatchObject({
+    models: ["gpt-5.6-sol", "grok-4.6"],
+    model_configs: [
+      { model: "gpt-5.6-sol", reasoning_effort: "high" },
+      { model: "grok-4.6", reasoning_effort: "low" },
+    ],
+  });
 });
 
 test.each(["invalid JSON", "null", '{"a":true}', "42", '[1,null,{}]'])("invalid hidden account storage %s does not prevent opening", (stored) => {

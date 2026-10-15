@@ -38,7 +38,7 @@ import {
   type RemixLabWorkflowPrompts,
 } from "./api";
 import { RunFlowPanel } from "./RunFlow";
-import { ModelMultiSelect } from "../ModelSelect";
+import { ModelCombo, ModelMultiSelect, REASONING_EFFORT_OPTIONS } from "../ModelSelect";
 import { FastModeButton } from "./FastModeButton";
 import { RerunDialog } from "./RerunDialog";
 import { RoleModelsDialog } from "./RoleModelsDialog";
@@ -54,7 +54,7 @@ type WorkflowCanvasProps = {
   prompts: RemixLabPrompt[];
   onMessage: (text: string) => void;
   onEditAgentPrompts: () => void;
-  runWorkflow: (source: string, runCount: number, accountID: string, auto: boolean, models: string[]) => Promise<RemixLabExperiment>;
+  runWorkflow: (source: string, runCount: number, accountID: string, auto: boolean, models: string[], modelConfigs: Array<{model:string; reasoning_effort:string}>) => Promise<RemixLabExperiment>;
   /** 工作流被外部改动（智能体提案确认）后父级递增，步骤列表重新拉取。 */
   refreshToken: number;
   /** 当前账号：读写该账号最新一版工作流；空=全局默认。 */
@@ -124,7 +124,7 @@ const PRODUCTION_DEFAULT_PROMPTS: Record<string, string> = {
   "produce-montage": "执行风景混剪，产出可编辑的剪映草稿。",
 };
 
-const EFFORT_OPTIONS = ["", "low", "medium", "high", "xhigh"] as const;
+const EFFORT_OPTIONS = REASONING_EFFORT_OPTIONS;
 
 function normalizeProduction(raw?: RemixLabWorkflowProduction): RemixLabWorkflowProduction {
   if (!raw) return { captions_disabled: true };
@@ -247,6 +247,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
   const [runCount, setRunCount] = useState(1);
   // 对比开跑：勾选多个模型时每个模型各出一稿并行跑；空 = 用写手节点/默认档。
   const [compareModels, setCompareModels] = useState<string[]>([]);
+  const [compareModelEfforts, setCompareModelEfforts] = useState<Record<string, string>>({});
   const [starting, setStarting] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [liveRun, setLiveRun] = useState<LiveRunState | null>(null);
@@ -255,11 +256,12 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
   // 风格与简报不在画布上编辑，但保存工作流时必须原样带回，否则会被清掉。
-  const styleRef = useRef<Pick<RemixLabWorkflow, "style" | "brief">>({});
+  const styleRef = useRef<Pick<RemixLabWorkflow, "style" | "style_name" | "finance" | "publish" | "brief">>({});
   const [runStatus, setRunStatus] = useState("queued");
   const [production, setProduction] = useState<RemixLabProduction | null>(null);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [accountID, setAccountID] = useState(() => {
+    if (accountIDProp !== undefined) return accountIDProp;
     try {
       return window.localStorage.getItem("remix-lab:produce-account") ?? "";
     } catch {
@@ -332,7 +334,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
         const workflow = await fetchRemixLabWorkflow(api, accountIDProp);
         if (cancelled) return;
         setMeta({ version: workflow.version, name: workflow.name });
-        styleRef.current = { style: workflow.style, brief: workflow.brief };
+        styleRef.current = { style: workflow.style, style_name: workflow.style_name, finance: workflow.finance, publish: workflow.publish, brief: workflow.brief };
         setRfNodes(toRfNodes(workflow));
         setRfEdges(toRfEdges(workflow));
         setProdCfg(normalizeProduction(workflow.production));
@@ -571,7 +573,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
 
   const applySavedPrompts = (result: RemixLabWorkflowPrompts, notice = "二创提示词已保存，后续新跑和重新二创使用新配置。") => {
     const saved = result.workflow;
-    styleRef.current = { style: saved.style, brief: saved.brief };
+    styleRef.current = { style: saved.style, style_name: saved.style_name, finance: saved.finance, publish: saved.publish, brief: saved.brief };
     const nextNodes = toRfNodes(saved);
     const nextEdges = toRfEdges(saved);
     const nextProd = normalizeProduction(saved.production);
@@ -617,6 +619,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
 
   const saveModels = async (workflow: RemixLabWorkflow) => {
     const saved = await saveRemixLabWorkflow(api, workflow, accountIDProp ?? accountID);
+    styleRef.current = { style: saved.style, style_name: saved.style_name, finance: saved.finance, publish: saved.publish, brief: saved.brief };
     const nextNodes = toRfNodes(saved);
     nodesRef.current = nextNodes;
     setRfNodes(nextNodes);
@@ -644,7 +647,8 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
     }
     setStarting(true);
     try {
-      const created = await runWorkflow(source.trim(), runCount, accountID, autoProduce, compareModels);
+      const modelConfigs = compareModels.map((model) => ({model, reasoning_effort: compareModelEfforts[model] ?? ""}));
+      const created = await runWorkflow(source.trim(), runCount, accountID, autoProduce, compareModels, modelConfigs);
       // 原地切到运行视图，实时显示每个步骤的进度。
       setLiveRun({
         experimentID: created.id,
@@ -1066,20 +1070,21 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
                 </label>
                 <label className="wf-field">
                   模型（空=默认模型档）
-                  <input
+                  <ModelCombo
+                    id={`node-model-${selectedNode.id}`}
                     aria-label="节点模型"
                     value={selectedNode.config.model ?? ""}
-                    onChange={(event) =>
+                    onChange={(model) =>
                       patchNode(selectedNode.id, (wfNode) => ({
                         ...wfNode,
-                        config: { ...wfNode.config, model: event.target.value },
+                        config: { ...wfNode.config, model },
                       }))
                     }
                   />
                 </label>
                 <label className="wf-field">
                   思考强度
-                  <input
+                  <select
                     aria-label="节点思考强度"
                     value={selectedNode.config.reasoning_effort ?? ""}
                     onChange={(event) =>
@@ -1088,7 +1093,9 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
                         config: { ...wfNode.config, reasoning_effort: event.target.value },
                       }))
                     }
-                  />
+                  >
+                    {EFFORT_OPTIONS.map((option) => <option key={option || "default"} value={option}>{option || "跟随默认模型档"}</option>)}
+                  </select>
                 </label>
                 <FastModeButton
                   label={`${selectedNode.title} Fast 加速模式`}
@@ -1200,7 +1207,9 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
                       }))
                     }
                   >
-                    <option value="">跟随日产提示词</option>
+                    <option value="" disabled={Boolean(styleRef.current.style && selectedNode.config.prompt_id)}>
+                      {styleRef.current.style ? `账号风格：${styleRef.current.style_name || "已保存的自定义提示词"}` : "跟随日产提示词"}
+                    </option>
                     {prompts.map((prompt) => (
                       <option key={prompt.id} value={prompt.id}>
                         {prompt.name}
@@ -1208,15 +1217,17 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
                     ))}
                   </select>
                 </label>
+                {styleRef.current.style ? <p className="remix-lab-muted">账号风格已应用到写手。更换或重新应用风格请使用上方“风格与简报”，编辑正文请使用“编辑二创提示词”。</p> : null}
                 <label className="wf-field">
                   模型（空=默认模型档）
-                  <input
+                  <ModelCombo
+                    id={`writer-model-${selectedNode.id}`}
                     aria-label="写手模型"
                     value={selectedNode.config.model ?? ""}
-                    onChange={(event) =>
+                    onChange={(model) =>
                       patchNode(selectedNode.id, (wfNode) => ({
                         ...wfNode,
-                        config: { ...wfNode.config, model: event.target.value },
+                        config: { ...wfNode.config, model },
                       }))
                     }
                   />
@@ -1294,6 +1305,8 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
                         if (next.length > 1) setAutoProduce(false);
                       }}
                       inheritedLabel={writerNodeModel || "写手节点默认"}
+                      efforts={compareModelEfforts}
+                      onEffortChange={(model, reasoning_effort) => setCompareModelEfforts((current) => ({...current, [model]: reasoning_effort}))}
                     />
                   </div>
                   <div className="wf-designer__run-controls">

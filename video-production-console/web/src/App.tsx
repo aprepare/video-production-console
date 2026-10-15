@@ -1054,9 +1054,11 @@ function App() {
             defaultStyle={settings?.public.default_image_style}
             defaultConcurrency={settings?.public.max_image_concurrency}
             defaultTextModel={settings?.public.image_text_model || "gpt-5.6-sol"}
-            defaultReasoningEffort=""
+            defaultReasoningEffort={settings?.public.image_text_reasoning_effort || ""}
             defaultImageModel={settings?.public.image_model || "gpt-image-2"}
             defaultImageAttempts={settings?.public.image_generation_attempts}
+            settings={settings}
+            onSettingsSaved={(next) => client.setQueryData(queryKeys.settings(), next)}
             onAdvancedMode={() => navigate("/image-projects/advanced")}
           />
         </>

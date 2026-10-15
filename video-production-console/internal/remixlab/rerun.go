@@ -132,14 +132,13 @@ func (s *Service) RerunOptions(ctx context.Context, runID string) (RerunInput, e
 
 func validateRerunModel(in *RerunModel) error {
 	in.Model = strings.TrimSpace(in.Model)
-	in.ReasoningEffort = strings.TrimSpace(in.ReasoningEffort)
+	effort, err := validateReasoningEffort(in.ReasoningEffort)
+	in.ReasoningEffort = effort
 	if in.Model == "" || len(in.Model) > 200 || strings.ContainsAny(in.Model, "\r\n") {
 		return ErrInvalidRerun
 	}
-	switch in.ReasoningEffort {
-	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
-	default:
-		return ErrInvalidRerun
+	if err != nil {
+		return err
 	}
 	tier, err := openaicompat.NormalizeServiceTier(in.ServiceTier)
 	if err != nil {
@@ -147,6 +146,16 @@ func validateRerunModel(in *RerunModel) error {
 	}
 	in.ServiceTier = tier
 	return nil
+}
+
+func validateReasoningEffort(value string) (string, error) {
+	effort := strings.TrimSpace(value)
+	switch effort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	default:
+		return "", ErrInvalidRerun
+	}
+	return effort, nil
 }
 
 func (s *Service) Rerun(ctx context.Context, runID string, in RerunInput) (RerunResult, error) {
@@ -200,22 +209,10 @@ func (s *Service) Rerun(ctx context.Context, runID string, in RerunInput) (Rerun
 	if err != nil {
 		return RerunResult{}, err
 	}
-	promptID := ""
-	if node := workflowWriter(wf); node != nil {
-		promptID = node.Config.PromptID
-	}
 	st := Store{DataRoot: s.dataRoot}
-	if promptID == "" {
-		if active, ok, e := st.GetActive(); e == nil && ok {
-			promptID = active.ID
-		}
-	}
-	prompt, ok, err := st.GetPrompt(promptID)
+	prompt, err := st.resolveWorkflowWriter(wf)
 	if err != nil {
 		return RerunResult{}, err
-	}
-	if !ok {
-		prompt = ResolvePrompt("elder_stable", "", "")
 	}
 	slot.ID = uuid.NewString()
 	slot.Model = in.Writer.Model

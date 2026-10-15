@@ -13,6 +13,8 @@ async function mockStudio(page: Page) {
     if (path === "/api/auth/me") body = { csrfToken: "studio-test-token" };
     else if (path === "/api/accounts") body = [{ id: "account-one", name: "认知漫步" }, { id: "account-two", name: "观局思考" }];
     else if (path === "/api/projects") body = [];
+    else if (path === "/api/tasks") body = [];
+    else if (path === "/api/mcp/token") body = {token:"fixture-only", endpoint:"http://127.0.0.1:2030/mcp", claude:"", codex:"", json:"{}"};
     else if (path === "/api/image-projects") body = images;
     else if (path === "/api/settings") body = { public: { remix_model: "claude-opus-4-6-thinking", image_model: "gpt-image-2", image_text_model: "gpt-5.6-sol", max_image_concurrency: 3 }, secrets: {}, configured_public: {}, active_public: {}, restart_required: false };
     else if (path === "/api/runtime") body = { Limit: 2, Running: 0, Queued: 0 };
@@ -55,6 +57,16 @@ test("desktop studio leaves room to edit and settings remain usable in both them
   await page.screenshot({ path: "../artifacts/frontend-studio-20260930/settings-dark.png" });
   await page.getByRole("button", { name: "关闭设置" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "模型配置", exact: true }).click();
+  await page.getByLabel("写手模型", {exact:true}).fill("");
+  await expect(page.getByLabel("写手模型", {exact:true})).toHaveValue("");
+  await page.getByLabel("写手模型", {exact:true}).fill("custom-writer");
+  await page.getByLabel("写手模型候选", {exact:true}).selectOption("gpt-5.6-sol");
+  await expect(page.getByLabel("写手模型", {exact:true})).toHaveValue("gpt-5.6-sol");
+  await page.getByLabel("写手推理强度", {exact:true}).selectOption("high");
+  await expect(page.getByRole("group", {name:"审稿",exact:true})).toHaveCount(0);
+  await noPageOverflow(page);
+  await page.screenshot({ path: "../artifacts/console-fixes-20261015/model-settings.png" });
 });
 
 test("image library filtering keeps the creation draft and has only one page title", async ({ page }) => {
@@ -93,5 +105,6 @@ test("mobile studio, image creation and settings fit without horizontal overflow
   await expect(page.getByRole("dialog", { name: "控制台设置" })).toBeVisible();
   await noPageOverflow(page);
   await page.getByRole("tab", { name: "系统", exact: true }).click();
+  await expect(page.getByRole("button", {name:"复制 Codex 配置"})).toBeVisible();
   await page.screenshot({ path: "../artifacts/frontend-studio-20260930/settings-mobile.png" });
 });

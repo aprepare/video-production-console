@@ -61,6 +61,7 @@ import { RunWorkbench } from "./RunWorkbench";
 import { RunFlow } from "./RunFlow";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { FastModeButton } from "./FastModeButton";
+import { ModelCombo, REASONING_EFFORT_OPTIONS } from "../ModelSelect";
 import { AccountsOverview } from "./AccountsOverview";
 import { AccountOverridesDialog } from "../accounts/AccountOverridesDialog";
 import { stageLabel } from "../projects/stages";
@@ -703,8 +704,8 @@ export function RemixLabPage({
   };
 
   // 工作流开跑：画布调用（带生产账号与全自动开关）。
-  const startWorkflowRun = async (sourceText: string, runCount: number, accountID: string, auto: boolean, models: string[]) => {
-    const created = await runRemixLabWorkflow(api, sourceText, runCount, accountID, auto, models);
+  const startWorkflowRun = async (sourceText: string, runCount: number, accountID: string, auto: boolean, models: string[], modelConfigs: Array<{model:string; reasoning_effort:string}>) => {
+    const created = await runRemixLabWorkflow(api, sourceText, runCount, accountID, auto, models, undefined, modelConfigs);
     return created;
   };
 
@@ -1187,11 +1188,11 @@ export function RemixLabPage({
             </summary>
             <label>
               模型
-              <input
+              <ModelCombo
+                id="agent-settings-model"
                 aria-label="智能体模型"
                 value={agentSettings.model}
-                onChange={(event) => setAgentSettings({ ...agentSettings, model: event.target.value })}
-                required
+                onChange={(model) => setAgentSettings({ ...agentSettings, model })}
               />
             </label>
             <label>
@@ -1204,12 +1205,15 @@ export function RemixLabPage({
             </label>
             <label>
               思考强度
-              <input
+              <select
+                aria-label="智能体思考强度"
                 value={agentSettings.reasoning_effort}
                 onChange={(event) =>
                   setAgentSettings({ ...agentSettings, reasoning_effort: event.target.value })
                 }
-              />
+              >
+                {REASONING_EFFORT_OPTIONS.map((effort) => <option key={effort || "default"} value={effort}>{effort || "沿用二创强度"}</option>)}
+              </select>
             </label>
             <label>
               API Key
@@ -1453,17 +1457,22 @@ export function RemixLabPage({
                     </label>
                     <label>
                       模型
-                      <input
+                      <ModelCombo
+                        id={`preset-model-${index}`}
+                        aria-label={`模型槽 ${index + 1} 模型`}
                         value={slot.model}
-                        onChange={(event) => updateSlot(index, { model: event.target.value })}
+                        onChange={(model) => updateSlot(index, { model })}
                       />
                     </label>
                     <label>
                       思考强度
-                      <input
+                      <select
+                        aria-label={`模型槽 ${index + 1} 思考强度`}
                         value={slot.reasoning_effort}
                         onChange={(event) => updateSlot(index, { reasoning_effort: event.target.value })}
-                      />
+                      >
+                        {REASONING_EFFORT_OPTIONS.map((effort) => <option key={effort || "default"} value={effort}>{effort || "不设置"}</option>)}
+                      </select>
                     </label>
                     <FastModeButton
                       label={`模型槽 ${index + 1} Fast 加速模式`}

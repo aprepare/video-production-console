@@ -17,6 +17,12 @@
 .settings-modal :is(input:not([type="range"]):not([type="checkbox"]):not([type="color"]), select, textarea) { min-height: 42px; max-width: 100%; border: 1px solid var(--ds-border); border-radius: 8px; background: var(--ds-surface); color: var(--ds-text); }
 .settings-modal .settings-field small, .settings-modal .settings-hint { color: var(--ds-text-muted); line-height: 1.6; }
 .settings-modal .settings-section-title { grid-column: 1 / -1; margin: 8px 0 0; padding-top: 18px; border-top: 1px solid var(--ds-border); font-size: 15px; color: var(--ds-text); }
+.settings-modal .settings-section-title--first { margin-top: 0; padding-top: 0; border-top: 0; }
+.settings-modal .settings-section-note { grid-column: 1 / -1; margin: -12px 0 0; color: var(--ds-text-muted); font-size: 12px; line-height: 1.6; }
+.settings-modal .settings-advanced { grid-column: 1 / -1; padding: 14px 16px; border: 1px solid var(--ds-border); border-radius: 10px; background: var(--ds-surface-muted); }
+.settings-modal .settings-advanced > summary { cursor: pointer; font-weight: 650; }
+.settings-modal .settings-advanced > p { margin: 10px 0 0; color: var(--ds-text-muted); font-size: 12px; line-height: 1.6; }
+.settings-modal .settings-advanced__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; margin-top: 16px; }
 .settings-modal .settings-actions { position: sticky; bottom: -24px; z-index: 1; display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 0; margin-bottom: -24px; border-top: 1px solid var(--ds-border); background: var(--ds-surface); }
 .settings-modal .save-settings { min-height: 42px; padding: 10px 20px; border-radius: 8px; background: var(--ds-accent); color: var(--ds-on-accent); border: 1px solid var(--ds-accent); }
 .settings-modal .save-settings--restart { color: var(--ds-text); background: var(--ds-surface); border-color: var(--ds-border); }
@@ -27,6 +33,7 @@
   .settings-modal .settings-tabs { top: -16px; }
   .settings-modal .settings-tab { padding: 0 8px; }
   .settings-modal .settings-tab-panel { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .settings-modal .settings-advanced__grid { grid-template-columns: minmax(0, 1fr); }
   .settings-modal .settings-actions { bottom: -16px; margin-bottom: -16px; }
   .settings-modal .settings-actions button { flex: 1; padding-inline: 10px; }
 }

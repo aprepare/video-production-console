@@ -20,7 +20,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
     {label:"二创策划", node:workflow.nodes.find(node => node.id === "hook" && node.type === "agent" && !isReferenceNode(node))},
     {label:"写手", node:writer},
     {label:"审稿", node:workflow.nodes.find(node => node.type === "reviewer")},
-  ]).filter(({label,node})=>label!=="二创策划"||node).map(({label,node}) => ({label, id:node?.id, value: {
+  ]).filter(({node})=>Boolean(node)).map(({label,node}) => ({label, id:node?.id, value: {
     model: node?.config.model || (label === "审稿" ? defaults?.remix_model : fallbackWriter.model) || "",
     reasoning_effort: node?.config.reasoning_effort || (label === "审稿" ? defaults?.remix_reasoning_effort : fallbackWriter.reasoning_effort) || "",
     service_tier: node?.config.service_tier || (label === "写手" ? fallbackWriter.service_tier : "default"),
@@ -63,7 +63,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
       }}>
       <div className="modal-head"><div><span className="muted">{ownerLabel} · 下一轮使用</span><h2 id="role-models-title">模型配置</h2></div>
         <button type="button" className="close" aria-label="关闭模型配置" disabled={busy} onClick={onClose}>×</button></div>
-      <p className="remix-lab-muted">参考模型先独立出稿，写手借鉴后完整重写，审稿负责定稿检查。保存后用于此账号的新建和重新生成，历史稿件保留。</p>
+      <p className="remix-lab-muted">参考模型先独立出稿，写手借鉴后完整重写。{roles.some(role => role.label === "审稿") ? "审稿负责定稿检查。" : ""}保存后用于此账号的新建和重新生成，历史稿件保留。</p>
       {error ? <p role="alert">{error}</p> : null}
       <ReferenceModelFields values={references} onChange={setReferences} fallback={fallbackWriter} disabled={busy} />
       <div className="remix-lab-slots">
@@ -75,7 +75,7 @@ export function RoleModelsDialog({ workflow, defaults, ownerLabel, onSave, onClo
       </div>
       <div className="remix-lab-modal__actions">
         {onConnections ? <button type="button" className="header-button" disabled={busy} onClick={onConnections}>连接与旧版预设</button> : null}
-        <button type="button" className="remix-lab-start" disabled={busy || references.some(value => !value.model.trim()) || roles.some(role => role.id && !role.value.model.trim())} onClick={() => void save()}>{busy ? "正在保存…" : "保存并完成"}</button>
+        <button type="button" className="remix-lab-start" disabled={busy || references.some(value => !value.model.trim())} onClick={() => void save()}>{busy ? "正在保存…" : "保存并完成"}</button>
       </div>
     </div>
   </div>, document.body);

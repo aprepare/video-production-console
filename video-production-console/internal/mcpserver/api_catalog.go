@@ -64,7 +64,7 @@ POST /api/remix-lab/runs/{id}/retry | 重试/指定节点重跑 {node_id, model}
 GET /api/remix-lab/runs/{id}/rerun-options | 可换模型重跑的选项
 POST /api/remix-lab/runs/{id}/rerun | 换模型重跑 {writer, reviewer, planner, references} | $
 GET /api/remix-lab/runs/{id}/stages | 各节点输入输出与耗时
-POST /api/remix-lab/workflow/run | 开始二创 {source, account_id, run_count, model, models, reviewer, auto} | $
+POST /api/remix-lab/workflow/run | 开始二创 {source, account_id, run_count, model, models, model_configs:[{model,reasoning_effort}], reviewer, auto}；models 兼容旧调用，model_configs 可逐模型指定强度 | $
 POST /api/remix-lab/workflow/import-draft | 导入已有成稿 {continuous_script, short_titles, …, account_id}
 # 二创：生产
 POST /api/remix-lab/runs/{id}/produce | 确认生产（口播→字幕→配音→混剪） {account_id} | $

@@ -556,6 +556,20 @@ func TestRemixLabImportDraftHTTP(t *testing.T) {
 	}
 }
 
+func TestRemixLabWorkflowRunRejectsInvalidModelReasoningEffort(t *testing.T) {
+	handler := newRemixLabTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/remix-lab/workflow/run", strings.NewReader(`{"source":"有效原文","model_configs":[{"model":"writer-a","reasoning_effort":"turbo"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"invalid_rerun"`) {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
 func TestRemixLabAgentLastEmptyHTTP(t *testing.T) {
 	handler := newRemixLabTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/remix-lab/agent/last", nil)

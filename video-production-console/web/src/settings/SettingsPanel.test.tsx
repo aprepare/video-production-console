@@ -180,13 +180,13 @@ test("category tabs support arrow keys and Home End with one tab stop", () => {
   expect(document.activeElement).toBe(first);
 });
 
-test("image tab only exposes service addresses and keys", () => {
+test("image tab keeps image generation connection and moves text connection to image production", () => {
   renderPanel();
   openTab("图文");
   expect(screen.getByRole("textbox", { name: "生图服务地址" })).toBeTruthy();
-  expect(screen.getByRole("textbox", { name: "图文文本模型地址" })).toBeTruthy();
   expect(screen.getByLabelText("生图 API Key")).toBeTruthy();
-  expect(screen.getByLabelText("图文文本模型 API Key")).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "图文文本模型地址" })).toBeNull();
+  expect(screen.queryByLabelText("图文文本模型 API Key")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "生图模型" })).toBeNull();
   expect(screen.queryByRole("textbox", { name: "图文文本模型" })).toBeNull();
   expect(screen.queryByRole("combobox", { name: /同时生成图片数/ })).toBeNull();
@@ -194,7 +194,7 @@ test("image tab only exposes service addresses and keys", () => {
   expect(screen.queryByRole("checkbox", { name: /生图流式保活/ })).toBeNull();
 });
 
-test("remix model fields are editable independently", () => {
+test("remix model fields are editable independently without retired quality and prompt displays", () => {
   const { onDraftChange, onSecretDraftChange } = renderPanel();
   fireEvent.change(screen.getByRole("textbox", { name: "二创服务地址" }), {
     target: { value: "http://127.0.0.1:2001/v1" },
@@ -214,9 +214,9 @@ test("remix model fields are editable independently", () => {
     target: { value: "gpt-5.6-sol" },
   });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, remix_model: "gpt-5.6-sol" });
+  expect(screen.queryByRole("combobox", { name: "质检模型" })).toBeNull();
   expect(screen.queryByRole("combobox", { name: "二创提示词" })).toBeNull();
-  expect(screen.getByLabelText("当前二创提示词").textContent).toContain("语感回流 2026-08-25 批注回流2");
-  expect(screen.getByLabelText("当前二创提示词").textContent).toContain("由文案创作台采用");
+  expect(screen.queryByLabelText("当前二创提示词")).toBeNull();
   fireEvent.change(screen.getByRole("combobox", { name: "二创思考强度" }), {
     target: { value: "high" },
   });
@@ -334,23 +334,22 @@ test("image generation settings and secret are editable", () => {
     ...emptySecretDraft,
     image_api_key: "new-image-key",
   });
-  fireEvent.change(screen.getByLabelText(/图文文本模型 API Key/), { target: { value: "new-text-key" } });
-  expect(onSecretDraftChange).toHaveBeenCalledWith({
-    ...emptySecretDraft,
-    image_text_api_key: "new-text-key",
-  });
   expect(screen.getByText(/当前地址使用 HTTP，密钥会明文传输/)).toBeTruthy();
 });
 
-test("the montage tab exposes catalog and FFmpeg paths without analysis keys", () => {
+test("the montage tab keeps tool paths in a closed advanced section", () => {
   const { onDraftChange } = renderPanel();
   openTab("混剪");
 
-  const catalogPath = screen.getByRole("textbox", { name: "素材库目录" }) as HTMLInputElement;
+  const catalogPath = screen.getByRole("textbox", { name: "电影片段库（可选）" }) as HTMLInputElement;
   expect(catalogPath.value).toBe("C:\\media\\catalog.db");
   fireEvent.change(catalogPath, { target: { value: "D:\\library\\catalog.db" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, media_catalog_path: "D:\\library\\catalog.db" });
 
+  const advanced = screen.getByText("高级工具与机器配置").closest("details");
+  expect(advanced?.open).toBe(false);
+  fireEvent.click(screen.getByText("高级工具与机器配置"));
+  expect(advanced?.open).toBe(true);
   fireEvent.change(screen.getByRole("textbox", { name: "FFmpeg 路径" }), { target: { value: "C:\\tools\\ffmpeg.exe" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, ffmpeg_path: "C:\\tools\\ffmpeg.exe" });
   fireEvent.change(screen.getByRole("textbox", { name: "FFprobe 路径" }), { target: { value: "C:\\tools\\ffprobe.exe" } });

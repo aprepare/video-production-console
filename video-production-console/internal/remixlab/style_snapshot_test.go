@@ -76,3 +76,68 @@ func TestStyleBriefSnapshotsStayFrozenAndRerunUsesCurrentAccount(t *testing.T) {
 		t.Fatalf("rerun snapshot was not frozen: %v", err)
 	}
 }
+
+func TestCustomStyleAppliesToNewRunAndRerunWithItsOwnMetadata(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := store.NewRemixLabRepository(db)
+	st := Store{DataRoot: root}
+	style, err := st.UpsertStyle(StyleTemplate{Name: "账号自定义写法", Writer: "自定义首版正文要求", WriterUser: "{{SOURCE}}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	if _, err = st.ApplyStyleForAccount(id, style.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	captured := make(chan string, 2)
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixAPIKey: "test", RemixModel: "writer"}}, remixFakeProtector{}, root,
+		func(ctx context.Context, opts openaicompat.Options) error {
+			captured <- opts.WorkflowJSON
+			return fastStubRunner(ctx, opts)
+		}, nil, nil)
+	exp, err := svc.CreateWorkflowExperiment(t.Context(), "原文用于核验账号风格", 1, id, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitExperimentTerminal(t, svc, exp.ID)
+	if done.Runs[0].PromptID != style.ID || done.Runs[0].PromptName != style.Name {
+		t.Fatal("new run still reports the old active prompt")
+	}
+	first := <-captured
+	style.Writer = "自定义新版正文要求"
+	if _, err = st.UpsertStyle(style); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ApplyStyleForAccount(id, style.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	rerun, err := svc.Rerun(t.Context(), done.Runs[0].ID, RerunInput{Writer: RerunModel{Model: "writer"}, Reviewer: RerunModel{Model: "reviewer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = waitExperimentTerminal(t, svc, exp.ID)
+	second := <-captured
+	for index, raw := range []string{first, second} {
+		var wf Workflow
+		if err := json.Unmarshal([]byte(raw), &wf); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"自定义首版正文要求", "自定义新版正文要求"}[index]
+		if workflowWriter(wf).Config.SystemPrompt != want || wf.EditorialRules == nil || *wf.EditorialRules != "" {
+			t.Fatalf("run %d lost custom style or added conflicting rules", index)
+		}
+	}
+	record, err := repo.GetRun(t.Context(), rerun.RunID)
+	if err != nil || record.PromptID != style.ID || record.PromptName != style.Name {
+		t.Fatalf("rerun metadata incorrect: %v", err)
+	}
+	original, _, _, err := repo.GetExperiment(t.Context(), exp.ID)
+	if err != nil || original.WorkflowJSON != first {
+		t.Fatalf("historical snapshot was overwritten: %v", err)
+	}
+}

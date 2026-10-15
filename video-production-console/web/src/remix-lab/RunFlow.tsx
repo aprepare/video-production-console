@@ -421,11 +421,13 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
   };
   const [exportingDraft, setExportingDraft] = useState("");
   const autoSelected = useRef(false);
+  const followProgress = useRef(true);
   const lastStatus = useRef("");
   const lastFailure = useRef("");
 
   useEffect(() => {
     autoSelected.current = false;
+    followProgress.current = true;
     lastStatus.current = "";
     lastFailure.current = "";
     setView(null);
@@ -451,13 +453,19 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
           onStatusChange?.(next.status);
         }
         onProductionChange?.(next.production ?? null);
-        // 首次载入聚焦当前断点/运行阶段；后续刷新保留操作员选择。
-        if (!autoSelected.current) {
+        // 自动跟随实际进度；操作员点选后保留选择，新失败仍会定位断点。
+        if (!autoSelected.current || followProgress.current) {
           autoSelected.current = true;
-          const active = next.stages.find((stage) => stage.status === "failed")
-            ?? next.stages.find((stage) => stage.status === "running");
-          setSelectedID(active?.id ?? next.stages.find((stage) => stage.id === "final")?.id
-            ?? next.stages.find((stage) => stage.id === "source")?.id ?? next.stages[0]?.id ?? "");
+          const running = next.stages.find((stage) => stage.status === "running");
+          const active = next.status === "queued" || next.status === "running" ? running
+            : next.stages.find((stage) => stage.status === "failed") ?? running;
+          const pending = next.status === "queued" || next.status === "running"
+            ? next.stages.find((stage) => stage.kind !== "input" && stage.kind !== "output" && stage.kind !== "produce"
+              && !stage.id.startsWith("produce-") && ["missing", "queued", "pending"].includes(stage.status))
+            : undefined;
+          setSelectedID(active?.id ?? pending?.id
+            ?? next.stages.find((stage) => stage.kind === "output" && ["ok", "completed"].includes(stage.status))?.id
+            ?? next.stages.find((stage) => stage.kind === "input")?.id ?? next.stages[0]?.id ?? "");
         } else if (live && next.status === "failed" && lastFailure.current !== next.status) {
           const failed = next.stages.find((stage) => stage.status === "failed");
           if (failed) setSelectedID(failed.id);
@@ -759,7 +767,7 @@ export function RunFlowPanel({ api, runID, live = false, onEditAgentPrompts, onM
   return (
     <div className="fixed-flow-workspace">
       {view ? (
-        <FixedFlowSteps steps={steps} selectedID={selectedID} onSelect={setSelectedID} label="运行步骤" />
+        <FixedFlowSteps steps={steps} selectedID={selectedID} onSelect={id => { followProgress.current = false; setSelectedID(id); }} label="运行步骤" />
       ) : loadError ? (
         <div className="run-flow-loading" role="alert">
           <p className="remix-lab-run__error">{loadError}</p>

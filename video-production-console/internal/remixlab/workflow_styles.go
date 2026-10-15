@@ -38,16 +38,14 @@ func workflowWithStyle(w Workflow, style StyleTemplate, brief *Brief) (Workflow,
 	w.Nodes = append([]WorkflowNode(nil), w.Nodes...)
 	w.Edges = append([][2]string(nil), w.Edges...)
 	w.Style = style.ID
+	w.StyleName = style.Name
 	w.Publish = style.Publish
 	w.Finance = style.Finance && style.ID != "finance_course"
 	w.Brief = brief
 	rules := style.Rules
-	if !style.Finance {
-		// 自定义规则可以补充通用底线，发布合同始终保留。
+	if style.Builtin && !style.Finance {
+		// 内置通用风格沿用配套规则；自定义风格只应用用户明确保存的规则。
 		rules = UniversalRules + "\n\n" + UniversalPublishingContract
-		if !style.Builtin && strings.TrimSpace(style.Rules) != "" && style.Rules != UniversalRules {
-			rules += "\n\n" + style.Rules
-		}
 	}
 	w.EditorialRules = &rules
 	// 财经策划的注入纪律提到祝福和课尾五步；通用风格用自己的那一份。

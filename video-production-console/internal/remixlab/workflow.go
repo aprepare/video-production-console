@@ -73,8 +73,9 @@ type WorkflowNode struct {
 }
 
 type Workflow struct {
-	Style string `json:"style,omitempty"`
-	Brief *Brief `json:"brief,omitempty"`
+	Style     string `json:"style,omitempty"`
+	StyleName string `json:"style_name,omitempty"`
+	Brief     *Brief `json:"brief,omitempty"`
 	// Finance 让另存的自定义财经风格也能冻结专用检查，不依赖运行时模板库。
 	Finance        bool           `json:"finance,omitempty"`
 	Publish        string         `json:"publish,omitempty"`

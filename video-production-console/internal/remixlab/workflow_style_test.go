@@ -115,8 +115,8 @@ func TestApplyStylePreservesOtherNodesAndBriefOnlyUpdate(t *testing.T) {
 	if view.Workflow.Style != style.ID || view.Workflow.Brief.Industry != "餐饮" || !reflect.DeepEqual(view.Workflow.Production, w.Production) {
 		t.Fatalf("metadata not retained: %+v", view.Workflow)
 	}
-	if !strings.Contains(*view.Workflow.EditorialRules, UniversalPublishingContract) || !strings.Contains(*view.Workflow.EditorialRules, "额外规则") {
-		t.Fatal("rules missing")
+	if *view.Workflow.EditorialRules != "额外规则" {
+		t.Fatal("custom style rules were replaced or supplemented")
 	}
 	for _, node := range view.Workflow.Nodes {
 		switch node.ID {
@@ -173,6 +173,36 @@ func TestApplyStylePreservesOtherNodesAndBriefOnlyUpdate(t *testing.T) {
 	}
 	if after.Brief != nil {
 		t.Fatal("nil brief not saved")
+	}
+}
+
+func TestCustomStyleDoesNotInjectUnselectedWritingRules(t *testing.T) {
+	st := Store{DataRoot: t.TempDir()}
+	id := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	style, err := st.UpsertStyle(StyleTemplate{Name: "我的完整写法", Writer: "首尾保留，只输出正文", WriterUser: "{{SOURCE}}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := st.ApplyStyleForAccount(id, style.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Workflow.EditorialRules == nil || *view.Workflow.EditorialRules != "" {
+		t.Fatal("custom writer was overridden by unselected universal/publishing rules")
+	}
+	prompt, err := st.resolveWorkflowWriter(view.Workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.ID != style.ID || prompt.Name != style.Name || prompt.System != style.Writer {
+		t.Fatalf("effective prompt does not identify the applied custom style: id=%q name=%q", prompt.ID, prompt.Name)
+	}
+	reloaded, err := st.WorkflowPromptsForAccount(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Workflow.EditorialRules == nil || *reloaded.Workflow.EditorialRules != "" {
+		t.Fatal("reloading injected default rules")
 	}
 }
 

@@ -122,3 +122,30 @@ test("live polling refreshes status without stealing selection, then focuses a n
     vi.useRealTimers();
   }
 });
+
+test("queued runs show the writer and follow actual progress until the operator selects a step", async () => {
+  vi.useFakeTimers();
+  try {
+    let status = "queued";
+    const api = vi.fn(async () => new Response(JSON.stringify({
+      run_id: "run-1", pipeline: "workflow", status, edges: [],
+      stages: [
+        { id: "source", kind: "input", title: "原文", status: "ok", output: "原文内容" },
+        { id: "writer", kind: "agent", title: "写手", status: status === "completed" ? "ok" : status === "running" ? "running" : "missing" },
+        { ...finalStage, status: status === "completed" ? "ok" : "missing" },
+      ],
+    })));
+    await act(async () => { render(<RunFlowPanel api={api} runID="run-1" live onMessage={vi.fn()} onEditAgentPrompts={vi.fn()} />); });
+    expect(screen.getByLabelText("写手详情")).toBeTruthy();
+    expect(screen.queryByLabelText("二创定稿详情")).toBeNull();
+    status = "running";
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByLabelText("写手详情")).toBeTruthy();
+    status = "completed";
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByLabelText("二创定稿详情")).toBeTruthy();
+    cleanup();
+  } finally {
+    vi.useRealTimers();
+  }
+});

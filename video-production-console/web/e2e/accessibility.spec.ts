@@ -31,7 +31,7 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
     } else if (path === "/api/projects") {
       body = [activeProject];
     } else if (path === "/api/settings") {
-      body = { public: {}, configured_public: {}, active_public: {}, restart_required: false };
+      body = { public: {}, secrets: {}, configured_public: {}, active_public: {}, restart_required: false };
     } else if (path === "/api/runtime") {
       body = { Limit: 2, Running: 0, Queued: 0 };
     } else if (url.pathname === "/api/remix-lab/experiments") {
@@ -97,6 +97,8 @@ async function mockConsole(page: Page, authenticated: boolean, review = false) {
             },
           }]
         : [];
+    } else if (url.pathname === "/api/tasks") {
+      body = [];
     }
 
     await route.fulfill({

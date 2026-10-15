@@ -505,6 +505,44 @@ func TestCreateWorkflowExperimentMultiModel(t *testing.T) {
 	}
 }
 
+func TestCreateWorkflowExperimentModelConfigsResolveIndependentEfforts(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repo := store.NewRemixLabRepository(db)
+	captured := make(chan WorkflowModelConfig, 2)
+	svc := NewService(repo, stubRuntime{view: RuntimeView{RemixBaseURL: "http://x/v1", RemixModel: "m-default", RemixReasoningEffort: "medium", RemixAPIKey: "sk-runtime"}}, remixFakeProtector{}, t.TempDir(), func(_ context.Context, opts openaicompat.Options) error {
+		captured <- WorkflowModelConfig{Model: opts.Model, ReasoningEffort: opts.ReasoningEffort}
+		dir := filepath.Dir(opts.OutputLastMessage)
+		return os.WriteFile(filepath.Join(dir, "continuous_script.txt"), []byte("成稿"), 0o644)
+	}, nil, nil)
+
+	exp, err := svc.CreateWorkflowExperimentWithModelConfigs(t.Context(), "逐模型强度原文一二三四五", 1, "", false, nil, []WorkflowModelConfig{
+		{Model: "m-high", ReasoningEffort: "high"},
+		{Model: "m-low", ReasoningEffort: "low"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exp.Slots) != 2 || exp.Slots[0].ReasoningEffort != "high" || exp.Slots[1].ReasoningEffort != "low" {
+		t.Fatalf("slots=%+v", exp.Slots)
+	}
+	_ = waitExperimentTerminal(t, svc, exp.ID)
+	seen := map[string]string{}
+	for range 2 {
+		got := <-captured
+		seen[got.Model] = got.ReasoningEffort
+	}
+	if seen["m-high"] != "high" || seen["m-low"] != "low" {
+		t.Fatalf("runner did not receive independent efforts: %v", seen)
+	}
+	if _, err := svc.CreateWorkflowExperimentWithModelConfigs(t.Context(), "非法强度原文一二三四五", 1, "", false, nil, []WorkflowModelConfig{{Model: "m", ReasoningEffort: "turbo"}}, nil); !errors.Is(err, ErrInvalidRerun) {
+		t.Fatalf("invalid effort error=%v", err)
+	}
+}
+
 // 换模型重试：整体重试改槽位模型（写手链沿用新模型），指定 agent 节点重试
 // 改实验快照里该节点的模型；两处都持久化，后续重试不再回到坏模型。
 func TestRetryRunSwitchesModel(t *testing.T) {

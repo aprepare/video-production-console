@@ -8,6 +8,42 @@ import (
 	"testing"
 )
 
+func TestCustomWorkflowSendsItsSavedWriterWithoutLegacyRules(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.txt")
+	if err := os.WriteFile(source, []byte("保留开头。改写中段。保留结尾。"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, _ := json.Marshal(map[string]any{
+		"action": "remix.standard", "output_dir": filepath.Join(root, "output"),
+		"inputs":              []map[string]string{{"type": "source_script", "path": source}},
+		"non_secret_settings": map[string]string{"remix_system_prompt": "不应使用的旧写法", "remix_user_prompt": "旧用户提示词"},
+	})
+	path := filepath.Join(root, "manifest.json")
+	if err := os.WriteFile(path, manifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	custom := "首尾原样保留，中段按我的新风格重写。发布字段留空。"
+	wf, _ := json.Marshal(map[string]any{"style": "custom-test", "editorial_rules": "", "nodes": []map[string]any{
+		{"id": "source", "type": "input"}, {"id": "writer", "type": "writer", "config": map[string]string{"system_prompt": custom, "user_template": "{{SOURCE}}"}},
+		{"id": "final", "type": "output"},
+	}, "edges": [][2]string{{"source", "writer"}, {"writer", "final"}}})
+	client := &sequenceClient{responses: []string{`{"continuous_script":"保留开头。新的中段。保留结尾。","titles":[],"short_titles":[],"descriptions":[],"topics":[],"cta":""}`}}
+	if err := Run(Options{ManifestPath: path, OutputLastMessage: filepath.Join(root, "last.json"), BaseURL: "http://example.invalid/v1", APIKey: "test", Model: "writer", Client: client, WorkflowJSON: string(wf)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("unexpected extra calls: %d", len(client.requests))
+	}
+	req := client.requests[0]
+	if req.Messages[0].Content != custom+"\n\n"+WriterJSONContract {
+		t.Fatalf("writer request contains unselected rules: %s", req.Messages[0].Content)
+	}
+	if req.Messages[1].Content != "保留开头。改写中段。保留结尾。" {
+		t.Fatalf("writer used the old user template: %s", req.Messages[1].Content)
+	}
+}
+
 func TestUniversalFlowInjectsBriefAndKeepsMode(t *testing.T) {
 	for _, placeholders := range []bool{true, false} {
 		name := "fallback"

@@ -1919,6 +1919,21 @@ summary:focus-visible,
   user-select: none;
 }
 
+.model-multi-option > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-multi-option { max-width: 100%; flex-wrap: wrap; }
+
+.model-multi-option > select {
+  margin-left: auto;
+  min-width: 118px;
+}
+
 .model-multi-option input {
   margin: 0;
   accent-color: var(--ink-950);
@@ -1952,6 +1967,20 @@ summary:focus-visible,
   color: inherit;
   font: inherit;
   font-size: 12px;
+}
+
+.model-combo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  width: 100%;
+}
+
+.model-combo > select { grid-column: 1 / -1; width: 100%; }
+
+.model-combo > select,
+.model-combo > input {
+  min-width: 0;
 }
 
 .task-script-view {

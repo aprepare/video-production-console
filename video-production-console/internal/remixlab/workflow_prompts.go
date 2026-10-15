@@ -24,7 +24,13 @@ func (s Store) resolveWorkflowWriter(w Workflow) (PromptTemplate, error) {
 	changed := writerSelectionChanged(node)
 	// 风格正文已随工作流冻结；模板被编辑或删除不影响已有工作流。
 	if id == "" && w.Style != "" && node != nil && strings.TrimSpace(node.Config.SystemPrompt) != "" {
-		return PromptTemplate{ID: w.Style, Name: w.Name, Style: openaicompat.PromptStyleRewrite,
+		name := w.StyleName
+		if name == "" {
+			if style, ok, err := s.GetStyle(w.Style); err == nil && ok {
+				name = style.Name
+			}
+		}
+		return PromptTemplate{ID: w.Style, Name: pick(name, w.Name), Style: openaicompat.PromptStyleRewrite,
 			System: node.Config.SystemPrompt, User: pick(node.Config.UserTemplate, styleWriterUserTemplate)}, nil
 	}
 	active, hasActive, err := s.GetActive()

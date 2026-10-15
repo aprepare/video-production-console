@@ -4,7 +4,8 @@ import { ArrowLeft, Download, Eye, EyeOff, FileText, Play, RefreshCw, Trash2 } f
 import { ModelSelect } from "../ModelSelect";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
-import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate } from "../types";
+import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate, Settings } from "../types";
+import { ImageTextConnectionSettings } from "./ImageTextConnectionSettings";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
 import { DEFAULT_IMAGE_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
 import { ImageProjectLibrary } from "./ImageProjectLibrary";
@@ -26,6 +27,8 @@ type Props = {
   defaultImageModel?: string;
   defaultImageAttempts?: number;
   onAdvancedMode?: () => void;
+  settings?: Settings | null;
+  onSettingsSaved?: (settings: Settings) => void;
 };
 type EditableItemField = "source_text" | "title" | "prompt";
 type DraftSegment = {
@@ -110,6 +113,8 @@ export function ImageModeWorkbench({
   defaultImageModel = "",
   defaultImageAttempts = 2,
   onAdvancedMode,
+  settings = null,
+  onSettingsSaved,
 }: Props) {
   const [projects, setProjects] = useState<ImageProject[]>([]);
   const [listState, setListState] = useState("loading");
@@ -691,6 +696,7 @@ export function ImageModeWorkbench({
           <p>{mode === "quick" ? "粘贴最终文案后直接生成图片。项目名称由模型生成，无需确认分段。" : "粘贴最终文案，先看 AI 分段建议，确认后再生成提示词和图片。最多 18 张，第一张是封面。"}</p>
         </div>
       </div>
+      {onSettingsSaved ? <ImageTextConnectionSettings api={api} settings={settings} onSaved={onSettingsSaved} /> : null}
       {message ? <div className="image-mode-notice" role="status">{message}</div> : null}
       <div className="image-mode-start image-mode-start--with-list">
         {mode === "quick" ? (

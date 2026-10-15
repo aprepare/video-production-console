@@ -119,6 +119,7 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
   // 空 = 用默认档（写手节点覆盖 > 模型配置槽1 > 全局二创设置）；多选 = 每个
   // 账号里各模型各出一稿并行，快的先看、慢的再比。
   const [models, setModels] = useState<string[]>([]);
+  const [modelEfforts, setModelEfforts] = useState<Record<string, string>>({});
   const [reviewMode, setReviewMode] = useState("inherit");
   const [reviewModel, setReviewModel] = useState("");
   const [reviewEffort, setReviewEffort] = useState("high");
@@ -279,7 +280,8 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
     // 逐个账号提交：每个账号用自己的工作流快照各跑一个实验。
     for (const account of chosen) {
       try {
-        const exp = await runRemixLabWorkflow(api, text, runCount, account.id, auto, models, reviewer);
+        const modelConfigs = models.map((model) => ({ model, reasoning_effort: modelEfforts[model] ?? "" }));
+        const exp = await runRemixLabWorkflow(api, text, runCount, account.id, auto, models, reviewer, modelConfigs);
         results[account.id] = { ok: true, detail: exp.id };
       } catch (error) {
         results[account.id] = {
@@ -348,6 +350,8 @@ export function AccountsOverview({ api, accounts, onClose, onOpenAccount, onAcco
                 if (next.length > 1) setAuto(false);
               }}
               inheritedLabel="各账号写手节点配置"
+              efforts={modelEfforts}
+              onEffortChange={(model, reasoning_effort) => setModelEfforts((current) => ({ ...current, [model]: reasoning_effort }))}
             />
           </div>
           <div className="batch-studio__review">

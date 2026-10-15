@@ -25,6 +25,15 @@ func (s *Service) CreateWorkflowExperiment(ctx context.Context, source string, r
 }
 
 func (s *Service) CreateWorkflowExperimentWithReviewer(ctx context.Context, source string, runCount int, produceAccountID string, auto bool, reviewer *RerunModel, models ...string) (Experiment, error) {
+	return s.CreateWorkflowExperimentWithModelConfigs(ctx, source, runCount, produceAccountID, auto, reviewer, nil, models)
+}
+
+type WorkflowModelConfig struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort"`
+}
+
+func (s *Service) CreateWorkflowExperimentWithModelConfigs(ctx context.Context, source string, runCount int, produceAccountID string, auto bool, reviewer *RerunModel, modelConfigs []WorkflowModelConfig, models []string) (Experiment, error) {
 	n := utf8.RuneCountInString(source)
 	if n < 1 || n > 20000 {
 		return Experiment{}, ErrInvalidSource
@@ -35,21 +44,33 @@ func (s *Service) CreateWorkflowExperimentWithReviewer(ctx context.Context, sour
 	if runCount < 1 || runCount > 3 {
 		return Experiment{}, ErrInvalidRunCount
 	}
-	cleanModels := make([]string, 0, len(models))
+	cleanModels := make([]WorkflowModelConfig, 0, len(modelConfigs)+len(models))
 	seen := map[string]bool{}
+	for _, config := range modelConfigs {
+		model := strings.TrimSpace(config.Model)
+		effort, err := validateReasoningEffort(config.ReasoningEffort)
+		if err != nil || model == "" || len(model) > 200 || strings.ContainsAny(model, "\r\n") {
+			return Experiment{}, ErrInvalidRerun
+		}
+		if seen[model] {
+			continue
+		}
+		seen[model] = true
+		cleanModels = append(cleanModels, WorkflowModelConfig{Model: model, ReasoningEffort: effort})
+	}
 	for _, m := range models {
 		m = strings.TrimSpace(m)
 		if m == "" || seen[m] {
 			continue
 		}
 		seen[m] = true
-		cleanModels = append(cleanModels, m)
+		cleanModels = append(cleanModels, WorkflowModelConfig{Model: m})
 	}
 	if len(cleanModels) > 4 {
 		return Experiment{}, ErrInvalidRunCount
 	}
 	if len(cleanModels) == 0 {
-		cleanModels = []string{""} // 一个槽，走默认档
+		cleanModels = []WorkflowModelConfig{{}} // 一个槽，走默认档
 	}
 	if err := validateProduceOptions(produceAccountID, auto, runCount*len(cleanModels)); err != nil {
 		return Experiment{}, err
@@ -115,10 +136,13 @@ func (s *Service) CreateWorkflowExperimentWithReviewer(ctx context.Context, sour
 	}
 	// 每个显式模型解析成一个槽；空字符串表示沿用上面算出的默认档。
 	slots := make([]resolvedSlot, 0, len(cleanModels))
-	for _, m := range cleanModels {
+	for _, config := range cleanModels {
 		slotIn := in
-		if m != "" {
-			slotIn.Model = m
+		if config.Model != "" {
+			slotIn.Model = config.Model
+		}
+		if config.ReasoningEffort != "" {
+			slotIn.ReasoningEffort = config.ReasoningEffort
 		}
 		slot, err := s.resolveSlot(slotIn, rt, preset)
 		if err != nil {
@@ -127,26 +151,10 @@ func (s *Service) CreateWorkflowExperimentWithReviewer(ctx context.Context, sour
 		slots = append(slots, slot)
 	}
 
-	// 写手提示词：节点指定 > 当前日产 > 编译默认。
 	libStore := Store{DataRoot: s.dataRoot}
-	promptID := ""
-	if writerNode != nil {
-		promptID = strings.TrimSpace(writerNode.Config.PromptID)
-	}
-	if promptID == "" {
-		if active, ok, err := libStore.GetActive(); err == nil && ok {
-			promptID = active.ID
-		}
-	}
-	if promptID == "" {
-		promptID = "elder_stable"
-	}
-	prompt, found, err := libStore.GetPrompt(promptID)
+	prompt, err := libStore.resolveWorkflowWriter(wf)
 	if err != nil {
 		return Experiment{}, err
-	}
-	if !found {
-		prompt = ResolvePrompt("elder_stable", "", "")
 	}
 
 	now := s.now()

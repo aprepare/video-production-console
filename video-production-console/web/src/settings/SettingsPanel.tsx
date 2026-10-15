@@ -77,36 +77,6 @@ type SettingsPanelProps = {
   onSaveAndRestart: () => void;
 };
 
-function RemixPromptStatus({ api }: { api: SettingsPanelProps["api"] }) {
-  const [label, setLabel] = useState("中老年定稿（生产默认） · 语感回流 2026-08-25 批注回流2");
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await api("/api/remix-lab/active-prompt");
-        if (!response.ok) return;
-        const body = (await response.json()) as {
-          prompt?: { name?: string; stamp?: string };
-        };
-        const name = body.prompt?.name || "中老年定稿（生产默认）";
-        const stamp = body.prompt?.stamp || "语感回流 2026-08-25 批注回流2";
-        if (!cancelled) setLabel(`${name} · ${stamp}`);
-      } catch {
-        // keep compiled default
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
-  return (
-    <div className="settings-remix-prompt" aria-label="当前二创提示词">
-      <strong>{label}</strong>
-      <small>由文案创作台采用。确认后立即生效，不用重启。</small>
-    </div>
-  );
-}
-
 function Field(props: { label: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`settings-field${props.wide ? " settings-field--wide" : ""}`}>
@@ -278,8 +248,7 @@ export function SettingsPanel({
     onDraftChange({ ...draft, [key]: event.target.value });
 
   const httpOnTab = (tab === "remix" && (draft.remix_base_url || "").toLowerCase().startsWith("http://"))
-    || (tab === "image" && ["image_base_url", "image_text_base_url"].some((key) =>
-      String(draft[key as keyof PublicSettings] || "").toLowerCase().startsWith("http://")))
+    || (tab === "image" && (draft.image_base_url || "").toLowerCase().startsWith("http://"))
     || (tab === "voice" && (draft.aurastd_base_url || "").toLowerCase().startsWith("http://"));
 
   return (
@@ -369,14 +338,6 @@ export function SettingsPanel({
                   onChange={(remix_model) => onDraftChange({ ...draft, remix_model })}
                 />
               </Field>
-              <Field label="质检模型（留空=关闭质检）">
-                <ModelSelect
-                  aria-label="质检模型"
-                  value={draft.remix_check_model || ""}
-                  emptyLabel="关闭质检"
-                  onChange={(remix_check_model) => onDraftChange({ ...draft, remix_check_model })}
-                />
-              </Field>
               <Field label="口播稿/字幕关键词模型（留空=跟随二创模型）">
                 <ModelSelect
                   aria-label="口播稿模型"
@@ -384,9 +345,6 @@ export function SettingsPanel({
                   emptyLabel="跟随二创模型"
                   onChange={(spoken_lines_model) => onDraftChange({ ...draft, spoken_lines_model })}
                 />
-              </Field>
-              <Field label="二创提示词">
-                <RemixPromptStatus api={api} />
               </Field>
               <Field label="二创思考强度">
                 <select
@@ -493,23 +451,6 @@ export function SettingsPanel({
                   placeholder="留空保持不变"
                   onChange={(event) =>
                     onSecretDraftChange({ ...secretDraft, image_api_key: event.target.value })
-                  }
-                />
-              </Field>
-              <Field label="图文文本模型地址">
-                <input value={draft.image_text_base_url || ""} placeholder="OpenAI 兼容地址" onChange={setText("image_text_base_url")} />
-              </Field>
-              <Field label="图文文本模型 API Key">
-                <small>
-                  {settings?.secrets.image_text_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
-                </small>
-                <input
-                  type="password"
-                  aria-label="图文文本模型 API Key"
-                  value={secretDraft.image_text_api_key}
-                  placeholder="留空保持不变"
-                  onChange={(event) =>
-                    onSecretDraftChange({ ...secretDraft, image_text_api_key: event.target.value })
                   }
                 />
               </Field>
@@ -659,7 +600,9 @@ export function SettingsPanel({
           ) : null}
           {tab === "montage" ? (
             <>
-              <Field label="素材库目录">
+              <p className="settings-section-title settings-section-title--first">素材来源</p>
+              <p className="settings-section-note">城市建筑混剪使用素材目录和素材索引；电影混剪另用 catalog.db 片段库。</p>
+              <Field label="电影片段库（可选）">
                 <input value={draft.media_catalog_path || ""} placeholder="catalog.db 路径" onChange={setText("media_catalog_path")} />
               </Field>
               <Field label="媒体素材目录">
@@ -668,25 +611,35 @@ export function SettingsPanel({
               <Field label="素材索引">
                 <input value={draft.media_index_path || ""} placeholder="媒体索引文件" onChange={setText("media_index_path")} />
               </Field>
+              <p className="settings-section-title">剪映输出</p>
+              <p className="settings-section-note">草稿写入这里配置的真实目录，剪映连接状态用于核验注册能力。</p>
               <Field label="剪映草稿目录">
                 <input value={draft.jianying_root || ""} placeholder="剪映草稿根目录" onChange={setText("jianying_root")} />
               </Field>
-              <Field label="FFmpeg 路径">
-                <input value={draft.ffmpeg_path || ""} placeholder="ffmpeg 可执行文件" onChange={setText("ffmpeg_path")} />
-              </Field>
-              <Field label="FFprobe 路径">
-                <input value={draft.ffprobe_path || ""} placeholder="ffprobe 可执行文件" onChange={setText("ffprobe_path")} />
-              </Field>
-              <Field label="混剪机器配置" wide>
-                <input value={draft.machine_profile_path || ""} placeholder="machine profile JSON" onChange={setText("machine_profile_path")} />
-              </Field>
               {api ? <JianyingHealthCard api={api} /> : null}
+              <details className="settings-advanced settings-field--wide">
+                <summary>高级工具与机器配置</summary>
+                <p>通常无需填写：FFmpeg 和 FFprobe 留空时自动使用控制台自带工具；机器配置用于指定混剪执行器、素材索引和剪映注册环境。</p>
+                <div className="settings-advanced__grid">
+                  <Field label="FFmpeg 路径">
+                    <input value={draft.ffmpeg_path || ""} placeholder="留空自动探测" onChange={setText("ffmpeg_path")} />
+                  </Field>
+                  <Field label="FFprobe 路径">
+                    <input value={draft.ffprobe_path || ""} placeholder="留空自动探测" onChange={setText("ffprobe_path")} />
+                  </Field>
+                  <Field label="混剪机器配置" wide>
+                    <input value={draft.machine_profile_path || ""} placeholder="machine profile JSON" onChange={setText("machine_profile_path")} />
+                  </Field>
+                </div>
+              </details>
             </>
           ) : null}
           {tab === "style" ? (
             <>
               <MontageStylePreview style={montageStyle} />
-              <p className="settings-section-title">字幕</p>
+              <p className="settings-section-note">这里设置全局默认样式；已开启账号专属样式的账号，以创作台“账号配置”为准。</p>
+              <p className="settings-section-title">字幕与关键词</p>
+              <p className="settings-section-note">控制口播字幕的字体、位置，以及重点词的强调方式。</p>
               <Field label="字幕字号">
                 <input
                   type="number"
@@ -779,7 +732,8 @@ export function SettingsPanel({
                   onChange={(event) => patchMontageStyle({ plain_size: Number(event.target.value) })}
                 />
               </Field>
-              <p className="settings-section-title">标题</p>
+              <p className="settings-section-title">画面标题</p>
+              <p className="settings-section-note">控制画面中的主标题和副标题；关闭后不会写入混剪草稿。</p>
               <Field label="显示主标题">
                 <input
                   type="checkbox"
@@ -856,7 +810,8 @@ export function SettingsPanel({
                   onChange={(event) => patchMontageStyle({ subtitle_y: Number(event.target.value) })}
                 />
               </Field>
-              <p className="settings-section-title">BGM</p>
+              <p className="settings-section-title">背景音乐</p>
+              <p className="settings-section-note">选择曲目并管理本地音乐目录。内置验证曲目使用固定音量。</p>
               <Field label="BGM 曲目">
                 <select
                   aria-label="BGM 曲目"

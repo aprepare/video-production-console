@@ -235,7 +235,7 @@ function StyleEditor({ style, onCancel, onSave }: { style: RemixLabStyle; onCanc
         <summary>高级：策划、审稿与公共规则</summary>
         <label>策划提示词（留空=不要策划节点）<textarea rows={6} value={draft.planner} onChange={set("planner")} /></label>
         <label>审稿提示词（留空=保留当前审稿）<textarea rows={6} value={draft.reviewer} onChange={set("reviewer")} /></label>
-        <label>公共编审规则（留空=用通用底线）<textarea rows={6} value={draft.rules} onChange={set("rules")} /></label>
+        <label>公共编审规则（留空=不追加其他写作规则）<textarea rows={6} value={draft.rules} onChange={set("rules")} /></label>
       </details>
     </div>
     <footer>

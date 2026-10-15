@@ -144,7 +144,7 @@ async function mockImageConsole(page: Page, mode: "advanced" | "quick" = "advanc
 
     if (path === "/api/auth/me") {
       body = { csrfToken: "csrf-test" };
-    } else if (path === "/api/accounts" || path === "/api/projects" || path === "/api/ideas") {
+    } else if (path === "/api/accounts" || path === "/api/projects" || path === "/api/ideas" || path === "/api/tasks") {
       body = [];
     } else if (path === "/api/runtime") {
       body = { Limit: 4, Running: 0, Queued: 0 };

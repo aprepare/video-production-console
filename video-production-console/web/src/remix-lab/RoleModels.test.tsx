@@ -10,7 +10,7 @@ afterEach(() => { cleanup(); window.localStorage.clear(); });
 const json = (value: unknown) => new Response(JSON.stringify(value));
 
 test("role settings save independent models to the current account and survive reopening without altering prompts", async () => {
-  let stored: RemixLabWorkflow = { version: 1, name: "账号工作流", nodes: [
+  let stored: RemixLabWorkflow = { version: 1, name: "账号工作流", style: "my-style", style_name: "我的写法", finance: true, publish: "channels_v2", nodes: [
     {id:"source",type:"input",title:"原文",x:0,y:0,config:{}},
     {id:"hook",type:"agent",title:"二创策划",x:100,y:0,config:{model:"planner-old",reasoning_effort:"high",service_tier:"priority",channel:"search",system_prompt:"策划规则"}},
     {id:"writer",type:"writer",title:"写手",x:200,y:0,config:{model:"writer-old",reasoning_effort:"low",service_tier:"priority",prompt_id:"bone_flesh"}},
@@ -30,7 +30,7 @@ test("role settings save independent models to the current account and survive r
   fireEvent.click(await screen.findByRole("button", {name:"模型配置"}));
   fireEvent.change(await screen.findByLabelText("二创策划模型"), {target:{value:"planner-new"}});
   fireEvent.click(within(screen.getByRole("group", {name:"二创策划"})).getByRole("button", {name:"改回默认模型"}));
-  expect((screen.getByLabelText("二创策划模型") as HTMLInputElement).value).toBe("planner-old");
+  expect((screen.getByLabelText("二创策划模型") as HTMLInputElement).value).toBe("");
   fireEvent.change(screen.getByLabelText("二创策划模型"), {target:{value:"planner-new"}});
   fireEvent.change(screen.getByLabelText("写手模型"), {target:{value:"writer-new"}});
   fireEvent.change(screen.getByLabelText("审稿模型"), {target:{value:"review-new"}});
@@ -45,10 +45,23 @@ test("role settings save independent models to the current account and survive r
   expect(stored.nodes[3].config).toEqual({...original.nodes[3].config,model:"review-new",service_tier:"priority"});
   expect(stored.production).toEqual(original.production);
   expect(stored.edges).toEqual(original.edges);
+  expect(stored).toMatchObject({style:"my-style", style_name:"我的写法", finance:true, publish:"channels_v2"});
   page.unmount();
   render(<WorkflowCanvas {...props} />);
   fireEvent.click(await screen.findByRole("button",{name:"模型配置"}));
   expect((await screen.findByLabelText("二创策划模型") as HTMLInputElement).value).toBe("planner-new");
   expect((screen.getByLabelText("写手模型") as HTMLInputElement).value).toBe("writer-new");
   expect(screen.getByRole("button",{name:"审稿 Fast"}).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("model dialog omits reviewer settings when the workflow has no reviewer node", async () => {
+  const workflow: RemixLabWorkflow = { version: 1, name: "无审稿流程", nodes: [
+    {id:"source",type:"input",title:"原文",x:0,y:0,config:{}},
+    {id:"writer",type:"writer",title:"写手",x:200,y:0,config:{model:"writer"}},
+  ],edges:[["source","writer"]] };
+  const api = vi.fn(async () => json(workflow));
+  render(<WorkflowCanvas api={api} prompts={[]} onMessage={vi.fn()} onEditAgentPrompts={vi.fn()} runWorkflow={vi.fn()} refreshToken={0} accountID="cloud" />);
+  fireEvent.click(await screen.findByRole("button", {name:"模型配置"}));
+  expect(screen.queryByRole("group", {name:"审稿"})).toBeNull();
+  expect(screen.queryByText("当前工作流未启用此环节。")).toBeNull();
 });

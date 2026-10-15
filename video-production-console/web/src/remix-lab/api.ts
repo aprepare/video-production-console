@@ -1,6 +1,7 @@
 export type RemixLabApi = (path: string, init?: RequestInit) => Promise<Response>;
 
 export type RemixLabRerunModel = { model: string; reasoning_effort: string; service_tier: string };
+export type RemixLabWorkflowModelConfig = { model: string; reasoning_effort: string };
 export type RemixLabRerunInput = { references?: RemixLabRerunModel[]; planner?: RemixLabRerunModel; writer: RemixLabRerunModel; reviewer: RemixLabRerunModel };
 export type RemixLabRerunResult = { experiment: RemixLabExperiment; run_id: string };
 
@@ -112,6 +113,9 @@ export type RemixLabWorkflow = {
   production?: RemixLabWorkflowProduction;
   /** 应用的风格模板 ID；旧工作流为空，按财经卖课处理。 */
   style?: string;
+  style_name?: string;
+  finance?: boolean;
+  publish?: string;
   /** 内容简报：行业、受众、卖点、转化动作等事实与要求。 */
   brief?: RemixLabBrief;
 };
@@ -283,6 +287,7 @@ export async function runRemixLabWorkflow(
   auto: boolean,
   models?: string[],
   reviewer?: { model: string; reasoning_effort?: string; service_tier?: string },
+  modelConfigs?: RemixLabWorkflowModelConfig[],
 ): Promise<RemixLabExperiment> {
   const response = await api("/api/remix-lab/workflow/run", {
     method: "POST",
@@ -290,6 +295,7 @@ export async function runRemixLabWorkflow(
     body: JSON.stringify({
       source, run_count: runCount, account_id: accountID, auto,
       models: (models ?? []).map((item) => item.trim()).filter(Boolean),
+      model_configs: (modelConfigs ?? []).map((item) => ({ model: item.model.trim(), reasoning_effort: item.reasoning_effort.trim() })).filter((item) => item.model),
       reviewer,
     }),
   });

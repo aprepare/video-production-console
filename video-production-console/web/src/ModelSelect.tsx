@@ -2,6 +2,8 @@ import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
 import { selectableModels } from "./taskModel";
 
+export const REASONING_EFFORT_OPTIONS = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+
 // All model dropdowns share one option list, maintained in settings
 // (model_options). An empty list falls back to the built-in defaults.
 const ModelOptionsContext = createContext<string[]>([]);
@@ -27,10 +29,14 @@ export function ModelMultiSelect({
   value,
   onChange,
   inheritedLabel,
+  efforts = {},
+  onEffortChange,
 }: {
   value: string[];
   onChange: (models: string[]) => void;
   inheritedLabel: string;
+  efforts?: Record<string, string>;
+  onEffortChange?: (model: string, effort: string) => void;
 }) {
   const configured = useModelOptions();
   // 已勾选但不在设置清单里的模型（临时手输的）也要显示出来，不然勾了看不见。
@@ -47,16 +53,19 @@ export function ModelMultiSelect({
   };
   return (
     <div className="model-multi-select" role="group" aria-label="二创模型多选">
-      {models.map((model) => (
-        <label key={model} className={`model-multi-option${value.includes(model) ? " is-checked" : ""}`}>
-          <input
-            type="checkbox"
-            checked={value.includes(model)}
-            onChange={() => toggle(model)}
-          />
-          {model}
-        </label>
-      ))}
+      {models.map((model) => {
+        const selected = value.includes(model);
+        return <div key={model} className={`model-multi-option${selected ? " is-checked" : ""}`}>
+          <label>
+            <input type="checkbox" checked={selected} onChange={() => toggle(model)} />
+            {model}
+          </label>
+          {selected && onEffortChange ? <select aria-label={`${model} 推理强度`} value={efforts[model] ?? ""}
+            onChange={(event) => onEffortChange(model, event.target.value)}>
+            {REASONING_EFFORT_OPTIONS.map((effort) => <option key={effort || "default"} value={effort}>{effort || "沿用写手强度"}</option>)}
+          </select> : null}
+        </div>;
+      })}
       <span className="model-multi-custom">
         <input
           type="text"
@@ -107,22 +116,26 @@ export function ModelCombo({
   id: string;
 }) {
   const models = useModelOptions();
-  const listID = `${id}-models`;
+  const optionLabel = `${ariaLabel || "模型"}候选`;
   return (
     <span className="model-combo">
+      <select
+        aria-label={optionLabel}
+        value={models.includes(value) ? value : ""}
+        onChange={(event) => { if (event.target.value) onChange(event.target.value); }}
+      >
+        <option value="">选择已有模型</option>
+        {models.map((model) => <option key={model} value={model}>{model}</option>)}
+      </select>
       <input
         id={id}
         type="text"
-        list={listID}
         aria-label={ariaLabel}
         value={value}
         placeholder={placeholder}
         autoComplete="off"
-        onChange={(event) => onChange(event.target.value.trim())}
+        onChange={(event) => onChange(event.target.value)}
       />
-      <datalist id={listID}>
-        {models.map((model) => <option key={model} value={model} />)}
-      </datalist>
       {value ? (
         <button type="button" className="header-button model-combo__clear" aria-label="改回默认模型" onClick={() => onChange("")}>
           默认

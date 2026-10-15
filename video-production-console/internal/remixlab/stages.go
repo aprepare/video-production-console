@@ -259,6 +259,9 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		}
 		if reviewRaw == "" {
 			review.Status = "skipped"
+			if run.Status == "queued" || run.Status == "running" {
+				review.Status = "missing"
+			}
 		} else {
 			var record struct {
 				Verdict string `json:"verdict"`
@@ -319,6 +322,7 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		}
 	}
 
+	markActiveCreationStages(&view, ids)
 	// —— 生产段（工作流运行）：确认闸门 → 建项目 → 口播稿 → 字幕 → 配音 → 混剪 ——
 	if hasWorkflow {
 		if rec, err := s.repo.GetProduction(ctx, run.ID); err == nil {
@@ -331,6 +335,51 @@ func (s *Service) RunStages(ctx context.Context, runID string) (RunStagesView, e
 		}
 	}
 	return view, nil
+}
+
+// 运行尚未产出文件时也要显示进度。执行器先按依赖跑完情报节点，再写稿、审稿、落定稿。
+func markActiveCreationStages(view *RunStagesView, ids stageNodeIDs) {
+	if view.Status != "running" && view.Status != "queued" {
+		return
+	}
+	status := "running"
+	if view.Status == "queued" {
+		status = "queued"
+	}
+	byID := map[string]*RunStageView{}
+	for i := range view.Stages {
+		byID[view.Stages[i].ID] = &view.Stages[i]
+	}
+	isPending := func(stage *RunStageView) bool {
+		return stage != nil && (stage.Status == "missing" || stage.Status == "queued" || stage.Status == "running")
+	}
+	// 按状态快照判断依赖，避免本轮标记影响同一波并行节点。
+	pendingAgents := map[string]bool{}
+	for _, stage := range view.Stages {
+		if stage.Kind == "agent" && stage.ID != ids.writer && stage.ID != ids.review && isPending(byID[stage.ID]) {
+			pendingAgents[stage.ID] = true
+		}
+	}
+	if len(pendingAgents) > 0 {
+		for id := range pendingAgents {
+			ready := true
+			for _, edge := range view.Edges {
+				if edge[1] == id && pendingAgents[edge[0]] {
+					ready = false
+				}
+			}
+			if ready {
+				byID[id].Status = status
+			}
+		}
+		return
+	}
+	for _, id := range []string{ids.writer, ids.review, ids.final} {
+		if stage := byID[id]; isPending(stage) {
+			stage.Status = status
+			return
+		}
+	}
 }
 
 // appendProductionStages 把生产段节点接在定稿之后。节点状态由生产记录的

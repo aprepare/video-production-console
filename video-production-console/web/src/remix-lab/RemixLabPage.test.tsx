@@ -255,6 +255,8 @@ test("remix-lab can remove an extra model slot", async () => {
   expect(screen.getByRole("dialog", { name: "模型配置" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
   expect(screen.getByText("写手预设 2")).toBeTruthy();
+  expect(screen.getByLabelText("模型槽 1 模型候选")).toBeTruthy();
+  expect(screen.getByLabelText("模型槽 1 思考强度").tagName).toBe("SELECT");
   fireEvent.click(screen.getByRole("button", { name: "删除模型槽 2" }));
   expect(screen.queryByText("写手预设 2")).toBeNull();
   expect((screen.getByRole("button", { name: "删除模型槽 1" }) as HTMLButtonElement).disabled).toBe(true);

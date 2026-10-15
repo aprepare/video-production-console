@@ -7,11 +7,79 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"video-production-console/internal/agentruntime/openaicompat"
 	"video-production-console/internal/remixproducer"
 	"video-production-console/internal/store"
 )
+
+func TestRunStagesShowsWriterRunningBeforeOutputExists(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "console.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	started, release := make(chan struct{}), make(chan struct{})
+	svc := NewService(store.NewRemixLabRepository(db), stubRuntime{view: RuntimeView{RemixAPIKey: "test"}}, remixFakeProtector{}, root,
+		func(ctx context.Context, opts openaicompat.Options) error {
+			close(started)
+			<-release
+			return fastStubRunner(ctx, opts)
+		}, nil, nil)
+	exp, err := svc.CreateExperiment(t.Context(), "用于验证写手实时进度的原文", []SlotInput{{Model: "writer", RunCount: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(release); waitExperimentTerminal(t, svc, exp.ID) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not start")
+	}
+	view, err := svc.RunStages(t.Context(), exp.Runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range view.Stages {
+		if stage.ID == "writer" && stage.Status != "running" {
+			t.Fatalf("writer should be running, got %q", stage.Status)
+		}
+		if stage.ID == "final" && stage.Status != "missing" {
+			t.Fatalf("final must wait, got %q", stage.Status)
+		}
+	}
+}
+
+func TestCreationProgressFollowsDependenciesAndWaitsForWriter(t *testing.T) {
+	ids := stageNodeIDs{source: "source", writer: "writer", review: "review", final: "final"}
+	view := RunStagesView{Status: "running", Stages: []RunStageView{
+		{ID: "source", Kind: "input", Status: "ok"},
+		{ID: "ref-a", Kind: "agent", Status: "missing"}, {ID: "ref-b", Kind: "agent", Status: "missing"},
+		{ID: "plan", Kind: "agent", Status: "missing"}, {ID: "writer", Kind: "agent", Status: "missing"},
+		{ID: "review", Kind: "agent", Status: "missing"}, {ID: "final", Kind: "output", Status: "missing"},
+	}, Edges: [][2]string{{"ref-a", "plan"}, {"ref-b", "plan"}, {"plan", "writer"}}}
+	markActiveCreationStages(&view, ids)
+	if view.Stages[1].Status != "running" || view.Stages[2].Status != "running" || view.Stages[3].Status != "missing" || view.Stages[4].Status != "missing" {
+		t.Fatal("parallel reference phase was skipped")
+	}
+	view.Stages[1].Status, view.Stages[2].Status = "ok", "failed"
+	markActiveCreationStages(&view, ids)
+	if view.Stages[3].Status != "running" || view.Stages[4].Status != "missing" {
+		t.Fatal("dependent planner did not follow reference completion")
+	}
+	view.Stages[3].Status = "ok"
+	markActiveCreationStages(&view, ids)
+	if view.Stages[4].Status != "running" || view.Stages[6].Status != "missing" {
+		t.Fatal("writer phase was skipped")
+	}
+	view.Stages[4].Status = "ok"
+	markActiveCreationStages(&view, ids)
+	if view.Stages[5].Status != "running" {
+		t.Fatal("review phase was skipped")
+	}
+}
 
 // 工作流里删掉字幕关键词节点后：生产段不再渲染该节点，且进度按固定
 // 步骤序号推导（narration 进行中不因下标位移而错位）。
