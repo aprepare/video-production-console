@@ -216,12 +216,16 @@ func TestValidateMediaURLRejectsCredentialsFragmentsAndGatewayTraversal(t *testi
 		"/api/%2e%2e/status",
 		"/cache/%252e%252e/status",
 		"/cache/%5c..%5cstatus",
+		"/api/xhs/search?keyword=x",
+		"/api/status",
+		"/api/tingwu/task?id=1",
+		"/cache/other/x.jpg",
 	} {
 		if err := ValidateMediaURL(XHS, rawURL); !errors.Is(err, ErrMediaHostNotAllowed) {
 			t.Errorf("url=%q err=%v", rawURL, err)
 		}
 	}
-	for _, rawURL := range []string{"https://ci.xhscdn.com/a.jpg?u=https%3A%2F%2Fevil.example", "/api/img?u=https%3A%2F%2Fci.xhscdn.com%2Fa"} {
+	for _, rawURL := range []string{"https://ci.xhscdn.com/a.jpg?u=https%3A%2F%2Fevil.example", "/api/img?u=https%3A%2F%2Fci.xhscdn.com%2Fa", "/cache/notes/69f43a770000000235016058/00.jpg?v=jpg"} {
 		if err := ValidateMediaURL(XHS, rawURL); err != nil {
 			t.Errorf("safe url=%q err=%v", rawURL, err)
 		}
@@ -405,5 +409,20 @@ func TestResolveRejectsDouyinWebLinks(t *testing.T) {
 	client, _ := New("http://127.0.0.1:1", "t", nil)
 	if _, err := client.Resolve(context.Background(), "https://www.douyin.com/video/7669644282001082623"); err == nil || !strings.Contains(err.Error(), "v.douyin.com") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDouyinImagePostsHaveNoVideo(t *testing.T) {
+	post := douyinPost(map[string]any{"aweme_id": "7658994183646877108", "desc": "日照去哪吃海鲜", "type": "images", "duration": float64(15000), "cover": "https://p3.douyinpic.com/a.jpeg", "digg_count": float64(257)})
+	if post.VideoURL != "" || post.DurationS != 0 || post.CoverURL == "" {
+		t.Fatalf("image post = %+v", post)
+	}
+	music := douyinPost(map[string]any{"aweme_id": "1", "desc": "x", "play_url": "https://v3-music.douyinstatic.com/a/?mime_type=audio_mp4", "duration": float64(15000)})
+	if music.VideoURL != "" {
+		t.Fatalf("audio-only play_url kept: %q", music.VideoURL)
+	}
+	video := douyinPost(map[string]any{"aweme_id": "2", "desc": "x", "type": "video", "play_url": "https://v5.zjcdn.com/a/?mime_type=video_mp4", "duration": float64(50876)})
+	if video.VideoURL == "" || video.DurationS < 50 {
+		t.Fatalf("video post = %+v", video)
 	}
 }

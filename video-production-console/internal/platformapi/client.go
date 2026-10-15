@@ -554,7 +554,8 @@ func ValidateMediaURL(platform Platform, rawURL string) error {
 		return ErrMediaHostNotAllowed
 	}
 	if gateway {
-		if platform != XHS || parsed.IsAbs() || parsed.Host != "" || (!strings.HasPrefix(parsed.Path, "/api/") && !strings.HasPrefix(parsed.Path, "/cache/")) {
+		// Only the gateway's image proxy and note-image cache; never its JSON APIs.
+		if platform != XHS || parsed.IsAbs() || parsed.Host != "" || (parsed.Path != "/api/img" && !strings.HasPrefix(parsed.Path, "/cache/notes/")) {
 			return ErrMediaHostNotAllowed
 		}
 		return nil
@@ -757,6 +758,10 @@ func douyinPost(item map[string]any) Post {
 		Shares:    num(item["share_count"]),
 		Collects:  num(item["collect_count"]),
 		CreatedAt: num(item["create_time"]),
+	}
+	// 图集 posts carry their background music as play_url; it is not a video.
+	if strings.EqualFold(str(item["type"]), "images") || strings.Contains(post.VideoURL, "mime_type=audio") {
+		post.VideoURL, post.DurationS = "", 0
 	}
 	if id != "" {
 		post.URL = "https://www.douyin.com/video/" + id
