@@ -74,7 +74,7 @@ export function ReferenceMedia({ api, post, onChange, onMessage, seekRef }: Prop
   if (!post.has_video) {
     return <div className="reference-media reference-media--empty">
       <Video size={22} strokeWidth={1.5} aria-hidden="true" />
-      <p>{post.platform === "xhs" ? "小红书接口目前只返回图文，没有视频地址；视频笔记请点「原帖」在网页里看。" : "这条内容没有视频。"}</p>
+      <p>{post.platform === "xhs" ? "这是图文笔记，没有视频；图片和文案请点「原帖」查看。" : "这条内容没有视频。"}</p>
     </div>;
   }
 
