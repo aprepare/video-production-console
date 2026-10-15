@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNumParsesGatewayCounts(t *testing.T) {
@@ -56,7 +58,7 @@ func TestSearchDouyinNormalizesStringCountsAndSendsBearer(t *testing.T) {
 		auth = r.Header.Get("Authorization")
 		keyword = r.URL.Query().Get("keyword")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true, "has_more": true, "cursor": 8, "search_id": "s1",
+			"ok": true, "has_more": true, "cursor": 8, "search_id": "s1", "login_wall": true,
 			"items": []map[string]any{{
 				"aweme_id": "7618399307196009764", "desc": "在日照岚山怼一顿海鲜 #日照美食",
 				"duration": "260970", "digg_count": "231108", "comment_count": "6644",
@@ -76,7 +78,7 @@ func TestSearchDouyinNormalizesStringCountsAndSendsBearer(t *testing.T) {
 	if auth != "Bearer tok-123" || keyword != "岚山海鲜" {
 		t.Fatalf("auth=%q keyword=%q", auth, keyword)
 	}
-	if !page.HasMore || page.Cursor != "8" || page.SearchID != "s1" || len(page.Items) != 1 {
+	if !page.HasMore || page.Cursor != "8" || page.SearchID != "s1" || !page.LoginWall || len(page.Items) != 1 {
 		t.Fatalf("page=%+v", page)
 	}
 	post := page.Items[0]
@@ -85,6 +87,47 @@ func TestSearchDouyinNormalizesStringCountsAndSendsBearer(t *testing.T) {
 	}
 	if post.Title != "在日照岚山怼一顿海鲜" || post.URL != "https://www.douyin.com/video/7618399307196009764" {
 		t.Fatalf("post title/url=%q %q", post.Title, post.URL)
+	}
+}
+
+func TestSearchNormalizesXHSVideoAndFiltersEmptyDouyinShells(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/xhs/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": []map[string]any{
+				{"id": "x1", "title": "海鲜", "type": "video", "video_url": "http://sns-video-v4.xhscdn.com/a.mp4", "duration": 93.5},
+				{"id": "x2", "title": "图文", "type": "normal", "video_url": "http://sns-video-v4.xhscdn.com/stale.mp4", "duration": 8.0},
+			}})
+		case "/api/douyin/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": []map[string]any{
+				{"aweme_id": "empty", "desc": "", "play_url": nil, "cover": nil, "digg_count": nil},
+				{"aweme_id": "real", "desc": "有内容", "play_url": "https://v.douyinvod.com/v.mp4"},
+			}})
+		}
+	}))
+	defer srv.Close()
+	client, _ := New(srv.URL, "t", srv.Client())
+	xhs, err := client.Search(context.Background(), XHS, "海鲜", "", "", "")
+	if err != nil || len(xhs.Items) != 2 || xhs.Items[0].VideoURL != "http://sns-video-v4.xhscdn.com/a.mp4" || xhs.Items[0].DurationS != 93.5 || xhs.Items[1].VideoURL != "" || xhs.Items[1].DurationS != 0 {
+		t.Fatalf("xhs=%+v err=%v", xhs, err)
+	}
+	douyin, err := client.Search(context.Background(), Douyin, "海鲜", "", "", "")
+	if err != nil || len(douyin.Items) != 1 || douyin.Items[0].ExternalID != "real" {
+		t.Fatalf("douyin=%+v err=%v", douyin, err)
+	}
+}
+
+func TestResolveXHSNormalizesVideoFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "note": map[string]any{
+			"id": "6a79c9a0000000020600ddd4", "type": "video", "video_url": "http://sns-video-al.xhscdn.com/a.mp4", "duration": 12.25,
+		}})
+	}))
+	defer srv.Close()
+	client, _ := New(srv.URL, "t", srv.Client())
+	post, err := client.Resolve(context.Background(), "6a79c9a0000000020600ddd4")
+	if err != nil || post.VideoURL != "http://sns-video-al.xhscdn.com/a.mp4" || post.DurationS != 12.25 {
+		t.Fatalf("post=%+v err=%v", post, err)
 	}
 }
 
@@ -126,6 +169,113 @@ func TestDownloadProxiesGatewayPathsWithToken(t *testing.T) {
 	if _, err := client.Download(context.Background(), XHS, "/api/img?u=x", &bytes.Buffer{}, 3); err == nil {
 		t.Fatal("size limit not enforced")
 	}
+	buf.Reset()
+	if _, err := client.Download(context.Background(), XHS, "/cache/notes/x/00.jpg?v=jpg", &buf, 1024); err != nil || buf.String() != "image-bytes" {
+		t.Fatalf("cache gateway download body=%q err=%v", buf.String(), err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOpenMediaValidatesHostsAndForwardsRange(t *testing.T) {
+	var gotRange, gotUA string
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotRange, gotUA = r.Header.Get("Range"), r.UserAgent()
+		return &http.Response{
+			StatusCode: http.StatusPartialContent,
+			Header:     http.Header{"Content-Type": {"video/mp4"}, "Content-Range": {"bytes 0-3/9"}},
+			Body:       io.NopCloser(strings.NewReader("part")), Request: r,
+		}, nil
+	})}
+	client, _ := New("https://gateway.example", "t", httpClient)
+	resp, err := client.OpenMedia(context.Background(), XHS, "http://sns-video-v4.xhscdn.com/a.mp4", "bytes=0-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 206 || string(body) != "part" || gotRange != "bytes=0-3" || !strings.Contains(gotUA, "Mozilla") {
+		t.Fatalf("status=%d body=%q range=%q ua=%q", resp.StatusCode, body, gotRange, gotUA)
+	}
+	for _, rawURL := range []string{
+		"https://evil.example/video", "https://evilxhscdn.com/video", "https://xhscdn.com.evil.example/video", "http://127.0.0.1/video", "http://localhost/video", "ftp://sns-video-v4.xhscdn.com/video",
+	} {
+		if _, err := client.OpenMedia(context.Background(), XHS, rawURL, ""); !errors.Is(err, ErrMediaHostNotAllowed) {
+			t.Errorf("url=%q err=%v", rawURL, err)
+		}
+	}
+}
+
+func TestValidateMediaURLRejectsCredentialsFragmentsAndGatewayTraversal(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://user:pass@ci.xhscdn.com/a.jpg",
+		"https://ci.xhscdn.com/a.jpg#fragment",
+		"/api/../status",
+		"/api/%2e%2e/status",
+		"/cache/%252e%252e/status",
+		"/cache/%5c..%5cstatus",
+	} {
+		if err := ValidateMediaURL(XHS, rawURL); !errors.Is(err, ErrMediaHostNotAllowed) {
+			t.Errorf("url=%q err=%v", rawURL, err)
+		}
+	}
+	for _, rawURL := range []string{"https://ci.xhscdn.com/a.jpg?u=https%3A%2F%2Fevil.example", "/api/img?u=https%3A%2F%2Fci.xhscdn.com%2Fa"} {
+		if err := ValidateMediaURL(XHS, rawURL); err != nil {
+			t.Errorf("safe url=%q err=%v", rawURL, err)
+		}
+	}
+	if err := ValidateMediaURL(Douyin, "/api/img?u=x"); !errors.Is(err, ErrMediaHostNotAllowed) {
+		t.Fatalf("cross-platform gateway err=%v", err)
+	}
+}
+
+func TestOpenMediaRejectsRedirects(t *testing.T) {
+	var requestedHosts []string
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestedHosts = append(requestedHosts, r.URL.Hostname())
+		if r.URL.Hostname() == "evil.example" {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("leaked")), Request: r}, nil
+		}
+		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://evil.example/video"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+	})}
+	client, _ := New("https://gateway.example", "t", httpClient)
+	resp, err := client.OpenMedia(context.Background(), XHS, "https://sns-video-v4.xhscdn.com/a.mp4", "")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, ErrMediaRedirect) {
+		t.Fatalf("redirect err=%v", err)
+	}
+	if len(requestedHosts) != 1 || requestedHosts[0] != "sns-video-v4.xhscdn.com" {
+		t.Fatalf("redirect made upstream requests to %v", requestedHosts)
+	}
+}
+
+func TestXHSCommentsRequestsAllFor120SecondsAndFlattensSubs(t *testing.T) {
+	var query url.Values
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		query = r.URL.Query()
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) < 119*time.Second || time.Until(deadline) > 121*time.Second {
+			t.Errorf("deadline=%v ok=%v", deadline, ok)
+		}
+		comments := make([]map[string]any, 151)
+		for i := range comments {
+			comments[i] = map[string]any{"nick": "甲", "content": "主评论", "like": 9, "subs": []map[string]any{{"nick": "乙", "content": "子评论", "like": 3}}}
+		}
+		body, _ := json.Marshal(map[string]any{"ok": true, "comments": comments})
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+	})}
+	client, _ := New("https://gateway.example", "t", httpClient)
+	comments, err := client.Comments(context.Background(), XHS, "note1", 500)
+	if err != nil || query.Get("id") != "note1" || query.Get("all") != "1" || len(comments) != 300 {
+		t.Fatalf("comments=%+v query=%v err=%v", comments, query, err)
+	}
+	if comments[1].Author != "↳ 乙" || comments[1].Text != "子评论" || comments[1].Likes != 3 {
+		t.Fatalf("sub=%+v", comments[1])
+	}
 }
 
 func TestDownloadReturnsHTTPStatusWithoutSignedURL(t *testing.T) {
@@ -141,6 +291,21 @@ func TestDownloadReturnsHTTPStatusWithoutSignedURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "private-") || strings.Contains(err.Error(), srv.URL) {
 		t.Fatalf("unsafe error=%v", err)
+	}
+}
+
+func TestDownloadAcceptsXHSPartialContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-4/5")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "video")
+	}))
+	defer srv.Close()
+	client, _ := New(srv.URL, "t", srv.Client())
+	var out bytes.Buffer
+	n, err := client.Download(context.Background(), XHS, srv.URL+"/video", &out, 10)
+	if err != nil || n != 5 || out.String() != "video" {
+		t.Fatalf("n=%d body=%q err=%v", n, out.String(), err)
 	}
 }
 

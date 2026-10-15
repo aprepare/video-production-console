@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -30,10 +31,15 @@ func (r referenceRuntimeStub) Runtime(context.Context) (consoleSettings.Runtime,
 type referencePlatformStub struct {
 	references.Platform
 	download func(context.Context, io.Writer) (int64, error)
+	open     func(context.Context, platformapi.Platform, string, string) (*http.Response, error)
 }
 
 func (p referencePlatformStub) Download(ctx context.Context, _ platformapi.Platform, _ string, w io.Writer, _ int64) (int64, error) {
 	return p.download(ctx, w)
+}
+
+func (p referencePlatformStub) OpenMedia(ctx context.Context, platform platformapi.Platform, rawURL, rangeHeader string) (*http.Response, error) {
+	return p.open(ctx, platform, rawURL, rangeHeader)
 }
 
 func newReferenceHandler(t *testing.T, platform references.Platform) (http.Handler, *store.ReferenceRepository, string) {
@@ -108,6 +114,69 @@ func TestReferenceMediaServesContentRangesAndCover(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/references/"+post.ID, nil))
 	if !strings.Contains(w.Body.String(), `"has_video":true`) || !strings.Contains(w.Body.String(), `"has_cover":true`) || strings.Contains(w.Body.String(), "media_path") || strings.Contains(w.Body.String(), "cover_path") {
 		t.Fatalf("JSON=%s", w.Body.String())
+	}
+}
+
+func TestReferencePreviewStreamsRangeResponse(t *testing.T) {
+	var gotPlatform platformapi.Platform
+	var gotURL, gotRange string
+	platform := referencePlatformStub{open: func(_ context.Context, p platformapi.Platform, rawURL, rangeHeader string) (*http.Response, error) {
+		gotPlatform, gotURL, gotRange = p, rawURL, rangeHeader
+		return &http.Response{
+			StatusCode: 206,
+			Header: http.Header{
+				"Content-Type":   {"video/mp4"},
+				"Content-Length": {"4"},
+				"Content-Range":  {"bytes 2-5/10"},
+				"Accept-Ranges":  {"bytes"},
+			},
+			Body: io.NopCloser(strings.NewReader("2345")),
+		}, nil
+	}}
+	h, _, _ := newReferenceHandler(t, platform)
+	r := httptest.NewRequest("GET", "/api/references/preview?platform=xhs&kind=video&url=http%3A%2F%2Fsns-video-v4.xhscdn.com%2Fa.mp4", nil)
+	r.Header.Set("Range", "bytes=2-5")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 206 || w.Body.String() != "2345" || gotPlatform != platformapi.XHS || gotURL != "http://sns-video-v4.xhscdn.com/a.mp4" || gotRange != "bytes=2-5" {
+		t.Fatalf("status=%d body=%q platform=%q url=%q range=%q", w.Code, w.Body.String(), gotPlatform, gotURL, gotRange)
+	}
+	for header, want := range map[string]string{"Content-Type": "video/mp4", "Content-Length": "4", "Content-Range": "bytes 2-5/10", "Accept-Ranges": "bytes", "Cache-Control": "private, max-age=600"} {
+		if got := w.Header().Get(header); got != want {
+			t.Errorf("%s=%q want %q", header, got, want)
+		}
+	}
+}
+
+func TestReferencePreviewValidatesGatewayPathAndReportsHostRejection(t *testing.T) {
+	platform := referencePlatformStub{open: func(_ context.Context, _ platformapi.Platform, rawURL, _ string) (*http.Response, error) {
+		if strings.Contains(rawURL, "evil") {
+			return nil, platformapi.ErrMediaHostNotAllowed
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader([]byte{0xff, 0xd8, 0xff, 0xe0, 0, 1}))}, nil
+	}}
+	h, _, _ := newReferenceHandler(t, platform)
+	for _, tc := range []struct {
+		name, query, code string
+		status            int
+	}{
+		{"gateway cover", "platform=xhs&kind=cover&url=%2Fcache%2Fnotes%2F1%2F00.jpg", "", 200},
+		{"gateway video", "platform=xhs&kind=video&url=%2Fapi%2Fimg%3Fu%3Dx", "preview_host_not_allowed", 400},
+		{"gateway douyin", "platform=douyin&kind=cover&url=%2Fapi%2Fimg%3Fu%3Dx", "preview_host_not_allowed", 400},
+		{"bad host", "platform=xhs&kind=cover&url=https%3A%2F%2Fevil.example%2Fa", "preview_host_not_allowed", 400},
+		{"bad kind", "platform=xhs&kind=file&url=https%3A%2F%2Fci.xhscdn.com%2Fa", "invalid_preview_kind", 400},
+		{"bad platform", "platform=other&kind=cover&url=https%3A%2F%2Fci.xhscdn.com%2Fa", "invalid_platform", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/api/references/preview?"+tc.query, nil))
+			if w.Code != tc.status || (tc.code != "" && !strings.Contains(w.Body.String(), `"code":"`+tc.code+`"`)) {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.name == "gateway cover" && (w.Header().Get("Content-Type") != "image/jpeg" || w.Header().Get("Cache-Control") != "private, max-age=3600") {
+				t.Fatalf("headers=%v", w.Header())
+			}
+		})
 	}
 }
 

@@ -1,0 +1,17 @@
+[
+  {
+    "command": "go build ./...",
+    "exit_code": 0,
+    "elapsed_seconds": 2.203
+  },
+  {
+    "command": "go vet ./...",
+    "exit_code": 0,
+    "elapsed_seconds": 2.735
+  },
+  {
+    "command": "go test ./...",
+    "exit_code": 0,
+    "elapsed_seconds": 89.906
+  }
+]

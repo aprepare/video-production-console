@@ -35,6 +35,7 @@ POST /api/orders/{id}/projects/{projectID}/deliver | 标记项目已交付
 # 对标采集与拆解
 GET /api/references/status | 平台接口连通状态
 GET /api/references/search | 抖音/小红书关键词搜索 ?platform&keyword&cursor&search_id&session_id | $
+GET /api/references/preview | 搜索结果封面或原视频在线预览 ?platform&kind&url
 GET /api/references | 对标库 ?q&platform&merchant_id&status&limit
 POST /api/references | 采集对标 {link | post, keyword, merchant_id, transcribe}（transcribe 时付费转写） | $
 GET /api/references/{id} | 对标详情（transcript 口播全文）
@@ -45,6 +46,23 @@ GET /api/references/{id}/comments | 拉平台评论 ?limit | $
 GET /api/references/{id}/media | 原视频 mp4 ?download=1
 POST /api/references/{id}/media | 下载原视频到本机（异步）
 GET /api/references/{id}/cover | 对标封面图
+# 关键词监控与评论洞察
+GET /api/monitors | 监控任务列表
+POST /api/monitors | 新建关键词监控 {platform, keyword, name, interval_minutes, pages, …}
+GET /api/monitors/{id} | 监控任务详情
+PATCH /api/monitors/{id} | 修改监控配置（仅更新已提供字段）
+DELETE /api/monitors/{id} | 删除监控任务及历史 | !
+POST /api/monitors/{id}/run | 立即排队执行一轮监控 | $
+GET /api/monitors/{id}/runs | 监控执行历史 ?limit
+GET /api/monitors/feed | 监控信息流 ?task_id&filter&limit
+PATCH /api/monitors/items/{item_id} | 标记条目 {read, dismissed}
+POST /api/monitors/items/read-all | 全部已读 {task_id}
+POST /api/monitors/items/{item_id}/collect | 采进素材库 {transcribe}（转写时付费） | $
+POST /api/monitors/items/{item_id}/score | 立即重新打分 | $
+POST /api/comment-insights | 评论洞察 {reference_id, model} | $
+GET /api/comment-insights | 评论洞察历史 ?reference_id
+GET /api/comment-insights/{id} | 评论洞察报告
+DELETE /api/comment-insights/{id} | 删除评论洞察 | !
 POST /api/reference-analyses | 拆解分析 {reference_id, model, focus}（视觉模型，异步） | $
 GET /api/reference-analyses | 拆解列表 ?reference_id
 GET /api/reference-analyses/{id} | 拆解详情

@@ -20,6 +20,7 @@ import (
 	"video-production-console/internal/baokuan"
 	"video-production-console/internal/codex"
 	"video-production-console/internal/codexapp"
+	"video-production-console/internal/commentinsight"
 	"video-production-console/internal/config"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/httpapi"
@@ -27,6 +28,7 @@ import (
 	"video-production-console/internal/imagevideo"
 	"video-production-console/internal/imagevideoruntime"
 	"video-production-console/internal/logging"
+	"video-production-console/internal/monitor"
 	"video-production-console/internal/obsidian"
 	"video-production-console/internal/realtime"
 	"video-production-console/internal/refanalysis"
@@ -290,7 +292,38 @@ func New(options Options) *App {
 			analysesHandler := httpapi.NewReferenceAnalysesHandler(analysisService)
 			mux.Handle("/api/reference-analyses", analysesHandler)
 			mux.Handle("/api/reference-analyses/", analysesHandler)
-			closers = append(closers, analysisService.Close)
+
+			insightService := commentinsight.New(store.NewCommentInsightRepository(options.DB), referenceRepo, options.Settings, referenceService)
+			monitorService := monitor.New(store.NewMonitorRepository(options.DB), referenceService, referenceRepo, options.Settings, monitor.Options{
+				Analyze: func(ctx context.Context, referenceID, model string) error {
+					_, err := analysisService.Start(ctx, referenceID, model, "")
+					return err
+				},
+				Insight: func(ctx context.Context, referenceID, model string) error {
+					_, _, err := insightService.Start(ctx, referenceID, model)
+					return err
+				},
+			})
+			resumeCtx, cancelResume = context.WithTimeout(context.Background(), 10*time.Second)
+			if err := insightService.Resume(resumeCtx); err != nil {
+				slog.Error("恢复评论洞察状态失败")
+			}
+			if err := monitorService.Resume(resumeCtx); err != nil {
+				slog.Error("恢复监控任务状态失败")
+			}
+			cancelResume()
+			monitorsHandler := httpapi.NewMonitorsHandler(monitorService)
+			mux.Handle("/api/monitors", monitorsHandler)
+			mux.Handle("/api/monitors/", monitorsHandler)
+			insightsHandler := httpapi.NewCommentInsightsHandler(insightService)
+			mux.Handle("/api/comment-insights", insightsHandler)
+			mux.Handle("/api/comment-insights/", insightsHandler)
+			background = append(background, monitorService.Run)
+			closers = append(closers, func() {
+				monitorService.Close()
+				insightService.Close()
+				analysisService.Close()
+			})
 
 			merchantsHandler := httpapi.NewMerchantsHandler(options.DB, options.Config.DataRoot)
 			for _, prefix := range []string{"/api/merchants", "/api/merchants/", "/api/materials/", "/api/orders", "/api/orders/", "/api/order-costs/", "/api/business/"} {

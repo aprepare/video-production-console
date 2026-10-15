@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type Platform interface {
 	StartTranscription(ctx context.Context, videoURL string) (platformapi.Transcript, error)
 	Transcription(ctx context.Context, taskID string) (platformapi.Transcript, error)
 	Download(ctx context.Context, platform platformapi.Platform, rawURL string, w io.Writer, limit int64) (int64, error)
+	OpenMedia(ctx context.Context, platform platformapi.Platform, rawURL, rangeHeader string) (*http.Response, error)
 }
 
 type RuntimeProvider interface {
@@ -54,6 +56,8 @@ type Service struct {
 	wake      chan struct{}
 	downloads map[string]*mediaDownload
 	deleting  map[string]bool
+	coverJPEG func(context.Context, []byte, int) ([]byte, error)
+	previews  *coverLRU
 }
 
 // New builds a service that creates gateway clients from live settings, so a
@@ -70,6 +74,7 @@ func New(repo *store.ReferenceRepository, runtime RuntimeProvider) *Service {
 		wake:      make(chan struct{}, 1),
 		downloads: map[string]*mediaDownload{},
 		deleting:  map[string]bool{},
+		previews:  newCoverLRU(300, 60<<20),
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,6 +23,11 @@ import (
 var ErrNotConfigured = errors.New("platform_api_not_configured")
 
 var ErrMediaTooLarge = errors.New("media exceeds size limit")
+
+var (
+	ErrMediaHostNotAllowed = errors.New("media host not allowed")
+	ErrMediaRedirect       = errors.New("media redirect not allowed")
+)
 
 // DownloadHTTPError exposes the status without retaining a signed CDN URL.
 type DownloadHTTPError struct{ StatusCode int }
@@ -176,8 +182,11 @@ func (c *Client) Search(ctx context.Context, platform Platform, keyword, cursor,
 		if !raw.OK {
 			return SearchPage{LoginWall: raw.LoginWall}, raw.failure("抖音搜索")
 		}
-		page := SearchPage{HasMore: raw.HasMore, Cursor: str(raw.Cursor), SearchID: raw.SearchID}
+		page := SearchPage{HasMore: raw.HasMore, Cursor: str(raw.Cursor), SearchID: raw.SearchID, LoginWall: raw.LoginWall}
 		for _, item := range raw.Items {
+			if strings.TrimSpace(str(item["desc"])) == "" && strings.TrimSpace(str(item["play_url"])) == "" && strings.TrimSpace(str(item["cover"])) == "" && item["digg_count"] == nil {
+				continue
+			}
 			page.Items = append(page.Items, douyinPost(item))
 		}
 		return page, nil
@@ -366,11 +375,11 @@ func transcriptFrom(raw map[string]any) (Transcript, error) {
 
 // Comments fetches top comments for a post (抖音 and 小红书 only).
 func (c *Client) Comments(ctx context.Context, platform Platform, externalID string, limit int) ([]Comment, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 30
-	}
 	switch platform {
 	case Douyin:
+		if limit <= 0 || limit > 100 {
+			limit = 30
+		}
 		var raw struct {
 			OK       bool             `json:"ok"`
 			Msg      string           `json:"msg"`
@@ -388,19 +397,37 @@ func (c *Client) Comments(ctx context.Context, platform Platform, externalID str
 		}
 		return out, nil
 	case XHS:
+		if limit <= 0 {
+			limit = 30
+		} else if limit > 300 {
+			limit = 300
+		}
 		var raw struct {
 			envelope
 			Comments []map[string]any `json:"comments"`
 		}
-		if err := c.do(ctx, http.MethodGet, "/api/xhs/comments", url.Values{"id": {externalID}}, nil, &raw); err != nil {
+		callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+		client := *c.http
+		client.Timeout = 0
+		if err := c.doWithClient(callCtx, &client, http.MethodGet, "/api/xhs/comments", url.Values{"id": {externalID}, "all": {"1"}}, nil, &raw); err != nil {
 			return nil, err
 		}
 		if !raw.OK {
 			return nil, raw.failure("小红书评论")
 		}
-		out := make([]Comment, 0, len(raw.Comments))
+		out := make([]Comment, 0, min(limit, len(raw.Comments)))
 		for _, item := range raw.Comments {
-			out = append(out, Comment{Author: str(item["nick"]), Text: str(item["content"]), Likes: num(item["like"])})
+			out = append(out, xhsComment(item, false))
+			if len(out) >= limit {
+				break
+			}
+			for _, sub := range mapSlice(item["subs"]) {
+				out = append(out, xhsComment(sub, true))
+				if len(out) >= limit {
+					break
+				}
+			}
 			if len(out) >= limit {
 				break
 			}
@@ -411,21 +438,195 @@ func (c *Client) Comments(ctx context.Context, platform Platform, externalID str
 	}
 }
 
+func xhsComment(item map[string]any, sub bool) Comment {
+	author := firstNonEmpty(str(item["nick"]), str(item["nickname"]))
+	if user, ok := item["user"].(map[string]any); ok {
+		author = firstNonEmpty(author, str(user["nickname"]), str(user["nick_name"]), str(user["name"]))
+	}
+	if sub {
+		author = "↳ " + author
+	}
+	return Comment{Author: author, Text: firstNonEmpty(str(item["content"]), str(item["text"])), Likes: num(firstNonNil(item["like"], item["like_count"], item["likes"]))}
+}
+
+func mapSlice(value any) []map[string]any {
+	switch items := value.(type) {
+	case []map[string]any:
+		return items
+	case []any:
+		out := make([]map[string]any, 0, len(items))
+		for _, value := range items {
+			if item, ok := value.(map[string]any); ok {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+// OpenMedia opens an allowlisted CDN or gateway media response without
+// following redirects. The caller owns resp.Body.
+func (c *Client) OpenMedia(ctx context.Context, platform Platform, rawURL, rangeHeader string) (*http.Response, error) {
+	target, gateway, err := c.mediaTarget(platform, rawURL, true)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	if gateway {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	setMediaUserAgent(req, platform)
+	if strings.TrimSpace(rangeHeader) != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
+	client := *c.download
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("open %s media failed", platform)
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		resp.Body.Close()
+		return nil, ErrMediaRedirect
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		status := resp.StatusCode
+		resp.Body.Close()
+		return nil, &DownloadHTTPError{StatusCode: status}
+	}
+	return resp, nil
+}
+
+func (c *Client) mediaTarget(platform Platform, rawURL string, enforceAllowlist bool) (string, bool, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", false, fmt.Errorf("media URL is invalid")
+	}
+	gateway := strings.HasPrefix(rawURL, "/api/") || strings.HasPrefix(rawURL, "/cache/")
+	if gateway {
+		if err := ValidateMediaURL(platform, rawURL); err != nil {
+			return "", false, err
+		}
+		return c.baseURL + rawURL, true, nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		if enforceAllowlist {
+			return "", false, ErrMediaHostNotAllowed
+		}
+		return "", false, fmt.Errorf("media URL is invalid")
+	}
+	if enforceAllowlist {
+		if err := ValidateMediaURL(platform, rawURL); err != nil {
+			return "", false, err
+		}
+	}
+	return rawURL, false, nil
+}
+
+// ValidateMediaURL applies the preview allowlist without making a network
+// request. Gateway paths are limited to XHS and may not escape /api or /cache.
+func ValidateMediaURL(platform Platform, rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ErrMediaHostNotAllowed
+	}
+	gateway := strings.HasPrefix(rawURL, "/api/") || strings.HasPrefix(rawURL, "/cache/")
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || unsafeMediaPath(parsed.EscapedPath()) {
+		return ErrMediaHostNotAllowed
+	}
+	if gateway {
+		if platform != XHS || parsed.IsAbs() || parsed.Host != "" || (!strings.HasPrefix(parsed.Path, "/api/") && !strings.HasPrefix(parsed.Path, "/cache/")) {
+			return ErrMediaHostNotAllowed
+		}
+		return nil
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || !mediaHostAllowed(platform, parsed.Hostname()) {
+		return ErrMediaHostNotAllowed
+	}
+	return nil
+}
+
+func unsafeMediaPath(escapedPath string) bool {
+	value := escapedPath
+	for range 8 {
+		decoded, err := url.PathUnescape(value)
+		if err != nil {
+			return true
+		}
+		normalized := strings.ReplaceAll(decoded, `\`, "/")
+		for _, segment := range strings.Split(normalized, "/") {
+			if segment == "." || segment == ".." {
+				return true
+			}
+		}
+		if decoded == value {
+			return false
+		}
+		value = decoded
+	}
+	return true
+}
+
+func mediaHostAllowed(platform Platform, hostname string) bool {
+	hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	if hostname == "" || hostname == "localhost" || net.ParseIP(hostname) != nil {
+		return false
+	}
+	var suffixes []string
+	switch platform {
+	case Douyin:
+		suffixes = []string{"douyinpic.com", "douyinvod.com", "zjcdn.com", "douyinstatic.com", "bytecdn.cn", "byteimg.com", "snssdk.com", "amemv.com"}
+	case XHS:
+		suffixes = []string{"xhscdn.com", "xiaohongshu.com"}
+	case Channels:
+		suffixes = []string{"qq.com", "qpic.cn"}
+	default:
+		return false
+	}
+	for _, suffix := range suffixes {
+		if hostname == suffix || strings.HasSuffix(hostname, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func setMediaUserAgent(req *http.Request, platform Platform) {
+	switch platform {
+	case Douyin:
+		req.Header.Set("User-Agent", "com.ss.android.ugc.aweme/310000 (Linux; U; Android 13; zh_CN)")
+	case Channels:
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 MicroMessenger/7.0.20 WindowsWechat")
+	default:
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+	}
+}
+
 // Download streams a media URL to w. Platform CDNs require app-like user
 // agents; 小红书 proxied paths (/api/img?...) go back through the gateway.
 func (c *Client) Download(ctx context.Context, platform Platform, rawURL string, w io.Writer, limit int64) (int64, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return 0, fmt.Errorf("media URL is empty")
-	}
-	target := rawURL
-	gateway := strings.HasPrefix(rawURL, "/api/")
-	if gateway {
-		target = c.baseURL + rawURL
-	}
-	parsed, err := url.Parse(target)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return 0, fmt.Errorf("media URL is invalid")
+	target, gateway, err := c.mediaTarget(platform, rawURL, false)
+	if err != nil {
+		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -434,12 +635,7 @@ func (c *Client) Download(ctx context.Context, platform Platform, rawURL string,
 	if gateway {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	switch platform {
-	case Douyin:
-		req.Header.Set("User-Agent", "com.ss.android.ugc.aweme/310000 (Linux; U; Android 13; zh_CN)")
-	case Channels:
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 MicroMessenger/7.0.20 WindowsWechat")
-	}
+	setMediaUserAgent(req, platform)
 	resp, err := c.download.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -448,7 +644,7 @@ func (c *Client) Download(ctx context.Context, platform Platform, rawURL string,
 		return 0, fmt.Errorf("download %s media failed", platform)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return 0, &DownloadHTTPError{StatusCode: resp.StatusCode}
 	}
 	if limit <= 0 {
@@ -485,6 +681,10 @@ func (e envelope) failure(what string) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
+	return c.doWithClient(ctx, c.http, method, path, query, body, out)
+}
+
+func (c *Client) doWithClient(ctx context.Context, client *http.Client, method, path string, query url.Values, body any, out any) error {
 	target := c.baseURL + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -505,7 +705,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("平台接口不可达：%w", redact(err, c.token))
 	}
@@ -568,21 +768,46 @@ func xhsPost(item map[string]any) Post {
 	id := str(item["id"])
 	title := str(item["title"])
 	text := str(item["desc"])
+	videoURL := str(item["video_url"])
+	duration := float64Value(item["duration"])
+	if strings.EqualFold(strings.TrimSpace(str(item["type"])), "normal") {
+		videoURL = ""
+		duration = 0
+	}
 	post := Post{
 		Platform: XHS, ExternalID: id,
-		Title:    firstNonEmpty(title, firstLine(text, 40)),
-		Text:     strings.TrimSpace(title + "\n" + text),
-		Author:   str(item["nick"]),
-		AuthorID: str(item["user_id"]),
-		CoverURL: str(item["cover"]),
-		Likes:    num(item["liked"]),
-		Comments: num(item["comments"]),
-		Collects: num(item["collected"]),
+		Title:     firstNonEmpty(title, firstLine(text, 40)),
+		Text:      strings.TrimSpace(title + "\n" + text),
+		Author:    str(item["nick"]),
+		AuthorID:  str(item["user_id"]),
+		CoverURL:  str(item["cover"]),
+		VideoURL:  videoURL,
+		DurationS: duration,
+		Likes:     num(item["liked"]),
+		Comments:  num(item["comments"]),
+		Collects:  num(item["collected"]),
 	}
 	if id != "" {
 		post.URL = "https://www.xiaohongshu.com/explore/" + id
 	}
 	return post
+}
+
+func float64Value(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case json.Number:
+		out, _ := v.Float64()
+		return out
+	case string:
+		out, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return out
+	default:
+		return float64(num(value))
+	}
 }
 
 // ExtractLink pulls the first http(s) URL out of pasted share text such as

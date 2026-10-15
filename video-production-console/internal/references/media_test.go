@@ -1,6 +1,7 @@
 package references
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func TestCacheMediaPublishesVideoAndCover(t *testing.T) {
 		if err != nil || post.MediaStatus != wantStatus {
 			t.Errorf("status while downloading=%s err=%v", post.MediaStatus, err)
 		}
-		body := "cover-bytes"
+		body := string([]byte{0xff, 0xd8, 0xff, 0xe0, 0, 1})
 		if strings.Contains(rawURL, "source.mp4") {
 			body = "source-bytes"
 			if limit != 1<<30 {
@@ -73,7 +74,7 @@ func TestCacheMediaPublishesVideoAndCover(t *testing.T) {
 	if got.MediaStatus != "ready" || got.MediaSize != 12 || got.MediaError != "" || calls != 2 {
 		t.Fatalf("cached=%+v calls=%d", got, calls)
 	}
-	for path, want := range map[string]string{got.MediaPath: "source-bytes", got.CoverPath: "cover-bytes"} {
+	for path, want := range map[string]string{got.MediaPath: "source-bytes", got.CoverPath: string([]byte{0xff, 0xd8, 0xff, 0xe0, 0, 1})} {
 		if !filepath.IsAbs(path) {
 			t.Errorf("path must be absolute: %s", path)
 		}
@@ -141,6 +142,40 @@ func TestCacheMediaCoverFailureDoesNotFailVideo(t *testing.T) {
 	got, err := svc.CacheMedia(context.Background(), post.ID)
 	if err != nil || got.MediaStatus != "ready" || got.CoverPath != "" {
 		t.Fatalf("cached=%+v err=%v", got, err)
+	}
+}
+
+func TestCacheMediaConvertsHEICCoverBeforePublishingJPEG(t *testing.T) {
+	heic := append([]byte{0, 0, 0, 24}, []byte("ftypheic\x00\x00\x00\x00payload")...)
+	converted := []byte{0xff, 0xd8, 0xff, 0xe0, 0, 1}
+	platform := &fakePlatform{download: func(_ context.Context, _ platformapi.Platform, rawURL string, w io.Writer, _ int64) (int64, error) {
+		body := []byte("video")
+		if strings.Contains(rawURL, "cover") {
+			body = heic
+		}
+		n, err := w.Write(body)
+		return int64(n), err
+	}}
+	svc, repo := newService(t, platform)
+	var convertedMax int
+	svc.coverJPEG = func(_ context.Context, data []byte, maxEdge int) ([]byte, error) {
+		if !bytes.Equal(data, heic) {
+			t.Fatalf("converter input=%q", data)
+		}
+		convertedMax = maxEdge
+		return converted, nil
+	}
+	post, err := repo.Upsert(context.Background(), store.ReferencePost{ID: "heic-cover", Platform: "douyin", ExternalID: "1", VideoURL: "https://v.douyinvod.com/a", CoverURL: "https://p.douyinpic.com/cover.heic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.CacheMedia(context.Background(), post.ID)
+	if err != nil || got.CoverPath == "" || convertedMax != 540 {
+		t.Fatalf("post=%+v max=%d err=%v", got, convertedMax, err)
+	}
+	body, err := os.ReadFile(got.CoverPath)
+	if err != nil || !bytes.Equal(body, converted) {
+		t.Fatalf("cover=%x err=%v", body, err)
 	}
 }
 

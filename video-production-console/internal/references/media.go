@@ -135,7 +135,24 @@ func (s *Service) cacheMediaFiles(ctx context.Context, post store.ReferencePost)
 	coverPath := filepath.Join(rootPath, post.ID, "cover.jpg")
 	covered := false
 	if strings.TrimSpace(post.CoverURL) != "" {
-		_, err := downloadMediaFile(coverCtx, client, platformapi.Platform(post.Platform), post.CoverURL, dir, "cover.jpg", 20<<20)
+		const downloadedCover = "cover.download"
+		_, err := downloadMediaFile(coverCtx, client, platformapi.Platform(post.Platform), post.CoverURL, dir, downloadedCover, 20<<20)
+		if err == nil {
+			data, readErr := dir.ReadFile(downloadedCover)
+			switch {
+			case readErr != nil:
+				err = readErr
+			case needsCoverConversion(data):
+				var converted []byte
+				converted, err = s.convertCoverJPEG(coverCtx, data, 540)
+				if err == nil {
+					err = writeMediaBytes(dir, "cover.jpg", converted)
+				}
+			default:
+				err = dir.Rename(downloadedCover, "cover.jpg")
+			}
+		}
+		_ = dir.Remove(downloadedCover)
 		covered = err == nil
 	}
 	if !covered {
@@ -144,6 +161,31 @@ func (s *Service) cacheMediaFiles(ctx context.Context, post store.ReferencePost)
 	}
 	if covered {
 		_ = s.repo.SetCoverPath(coverCtx, post.ID, coverPath)
+	}
+	return nil
+}
+
+func writeMediaBytes(dir *os.Root, name string, data []byte) error {
+	part := name + ".part"
+	if err := dir.Remove(part); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	file, err := dir.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		_ = dir.Remove(part)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = dir.Remove(part)
+		return err
+	}
+	if err := dir.Rename(part, name); err != nil {
+		_ = dir.Remove(part)
+		return err
 	}
 	return nil
 }

@@ -1411,6 +1411,105 @@ CREATE UNIQUE INDEX reference_analyses_active_idx ON reference_analyses(referenc
     task_id TEXT PRIMARY KEY REFERENCES codex_tasks(id) ON DELETE CASCADE,
     dismissed_at DATETIME NOT NULL
 );`,
+	`CREATE TABLE monitor_tasks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('douyin','xhs')),
+  keyword TEXT NOT NULL,
+  interval_minutes INTEGER NOT NULL,
+  pages INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT NOT NULL DEFAULT '',
+  score_enabled INTEGER NOT NULL DEFAULT 1,
+  score_threshold INTEGER NOT NULL DEFAULT 70,
+  score_focus TEXT NOT NULL DEFAULT '',
+  auto_collect INTEGER NOT NULL DEFAULT 1,
+  auto_transcribe INTEGER NOT NULL DEFAULT 0,
+  auto_analyze INTEGER NOT NULL DEFAULT 0,
+  auto_insight INTEGER NOT NULL DEFAULT 0,
+  surge_mode TEXT NOT NULL DEFAULT 'rule' CHECK (surge_mode IN ('rule','ai','both')),
+  surge_like_delta INTEGER NOT NULL DEFAULT 500,
+  surge_like_ratio REAL NOT NULL DEFAULT 0.5,
+  surge_comment_delta INTEGER NOT NULL DEFAULT 50,
+  surge_comment_ratio REAL NOT NULL DEFAULT 0.5,
+  surge_min_base INTEGER NOT NULL DEFAULT 20,
+  last_run_at TEXT NOT NULL DEFAULT '',
+  next_run_at TEXT NOT NULL DEFAULT '',
+  last_status TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE monitor_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES monitor_tasks(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
+  trigger TEXT NOT NULL DEFAULT 'schedule',
+  found INTEGER NOT NULL DEFAULT 0,
+  new_count INTEGER NOT NULL DEFAULT 0,
+  surge_count INTEGER NOT NULL DEFAULT 0,
+  scored_count INTEGER NOT NULL DEFAULT 0,
+  collected_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_monitor_runs_task ON monitor_runs(task_id, started_at DESC);`,
+	`CREATE TABLE monitor_items (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES monitor_tasks(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  caption TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
+  cover_url TEXT NOT NULL DEFAULT '',
+  video_url TEXT NOT NULL DEFAULT '',
+  duration_s REAL NOT NULL DEFAULT 0,
+  posted_at INTEGER NOT NULL DEFAULT 0,
+  likes INTEGER NOT NULL DEFAULT 0, comments INTEGER NOT NULL DEFAULT 0,
+  shares INTEGER NOT NULL DEFAULT 0, collects INTEGER NOT NULL DEFAULT 0,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  seen_count INTEGER NOT NULL DEFAULT 1,
+  score_status TEXT NOT NULL DEFAULT 'none' CHECK (score_status IN ('none','pending','scored','failed','skipped')),
+  score INTEGER NOT NULL DEFAULT 0,
+  score_reason TEXT NOT NULL DEFAULT '',
+  score_tags TEXT NOT NULL DEFAULT '[]',
+  score_error TEXT NOT NULL DEFAULT '',
+  surge INTEGER NOT NULL DEFAULT 0,
+  surge_reason TEXT NOT NULL DEFAULT '',
+  surge_at TEXT NOT NULL DEFAULT '',
+  like_delta INTEGER NOT NULL DEFAULT 0,
+  comment_delta INTEGER NOT NULL DEFAULT 0,
+  like_rate_per_hour REAL NOT NULL DEFAULT 0,
+  reference_id TEXT NOT NULL DEFAULT '',
+  read INTEGER NOT NULL DEFAULT 0,
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(task_id, platform, external_id)
+);
+CREATE INDEX idx_monitor_items_feed ON monitor_items(task_id, dismissed, surge DESC, score DESC, last_seen_at DESC);
+CREATE TABLE monitor_snapshots (
+  item_id TEXT NOT NULL REFERENCES monitor_items(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  likes INTEGER NOT NULL, comments INTEGER NOT NULL, shares INTEGER NOT NULL, collects INTEGER NOT NULL,
+  PRIMARY KEY (item_id, run_id)
+);
+CREATE TABLE comment_insights (
+  id TEXT PRIMARY KEY,
+  reference_id TEXT NOT NULL REFERENCES reference_posts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),
+  model TEXT NOT NULL DEFAULT '',
+  comment_count INTEGER NOT NULL DEFAULT 0,
+  report_json TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_comment_insights_ref ON comment_insights(reference_id, created_at DESC);
+CREATE UNIQUE INDEX idx_comment_insights_active ON comment_insights(reference_id) WHERE status IN ('queued','running');`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

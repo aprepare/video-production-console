@@ -25,6 +25,7 @@ func NewReferencesHandler(service *references.Service, repo *store.ReferenceRepo
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/references/status", h.status)
 	mux.HandleFunc("GET /api/references/search", h.search)
+	mux.HandleFunc("GET /api/references/preview", h.preview)
 	mux.HandleFunc("GET /api/references", h.list)
 	mux.HandleFunc("POST /api/references", h.collect)
 	mux.HandleFunc("GET /api/references/{id}", h.get)

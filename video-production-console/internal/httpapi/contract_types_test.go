@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"video-production-console/internal/aigc"
+	"video-production-console/internal/commentinsight"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/store"
 )
@@ -45,6 +46,10 @@ var responseContracts = []struct {
 	{"order project", store.OrderProject{}, "merchants/MerchantsPage.tsx", "OrderProject"},
 	{"business overview", store.BusinessOverview{}, "merchants/MerchantsPage.tsx", "BusinessOverview"},
 	{"reference post", store.ReferencePost{}, "references/ReferencesPage.tsx", "ReferencePost"},
+	{"monitor task", store.MonitorTask{}, "references/monitorTypes.ts", "MonitorTask"},
+	{"monitor item", store.MonitorItem{}, "references/monitorTypes.ts", "MonitorItem"},
+	{"monitor run", store.MonitorRun{}, "references/monitorTypes.ts", "MonitorRun"},
+	{"comment insight", commentinsight.Insight{}, "references/monitorTypes.ts", "CommentInsight"},
 	{"aigc job", store.AIGCJob{}, "merchants/AigcStudio.tsx", "AigcJob"},
 	{"aigc lineage", aigc.LineageEntry{}, "merchants/AigcStudio.tsx", "LineageStep"},
 }

@@ -2,7 +2,9 @@ package references
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -29,6 +31,7 @@ type fakePlatform struct {
 	started  []string
 	resolved platformapi.Post
 	download func(context.Context, platformapi.Platform, string, io.Writer, int64) (int64, error)
+	open     func(context.Context, platformapi.Platform, string, string) (*http.Response, error)
 }
 
 func (f *fakePlatform) Status(context.Context) ([]platformapi.AppStatus, error) { return nil, nil }
@@ -47,6 +50,12 @@ func (f *fakePlatform) Download(ctx context.Context, platform platformapi.Platfo
 	}
 	n, err := io.WriteString(w, "video")
 	return int64(n), err
+}
+func (f *fakePlatform) OpenMedia(ctx context.Context, platform platformapi.Platform, rawURL, rangeHeader string) (*http.Response, error) {
+	if f.open != nil {
+		return f.open(ctx, platform, rawURL, rangeHeader)
+	}
+	return nil, errors.New("open media is not configured")
 }
 func (f *fakePlatform) StartTranscription(_ context.Context, videoURL string) (platformapi.Transcript, error) {
 	f.mu.Lock()
@@ -127,6 +136,33 @@ func TestCollectSubmitsTranscriptionAndPollerCompletesIt(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("poller did not complete the transcription")
+}
+
+func TestCollectXHSVideoDownloadsWithoutTranscriptionAndCanTranscribeHTTPURL(t *testing.T) {
+	startedDownload := make(chan struct{}, 1)
+	platform := &fakePlatform{download: func(_ context.Context, _ platformapi.Platform, _ string, w io.Writer, _ int64) (int64, error) {
+		startedDownload <- struct{}{}
+		n, err := io.WriteString(w, "video")
+		return int64(n), err
+	}}
+	svc, repo := newService(t, platform)
+	videoURL := "http://sns-video-v4.xhscdn.com/a.mp4"
+	post, err := svc.Collect(context.Background(), "", &platformapi.Post{Platform: platformapi.XHS, ExternalID: "x1", VideoURL: videoURL}, "", "", false)
+	if err != nil || post.TranscriptStatus == "running" || len(platform.started) != 0 {
+		t.Fatalf("post=%+v started=%v err=%v", post, platform.started, err)
+	}
+	select {
+	case <-startedDownload:
+	case <-time.After(3 * time.Second):
+		t.Fatal("xhs video download did not start")
+	}
+	waitMediaStatus(t, repo, post.ID, "ready")
+	if _, err := svc.Transcribe(context.Background(), post.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(platform.started) != 1 || platform.started[0] != videoURL {
+		t.Fatalf("transcription URLs=%v", platform.started)
+	}
 }
 
 func TestRecollectKeepsTranscriptAndDoesNotResubmit(t *testing.T) {
