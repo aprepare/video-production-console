@@ -131,6 +131,87 @@ func TestResolveXHSNormalizesVideoFields(t *testing.T) {
 	}
 }
 
+func TestSearchMarksMissingCountsAndKeepsExplicitZeroKnown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/douyin/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": []map[string]any{
+				{"aweme_id": "missing", "desc": "missing", "digg_count": 3},
+				{"aweme_id": "null", "desc": "null", "digg_count": nil, "comment_count": 4},
+				{"aweme_id": "zero", "desc": "zero", "digg_count": 0, "comment_count": 0},
+			}})
+		case "/api/xhs/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": []map[string]any{
+				{"id": "missing", "title": "missing", "liked": 3},
+				{"id": "null", "title": "null", "liked": nil, "comments": 4},
+				{"id": "zero", "title": "zero", "liked": 0, "comments": 0},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client, _ := New(srv.URL, "t", srv.Client())
+
+	for _, platform := range []Platform{Douyin, XHS} {
+		page, err := client.Search(context.Background(), platform, "test", "", "", "")
+		if err != nil {
+			t.Fatalf("Search(%s): %v", platform, err)
+		}
+		if len(page.Items) != 3 {
+			t.Fatalf("Search(%s) returned %d items", platform, len(page.Items))
+		}
+		if !page.Items[0].CountsMissing || !page.Items[1].CountsMissing {
+			t.Errorf("Search(%s) did not mark missing/null counts: %+v", platform, page.Items)
+		}
+		if page.Items[2].CountsMissing || page.Items[2].Likes != 0 || page.Items[2].Comments != 0 {
+			t.Errorf("Search(%s) did not preserve explicit zero as known: %+v", platform, page.Items[2])
+		}
+	}
+}
+
+func TestResolveMarksMissingCountsAndKeepsExplicitZeroKnown(t *testing.T) {
+	tests := []struct {
+		name string
+		link string
+		body map[string]any
+	}{
+		{"douyin missing", "https://v.douyin.com/missing/", map[string]any{"ok": true, "aweme_id": "d1", "statistics": map[string]any{"digg_count": 3}}},
+		{"douyin zero", "https://v.douyin.com/zero/", map[string]any{"ok": true, "aweme_id": "d2", "statistics": map[string]any{"digg_count": 0, "comment_count": 0}}},
+		{"xhs null", "6a79c9a0000000020600ddd4", map[string]any{"ok": true, "note": map[string]any{"id": "x1", "liked": nil, "comments": 4}}},
+		{"xhs zero", "6a79c9a0000000020600ddd5", map[string]any{"ok": true, "note": map[string]any{"id": "x2", "liked": 0, "comments": 0}}},
+		{"channels missing", "https://weixin.qq.com/sph/missing", map[string]any{"ok": true, "counts": map[string]any{"like": 3}}},
+		{"channels zero", "https://weixin.qq.com/sph/zero", map[string]any{"ok": true, "counts": map[string]any{"like": 0, "comment": 0}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer srv.Close()
+			client, _ := New(srv.URL, "t", srv.Client())
+			post, err := client.Resolve(context.Background(), tc.link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMissing := strings.Contains(tc.name, "missing") || strings.Contains(tc.name, "null")
+			if post.CountsMissing != wantMissing {
+				t.Fatalf("CountsMissing=%v want %v; post=%+v", post.CountsMissing, wantMissing, post)
+			}
+		})
+	}
+}
+
+func TestPostCountsMissingIsNotSerialized(t *testing.T) {
+	raw, err := json.Marshal(Post{Platform: Douyin, Likes: 1, Comments: 2, CountsMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "CountsMissing") || strings.Contains(string(raw), "counts_missing") {
+		t.Fatalf("internal count state leaked into JSON: %s", raw)
+	}
+}
+
 func TestUpstreamFailureAndUnauthorizedAreReadable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "xhs") {

@@ -105,6 +105,64 @@ func TestMonitorHTTPTaskRoutesPartialPatchAndManualConflict(t *testing.T) {
 		t.Fatalf("deleted=%d", w.Code)
 	}
 }
+
+func TestMonitorHTTPPatchAcceptsFullTaskAndIgnoresReadOnlyFields(t *testing.T) {
+	h, _, _, _ := monitorFixture(t)
+	task := createHTTPMonitor(t, h)
+	get := monitorRequest(h, "GET", "/api/monitors/"+task.ID, "")
+	var payload map[string]any
+	if get.Code != http.StatusOK || json.Unmarshal(get.Body.Bytes(), &payload) != nil {
+		t.Fatalf("get=%d %s", get.Code, get.Body.String())
+	}
+	payload["name"] = "updated name"
+	payload["id"] = "attacker-id"
+	payload["running"] = true
+	payload["item_count"] = 999
+	payload["unread_count"] = 999
+	payload["surge_count"] = 999
+	payload["last_run_at"] = "2000-01-01T00:00:00Z"
+	payload["next_run_at"] = "2000-01-01T00:00:00Z"
+	payload["last_status"] = "attacker-status"
+	payload["last_error"] = "attacker-error"
+	payload["created_at"] = "2000-01-01T00:00:00Z"
+	payload["updated_at"] = "2000-01-01T00:00:00Z"
+	body, _ := json.Marshal(payload)
+
+	w := monitorRequest(h, "PATCH", "/api/monitors/"+task.ID, string(body))
+	var updated store.MonitorTask
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &updated) != nil {
+		t.Fatalf("patch=%d %s", w.Code, w.Body.String())
+	}
+	if updated.Name != "updated name" || updated.ID != task.ID || updated.Running ||
+		updated.ItemCount != task.ItemCount || updated.UnreadCount != task.UnreadCount || updated.SurgeCount != task.SurgeCount ||
+		updated.LastRunAt != task.LastRunAt || updated.NextRunAt != task.NextRunAt || updated.LastStatus != task.LastStatus || updated.LastError != task.LastError ||
+		updated.CreatedAt != task.CreatedAt || updated.UpdatedAt == "2000-01-01T00:00:00Z" {
+		t.Fatalf("updated=%+v; original=%+v", updated, task)
+	}
+}
+
+func TestMonitorHTTPPostAcceptsFullTaskAndIgnoresReadOnlyFields(t *testing.T) {
+	h, _, _, _ := monitorFixture(t)
+	payload := monitor.DefaultTask()
+	payload.ID = "attacker-id"
+	payload.Name = "full object"
+	payload.Platform = "xhs"
+	payload.Keyword = "full object keyword"
+	payload.Running = true
+	payload.ItemCount = 999
+	payload.LastStatus = "attacker-status"
+	payload.CreatedAt = "2000-01-01T00:00:00Z"
+	body, _ := json.Marshal(payload)
+
+	w := monitorRequest(h, "POST", "/api/monitors", string(body))
+	var created store.MonitorTask
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatalf("create=%d %s", w.Code, w.Body.String())
+	}
+	if created.Name != payload.Name || created.Platform != payload.Platform || created.Keyword != payload.Keyword || created.ID == "" || created.ID == payload.ID || created.Running || created.ItemCount != 0 || created.LastStatus != "" || created.CreatedAt == payload.CreatedAt {
+		t.Fatalf("created=%+v", created)
+	}
+}
 func TestMonitorHTTPFeedItemActionsAndRouteSpecificity(t *testing.T) {
 	h, repo, refs, _ := monitorFixture(t)
 	task := createHTTPMonitor(t, h)
@@ -163,7 +221,6 @@ func TestMonitorHTTPEveryRouteFailure(t *testing.T) {
 	}{
 		{"POST", "/api/monitors", `{"platform":"channels","keyword":"海鲜"}`, 400, "invalid_monitor"},
 		{"POST", "/api/monitors", `{"platform":"xhs","keyword":"海鲜","pages":0}`, 400, "invalid_monitor"},
-		{"POST", "/api/monitors", `{"platform":"xhs","keyword":"海鲜","id":"bad"}`, 400, "invalid_monitor"},
 		{"GET", "/api/monitors/missing", "", 404, "monitor_not_found"},
 		{"PATCH", "/api/monitors/missing", `{"enabled":false}`, 404, "monitor_not_found"},
 		{"DELETE", "/api/monitors/missing", "", 404, "monitor_not_found"},
@@ -171,6 +228,7 @@ func TestMonitorHTTPEveryRouteFailure(t *testing.T) {
 		{"GET", "/api/monitors/missing/runs", "", 404, "monitor_not_found"},
 		{"GET", "/api/monitors/feed?filter=bad", "", 400, "invalid_monitor"},
 		{"GET", "/api/monitors/feed?limit=bad", "", 400, "invalid_monitor"},
+		{"PATCH", "/api/monitors/items/missing", `{"read":true,"unexpected":1}`, 400, "invalid_monitor"},
 		{"PATCH", "/api/monitors/items/missing", `{"read":true}`, 404, "monitor_item_not_found"},
 		{"PATCH", "/api/monitors/items/missing", `{}`, 400, "invalid_monitor"},
 		{"POST", "/api/monitors/items/read-all", `{"task_id":"missing"}`, 404, "monitor_not_found"},

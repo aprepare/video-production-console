@@ -47,22 +47,23 @@ const (
 
 // Post is the normalized view of one video or note.
 type Post struct {
-	Platform   Platform `json:"platform"`
-	ExternalID string   `json:"external_id"`
-	URL        string   `json:"url"`
-	Title      string   `json:"title"`
-	Text       string   `json:"text"`
-	Author     string   `json:"author"`
-	AuthorID   string   `json:"author_id"`
-	CoverURL   string   `json:"cover_url"`
-	VideoURL   string   `json:"video_url"`
-	DurationS  float64  `json:"duration_s"`
-	Likes      int64    `json:"likes"`
-	Comments   int64    `json:"comments"`
-	Shares     int64    `json:"shares"`
-	Collects   int64    `json:"collects"`
-	Plays      int64    `json:"plays"`
-	CreatedAt  int64    `json:"created_at"`
+	Platform      Platform `json:"platform"`
+	ExternalID    string   `json:"external_id"`
+	URL           string   `json:"url"`
+	Title         string   `json:"title"`
+	Text          string   `json:"text"`
+	Author        string   `json:"author"`
+	AuthorID      string   `json:"author_id"`
+	CoverURL      string   `json:"cover_url"`
+	VideoURL      string   `json:"video_url"`
+	DurationS     float64  `json:"duration_s"`
+	Likes         int64    `json:"likes"`
+	Comments      int64    `json:"comments"`
+	Shares        int64    `json:"shares"`
+	Collects      int64    `json:"collects"`
+	Plays         int64    `json:"plays"`
+	CreatedAt     int64    `json:"created_at"`
+	CountsMissing bool     `json:"-"`
 }
 
 // SearchPage carries one page of search results plus the cursor to continue.
@@ -248,6 +249,7 @@ func (c *Client) Resolve(ctx context.Context, link string) (Post, error) {
 		if stats, ok := raw["statistics"].(map[string]any); ok {
 			post.Likes = num(stats["digg_count"])
 			post.Comments = num(stats["comment_count"])
+			post.CountsMissing = countsMissing(stats, "digg_count", "comment_count")
 			post.Shares = num(stats["share_count"])
 			post.Plays = num(stats["play_count"])
 		}
@@ -273,9 +275,11 @@ func (c *Client) Resolve(ctx context.Context, link string) (Post, error) {
 			CoverURL: firstURL(str(raw["cover_url"]), str(raw["cover"])),
 		}
 		post.CreatedAt = num(raw["createtime"])
+		post.CountsMissing = true
 		if counts, ok := raw["counts"].(map[string]any); ok {
 			post.Likes = num(counts["like"])
 			post.Comments = num(counts["comment"])
+			post.CountsMissing = countsMissing(counts, "like", "comment")
 			post.Shares = num(counts["forward"])
 			post.Collects = num(counts["fav"])
 		}
@@ -746,18 +750,19 @@ func douyinPost(item map[string]any) Post {
 	}
 	post := Post{
 		Platform: Douyin, ExternalID: id,
-		Title:     firstLine(text, 40),
-		Text:      text,
-		Author:    firstNonEmpty(str(item["nickname"]), str(item["author"])),
-		AuthorID:  str(item["sec_uid"]),
-		CoverURL:  str(item["cover"]),
-		VideoURL:  str(item["play_url"]),
-		DurationS: duration,
-		Likes:     num(item["digg_count"]),
-		Comments:  num(item["comment_count"]),
-		Shares:    num(item["share_count"]),
-		Collects:  num(item["collect_count"]),
-		CreatedAt: num(item["create_time"]),
+		Title:         firstLine(text, 40),
+		Text:          text,
+		Author:        firstNonEmpty(str(item["nickname"]), str(item["author"])),
+		AuthorID:      str(item["sec_uid"]),
+		CoverURL:      str(item["cover"]),
+		VideoURL:      str(item["play_url"]),
+		DurationS:     duration,
+		Likes:         num(item["digg_count"]),
+		Comments:      num(item["comment_count"]),
+		Shares:        num(item["share_count"]),
+		Collects:      num(item["collect_count"]),
+		CreatedAt:     num(item["create_time"]),
+		CountsMissing: countsMissing(item, "digg_count", "comment_count"),
 	}
 	// 图集 posts carry their background music as play_url; it is not a video.
 	if strings.EqualFold(str(item["type"]), "images") || strings.Contains(post.VideoURL, "mime_type=audio") {
@@ -781,21 +786,28 @@ func xhsPost(item map[string]any) Post {
 	}
 	post := Post{
 		Platform: XHS, ExternalID: id,
-		Title:     firstNonEmpty(title, firstLine(text, 40)),
-		Text:      strings.TrimSpace(title + "\n" + text),
-		Author:    str(item["nick"]),
-		AuthorID:  str(item["user_id"]),
-		CoverURL:  str(item["cover"]),
-		VideoURL:  videoURL,
-		DurationS: duration,
-		Likes:     num(item["liked"]),
-		Comments:  num(item["comments"]),
-		Collects:  num(item["collected"]),
+		Title:         firstNonEmpty(title, firstLine(text, 40)),
+		Text:          strings.TrimSpace(title + "\n" + text),
+		Author:        str(item["nick"]),
+		AuthorID:      str(item["user_id"]),
+		CoverURL:      str(item["cover"]),
+		VideoURL:      videoURL,
+		DurationS:     duration,
+		Likes:         num(item["liked"]),
+		Comments:      num(item["comments"]),
+		Collects:      num(item["collected"]),
+		CountsMissing: countsMissing(item, "liked", "comments"),
 	}
 	if id != "" {
 		post.URL = "https://www.xiaohongshu.com/explore/" + id
 	}
 	return post
+}
+
+func countsMissing(item map[string]any, likeKey, commentKey string) bool {
+	like, hasLike := item[likeKey]
+	comment, hasComment := item[commentKey]
+	return !hasLike || like == nil || !hasComment || comment == nil
 }
 
 func float64Value(value any) float64 {

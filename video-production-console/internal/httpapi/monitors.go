@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -58,7 +59,7 @@ func (h *monitorsHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 func (h *monitorsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var input monitor.TaskPatch
-	if err := decodeJSON(w, r, maxNormalJSONRequest, &input); err != nil {
+	if err := decodeMonitorTaskJSON(w, r, &input); err != nil {
 		writeDecodeError(w, err, "invalid_monitor", "监控任务格式不正确")
 		return
 	}
@@ -81,7 +82,7 @@ func (h *monitorsHandler) get(w http.ResponseWriter, r *http.Request) {
 }
 func (h *monitorsHandler) patch(w http.ResponseWriter, r *http.Request) {
 	var input monitor.TaskPatch
-	if err := decodeJSON(w, r, maxNormalJSONRequest, &input); err != nil {
+	if err := decodeMonitorTaskJSON(w, r, &input); err != nil {
 		writeDecodeError(w, err, "invalid_monitor", "监控修改格式不正确")
 		return
 	}
@@ -91,6 +92,14 @@ func (h *monitorsHandler) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+func decodeMonitorTaskJSON(w http.ResponseWriter, r *http.Request, out any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxNormalJSONRequest))
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
 }
 func (h *monitorsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.Delete(r.Context(), r.PathValue("id")); err != nil {

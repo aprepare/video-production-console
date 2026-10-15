@@ -1,0 +1,79 @@
+ok  	video-production-console/cmd/catalog-builder	(cached)
+ok  	video-production-console/cmd/console	2.704s
+?   	video-production-console/cmd/editor-acceptance	[no test files]
+ok  	video-production-console/cmd/maintenance	(cached)
+?   	video-production-console/cmd/mintsession	[no test files]
+?   	video-production-console/cmd/remix-policy	[no test files]
+ok  	video-production-console/cmd/repair-startup	(cached)
+ok  	video-production-console/cmd/spoken-qc	(cached)
+ok  	video-production-console/internal/agentruntime	(cached)
+ok  	video-production-console/internal/agentruntime/montageplan	13.914s
+ok  	video-production-console/internal/agentruntime/montagescript	10.554s
+ok  	video-production-console/internal/agentruntime/openaicompat	(cached)
+ok  	video-production-console/internal/agentruntime/piruntime	(cached)
+ok  	video-production-console/internal/aigc	14.182s
+ok  	video-production-console/internal/app	19.417s
+ok  	video-production-console/internal/assets	(cached)
+ok  	video-production-console/internal/auth	(cached)
+ok  	video-production-console/internal/baokuan	(cached)
+ok  	video-production-console/internal/bgmlibrary	(cached)
+?   	video-production-console/internal/buildinfo	[no test files]
+ok  	video-production-console/internal/catalogbuilder	(cached)
+ok  	video-production-console/internal/codex	31.014s
+ok  	video-production-console/internal/codexapp	(cached)
+ok  	video-production-console/internal/commentinsight	2.213s
+ok  	video-production-console/internal/config	(cached)
+ok  	video-production-console/internal/conversation	(cached)
+ok  	video-production-console/internal/cover	(cached)
+ok  	video-production-console/internal/domain	(cached)
+?   	video-production-console/internal/grokvideo	[no test files]
+ok  	video-production-console/internal/httpapi	166.936s
+ok  	video-production-console/internal/imageproject	(cached)
+ok  	video-production-console/internal/imagevideo	(cached)
+?   	video-production-console/internal/imagevideoruntime	[no test files]
+ok  	video-production-console/internal/jianyingdraft	0.766s
+?   	video-production-console/internal/localpath	[no test files]
+ok  	video-production-console/internal/logging	(cached)
+ok  	video-production-console/internal/mcpserver	0.641s
+ok  	video-production-console/internal/mediacatalog	13.304s
+?   	video-production-console/internal/medialibrary	[no test files]
+--- FAIL: TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection (1.59s)
+    --- FAIL: TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection/http500 (0.52s)
+        scoring_test.go:151: run={ID:13f6b3d3-f227-4d1f-ae75-ad92db979b55 TaskID:da726d11-85df-42da-aa58-456f18945714 Status:completed Trigger:manual Found:2 NewCount:1 SurgeCount:0 ScoredCount:0 CollectedCount:0 Error: StartedAt:2026-10-15T15:47:14Z FinishedAt:2026-10-15T15:47:14Z} collects=0 model=1
+    --- FAIL: TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection/missing (0.31s)
+        scoring_test.go:151: run={ID:93738c8b-ac48-49c4-ae82-48048ae78b6b TaskID:6f7505cf-73bd-41ff-be7d-205a7d95d641 Status:completed Trigger:manual Found:2 NewCount:1 SurgeCount:0 ScoredCount:0 CollectedCount:0 Error: StartedAt:2026-10-15T15:47:15Z FinishedAt:2026-10-15T15:47:15Z} collects=0 model=1
+    --- FAIL: TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection/invalid-score (0.36s)
+        scoring_test.go:151: run={ID:02adb430-9512-4567-ae60-66875c932df0 TaskID:869fb27a-9217-4fd1-ba61-b4bb4ef0e2be Status:completed Trigger:manual Found:2 NewCount:1 SurgeCount:0 ScoredCount:0 CollectedCount:0 Error: StartedAt:2026-10-15T15:47:15Z FinishedAt:2026-10-15T15:47:15Z} collects=0 model=1
+    --- FAIL: TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection/malformed (0.40s)
+        scoring_test.go:151: run={ID:d47f53cb-7235-4cb9-9b7c-3211dd278f4d TaskID:da5c10ca-5921-4290-ab9a-a5c6c22ad1f0 Status:completed Trigger:manual Found:2 NewCount:1 SurgeCount:0 ScoredCount:0 CollectedCount:0 Error: StartedAt:2026-10-15T15:47:15Z FinishedAt:2026-10-15T15:47:16Z} collects=0 model=1
+2026/10/15 23:47:16 WARN 监控自动拆解启动失败 reference_id=video
+2026/10/15 23:47:16 WARN 监控评论洞察启动失败 item_id=67734794-60c1-48ae-832e-461ac77f1a79
+2026/10/15 23:47:16 WARN 监控评论洞察启动失败 item_id=c3617487-f654-4409-bd44-0e44eff9b5cd
+FAIL
+FAIL	video-production-console/internal/monitor	55.796s
+ok  	video-production-console/internal/monitorai	0.881s
+ok  	video-production-console/internal/montage	(cached)
+ok  	video-production-console/internal/narration	9.250s
+?   	video-production-console/internal/obsidian	[no test files]
+ok  	video-production-console/internal/platformapi	8.609s
+ok  	video-production-console/internal/progress	(cached)
+ok  	video-production-console/internal/publishing	(cached)
+ok  	video-production-console/internal/realtime	(cached)
+ok  	video-production-console/internal/refanalysis	2.641s
+ok  	video-production-console/internal/references	25.197s
+ok  	video-production-console/internal/remixlab	(cached)
+ok  	video-production-console/internal/remixproducer	(cached)
+ok  	video-production-console/internal/security	(cached)
+ok  	video-production-console/internal/settings	(cached)
+ok  	video-production-console/internal/setup	20.428s
+ok  	video-production-console/internal/skillregistry	(cached)
+ok  	video-production-console/internal/spokenlines	(cached)
+ok  	video-production-console/internal/store	109.433s
+?   	video-production-console/internal/taskcompletion	[no test files]
+ok  	video-production-console/internal/taskmodel	(cached)
+?   	video-production-console/internal/testutil/citylib	[no test files]
+ok  	video-production-console/internal/timing	(cached)
+ok  	video-production-console/internal/webui	(cached)
+ok  	video-production-console/internal/workflow	(cached)
+ok  	video-production-console/schemas	(cached)
+FAIL

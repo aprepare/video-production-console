@@ -175,7 +175,7 @@ func TestServiceRejectsUnsupportedPlatformAndDeduplicatesActiveJob(t *testing.T)
 	})
 }
 
-func TestServiceFailsTooFewCommentsAndInventedEvidence(t *testing.T) {
+func TestServiceHandlesTooFewCommentsAndInventedEvidence(t *testing.T) {
 	t.Run("too few", func(t *testing.T) {
 		svc, repo, _, calls := insightFixture(t, "xhs", fiveComments()[:4], http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		item, _, err := svc.Start(t.Context(), "ref", "")
@@ -198,9 +198,16 @@ func TestServiceFailsTooFewCommentsAndInventedEvidence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		failed := waitInsight(t, repo, item.ID)
-		if failed.Status != "failed" || !strings.Contains(failed.Error, "引用") {
-			t.Fatalf("failed = %+v", failed)
+		completed := waitInsight(t, repo, item.ID)
+		if completed.Status != "completed" {
+			t.Fatalf("completed = %+v", completed)
+		}
+		var report Report
+		if err := json.Unmarshal([]byte(completed.ReportJSON), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.PainPoints) != 0 || len(report.Questions) != 1 || len(report.Needs) != 1 || len(report.Opportunities) != 1 {
+			t.Fatalf("filtered report = %+v", report)
 		}
 	})
 }

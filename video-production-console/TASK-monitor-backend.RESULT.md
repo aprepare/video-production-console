@@ -91,3 +91,51 @@ HEIC 样本为自行生成的三色矩形图，2708 字节；`ffprobe` 确认编
 - 所有平台和模型测试使用假平台、假 HTTP 服务或测试 transport；按禁令没有访问真实 console-api 网关或真实模型。真实登录状态、CDN 可用性、网关对小红书 HTTP 视频的拉取、完整评论返回质量及模型实际评分质量未做在线验证。
 - 迁移仅在测试临时数据库验证，没有修改 `video-console-data/`，没有启动或重启本机 2030 控制台；没有修改允许范围以外的前端文件。
 - 验证日志、可复现样本和本报告保留。样本生成依赖仅安装在临时目录；自动审批检查拒绝递归清理该目录，返回 `blocked by policy`，因此保留 `C:/Users/prepare/AppData/Local/Temp/codeg-acp/45012-0e1aab22/codex-monitor-heif-fixture`。它不在 Git 工作树或运行依赖中，不影响交付与验证。
+
+## 审查修复（2026-10-15）
+
+本节对应 `TASK-monitor-fixes.md` 的全部 8 项，以本节描述为当前行为。接口路径及对外 JSON 字段保持不变，未修改 `web/`、既有迁移或 `video-console-data/`。封面与模型调用的超时采用修复单要求的分阶段预算。
+
+| 项目 | 修复内容 | 新增或更新的主要测试 |
+| --- | --- | --- |
+| 1. 评论引用与情绪 | 引用双方先 NFKC，去空白、标点、符号及组合 emoji，再转小写；剥离 `[赞N]`，省略号各有效片段必须在同一条评论内依序匹配。逐条丢弃坏引用，删除没有有效引用的 pain_points/questions/needs；opportunities/content_ideas 可无引用，四类主结论全空才判无可用结论。情绪接受整数、小数和比例，截断取整后差额补给最大项，全零保留；增加浮点整界修正。 | `TestParseReportNormalizesSentiment`、`TestNormalizeEvidenceTextRemovesCompositeEmoji`、`TestEvidenceNormalizesQuotesAndStripsLikePrefix`、`TestEvidenceDropsInventedQuotesAndUnsupportedConclusions`、`TestEvidenceRejectsCrossCommentEllipsisJoinWithoutDiscardingOtherFindings`、`TestEvidenceFailsOnlyWhenAllFourMainConclusionGroupsAreEmpty`、`TestServiceHandlesTooFewCommentsAndInventedEvidence` |
+| 2. 补打分 | 每轮从整个任务挑选 `none/pending`，优先本轮出现条目，再按 `first_seen_at` 升序，最多 30 条，每批仍最多 10 条。进程遗留 pending 可重新打分；补打分通过的历史条目继续进入自动采集。 | `TestScoringDrainsBacklogAcrossRuns`（45 条分两轮 30+15，包含第二轮不再搜索到旧条目）、`TestScoringResumesPendingAndPrioritizesCurrentThenOldest` |
+| 3. 飙升误报 | 平台 Post 增加仅内部使用的 `CountsMissing`，明确零值与缺失/null 分离。缺失时保留计数、跳过规则/AI 飙升及快照写入；下次有效观察以最近真实快照为基准，缺失轮次不消耗飙升保留期。小红书万级绝对点赞门槛至少 2000；相对分支要求正增量；超过两倍周期后仅接受满足点赞速率门槛的相对增长。 | `TestSearchMarksMissingCountsAndKeepsExplicitZeroKnown`、`TestResolveMarksMissingCountsAndKeepsExplicitZeroKnown`、`TestPostCountsMissingIsNotSerialized`、`TestMonitorMissingCountsPreserveValuesWithoutSnapshot`、`TestMissingCountsSkipSurgeAndUseLastValidSnapshot`、`TestFirstKnownCountsAfterMissingObservationDoNotSurge`、`TestSurgeRejectsRoundedStaleAndZeroGrowth` |
+| 4. 打分超时 | 封面下载及转码最多 4 个并发，总预算 30 秒，每张 10 秒，失败只移除该封面。模型首调和图片失败后的文字重试分别新建 90 秒上下文，保留父上下文取消；仅 400/413/415/422 触发文字回退，401/403/404/429/5xx 不回退。 | `TestScoreCoverParallelBudgetAndFailureIsolation`、`TestScoreCoverTotalBudgetAndParentCancellation`、`TestScoreImageFallbackStatusesAndFreshContext`；用 `testing/synctest` 虚拟时间验证完整预算和回退，不依赖长时间真实等待 |
+| 5. JSON 兼容 | 请求增加 `response_format=json_object` 和 `temperature=0.2`；仅上游明确因 response_format 返回 400 时去掉该字段重试一次，支持结构化及纯文本错误，响应内容不进入错误或日志。共享 `UnmarshalJSON` 先完整解析，再截取首个 `{` 至最后一个 `}`；打分、AI 飙升、评论报告全部接入。 | `TestCompleteSendsChatRequestAndReturnsContent`、`TestCompleteRetriesOnceWithoutResponseFormatWhenUpstreamRejectsThatField`、`TestCompleteDoesNotRetryUnrelatedBadRequestOrExposeResponse`、`TestUnmarshalJSONAcceptsPreambleAndFencedObject`、`TestParseReportAcceptsProseAndJSONFence`，以及更新后的 `TestAISurgeModesLimitAndRulePriority` |
+| 6. 完整任务回传 | 仅任务 POST/PATCH 使用允许未知字段的有大小限制解码器，仍拒绝多段 JSON；只从 TaskPatch 应用可写字段。完整 TaskJSON 中的 id、运行状态、统计、调度及创建时间等只读字段不会被应用。其他监控接口保持严格解码。 | `TestMonitorHTTPPatchAcceptsFullTaskAndIgnoresReadOnlyFields`、`TestMonitorHTTPPostAcceptsFullTaskAndIgnoresReadOnlyFields`、更新后的 `TestMonitorHTTPEveryRouteFailure` |
+| 7. 分页部分成功 | 第 2/3 页搜索失败，先正常保存和处理前面成功页的条目、飙升、打分及自动采集，最后将 run 标 failed；错误注明失败页和已保存页数，原始平台错误先脱敏。 | `TestPaginationFailureSavesAndProcessesSuccessfulPages` |
+| 8. 历史排序 | 快照按 `at DESC, run_id DESC` 取最新 12 条后反转为升序，不依赖 rowid。 | `TestMonitorHistoryUsesSnapshotTimeNotInsertionOrder`（逆序插入 15 条快照，验证取最新 12 条并按观察时间升序） |
+
+修改范围为 `internal/commentinsight/`、`internal/monitor/`、`internal/monitorai/`、平台适配、监控存储及监控 HTTP 处理与对应测试；`go.mod` 将已有的 `golang.org/x/text v0.40.0` 从间接依赖改为直接依赖，用于 NFKC，未升级依赖版本。
+
+审查中检查了补打分查询、缺失快照后的比较基准、分页错误处理及并发封面生命周期；相应测试验证了父上下文取消、封面失败隔离及模型回退预算。所有平台和模型调用均为假服务或测试 transport，没有访问真实网关/模型，没有启动或重启 2030 控制台。工作树原有的 `.codex-last.txt` 不改动、不纳入提交。
+
+本轮验收记录保存在 `artifacts/monitor-fixes-validation-20261015/`。
+
+最终验收结果：
+
+| 命令 | 退出码 | 耗时（秒） |
+| --- | ---: | ---: |
+| `go build ./...` | 0 | 3.918 |
+| `go vet ./...` | 0 | 4.467 |
+| `go test ./...` | 0 | 97.176 |
+| `git diff --check` | 0 | — |
+
+构建、vet 无诊断输出。最终全量测试原文摘录：
+
+```text
+ok  	video-production-console/internal/app	5.166s
+ok  	video-production-console/internal/commentinsight	1.414s
+ok  	video-production-console/internal/httpapi	40.029s
+ok  	video-production-console/internal/mcpserver	(cached)
+ok  	video-production-console/internal/monitor	14.068s
+ok  	video-production-console/internal/monitorai	0.416s
+ok  	video-production-console/internal/platformapi	(cached)
+ok  	video-production-console/internal/references	(cached)
+ok  	video-production-console/internal/store	(cached)
+```
+
+首轮全量回归只有旧的 `TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection` 失败：它以实际时钟减一小时构造快照，正好落入新规则的“超过两倍周期”区间，增长速率不足以触发飙升。该测试改用固定时钟和正常 30 分钟观察间隔，仍保留“打分失败不阻断飙升采集”的全部断言；定向重跑和最终全量回归均通过。首轮输出保留在 `go-test-before-fixture-fix.log`，最终结果见 `go-test.log` 和 `commands.json`。
+
+全部 8 项均已修复并验证；本轮没有新增数据库迁移或对外接口字段变更。提交保留在 `codex/monitor-backend`，不推送。

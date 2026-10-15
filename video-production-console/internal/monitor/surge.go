@@ -27,14 +27,19 @@ func evaluateSurge(task store.MonitorTask, current store.MonitorItem, previous *
 	d := surgeDecision{LikeDelta: current.Likes - previous.Likes, CommentDelta: current.Comments - previous.Comments, Minutes: minutes}
 	d.Rate = float64(d.LikeDelta) / (minutes / 60)
 	commentBase := max(int64(5), task.SurgeMinBase/10)
-	d.Hit = (task.SurgeLikeDelta > 0 && d.LikeDelta >= task.SurgeLikeDelta) ||
-		(task.SurgeLikeRatio > 0 && previous.Likes >= task.SurgeMinBase && float64(d.LikeDelta) >= float64(previous.Likes)*task.SurgeLikeRatio) ||
-		(task.SurgeCommentDelta > 0 && d.CommentDelta >= task.SurgeCommentDelta) ||
-		(task.SurgeCommentRatio > 0 && previous.Comments >= commentBase && float64(d.CommentDelta) >= float64(previous.Comments)*task.SurgeCommentRatio)
-	// A zero baseline must never make a zero change a surge.
-	if d.LikeDelta <= 0 && d.CommentDelta <= 0 {
-		d.Hit = false
+	likeThreshold := task.SurgeLikeDelta
+	if task.Platform == "xhs" && previous.Likes >= 10000 {
+		likeThreshold = max(likeThreshold, 2000)
 	}
+	absolute := (task.SurgeLikeDelta > 0 && d.LikeDelta >= likeThreshold) ||
+		(task.SurgeCommentDelta > 0 && d.CommentDelta >= task.SurgeCommentDelta)
+	relative := (d.LikeDelta > 0 && task.SurgeLikeRatio > 0 && previous.Likes >= task.SurgeMinBase && float64(d.LikeDelta) >= float64(previous.Likes)*task.SurgeLikeRatio) ||
+		(d.CommentDelta > 0 && task.SurgeCommentRatio > 0 && previous.Comments >= commentBase && float64(d.CommentDelta) >= float64(previous.Comments)*task.SurgeCommentRatio)
+	if task.IntervalMinutes > 0 && minutes > 2*float64(task.IntervalMinutes) {
+		absolute = false
+		relative = relative && d.Rate >= float64(task.SurgeLikeDelta)/(float64(task.IntervalMinutes)/60)
+	}
+	d.Hit = absolute || relative
 	if d.Hit {
 		ratio := ""
 		if previous.Likes > 0 {

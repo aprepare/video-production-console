@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -388,9 +389,10 @@ func (s *Service) Close() {
 }
 
 type observedItem struct {
-	item     store.MonitorItem
-	previous *store.MonitorItem
-	decision surgeDecision
+	item          store.MonitorItem
+	previous      *store.MonitorItem
+	decision      surgeDecision
+	countsMissing bool
 }
 
 func (s *Service) execute(job *queuedRun) error {
@@ -406,6 +408,7 @@ func (s *Service) execute(job *queuedRun) error {
 	var cursor, searchID, sessionID string
 	posts := []platformapi.Post{}
 	seen := map[string]bool{}
+	var searchFailure error
 	for page := 0; page < task.Pages; page++ {
 		if page > 0 {
 			if err := s.options.Sleep(ctx, 2*time.Second+s.jitter(3*time.Second)); err != nil {
@@ -414,10 +417,15 @@ func (s *Service) execute(job *queuedRun) error {
 		}
 		result, err := s.references.Search(ctx, task.Platform, task.Keyword, cursor, searchID, sessionID)
 		if result.LoginWall {
-			return errors.New("抖音搜索需要重新登录，请检查平台登录状态")
+			err = errors.New("抖音搜索需要重新登录，请检查平台登录状态")
 		}
 		if err != nil {
-			return searchError(err)
+			cause := searchError(err)
+			if page == 0 {
+				return cause
+			}
+			searchFailure = fmt.Errorf("第 %d 页失败：%s（已保存前 %d 页）", page+1, cause, page)
+			break
 		}
 		job.run.Found += int64(len(result.Items))
 		for _, post := range result.Items {
@@ -443,19 +451,37 @@ func (s *Service) execute(job *queuedRun) error {
 		if previous == nil {
 			job.run.NewCount++
 		}
+		// Missing-count observations advance last_seen_at without taking a
+		// snapshot. Compare to the last real snapshot, including its timestamp.
+		if previous != nil {
+			if len(previous.History) == 0 {
+				previous = nil
+			} else {
+				snapshot := previous.History[len(previous.History)-1]
+				previous.Likes, previous.Comments = snapshot.Likes, snapshot.Comments
+				previous.Shares, previous.Collects = snapshot.Shares, snapshot.Collects
+				previous.LastSeenAt = snapshot.At
+			}
+		}
 		d := evaluateSurge(task, item, previous, now)
 		if task.SurgeMode == "ai" {
 			d.Hit = false
 			d.Reason = ""
 		}
-		observed = append(observed, observedItem{item, previous, d})
+		observed = append(observed, observedItem{item: item, previous: previous, decision: d, countsMissing: post.CountsMissing})
 	}
 	if task.SurgeMode != "rule" {
 		s.detectAISurges(ctx, task, observed)
 	}
-	newItems := []store.MonitorItem{}
+	itemIDs := make([]string, 0, len(observed))
+	observedIDs := map[string]bool{}
 	for i := range observed {
 		o := &observed[i]
+		itemIDs = append(itemIDs, o.item.ID)
+		observedIDs[o.item.ID] = true
+		if o.countsMissing {
+			continue
+		}
 		applySurge(&o.item, o.previous, o.decision, s.options.Now())
 		if err := s.repo.SetSurge(ctx, o.item.ID, o.item.Surge, o.item.SurgeReason, o.item.SurgeAt, o.item.LikeDelta, o.item.CommentDelta, o.item.LikeRatePerHour); err != nil {
 			return errors.New("保存飙升状态失败")
@@ -463,16 +489,25 @@ func (s *Service) execute(job *queuedRun) error {
 		if o.decision.Hit {
 			job.run.SurgeCount++
 		}
-		if task.ScoreEnabled && o.previous == nil && o.item.ScoreStatus == "none" && len(newItems) < 30 {
-			newItems = append(newItems, o.item)
+	}
+	if task.ScoreEnabled {
+		candidates, err := s.repo.ScoreCandidates(ctx, task.ID, itemIDs)
+		if err != nil {
+			return errors.New("读取待打分条目失败")
+		}
+		job.run.ScoredCount = s.scoreItems(ctx, task, candidates)
+		// Backlog items should also reach automatic collection when they score.
+		for _, item := range candidates {
+			if !observedIDs[item.ID] {
+				itemIDs = append(itemIDs, item.ID)
+			}
 		}
 	}
-	job.run.ScoredCount = s.scoreItems(ctx, task, newItems)
-	for _, o := range observed {
+	for _, id := range itemIDs {
 		if ctx.Err() != nil {
 			return errors.New("监控已停止")
 		}
-		item, err := s.repo.GetItem(ctx, o.item.ID)
+		item, err := s.repo.GetItem(ctx, id)
 		if err != nil {
 			return errors.New("读取监控条目失败")
 		}
@@ -494,7 +529,7 @@ func (s *Service) execute(job *queuedRun) error {
 			}
 		}
 	}
-	return nil
+	return searchFailure
 }
 
 // Collect starts media caching asynchronously. Wait for that local cache before

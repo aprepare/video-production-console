@@ -1,0 +1,28 @@
+{
+    "earlier_test":  {
+                         "command":  "go test ./...",
+                         "seconds":  414.5567261,
+                         "exit_code":  1
+                     },
+    "protected_paths_changed":  [
+
+                                ],
+    "final":  [
+                  {
+                      "command":  "go build ./...",
+                      "seconds":  3.9175613,
+                      "exit_code":  0
+                  },
+                  {
+                      "command":  "go vet ./...",
+                      "seconds":  4.4671641,
+                      "exit_code":  0
+                  },
+                  {
+                      "command":  "go test ./...",
+                      "seconds":  97.176106199999992,
+                      "exit_code":  0
+                  }
+              ],
+    "diff_check_exit_code":  0
+}

@@ -62,7 +62,7 @@ func TestAISurgeModesLimitAndRulePriority(t *testing.T) {
 					}
 				}
 				out, _ := json.Marshal(map[string]any{"items": []any{map[string]any{"external_id": input.Items[0].ExternalID, "surge": true, "reason": "30分钟互动异常增长"}, map[string]any{"external_id": "outside", "surge": true, "reason": "忽略规则"}}})
-				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(out)}}}})
+				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "趋势判断如下：\n```json\n" + string(out) + "\n```"}}}})
 			}))
 			defer model.Close()
 			s, _ := fixture(t, referenceStub{}, settings.Runtime{PublicSettings: domain.PublicSettings{AnalysisBaseURL: model.URL, AnalysisModel: "fake"}}, Options{})
@@ -104,6 +104,7 @@ func TestAISurgeModesLimitAndRulePriority(t *testing.T) {
 func TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection(t *testing.T) {
 	for _, response := range []string{"http500", "missing", "invalid-score", "malformed"} {
 		t.Run(response, func(t *testing.T) {
+			now := time.Now().UTC()
 			var calls atomic.Int32
 			var collections atomic.Int32
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,17 +130,17 @@ func TestScoringFailuresDoNotFailRunOrSuppressSurgeCollection(t *testing.T) {
 				collections.Add(1)
 				return store.ReferencePost{ID: "collected-" + p.ExternalID}, nil
 			}}
-			s, repo := fixture(t, refs, settings.Runtime{PublicSettings: domain.PublicSettings{AnalysisBaseURL: model.URL, AnalysisModel: "fake"}}, Options{})
+			s, repo := fixture(t, refs, settings.Runtime{PublicSettings: domain.PublicSettings{AnalysisBaseURL: model.URL, AnalysisModel: "fake"}}, Options{Now: func() time.Time { return now }})
 			task := createTask(t, s, "failure")
 			task.ScoreEnabled = true
 			task.AutoCollect = true
 			if _, err := s.Update(t.Context(), task); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.CreateRun(t.Context(), store.MonitorRun{ID: "previous", TaskID: task.ID, Status: "completed", Trigger: "manual", StartedAt: stamp(time.Now().Add(-time.Hour))}); err != nil {
+			if _, err := repo.CreateRun(t.Context(), store.MonitorRun{ID: "previous", TaskID: task.ID, Status: "completed", Trigger: "manual", StartedAt: stamp(now.Add(-30 * time.Minute))}); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := repo.UpsertItem(t.Context(), task.ID, "previous", platformapi.Post{Platform: platformapi.Douyin, ExternalID: "old", Likes: 100}, time.Now().Add(-time.Hour)); err != nil {
+			if _, _, err := repo.UpsertItem(t.Context(), task.ID, "previous", platformapi.Post{Platform: platformapi.Douyin, ExternalID: "old", Likes: 100}, now.Add(-30*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 			go s.Run(t.Context())

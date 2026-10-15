@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"video-production-console/internal/monitorai"
@@ -28,17 +29,6 @@ func truncate(value string, limit int) string {
 	}
 	return value
 }
-func cleanJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "```") {
-		if i := strings.IndexByte(raw, '\n'); i >= 0 {
-			raw = strings.TrimSpace(raw[i+1:])
-			raw = strings.TrimSpace(strings.TrimSuffix(raw, "```"))
-		}
-	}
-	return raw
-}
-
 func (s *Service) modelConfig(ctx context.Context, model string) (refanalysis.ModelConfig, error) {
 	if s.runtime == nil {
 		return refanalysis.ModelConfig{}, refanalysis.ErrNotConfigured
@@ -71,8 +61,6 @@ type scoreResult struct {
 }
 
 func (s *Service) scoreBatch(ctx context.Context, cfg refanalysis.ModelConfig, task store.MonitorTask, items []store.MonitorItem) ([]scoreResult, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
 	input := struct {
 		Focus string       `json:"score_focus"`
 		Items []scoreInput `json:"items"`
@@ -90,27 +78,28 @@ func (s *Service) scoreBatch(ctx context.Context, cfg refanalysis.ModelConfig, t
 	}
 	parts := []map[string]any{{"type": "text", "text": string(raw)}}
 	images := 0
-	for _, item := range items {
-		if strings.TrimSpace(item.CoverURL) == "" {
+	for i, jpeg := range s.scoreCovers(ctx, items) {
+		if len(jpeg) == 0 {
 			continue
 		}
-		coverCtx, coverCancel := context.WithTimeout(callCtx, 15*time.Second)
-		jpeg, err := s.references.ScoreCover(coverCtx, item.Platform, item.CoverURL)
-		coverCancel()
-		if err != nil || len(jpeg) == 0 {
-			continue
-		}
-		parts = append(parts, map[string]any{"type": "text", "text": "封面对应 external_id=" + item.ExternalID}, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpeg)}})
+		parts = append(parts, map[string]any{"type": "text", "text": "封面对应 external_id=" + items[i].ExternalID}, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpeg)}})
 		images++
 	}
 	var content any = string(raw)
 	if images > 0 {
 		content = parts
 	}
-	response, err := s.model.Complete(callCtx, cfg, scorePrompt, content, 90*time.Second)
+	// Cover preparation and each model attempt have separate budgets, while
+	// remaining children of the caller so shutdown/request cancellation propagates.
+	complete := func(content any) (string, error) {
+		callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+		return s.model.Complete(callCtx, cfg, scorePrompt, content, 90*time.Second)
+	}
+	response, err := complete(content)
 	var httpErr *monitorai.HTTPError
-	if images > 0 && errors.As(err, &httpErr) && httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 {
-		response, err = s.model.Complete(callCtx, cfg, scorePrompt, string(raw), 90*time.Second)
+	if images > 0 && errors.As(err, &httpErr) && (httpErr.StatusCode == 400 || httpErr.StatusCode == 413 || httpErr.StatusCode == 415 || httpErr.StatusCode == 422) {
+		response, err = complete(string(raw))
 	}
 	if err != nil {
 		return nil, err
@@ -118,7 +107,7 @@ func (s *Service) scoreBatch(ctx context.Context, cfg refanalysis.ModelConfig, t
 	var result struct {
 		Items []scoreResult `json:"items"`
 	}
-	if err := json.Unmarshal([]byte(cleanJSON(response)), &result); err != nil {
+	if err := monitorai.UnmarshalJSON(response, &result); err != nil {
 		return nil, errors.New("打分模型返回的 JSON 无效")
 	}
 	wanted := map[string]bool{}
@@ -133,6 +122,40 @@ func (s *Service) scoreBatch(ctx context.Context, cfg refanalysis.ModelConfig, t
 		seen[item.ExternalID] = true
 	}
 	return result.Items, nil
+}
+
+func (s *Service) scoreCovers(ctx context.Context, items []store.MonitorItem) [][]byte {
+	budgetCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	covers := make([][]byte, len(items))
+	jobs := make(chan int, len(items))
+	for i, item := range items {
+		if strings.TrimSpace(item.CoverURL) != "" {
+			jobs <- i
+		}
+	}
+	close(jobs)
+	var workers sync.WaitGroup
+	workerCount := min(4, len(jobs))
+	for n := 0; n < workerCount; n++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				if budgetCtx.Err() != nil {
+					return
+				}
+				coverCtx, coverCancel := context.WithTimeout(budgetCtx, 10*time.Second)
+				jpeg, err := s.references.ScoreCover(coverCtx, items[i].Platform, items[i].CoverURL)
+				coverCancel()
+				if err == nil {
+					covers[i] = jpeg
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	return covers
 }
 func (s *Service) saveScore(ctx context.Context, item store.MonitorItem, status string, score int, reason string, tags []string, message string) bool {
 	// Failed/cancelled calls must still leave pending, using a bounded cleanup context.
@@ -196,17 +219,15 @@ func (s *Service) scoreItems(ctx context.Context, task store.MonitorTask, items 
 	return count
 }
 func (s *Service) Score(ctx context.Context, id string) (store.MonitorItem, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	item, err := s.repo.GetItem(callCtx, id)
+	item, err := s.repo.GetItem(ctx, id)
 	if err != nil {
 		return store.MonitorItem{}, err
 	}
-	task, err := s.repo.GetTask(callCtx, item.TaskID)
+	task, err := s.repo.GetTask(ctx, item.TaskID)
 	if err != nil {
 		return store.MonitorItem{}, err
 	}
-	s.scoreItems(callCtx, task, []store.MonitorItem{item})
+	s.scoreItems(ctx, task, []store.MonitorItem{item})
 	// Return the recorded failure too, allowing the feed to show a retry action.
 	readCtx, readCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer readCancel()
@@ -222,7 +243,7 @@ const surgePrompt = `你是本地商户的内容趋势研究员。判断哪些�
 func (s *Service) detectAISurges(ctx context.Context, task store.MonitorTask, observed []observedItem) {
 	candidates := []int{}
 	for i, o := range observed {
-		if o.previous == nil || o.decision.Hit {
+		if o.countsMissing || o.previous == nil || o.decision.Hit {
 			continue
 		}
 		if o.decision.LikeDelta > 0 || o.decision.CommentDelta > 0 || o.item.Shares > o.previous.Shares || o.item.Collects > o.previous.Collects {
@@ -267,7 +288,7 @@ func (s *Service) detectAISurges(ctx context.Context, task store.MonitorTask, ob
 			Reason     string `json:"reason"`
 		} `json:"items"`
 	}
-	if json.Unmarshal([]byte(cleanJSON(raw)), &response) != nil {
+	if monitorai.UnmarshalJSON(raw, &response) != nil {
 		slog.Warn("监控飙升结果格式无效", "task_id", task.ID)
 		return
 	}

@@ -372,7 +372,7 @@ func getMonitorItem(ctx context.Context, q monitorQuerier, where string, args ..
 }
 
 func monitorHistory(ctx context.Context, q monitorQuerier, itemID string) ([]MonitorSnapshot, error) {
-	rows, err := q.QueryContext(ctx, `SELECT at,likes,comments,shares,collects FROM monitor_snapshots WHERE item_id=? ORDER BY rowid DESC LIMIT 12`, itemID)
+	rows, err := q.QueryContext(ctx, `SELECT at,likes,comments,shares,collects FROM monitor_snapshots WHERE item_id=? ORDER BY at DESC,run_id DESC LIMIT 12`, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("list monitor snapshots: %w", err)
 	}
@@ -415,6 +415,10 @@ func (r *MonitorRepository) UpsertItem(ctx context.Context, taskID, runID string
 			itemID, taskID, platform, post.ExternalID, post.URL, post.Title, post.Text, post.Author, post.CoverURL, post.VideoURL, post.DurationS, post.CreatedAt,
 			post.Likes, post.Comments, post.Shares, post.Collects, atText, atText)
 	} else {
+		if post.CountsMissing {
+			post.Likes, post.Comments = previous.Likes, previous.Comments
+			post.Shares, post.Collects = previous.Shares, previous.Collects
+		}
 		var existingSnapshotAt string
 		err = tx.QueryRowContext(ctx, `SELECT at FROM monitor_snapshots WHERE item_id=? AND run_id=?`, itemID, runID).Scan(&existingSnapshotAt)
 		sameRun := err == nil
@@ -437,10 +441,12 @@ func (r *MonitorRepository) UpsertItem(ctx context.Context, taskID, runID string
 	if err != nil {
 		return MonitorItem{}, nil, fmt.Errorf("upsert monitor item: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO monitor_snapshots(item_id,run_id,at,likes,comments,shares,collects) VALUES(?,?,?,?,?,?,?)
+	if !post.CountsMissing {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO monitor_snapshots(item_id,run_id,at,likes,comments,shares,collects) VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(item_id,run_id) DO UPDATE SET at=excluded.at,likes=excluded.likes,comments=excluded.comments,shares=excluded.shares,collects=excluded.collects`,
-		itemID, runID, atText, post.Likes, post.Comments, post.Shares, post.Collects); err != nil {
-		return MonitorItem{}, nil, fmt.Errorf("upsert monitor snapshot: %w", err)
+			itemID, runID, atText, post.Likes, post.Comments, post.Shares, post.Collects); err != nil {
+			return MonitorItem{}, nil, fmt.Errorf("upsert monitor snapshot: %w", err)
+		}
 	}
 	item, err := getMonitorItem(ctx, tx, `i.id=?`, itemID)
 	if err != nil {
@@ -457,6 +463,34 @@ func (r *MonitorRepository) UpsertItem(ctx context.Context, taskID, runID string
 
 func (r *MonitorRepository) GetItem(ctx context.Context, id string) (MonitorItem, error) {
 	return getMonitorItem(ctx, r.db, `i.id=?`, id)
+}
+
+// ScoreCandidates drains unfinished work, preferring this run's observations.
+// Pending scores left by a stopped process are eligible without a separate reset.
+func (r *MonitorRepository) ScoreCandidates(ctx context.Context, taskID string, observedIDs []string) ([]MonitorItem, error) {
+	args := []any{taskID}
+	order := ""
+	if len(observedIDs) > 0 {
+		order = `CASE WHEN i.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(observedIDs)), ",") + `) THEN 0 ELSE 1 END,`
+		for _, id := range observedIDs {
+			args = append(args, id)
+		}
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+monitorItemColumns+` FROM monitor_items i JOIN monitor_tasks t ON t.id=i.task_id
+		WHERE i.task_id=? AND i.score_status IN ('none','pending') ORDER BY `+order+`i.first_seen_at ASC,i.id ASC LIMIT 30`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list monitor score candidates: %w", err)
+	}
+	defer rows.Close()
+	items := []MonitorItem{}
+	for rows.Next() {
+		item, err := scanMonitorItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan monitor score candidate: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *MonitorRepository) Feed(ctx context.Context, taskID, filter string, limit int) (MonitorFeed, error) {

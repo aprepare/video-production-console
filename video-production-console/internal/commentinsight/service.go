@@ -170,7 +170,7 @@ func (s *Service) run(ctx context.Context, item store.CommentInsight, post store
 	if err != nil {
 		return err
 	}
-	if err := validateEvidence(report, sentComments); err != nil {
+	if err := validateEvidence(&report, sentComments); err != nil {
 		return err
 	}
 	normalized, err := json.Marshal(report)

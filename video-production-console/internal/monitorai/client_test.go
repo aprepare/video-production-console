@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,9 +20,20 @@ func TestCompleteSendsChatRequestAndReturnsContent(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer secret" {
 			t.Errorf("request: %s %q", r.URL.Path, r.Header.Get("Authorization"))
 		}
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"role":"system"`) || !strings.Contains(string(body), `\"reference_id\":\"ref-1\"`) {
-			t.Errorf("payload: %s", body)
+		var request struct {
+			Messages       []map[string]any `json:"messages"`
+			ResponseFormat map[string]any   `json:"response_format"`
+			Temperature    float64          `json:"temperature"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ := json.Marshal(request.Messages)
+		if !strings.Contains(string(encoded), `"role":"system"`) || !strings.Contains(string(encoded), `\"reference_id\":\"ref-1\"`) {
+			t.Errorf("messages: %s", encoded)
+		}
+		if request.ResponseFormat["type"] != "json_object" || request.Temperature != 0.2 {
+			t.Errorf("json mode = %#v, temperature = %v", request.ResponseFormat, request.Temperature)
 		}
 		io.WriteString(w, `{"choices":[{"message":{"content":"{\"summary\":\"ok\"}"}}]}`)
 	}))
@@ -32,6 +44,81 @@ func TestCompleteSendsChatRequestAndReturnsContent(t *testing.T) {
 	}, "system prompt", map[string]any{"reference_id": "ref-1"}, time.Second)
 	if err != nil || got != `{"summary":"ok"}` {
 		t.Fatalf("Complete() = %q, %v", got, err)
+	}
+}
+
+func TestCompleteRetriesOnceWithoutResponseFormatWhenUpstreamRejectsThatField(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+	}{
+		{"structured param", `{"error":{"message":"bad field","param":"response_format"}}`},
+		{"structured message", `{"error":{"message":"response_format is not supported"}}`},
+		{"top level message", `{"message":"Unsupported parameter: response_format"}`},
+		{"plain text", `unknown parameter response_format is not supported`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempt := attempts.Add(1)
+				var request map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				_, hasResponseFormat := request["response_format"]
+				if attempt == 1 {
+					if !hasResponseFormat {
+						t.Error("first request omitted response_format")
+					}
+					w.WriteHeader(http.StatusBadRequest)
+					io.WriteString(w, tc.response)
+					return
+				}
+				if hasResponseFormat {
+					t.Error("retry still included response_format")
+				}
+				if request["temperature"] != 0.2 {
+					t.Errorf("temperature = %#v", request["temperature"])
+				}
+				io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+			}))
+			defer server.Close()
+
+			got, err := NewClient(server.Client()).Complete(t.Context(), refanalysis.ModelConfig{BaseURL: server.URL, Model: "m"}, "s", "prompt", time.Second)
+			if err != nil || got != "ok" || attempts.Load() != 2 {
+				t.Fatalf("Complete() = %q, %v; attempts = %d", got, err, attempts.Load())
+			}
+		})
+	}
+}
+
+func TestCompleteDoesNotRetryUnrelatedBadRequestOrExposeResponse(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"message":"invalid messages: private-value"}}`)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.Client()).Complete(t.Context(), refanalysis.ModelConfig{BaseURL: server.URL, Model: "m"}, "s", "prompt", time.Second)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest || attempts.Load() != 1 {
+		t.Fatalf("error = %#v; attempts = %d", err, attempts.Load())
+	}
+	if strings.Contains(err.Error(), "private-value") {
+		t.Fatalf("sensitive response leaked: %v", err)
+	}
+}
+
+func TestUnmarshalJSONAcceptsPreambleAndFencedObject(t *testing.T) {
+	var got struct {
+		Summary string `json:"summary"`
+	}
+	if err := UnmarshalJSON("analysis follows\n```json\n{\"summary\":\"ok\"}\n```\nthanks", &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary != "ok" {
+		t.Fatalf("summary = %q", got.Summary)
 	}
 }
 
