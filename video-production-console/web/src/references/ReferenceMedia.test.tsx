@@ -43,9 +43,9 @@ test("an uncached video can be re-downloaded and failures explain why", async ()
   expect(api).toHaveBeenCalledWith("/api/references/r1/media", { method: "POST" });
 });
 
-test("小红书 notes explain that the gateway returns no video", () => {
+test("小红书 image notes say there is no video", () => {
   render(<ReferenceMedia api={vi.fn()} post={post({ platform: "xhs", has_video: false, media_status: "none" })} onChange={vi.fn()} onMessage={vi.fn()} />);
-  expect(screen.getByText(/小红书接口目前只返回图文/)).toBeTruthy();
+  expect(screen.getByText(/这是图文笔记/)).toBeTruthy();
 });
 
 const report: ReferenceAnalysisRecord = {

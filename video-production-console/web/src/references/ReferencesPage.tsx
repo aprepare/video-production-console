@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, Heart, Link2, MessageCircle, RefreshCw, Search, Send, Trash2, Video, Wand2 } from "lucide-react";
+import { ArrowUpRight, Heart, Link2, MessageCircle, Radar, RefreshCw, Search, Send, Trash2, Video, Wand2 } from "lucide-react";
 import { ReferenceMedia, type Sentence } from "./ReferenceMedia";
 import { ReferenceAnalysis } from "./ReferenceAnalysis";
+import { CommentInsightPanel } from "./CommentInsight";
+import { MonitorBoard } from "./MonitorBoard";
+import { PreviewPlayer, PreviewThumb, type PreviewTarget } from "./Preview";
 import "../shell/studio-page.css";
 import "./references.css";
+import "./monitor.css";
 
 export type ReferenceApi = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -74,6 +78,21 @@ export function formatCount(value: number) {
   return String(value);
 }
 
+/** 发布时间（秒级时间戳）→ 「今天 / 3 天前 / 2026-05-01」。 */
+export function relativeDay(unixSeconds: number, now = Date.now()) {
+  if (!unixSeconds) return "";
+  const days = Math.floor((now - unixSeconds * 1000) / 86400000);
+  if (days <= 0) return "今天";
+  if (days < 30) return `${days} 天前`;
+  const date = new Date(unixSeconds * 1000);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function excerpt(post: PlatformPost) {
+  const rest = (post.text || "").replace(post.title.replace(/…$/, ""), "").replace(/\s+/g, " ").trim();
+  return rest.length > 4 ? rest : "";
+}
+
 /** One-shot hand-off read by WorkflowCanvas regardless of the selected account. */
 export const PENDING_REMIX_SOURCE_KEY = "remix-lab:pending-source";
 
@@ -100,6 +119,11 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
   const [selectedID, setSelectedID] = useState("");
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"link" | "search">("link");
+  const [mode, setMode] = useState<"collect" | "monitor">(() => (typeof window !== "undefined" && window.location.hash === "#monitor" ? "monitor" : "collect"));
+  const switchMode = (next: "collect" | "monitor") => {
+    setMode(next);
+    try { window.history.replaceState(null, "", next === "monitor" ? "#monitor" : window.location.pathname + window.location.search); } catch { /* history unavailable */ }
+  };
 
   const loadList = useCallback(async () => {
     try {
@@ -148,9 +172,15 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
       <div>
         <p className="studio-kicker">创作工作室 / 对标采集</p>
         <h1>对标采集</h1>
-        <p>粘贴抖音、小红书、视频号链接或按关键词搜索。原视频自动存到本机，可播放、下载、拆解；口播转写完成后一键送进二创。</p>
+        <p>粘贴抖音、小红书、视频号链接或按关键词搜索；也可以让关键词定时自动搜，AI 打分、盯住数据飙升的视频。</p>
       </div>
-      <GatewayBadges status={status} />
+      <div className="references-head-side">
+        <GatewayBadges status={status} />
+        <div className="studio-tabs references-mode" role="tablist" aria-label="对标采集模式">
+          <button type="button" role="tab" aria-selected={mode === "collect"} onClick={() => switchMode("collect")}><Search size={14} aria-hidden="true" />采集</button>
+          <button type="button" role="tab" aria-selected={mode === "monitor"} onClick={() => switchMode("monitor")}><Radar size={14} aria-hidden="true" />监控</button>
+        </div>
+      </div>
     </header>
 
     {notConfigured ? <div className="studio-notice" role="status">
@@ -158,11 +188,13 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
     </div> : null}
     {message ? <div className="studio-notice" data-tone={message.tone === "info" ? undefined : message.tone} role={message.tone === "error" ? "alert" : "status"}>{message.text}</div> : null}
 
-    <div className="studio-grid studio-grid--split references-layout">
+    {mode === "monitor" ? <MonitorBoard api={api} disabled={Boolean(notConfigured)} onMessage={setMessage} onOpenReference={(post) => { upsertLocal(post); setSelectedID(post.id); switchMode("collect"); }} /> : null}
+
+    <div className="studio-grid studio-grid--split references-layout" hidden={mode !== "collect"}>
       <div>
         <section className="studio-panel" aria-labelledby="reference-collect-title">
           <header>
-            <div><h2 id="reference-collect-title">采集</h2><p>采集时默认同时提交通义听悟转写，约 20–60 秒出结果。</p></div>
+            <div><h2 id="reference-collect-title">采集</h2><p>{tab === "search" ? "点封面在线预览，不下载也不花钱；选中后再采集。" : "采集时默认同时提交通义听悟转写，约 20–60 秒出结果。"}</p></div>
             <div className="studio-tabs" role="tablist" aria-label="采集方式">
               <button type="button" role="tab" aria-selected={tab === "link"} onClick={() => setTab("link")}>粘贴链接</button>
               <button type="button" role="tab" aria-selected={tab === "search"} onClick={() => setTab("search")}>关键词搜索</button>
@@ -170,7 +202,7 @@ export function ReferencesPage({ api, onNavigate, onOpenSettings }: Props) {
           </header>
           {tab === "link"
             ? <LinkCollector api={api} disabled={Boolean(notConfigured)} onCollected={(post) => { upsertLocal(post); setSelectedID(post.id); setMessage({ tone: "ok", text: post.transcript_status === "running" ? "已采集，口播正在转写。" : "已采集。" }); }} onError={(text) => setMessage({ tone: "error", text })} />
-            : <SearchCollector api={api} disabled={Boolean(notConfigured)} onCollected={(collected) => { collected.forEach(upsertLocal); setMessage({ tone: "ok", text: `已采集 ${collected.length} 条，口播转写在后台进行。` }); }} onError={(text) => setMessage({ tone: "error", text })} />}
+            : <SearchCollector api={api} disabled={Boolean(notConfigured)} onCollected={(collected, transcribed) => { collected.forEach(upsertLocal); setMessage({ tone: "ok", text: transcribed ? `已采集 ${collected.length} 条，口播转写在后台进行。` : `已采集 ${collected.length} 条，原视频在后台下载。` }); }} onError={(text) => setMessage({ tone: "error", text })} />}
         </section>
 
         <section className="studio-panel" aria-labelledby="reference-library-title">
@@ -242,13 +274,16 @@ function LinkCollector({ api, disabled, onCollected, onError }: { api: Reference
   </form>;
 }
 
-function SearchCollector({ api, disabled, onCollected, onError }: { api: ReferenceApi; disabled: boolean; onCollected: (posts: ReferencePost[]) => void; onError: (text: string) => void }) {
+function SearchCollector({ api, disabled, onCollected, onError }: { api: ReferenceApi; disabled: boolean; onCollected: (posts: ReferencePost[], transcribed: boolean) => void; onError: (text: string) => void }) {
   const [platform, setPlatform] = useState<"douyin" | "xhs">("douyin");
   const [keyword, setKeyword] = useState("");
   const [results, setResults] = useState<PlatformPost[]>([]);
   const [paging, setPaging] = useState<{ cursor: string; search_id: string; session_id?: string; has_more: boolean } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState<"" | "search" | "more" | "collect">("");
+  const [busy, setBusy] = useState<"" | "search" | "more" | "collect" | "transcribe">("");
+  const [sort, setSort] = useState<"likes" | "comments" | "recent">("likes");
+  const [videoOnly, setVideoOnly] = useState(false);
+  const [preview, setPreview] = useState<PlatformPost | null>(null);
   const lastKeyword = useRef("");
 
   const search = async (more = false) => {
@@ -276,32 +311,40 @@ function SearchCollector({ api, disabled, onCollected, onError }: { api: Referen
     }
   };
 
-  const sorted = useMemo(() => [...results].sort((a, b) => b.likes - a.likes), [results]);
+  const sorted = useMemo(() => {
+    const list = videoOnly ? results.filter((post) => post.video_url) : [...results];
+    if (sort === "comments") return list.sort((a, b) => b.comments - a.comments);
+    if (sort === "recent") return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    return list.sort((a, b) => b.likes - a.likes);
+  }, [results, sort, videoOnly]);
+  const videoCount = useMemo(() => results.filter((post) => post.video_url).length, [results]);
   const toggle = (id: string) => setPicked((current) => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
 
-  const collect = async () => {
-    const chosen = sorted.filter((post) => picked.has(post.external_id));
+  const collect = async (transcribe: boolean, only?: PlatformPost) => {
+    const chosen = only ? [only] : sorted.filter((post) => picked.has(post.external_id));
     if (!chosen.length) return;
-    setBusy("collect");
+    setBusy(transcribe ? "transcribe" : "collect");
     const collected: ReferencePost[] = [];
     try {
       for (const post of chosen) {
-        const response = await api("/api/references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ post, keyword: lastKeyword.current, transcribe: Boolean(post.video_url) }) });
+        const response = await api("/api/references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ post, keyword: lastKeyword.current, transcribe: transcribe && Boolean(post.video_url) }) });
         if (!response.ok) throw new Error(await readError(response, "采集失败。"));
         collected.push(await response.json());
       }
-      setPicked(new Set());
+      if (only) setPicked((current) => { const next = new Set(current); next.delete(only.external_id); return next; });
+      else setPicked(new Set());
     } catch (error) {
       onError(error instanceof Error ? error.message : "采集失败。");
     } finally {
-      if (collected.length) onCollected(collected);
+      if (collected.length) onCollected(collected, transcribe);
       setBusy("");
     }
   };
+  const previewTarget: PreviewTarget | null = preview ? { platform: preview.platform, title: preview.title, author: preview.author, url: preview.url, coverURL: preview.cover_url, videoURL: preview.video_url } : null;
 
   return <div className="references-search">
     <form className="studio-row" onSubmit={(event) => { event.preventDefault(); void search(); }}>
@@ -311,26 +354,38 @@ function SearchCollector({ api, disabled, onCollected, onError }: { api: Referen
       <label className="studio-search grow"><Search size={16} aria-hidden="true" /><input type="search" aria-label="搜索关键词" placeholder="例：岚山海鲜、日照绿茶、煎饼果子" value={keyword} onChange={(event) => setKeyword(event.target.value)} /></label>
       <button type="submit" className="studio-button studio-button--primary" disabled={disabled || Boolean(busy) || !keyword.trim()}>{busy === "search" ? "搜索中…" : "搜索"}</button>
     </form>
-    {sorted.length ? <>
+    {results.length ? <>
       <div className="studio-row references-search__bar">
-        <span className="studio-metrics">按点赞排序 · 已选 {picked.size} 条</span>
+        <select aria-label="结果排序" className="references-sort" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
+          <option value="likes">按点赞</option><option value="comments">按评论</option><option value="recent">按发布时间</option>
+        </select>
+        <label className="references-check"><input type="checkbox" checked={videoOnly} onChange={(event) => setVideoOnly(event.target.checked)} />只看视频<span className="studio-metrics">{videoCount}/{results.length}</span></label>
         <span className="grow" />
-        <button type="button" className="studio-button" disabled={!picked.size || Boolean(busy)} onClick={() => void collect()}>{busy === "collect" ? "正在采集…" : `采集并转写（${picked.size}）`}</button>
+        <span className="studio-metrics">已选 {picked.size}</span>
+        <button type="button" className="studio-button" disabled={!picked.size || Boolean(busy)} onClick={() => void collect(false)}>{busy === "collect" ? "采集中…" : "采集"}</button>
+        <button type="button" className="studio-button studio-button--primary" disabled={!picked.size || Boolean(busy)} onClick={() => void collect(true)}>{busy === "transcribe" ? "提交中…" : "采集并转写"}</button>
       </div>
+      {sorted.length === 0 ? <p className="studio-empty">这一页没有视频，取消「只看视频」或加载更多。</p> : null}
       <ul className="studio-list references-results">
         {sorted.map((post) => <li key={post.external_id}>
-          <label className="reference-result">
+          <div className="reference-result" data-picked={picked.has(post.external_id) ? "true" : undefined}>
             <input type="checkbox" checked={picked.has(post.external_id)} onChange={() => toggle(post.external_id)} aria-label={`选择 ${post.title || post.external_id}`} />
-            <span className="reference-result__body">
+            <PreviewThumb platform={post.platform} coverURL={post.cover_url} videoURL={post.video_url} durationS={post.duration_s} title={post.title} onPlay={() => setPreview(post)} />
+            <button type="button" className="reference-result__body" onClick={() => toggle(post.external_id)}>
               <strong>{post.title || "（无标题）"}</strong>
-              <span className="studio-metrics"><span>{post.author}</span><span><Heart size={11} aria-hidden="true" /> {formatCount(post.likes)}</span><span><MessageCircle size={11} aria-hidden="true" /> {formatCount(post.comments)}</span>{post.duration_s ? <span>{Math.round(post.duration_s)}s</span> : <span>图文</span>}</span>
-            </span>
-            {post.url ? <a href={post.url} target="_blank" rel="noreferrer" aria-label="在平台打开" className="reference-result__open" onClick={(event) => event.stopPropagation()}><ArrowUpRight size={15} aria-hidden="true" /></a> : null}
-          </label>
+              {excerpt(post) ? <span className="reference-result__text">{excerpt(post)}</span> : null}
+              <span className="studio-metrics"><span>{post.author}</span><span><Heart size={11} aria-hidden="true" /> {formatCount(post.likes)}</span><span><MessageCircle size={11} aria-hidden="true" /> {formatCount(post.comments)}</span>{post.collects ? <span>收藏 {formatCount(post.collects)}</span> : null}{post.created_at ? <span>{relativeDay(post.created_at)}</span> : null}</span>
+            </button>
+            {post.url ? <a href={post.url} target="_blank" rel="noreferrer" aria-label="在平台打开" className="reference-result__open"><ArrowUpRight size={15} aria-hidden="true" /></a> : null}
+          </div>
         </li>)}
       </ul>
       {paging?.has_more ? <button type="button" className="studio-button references-more" disabled={Boolean(busy)} onClick={() => void search(true)}>{busy === "more" ? "加载中…" : "加载更多"}</button> : null}
     </> : null}
+    {previewTarget && preview ? <PreviewPlayer target={previewTarget} onClose={() => setPreview(null)} actions={<>
+      <button type="button" className="studio-button" disabled={Boolean(busy)} onClick={() => void collect(false, preview).then(() => setPreview(null))}>采集</button>
+      <button type="button" className="studio-button studio-button--primary" disabled={Boolean(busy)} onClick={() => void collect(true, preview).then(() => setPreview(null))}>采集并转写</button>
+    </>} /> : null}
   </div>;
 }
 
@@ -346,7 +401,7 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
   const [notes, setNotes] = useState(post.notes);
   const [busy, setBusy] = useState<"" | "save" | "transcribe" | "delete" | "comments">("");
   const [comments, setComments] = useState<Array<{ author: string; text: string; likes: number }> | null>(null);
-  const [view, setView] = useState<"source" | "analysis" | "comments">("source");
+  const [view, setView] = useState<"source" | "analysis" | "insight" | "comments">("source");
   const seekRef = useRef<((seconds: number) => void) | null>(null);
   useEffect(() => { setTranscript(post.transcript); }, [post.transcript]);
   const dirty = transcript.trim() !== post.transcript.trim() || notes.trim() !== post.notes.trim();
@@ -430,6 +485,7 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
     <div className="studio-tabs reference-views" role="tablist" aria-label="对标详情视图">
       <button type="button" role="tab" aria-selected={view === "source"} onClick={() => setView("source")}>原片与口播</button>
       <button type="button" role="tab" aria-selected={view === "analysis"} onClick={() => setView("analysis")}>拆解分析</button>
+      {post.platform !== "channels" ? <button type="button" role="tab" aria-selected={view === "insight"} onClick={() => setView("insight")}>评论洞察</button> : null}
       {post.platform !== "channels" ? <button type="button" role="tab" aria-selected={view === "comments"} onClick={() => { setView("comments"); if (!comments && busy !== "comments") void loadComments(); }}>热评</button> : null}
     </div>
 
@@ -464,6 +520,8 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
     </> : null}
 
     {view === "analysis" ? <ReferenceAnalysis api={api} post={post} onSeek={seek} onMessage={onMessage} /> : null}
+
+    {view === "insight" ? <CommentInsightPanel api={api} post={post} onMessage={onMessage} /> : null}
 
     {view === "comments" ? <section className="reference-comments" aria-label="热评">
       <div className="studio-row">
