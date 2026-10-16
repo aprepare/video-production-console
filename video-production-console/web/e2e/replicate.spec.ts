@@ -335,3 +335,15 @@ test("settings has an AI replicate tab without exposing the upstream key", async
   await expect(page.getByLabel(/API Key/)).toHaveCount(0);
   await page.screenshot({ path: `${shotsDir}/settings-replicate.png` });
 });
+
+test("task center opens as a full-height drawer above the top bar", async ({ page }) => {
+  await mockConsole(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/replicate");
+  await page.getByRole("button", { name: "任务中心" }).click();
+  const drawer = page.getByRole("dialog", { name: "任务中心" });
+  await expect(drawer).toBeVisible();
+  const box = await drawer.boundingBox();
+  expect(box?.height).toBeGreaterThan(850);
+  await page.screenshot({ path: `${shotsDir}/task-center.png` });
+});

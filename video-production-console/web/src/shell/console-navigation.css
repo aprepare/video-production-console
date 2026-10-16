@@ -1,5 +1,5 @@
 .console-shell { --console-nav-height: 70px; padding-top: var(--console-nav-height); }
-.console-nav, .shell > header.console-nav { position: fixed; inset: 0 0 auto 0; z-index: 25; min-height: 0; justify-content: flex-start; display: flex; align-items: center; gap: 40px; height: var(--console-nav-height); padding: 0 32px; color: var(--ds-text-muted); background: color-mix(in srgb, var(--ds-surface) 96%, transparent); box-shadow: 0 1px 2px rgb(37 37 50 / 5%); border-bottom: 1px solid color-mix(in srgb, var(--ds-border) 60%, transparent); backdrop-filter: blur(10px); }
+.console-nav, .shell > header.console-nav { position: fixed; inset: 0 0 auto 0; z-index: 25; min-height: 0; justify-content: flex-start; display: flex; align-items: center; gap: 40px; height: var(--console-nav-height); padding: 0 32px; color: var(--ds-text-muted); background: var(--ds-surface); box-shadow: 0 1px 2px rgb(37 37 50 / 5%); border-bottom: 1px solid color-mix(in srgb, var(--ds-border) 60%, transparent); }
 .console-nav__brand { display: flex; flex-shrink: 0; gap: 10px; align-items: center; color: inherit; text-decoration: none; }
 .console-nav__mark { display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0; border-radius: 9px; color: var(--ds-on-accent); background: var(--ds-accent); }
 .console-nav__brand-text { display: grid; gap: 2px; }

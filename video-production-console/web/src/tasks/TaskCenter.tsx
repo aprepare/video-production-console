@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Activity, Trash2, X } from "lucide-react";
 import type { Task } from "../types";
 import { liveTaskStatuses, statusLabels, taskTitle } from "./task-view";
@@ -121,7 +122,7 @@ export function TaskCenter({ api, projects, onOpenProject }: Props) {
       <Activity size={18} aria-hidden="true" /><span>任务中心</span>
       {badge ? <span className="task-center__badge" data-tone={groups.failed.length ? "attention" : "working"}>{groups.live.length || groups.failed.length}</span> : null}
     </button>
-    {open ? <div className="task-center__backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+    {open ? createPortal(<div className="task-center__backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
       <aside className="task-center" role="dialog" aria-modal="true" aria-label="任务中心">
         <header>
           <div><h2>任务中心</h2><p>所有项目的二创、口播、配音、混剪任务。移除只是不在这里显示，记录仍在项目里。</p></div>
@@ -148,6 +149,6 @@ export function TaskCenter({ api, projects, onOpenProject }: Props) {
           <ul className="studio-list">{groups.done.map(row)}</ul>
         </section> : null}
       </aside>
-    </div> : null}
+    </div>, document.body) : null}
   </>;
 }
