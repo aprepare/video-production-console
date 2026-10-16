@@ -15,6 +15,7 @@ import (
 	"video-production-console/internal/commentinsight"
 	"video-production-console/internal/domain"
 	"video-production-console/internal/imagestudio"
+	"video-production-console/internal/replicate"
 	"video-production-console/internal/store"
 	"video-production-console/internal/videoqc"
 )
@@ -62,6 +63,12 @@ var responseContracts = []struct {
 	{"video qc issue", videoqc.Issue{}, "references/videoQCTypes.ts", "VideoQCIssue"},
 	{"video qc frame", videoqc.Frame{}, "references/videoQCTypes.ts", "VideoQCFrame"},
 	{"video qc report", videoqc.Report{}, "references/videoQCTypes.ts", "VideoQCReport"},
+	{"replicate project", replicate.Project{}, "replicate/replicateTypes.ts", "ReplicateProject"},
+	{"replicate shot", replicate.Shot{}, "replicate/replicateTypes.ts", "ReplicateShot"},
+	{"replicate take", replicate.Take{}, "replicate/replicateTypes.ts", "ReplicateTake"},
+	{"replicate provider", replicate.Provider{}, "replicate/replicateTypes.ts", "ReplicateProvider"},
+	{"replicate providers response", replicate.ProvidersResponse{}, "replicate/replicateTypes.ts", "ReplicateProvidersResponse"},
+	{"replicate generate response", replicate.GenerateResponse{}, "replicate/replicateTypes.ts", "ReplicateGenerateResponse"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,6 +53,17 @@ type rejectTransport struct{}
 
 func (rejectTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("external requests forbidden in test")
+}
+
+func routedTLSTestClient(server *httptest.Server) *http.Client {
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.InsecureSkipVerify = true // local httptest certificate only
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	return &http.Client{Transport: transport}
 }
 
 func material(t *testing.T, s *Service, merchantID, kind, name string) store.MerchantMaterial {
@@ -255,18 +268,32 @@ func TestPrepareConfirmResumeAndLineage(t *testing.T) {
 	if _, err := os.Stat(copied); err != nil {
 		t.Fatal(err)
 	}
-	s.HypitScriptsDir = filepath.Join(t.TempDir(), "fake-scripts")
 	var calls atomic.Int32
-	s.Execute = func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
-		calls.Add(1)
-		if name != "python" || len(args) != 5 || args[0] != filepath.Join(s.HypitScriptsDir, "runninghub_batch.py") || args[1] != "--shots" || args[2] != p.ShotsPath || args[3] != "--output-dir" || args[4] != p.OutputDir {
-			t.Errorf("command: %s %v", name, args)
+	const runningHubKey = "runninghub-test-key"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+runningHubKey && r.URL.Path != "/video.mp4" {
+			t.Errorf("wrong key used: %q", r.Header.Get("Authorization"))
 		}
-		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2*time.Hour {
-			t.Error("missing timeout")
+		switch r.URL.Path {
+		case "/openapi/v2/media/upload/binary":
+			calls.Add(1)
+			io.WriteString(w, `{"data":{"fileName":"uploaded.png"}}`)
+		case "/task/openapi/ai-app/run":
+			calls.Add(1)
+			io.WriteString(w, `{"data":{"taskId":"task-1"}}`)
+		case "/openapi/v2/query":
+			calls.Add(1)
+			io.WriteString(w, `{"status":"SUCCESS","results":[{"outputType":"mp4","url":"https://93.184.216.34/video.mp4"}]}`)
+		case "/video.mp4":
+			calls.Add(1)
+			io.WriteString(w, "fake mp4")
+		default:
+			http.NotFound(w, r)
 		}
-		return nil, nil, os.WriteFile(filepath.Join(p.OutputDir, "shot-01.mp4"), []byte("fake mp4"), 0600)
-	}
+	}))
+	defer server.Close()
+	s.HTTPClient = routedTLSTestClient(server)
+	s.runtime = runtimeStub{consoleSettings.Runtime{RunningHubAPIKeys: runningHubKey, ImageAPIKey: "must-not-be-used"}}
 	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +301,7 @@ func TestPrepareConfirmResumeAndLineage(t *testing.T) {
 		t.Fatalf("duplicate confirm: %v", err)
 	}
 	job = waitJob(t, s, job.ID)
-	if job.Status != "completed" || len(job.OutputMaterialIDs) != 1 || calls.Load() != 1 {
+	if job.Status != "completed" || len(job.OutputMaterialIDs) != 1 || calls.Load() != 4 {
 		t.Fatalf("%+v calls=%d", job, calls.Load())
 	}
 	output, err := s.merchants.GetMaterial(context.Background(), job.OutputMaterialIDs[0])
@@ -299,7 +326,7 @@ func TestPrepareConfirmResumeAndLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 	job, _ = s.GetJob(context.Background(), job.ID)
-	if job.Status != "failed" || job.Error != "控制台重启时中断，请重新发起" || calls.Load() != 1 {
+	if job.Status != "failed" || job.Error != "控制台重启时中断，请重新发起" || calls.Load() != 4 {
 		t.Fatalf("%+v", job)
 	}
 }

@@ -1,0 +1,73 @@
+$ go test ./... -count=1
+ok  	video-production-console/cmd/catalog-builder	4.119s
+ok  	video-production-console/cmd/console	4.707s
+?   	video-production-console/cmd/editor-acceptance	[no test files]
+ok  	video-production-console/cmd/maintenance	3.746s
+?   	video-production-console/cmd/mintsession	[no test files]
+?   	video-production-console/cmd/remix-policy	[no test files]
+ok  	video-production-console/cmd/repair-startup	2.418s
+ok  	video-production-console/cmd/spoken-qc	0.829s
+ok  	video-production-console/internal/agentruntime	2.330s
+ok  	video-production-console/internal/agentruntime/montageplan	79.121s
+ok  	video-production-console/internal/agentruntime/montagescript	70.511s
+ok  	video-production-console/internal/agentruntime/openaicompat	4.846s
+ok  	video-production-console/internal/agentruntime/piruntime	2.627s
+ok  	video-production-console/internal/aigc	50.470s
+ok  	video-production-console/internal/app	15.179s
+ok  	video-production-console/internal/assets	4.326s
+ok  	video-production-console/internal/auth	10.910s
+ok  	video-production-console/internal/baokuan	7.960s
+ok  	video-production-console/internal/bgmlibrary	7.851s
+?   	video-production-console/internal/buildinfo	[no test files]
+ok  	video-production-console/internal/catalogbuilder	24.856s
+ok  	video-production-console/internal/codex	100.187s
+ok  	video-production-console/internal/codexapp	1.533s
+ok  	video-production-console/internal/commentinsight	2.651s
+ok  	video-production-console/internal/config	1.318s
+ok  	video-production-console/internal/conversation	51.849s
+ok  	video-production-console/internal/cover	1.768s
+ok  	video-production-console/internal/domain	1.366s
+?   	video-production-console/internal/grokvideo	[no test files]
+ok  	video-production-console/internal/httpapi	162.500s
+ok  	video-production-console/internal/imageproject	4.204s
+ok  	video-production-console/internal/imagestudio	6.684s
+ok  	video-production-console/internal/imagevideo	2.170s
+?   	video-production-console/internal/imagevideoruntime	[no test files]
+ok  	video-production-console/internal/jianyingdraft	4.718s
+?   	video-production-console/internal/localpath	[no test files]
+ok  	video-production-console/internal/logging	3.315s
+ok  	video-production-console/internal/mcpserver	3.492s
+ok  	video-production-console/internal/mediacatalog	47.652s
+?   	video-production-console/internal/medialibrary	[no test files]
+ok  	video-production-console/internal/monitor	44.842s
+ok  	video-production-console/internal/monitorai	6.979s
+ok  	video-production-console/internal/montage	5.457s
+ok  	video-production-console/internal/narration	5.903s
+?   	video-production-console/internal/obsidian	[no test files]
+ok  	video-production-console/internal/platformapi	2.881s
+ok  	video-production-console/internal/progress	3.260s
+ok  	video-production-console/internal/publishing	3.973s
+ok  	video-production-console/internal/realtime	3.290s
+ok  	video-production-console/internal/refanalysis	21.601s
+ok  	video-production-console/internal/references	20.016s
+ok  	video-production-console/internal/remixlab	19.775s
+ok  	video-production-console/internal/remixproducer	38.528s
+ok  	video-production-console/internal/replicate	16.456s
+ok  	video-production-console/internal/runninghub	5.758s
+ok  	video-production-console/internal/security	6.634s
+ok  	video-production-console/internal/settings	55.678s
+ok  	video-production-console/internal/setup	7.114s
+ok  	video-production-console/internal/skillregistry	1.112s
+ok  	video-production-console/internal/spokenlines	0.341s
+ok  	video-production-console/internal/store	238.281s
+?   	video-production-console/internal/taskcompletion	[no test files]
+ok  	video-production-console/internal/taskmodel	0.226s
+?   	video-production-console/internal/testutil/citylib	[no test files]
+ok  	video-production-console/internal/timing	0.325s
+ok  	video-production-console/internal/videoqc	5.350s
+ok  	video-production-console/internal/webui	0.286s
+ok  	video-production-console/internal/workflow	4.542s
+ok  	video-production-console/schemas	0.205s
+
+exit_code=0
+elapsed_s=336.203

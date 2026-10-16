@@ -1,0 +1,4 @@
+$ go vet ./...
+
+exit_code=0
+elapsed_s=26.922

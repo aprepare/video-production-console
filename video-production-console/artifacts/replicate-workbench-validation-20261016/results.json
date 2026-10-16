@@ -1,0 +1,71 @@
+{
+  "go-build": {
+    "command": [
+      "go",
+      "build",
+      "./..."
+    ],
+    "exit_code": 0,
+    "elapsed_s": 26.75,
+    "log": "go-build.log"
+  },
+  "go-vet": {
+    "command": [
+      "go",
+      "vet",
+      "./..."
+    ],
+    "exit_code": 0,
+    "elapsed_s": 26.922,
+    "log": "go-vet.log"
+  },
+  "go-test": {
+    "command": [
+      "go",
+      "test",
+      "./...",
+      "-count=1"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 336.203,
+    "log": "go-test.log"
+  },
+  "typescript": {
+    "command": [
+      "node",
+      "C:/Users/prepare/.codex/worktrees/视频号混剪/video-production-console/video-production-console/web/node_modules/typescript/bin/tsc",
+      "--noEmit",
+      "--strict",
+      "--target",
+      "ES2022",
+      "--skipLibCheck",
+      "web/src/replicate/replicateTypes.ts"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.5,
+    "log": "typescript.log"
+  },
+  "media-integration": {
+    "command": [
+      "go",
+      "test",
+      "./internal/replicate",
+      "-run",
+      "TestStitchRealMedia",
+      "-count=1",
+      "-v"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 10.297,
+    "log": "media-integration.log"
+  },
+  "passed_packages": 58,
+  "packages_without_tests": 11,
+  "scope": {
+    "old_migrations": 49,
+    "new_migrations": 50,
+    "migrations_1_to_49_unchanged": true,
+    "forbidden_changed_files": [],
+    "branch": "codex/replicate-qc-backend"
+  }
+}

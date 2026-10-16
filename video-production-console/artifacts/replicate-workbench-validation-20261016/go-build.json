@@ -1,0 +1,10 @@
+{
+  "command": [
+    "go",
+    "build",
+    "./..."
+  ],
+  "exit_code": 0,
+  "elapsed_s": 26.75,
+  "log": "go-build.log"
+}

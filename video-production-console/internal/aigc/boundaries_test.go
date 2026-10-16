@@ -109,14 +109,22 @@ func TestVideoFailureRedactsBeforeTailAndKeepsConfirmationBoundary(t *testing.T)
 		t.Fatal(err)
 	}
 	token := strings.Repeat("SecretToken", 60)
-	s.Execute = func(context.Context, string, ...string) ([]byte, []byte, error) {
-		return nil, []byte(strings.Repeat("旧日志", 300) + token + " tail"), errors.New("fake process failed")
-	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/openapi/v2/media/upload/binary" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"code":"AUTH_FAILED","msg":%q}`, token+" tail")
+	}))
+	defer server.Close()
+	s.HTTPClient = routedTLSTestClient(server)
+	s.runtime = runtimeStub{consoleSettings.Runtime{RunningHubAPIKeys: token}}
 	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	job = waitJob(t, s, job.ID)
-	if job.Status != "failed" || !strings.Contains(job.Error, "退出码 -1") || !strings.Contains(job.Error, "[redacted] tail") || strings.Contains(job.Error, "SecretToken") {
+	if job.Status != "failed" || !strings.Contains(job.Error, "auth_failed") || strings.Contains(job.Error, "SecretToken") {
 		t.Fatalf("%+v", job)
 	}
 	prepared, err := s.PrepareImageToVideo(context.Background(), merchantID, []string{m.ID}, "镜头推进", 3, "1:1")
@@ -182,36 +190,20 @@ func TestLineageDepthAndInputBounds(t *testing.T) {
 	}
 }
 
-func TestPythonAndScriptsOverrides(t *testing.T) {
+func TestImageToVideoRequiresRunningHubKeysBeforeClaimingJob(t *testing.T) {
 	s, _, merchantID := fixture(t)
 	m := material(t, s, merchantID, "image", "source.png")
-	dir := t.TempDir()
-	python := filepath.Join(dir, "fake-python.exe")
-	profile := filepath.Join(dir, "profile.json")
-	if err := os.WriteFile(python, []byte("not executable"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(map[string]string{"python_binary": python})
-	if err := os.WriteFile(profile, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	s.runtime = runtimeStub{consoleSettings.Runtime{PublicSettings: domain.PublicSettings{MachineProfilePath: profile}}}
-	scripts := filepath.Join(dir, "scripts")
-	t.Setenv("VIDEO_CONSOLE_HYPIT_SCRIPTS", scripts)
-	s.Execute = func(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
-		if name != python || args[0] != filepath.Join(scripts, "runninghub_batch.py") {
-			t.Errorf("%s %v", name, args)
-		}
-		return nil, nil, errors.New("fake only")
-	}
 	job, err := s.PrepareImageToVideo(context.Background(), merchantID, []string{m.ID}, "镜头推进", 5, "16:9")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "RunningHub Key") {
+		t.Fatalf("missing key error=%v", err)
 	}
-	waitJob(t, s, job.ID)
+	job, err = s.GetJob(context.Background(), job.ID)
+	if err != nil || job.Status != "awaiting_confirm" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
 }
 
 func TestSafeMaterialPathRejectsLinkedMerchantDirectory(t *testing.T) {

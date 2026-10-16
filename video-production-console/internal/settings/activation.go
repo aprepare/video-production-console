@@ -88,6 +88,8 @@ var activationPublicKeys = map[string]struct{}{
 	"volc_speech_speaker_id": {}, "volc_speech_resource_id": {},
 	"pexels_api_base_url": {}, "pixabay_api_base_url": {},
 	"analysis_base_url": {}, "analysis_model": {},
+	"runninghub_per_key_concurrency": {}, "replicate_default_provider": {},
+	"replicate_default_variants": {},
 }
 
 const reservedAnalysisSecretKey = "analysis_api_key"
@@ -168,6 +170,14 @@ func marshalActivationPublic(values map[string]string) ([]byte, error) {
 				return nil, err
 			}
 			encoded[key] = json.RawMessage(strconv.FormatBool(parsed))
+			continue
+		}
+		if key == "runninghub_per_key_concurrency" || key == "replicate_default_variants" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, err
+			}
+			encoded[key] = json.RawMessage(strconv.Itoa(parsed))
 			continue
 		}
 		raw, err := json.Marshal(value)

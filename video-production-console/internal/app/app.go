@@ -35,6 +35,7 @@ import (
 	"video-production-console/internal/references"
 	"video-production-console/internal/remixlab"
 	"video-production-console/internal/remixproducer"
+	"video-production-console/internal/replicate"
 	"video-production-console/internal/security"
 	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/setup"
@@ -298,7 +299,14 @@ func New(options Options) *App {
 			mux.Handle("/api/reference-analyses", analysesHandler)
 			mux.Handle("/api/reference-analyses/", analysesHandler)
 
-			qcService := videoqc.New(store.NewVideoQCRepository(options.DB), referenceRepo, options.Settings)
+			replicateService, replicateErr := replicate.New(store.NewReplicateRepository(options.DB), store.NewReferenceAnalysisRepository(options.DB), options.Settings, replicate.Options{ReferenceFrame: analysisService.OpenFrame})
+			qcOptions := videoqc.Options{}
+			if replicateErr == nil {
+				qcOptions.ReplicateSource = replicateService.QCSource
+			} else {
+				slog.Error("初始化复刻工作台失败")
+			}
+			qcService := videoqc.New(store.NewVideoQCRepository(options.DB), referenceRepo, options.Settings, qcOptions)
 			resumeCtx, cancelResume = context.WithTimeout(context.Background(), 10*time.Second)
 			if err := qcService.Resume(resumeCtx); err != nil {
 				slog.Error("恢复视频审核状态失败")
@@ -308,6 +316,18 @@ func New(options Options) *App {
 			mux.Handle("/api/video-qc", qcHandler)
 			mux.Handle("/api/video-qc/", qcHandler)
 			closers = append(closers, qcService.Close)
+			if replicateService != nil {
+				replicateService.SetQC(qcService)
+				resumeCtx, cancelResume = context.WithTimeout(context.Background(), 10*time.Second)
+				if err := replicateService.Resume(resumeCtx); err != nil {
+					slog.Error("恢复复刻工作台状态失败")
+				}
+				cancelResume()
+				replicateHandler := httpapi.NewReplicateHandler(replicateService)
+				mux.Handle("/api/replicate", replicateHandler)
+				mux.Handle("/api/replicate/", replicateHandler)
+				closers = append(closers, replicateService.Close)
+			}
 
 			insightService := commentinsight.New(store.NewCommentInsightRepository(options.DB), referenceRepo, options.Settings, referenceService)
 			monitorService := monitor.New(store.NewMonitorRepository(options.DB), referenceService, referenceRepo, options.Settings, monitor.Options{

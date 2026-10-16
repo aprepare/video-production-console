@@ -1309,6 +1309,7 @@ func newSettingsTestService(t *testing.T, options Options) (*Service, *sql.DB, *
 		ObsidianVault: vault, TopicCardsDir: filepath.Join(vault, "topic-cards"),
 		GrokBaseURL: "http://127.0.0.1:3030", GrokModel: "grok-test",
 		ImageModel: "gpt-image-2", ImageUseTextKey: true, MaxImageConcurrency: 3, ImageGenerationAttempts: 2, DefaultImageRatio: "3:4", DefaultImageStyle: "finance_documentary",
+		RunningHubPerKeyConcurrency: defaultRunningHubPerKeyConcurrency, ReplicateDefaultProvider: defaultReplicateProvider, ReplicateDefaultVariants: defaultReplicateVariants,
 		CodexBinaryPath: filepath.Join(root, "codex.exe"), MediaIndexPath: filepath.Join(mediaRoot, "media-index.json"),
 		MediaRoot: mediaRoot, JianyingRoot: filepath.Join(root, "jianying"),
 		PexelsAPIBaseURL: "https://api.pexels.com", PixabayAPIBaseURL: "https://pixabay.com",

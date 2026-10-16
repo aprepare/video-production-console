@@ -30,26 +30,30 @@ import (
 )
 
 const (
-	SecretGrokAPIKey       = "grok_api_key"
-	SecretRemixAPIKey      = "remix_api_key"
-	SecretCopyAPIKey       = "copy_api_key"
-	SecretPexelsAPIKey     = "pexels_api_key"
-	SecretVolcSpeechAPIKey = "volc_speech_api_key"
-	SecretAuraSTDTTsAPIKey = "aurastd_tts_api_key"
-	SecretImageAPIKey      = "image_api_key"
-	SecretImageTextAPIKey  = "image_text_api_key"
-	SecretVisionAPIKey     = "vision_api_key"
-	SecretAnalysisAPIKey   = "analysis_api_key"
-	SecretEmbeddingAPIKey  = "embedding_api_key"
-	SecretPixabayAPIKey    = "pixabay_api_key"
-	SecretPlatformAPIToken = "platform_api_token"
+	SecretGrokAPIKey        = "grok_api_key"
+	SecretRemixAPIKey       = "remix_api_key"
+	SecretCopyAPIKey        = "copy_api_key"
+	SecretPexelsAPIKey      = "pexels_api_key"
+	SecretVolcSpeechAPIKey  = "volc_speech_api_key"
+	SecretAuraSTDTTsAPIKey  = "aurastd_tts_api_key"
+	SecretImageAPIKey       = "image_api_key"
+	SecretImageTextAPIKey   = "image_text_api_key"
+	SecretVisionAPIKey      = "vision_api_key"
+	SecretAnalysisAPIKey    = "analysis_api_key"
+	SecretEmbeddingAPIKey   = "embedding_api_key"
+	SecretPixabayAPIKey     = "pixabay_api_key"
+	SecretPlatformAPIToken  = "platform_api_token"
+	SecretRunningHubAPIKeys = "runninghub_api_keys"
 
-	secretMask                     = "********"
-	defaultImageModel              = "grok-imagine-image-2.0"
-	defaultMaxImageConcurrency     = 3
-	maxImageConcurrency            = 18
-	defaultImageGenerationAttempts = 2
-	maxImageGenerationAttempts     = 4
+	secretMask                         = "********"
+	defaultImageModel                  = "grok-imagine-image-2.0"
+	defaultMaxImageConcurrency         = 3
+	maxImageConcurrency                = 18
+	defaultImageGenerationAttempts     = 2
+	maxImageGenerationAttempts         = 4
+	defaultRunningHubPerKeyConcurrency = 1
+	defaultReplicateProvider           = "runninghub_h3"
+	defaultReplicateVariants           = 1
 
 	defaultPexelsAPIBaseURL           = "https://api.pexels.com"
 	defaultPixabayAPIBaseURL          = "https://pixabay.com"
@@ -78,7 +82,7 @@ var (
 	ErrNotConfigured   = errors.New("settings are not configured")
 )
 
-var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretAnalysisAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey, SecretPlatformAPIToken}
+var secretKeys = []string{SecretGrokAPIKey, SecretRemixAPIKey, SecretCopyAPIKey, SecretPexelsAPIKey, SecretVolcSpeechAPIKey, SecretAuraSTDTTsAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretVisionAPIKey, SecretAnalysisAPIKey, SecretEmbeddingAPIKey, SecretPixabayAPIKey, SecretPlatformAPIToken, SecretRunningHubAPIKeys}
 
 type Repository interface {
 	Public(context.Context) (map[string]string, int64, error)
@@ -154,6 +158,7 @@ type Runtime struct {
 	EmbeddingAPIKey       string           `json:"-"`
 	PixabayAPIKey         string           `json:"-"`
 	PlatformAPIToken      string           `json:"-"`
+	RunningHubAPIKeys     string           `json:"-"`
 	SecretVersions        map[string]int64 `json:"-"`
 	configuredImageAPIKey string
 }
@@ -259,7 +264,13 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 		secret, err := s.repo.Secret(ctx, key)
 		switch {
 		case err == nil:
-			view.Secrets[key] = domain.SecretStatus{Configured: true, Masked: secretMask}
+			status := domain.SecretStatus{Configured: true, Masked: secretMask}
+			if key == SecretRunningHubAPIKeys {
+				if value, _, configured, readErr := s.secretValue(ctx, key); readErr == nil && configured {
+					status.Count = len(ParseRunningHubAPIKeys(value))
+				}
+			}
+			view.Secrets[key] = status
 			configuredSecretVersions[key] = secret.Version
 		case errors.Is(err, store.ErrSecretNotFound):
 			view.Secrets[key] = domain.SecretStatus{}
@@ -346,6 +357,7 @@ func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secr
 
 func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	configured = withImageDefaults(configured)
+	configured = withReplicateDefaults(configured)
 	s.activeMu.Lock()
 	defer s.activeMu.Unlock()
 	if s.active == nil {
@@ -372,6 +384,9 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.ImageStream = configured.ImageStream
 	s.active.ImageBaseURL = effectiveImageBaseURL(configured.ImageBaseURL, configured.ImageTextBaseURL)
 	s.active.ImageAPIKey = effectiveImageAPIKey(configured.ImageUseTextKey, s.active.configuredImageAPIKey, s.active.ImageTextAPIKey)
+	s.active.RunningHubPerKeyConcurrency = configured.RunningHubPerKeyConcurrency
+	s.active.ReplicateDefaultProvider = configured.ReplicateDefaultProvider
+	s.active.ReplicateDefaultVariants = configured.ReplicateDefaultVariants
 	// Montage style and the BGM library directory only affect future task
 	// manifests, so they hot-apply without a restart.
 	s.active.MontageStyle = configured.MontageStyle
@@ -432,7 +447,7 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 	if s.active == nil {
 		return
 	}
-	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken, SecretAnalysisAPIKey, SecretImageAPIKey, SecretImageTextAPIKey} {
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken, SecretAnalysisAPIKey, SecretImageAPIKey, SecretImageTextAPIKey, SecretRunningHubAPIKeys} {
 		input, ok := secrets[key]
 		if !ok || input == "" {
 			continue
@@ -454,6 +469,8 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 			s.active.configuredImageAPIKey = value
 		case SecretImageTextAPIKey:
 			s.active.ImageTextAPIKey = value
+		case SecretRunningHubAPIKeys:
+			s.active.RunningHubAPIKeys = value
 		}
 		if s.active.SecretVersions == nil {
 			s.active.SecretVersions = map[string]int64{}
@@ -577,6 +594,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 			runtime.PixabayAPIKey = value
 		case SecretPlatformAPIToken:
 			runtime.PlatformAPIToken = value
+		case SecretRunningHubAPIKeys:
+			runtime.RunningHubAPIKeys = value
 		}
 		runtime.SecretVersions[key] = version
 	}
@@ -666,6 +685,9 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.ImageTextModel, active.ImageTextModel = "", ""
 	configured.ImageTextReasoningEffort, active.ImageTextReasoningEffort = "", ""
 	configured.ImageStream, active.ImageStream = false, false
+	configured.RunningHubPerKeyConcurrency, active.RunningHubPerKeyConcurrency = 0, 0
+	configured.ReplicateDefaultProvider, active.ReplicateDefaultProvider = "", ""
+	configured.ReplicateDefaultVariants, active.ReplicateDefaultVariants = 0, 0
 	clearVoiceHotSettings(&configured)
 	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
@@ -832,11 +854,21 @@ func validatePublic(value domain.PublicSettings) error {
 	}
 	value = withImageDefaults(value)
 	value = withMediaIntelligenceDefaults(value)
+	value = withReplicateDefaults(value)
 	if value.MaxCodexConcurrency < 1 || value.MaxCodexConcurrency > 4 {
 		return invalid("max_codex_concurrency")
 	}
 	if value.MaxImageConcurrency < 1 || value.MaxImageConcurrency > maxImageConcurrency {
 		return invalid("max_image_concurrency")
+	}
+	if value.RunningHubPerKeyConcurrency < 1 || value.RunningHubPerKeyConcurrency > 5 {
+		return invalid("runninghub_per_key_concurrency")
+	}
+	if value.ReplicateDefaultProvider != "runninghub_h3" && value.ReplicateDefaultProvider != "grok" {
+		return invalid("replicate_default_provider")
+	}
+	if value.ReplicateDefaultVariants < 1 || value.ReplicateDefaultVariants > 4 {
+		return invalid("replicate_default_variants")
 	}
 	normalizedModel, err := taskmodel.Normalize(taskmodel.Selection{Model: value.CodexDefaultModel, ReasoningEffort: taskmodel.DefaultReasoningEffort})
 	if err != nil || normalizedModel.Model != value.CodexDefaultModel {
@@ -1225,6 +1257,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 	value = withImageDefaults(value)
 	value = withMediaIntelligenceDefaults(value)
 	value = withAuraSTDDefaults(value)
+	value = withReplicateDefaults(value)
 	workspaceRoots, _ := json.Marshal(value.CodexWorkspaceRoots)
 	return map[string]string{
 		"listen_addr": value.ListenAddr, "data_root": value.DataRoot,
@@ -1243,11 +1276,14 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
 		"image_use_text_key":  strconv.FormatBool(value.ImageUseTextKey),
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
-		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
-		"image_stream":                strconv.FormatBool(value.ImageStream),
-		"max_image_concurrency":       strconv.Itoa(value.MaxImageConcurrency),
-		"image_generation_attempts":   strconv.Itoa(value.ImageGenerationAttempts),
-		"default_image_ratio":         value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
+		"image_text_reasoning_effort":    value.ImageTextReasoningEffort,
+		"image_stream":                   strconv.FormatBool(value.ImageStream),
+		"max_image_concurrency":          strconv.Itoa(value.MaxImageConcurrency),
+		"image_generation_attempts":      strconv.Itoa(value.ImageGenerationAttempts),
+		"runninghub_per_key_concurrency": strconv.Itoa(value.RunningHubPerKeyConcurrency),
+		"replicate_default_provider":     value.ReplicateDefaultProvider,
+		"replicate_default_variants":     strconv.Itoa(value.ReplicateDefaultVariants),
+		"default_image_ratio":            value.DefaultImageRatio, "default_image_style": value.DefaultImageStyle,
 		"codex_binary_path": value.CodexBinaryPath, "media_index_path": value.MediaIndexPath,
 		"media_root": value.MediaRoot, "jianying_root": value.JianyingRoot,
 		"machine_profile_path":     value.MachineProfilePath,
@@ -1318,6 +1354,35 @@ func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
 		value.DefaultImageStyle = defaultImageStyle
 	}
 	return value
+}
+
+func withReplicateDefaults(value domain.PublicSettings) domain.PublicSettings {
+	if value.RunningHubPerKeyConcurrency == 0 {
+		value.RunningHubPerKeyConcurrency = defaultRunningHubPerKeyConcurrency
+	}
+	if strings.TrimSpace(value.ReplicateDefaultProvider) == "" {
+		value.ReplicateDefaultProvider = defaultReplicateProvider
+	}
+	if value.ReplicateDefaultVariants == 0 {
+		value.ReplicateDefaultVariants = defaultReplicateVariants
+	}
+	return value
+}
+
+// ParseRunningHubAPIKeys normalizes the multiline secret without retaining
+// blank or duplicate keys. The original secret is still stored encrypted.
+func ParseRunningHubAPIKeys(value string) []string {
+	seen := map[string]bool{}
+	keys := make([]string, 0)
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		key := strings.TrimSpace(line)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func effectiveImageAPIKey(useTextKey bool, imageKey, textKey string) string {
@@ -1469,6 +1534,18 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 	if imageAttempts < 1 || imageAttempts > maxImageGenerationAttempts {
 		imageAttempts = defaultImageGenerationAttempts
 	}
+	runningHubConcurrency, _ := strconv.Atoi(values["runninghub_per_key_concurrency"])
+	if runningHubConcurrency < 1 || runningHubConcurrency > 5 {
+		runningHubConcurrency = defaultRunningHubPerKeyConcurrency
+	}
+	replicateProvider := strings.TrimSpace(values["replicate_default_provider"])
+	if replicateProvider != "runninghub_h3" && replicateProvider != "grok" {
+		replicateProvider = defaultReplicateProvider
+	}
+	replicateVariants, _ := strconv.Atoi(values["replicate_default_variants"])
+	if replicateVariants < 1 || replicateVariants > 4 {
+		replicateVariants = defaultReplicateVariants
+	}
 	imageModel := strings.TrimSpace(values["image_model"])
 	if imageModel == "" {
 		imageModel = defaultImageModel
@@ -1528,11 +1605,14 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		ModelOptions:         normalizeModelOptions(values["model_options"]),
 		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel, ImageUseTextKey: imageUseTextKey,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
-		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
-		ImageStream:              imageStream,
-		MaxImageConcurrency:      imageConcurrency,
-		ImageGenerationAttempts:  imageAttempts,
-		DefaultImageRatio:        imageRatio, DefaultImageStyle: imageStyle,
+		ImageTextReasoningEffort:    strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
+		ImageStream:                 imageStream,
+		MaxImageConcurrency:         imageConcurrency,
+		ImageGenerationAttempts:     imageAttempts,
+		RunningHubPerKeyConcurrency: runningHubConcurrency,
+		ReplicateDefaultProvider:    replicateProvider,
+		ReplicateDefaultVariants:    replicateVariants,
+		DefaultImageRatio:           imageRatio, DefaultImageStyle: imageStyle,
 		CodexBinaryPath: values["codex_binary_path"], MediaIndexPath: values["media_index_path"],
 		MediaRoot: values["media_root"], JianyingRoot: values["jianying_root"],
 		MachineProfilePath: values["machine_profile_path"],

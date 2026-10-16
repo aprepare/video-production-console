@@ -16,12 +16,13 @@ type Check struct {
 }
 
 type Issue struct {
-	FrameIndex  int     `json:"frame_index"`
-	TimeS       float64 `json:"time_s"`
-	Category    string  `json:"category"`
-	Severity    string  `json:"severity"`
-	Description string  `json:"description"`
-	Suggestion  string  `json:"suggestion"`
+	ShotPosition int     `json:"shot_position,omitempty"`
+	FrameIndex   int     `json:"frame_index"`
+	TimeS        float64 `json:"time_s"`
+	Category     string  `json:"category"`
+	Severity     string  `json:"severity"`
+	Description  string  `json:"description"`
+	Suggestion   string  `json:"suggestion"`
 }
 
 type Report struct {

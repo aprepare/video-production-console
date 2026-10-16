@@ -1567,6 +1567,91 @@ CREATE TABLE video_qc_checks (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_video_qc_created ON video_qc_checks(created_at DESC);`,
+	`CREATE TABLE replicate_projects (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  reference_id TEXT NOT NULL DEFAULT '',
+  analysis_id TEXT NOT NULL DEFAULT '',
+  product TEXT NOT NULL DEFAULT '',
+  style_lock TEXT NOT NULL DEFAULT '',
+  ratio TEXT NOT NULL DEFAULT '9:16' CHECK (ratio IN ('9:16','16:9','1:1','3:4','4:3')),
+  video_provider TEXT NOT NULL DEFAULT 'runninghub_h3' CHECK (video_provider IN ('runninghub_h3','grok')),
+  image_model TEXT NOT NULL DEFAULT '',
+  variants INTEGER NOT NULL DEFAULT 1 CHECK (variants BETWEEN 1 AND 4),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','generating','ready','stitching','stitched','failed')),
+  final_path TEXT NOT NULL DEFAULT '',
+  final_duration_s REAL NOT NULL DEFAULT 0,
+  qc_id TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_replicate_projects_created ON replicate_projects(created_at DESC);
+CREATE TABLE replicate_shots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES replicate_projects(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  source_start_s REAL NOT NULL DEFAULT 0,
+  source_end_s REAL NOT NULL DEFAULT 0,
+  duration_s INTEGER NOT NULL DEFAULT 6,
+  first_frame_prompt TEXT NOT NULL DEFAULT '',
+  motion_prompt TEXT NOT NULL DEFAULT '',
+  negative TEXT NOT NULL DEFAULT '',
+  keep TEXT NOT NULL DEFAULT '',
+  first_frame_path TEXT NOT NULL DEFAULT '',
+  first_frame_source TEXT NOT NULL DEFAULT '' CHECK (first_frame_source IN ('','generated','uploaded','reference_frame')),
+  first_frame_status TEXT NOT NULL DEFAULT 'none' CHECK (first_frame_status IN ('none','generating','ready','failed')),
+  first_frame_error TEXT NOT NULL DEFAULT '',
+  selected_take_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, position)
+);
+CREATE TABLE replicate_takes (
+  id TEXT PRIMARY KEY,
+  shot_id TEXT NOT NULL REFERENCES replicate_shots(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','submitting','running','succeeded','failed','canceled')),
+  provider_task_id TEXT NOT NULL DEFAULT '',
+  key_slot INTEGER NOT NULL DEFAULT -1,
+  path TEXT NOT NULL DEFAULT '',
+  duration_s REAL NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  cost_note TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_replicate_takes_shot ON replicate_takes(shot_id, created_at);
+
+CREATE TABLE video_qc_checks_v50 (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL CHECK (source IN ('upload','reference','image_video_job','replicate','replicate_take')),
+  source_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  product TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),
+  duration_s REAL NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  frame_count INTEGER NOT NULL DEFAULT 0,
+  verdict TEXT NOT NULL DEFAULT '',
+  score INTEGER NOT NULL DEFAULT 0,
+  report_json TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO video_qc_checks_v50 (id,source,source_id,title,product,model,status,duration_s,width,height,frame_count,verdict,score,report_json,error,created_at,updated_at)
+SELECT id,source,source_id,title,product,model,status,duration_s,width,height,frame_count,verdict,score,report_json,error,created_at,updated_at
+FROM video_qc_checks;
+DROP TABLE video_qc_checks;
+ALTER TABLE video_qc_checks_v50 RENAME TO video_qc_checks;
+CREATE INDEX idx_video_qc_created ON video_qc_checks(created_at DESC);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

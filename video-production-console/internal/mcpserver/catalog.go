@@ -27,12 +27,65 @@ func Catalog() []Tool {
 	tools = append(tools, accountTools()...)
 	tools = append(tools, merchantTools()...)
 	tools = append(tools, referenceTools()...)
+	tools = append(tools, replicateTools()...)
 	tools = append(tools, remixTools()...)
 	tools = append(tools, productionTools()...)
 	tools = append(tools, projectTools()...)
 	tools = append(tools, imageStudioTools()...)
 	tools = append(tools, systemTools()...)
 	return tools
+}
+
+func replicateTools() []Tool {
+	return []Tool{
+		{
+			Name:        "create_replicate_project",
+			Description: "从已完成的对标拆解创建 AI 复刻项目；也可用 blank=true 和 title 新建空白项目。",
+			Method:      http.MethodPost,
+			Path:        "/api/replicate",
+			Params: map[string]Param{
+				"reference_id":   str("对标素材 id"),
+				"analysis_id":    str("已完成且含复刻提示词的拆解 id"),
+				"product":        str("用户自己的产品或场景描述"),
+				"ratio":          {Type: "string", Description: "画面比例", Enum: []string{"9:16", "16:9", "1:1", "3:4", "4:3"}},
+				"video_provider": {Type: "string", Description: "视频模型供应商", Enum: []string{"runninghub_h3", "grok"}},
+				"image_model":    str("首帧图片模型；空值使用系统默认模型"),
+				"variants":       integer("每个镜头默认生成版本数，1–4"),
+				"blank":          boolean("新建空白项目"),
+				"title":          str("空白项目标题"),
+			},
+		},
+		{
+			Name:        "generate_replicate_shots",
+			Description: "为复刻项目的指定镜头并行生成视频版本；shot_ids 为空时生成全部已有首帧的镜头。",
+			Method:      http.MethodPost,
+			Path:        "/api/replicate/{id}/generate",
+			Confirm:     "会调用视频模型（花钱）",
+			Params: map[string]Param{
+				"id":       pathID("复刻项目 id"),
+				"shot_ids": strList("要生成的镜头 id；空数组表示全部"),
+				"variants": integer("每个镜头生成版本数，0 使用项目默认值"),
+				"provider": {Type: "string", Description: "本次使用的视频模型；空值使用项目默认值", Enum: []string{"runninghub_h3", "grok"}},
+			},
+		},
+		{
+			Name:        "stitch_replicate",
+			Description: "按镜头顺序异步拼接每个镜头已选中的视频版本。",
+			Method:      http.MethodPost,
+			Path:        "/api/replicate/{id}/stitch",
+			Params: map[string]Param{
+				"id":    pathID("复刻项目 id"),
+				"audio": {Type: "string", Description: "音频策略；本期只支持 none", Enum: []string{"none"}},
+			},
+		},
+		{
+			Name:        "get_replicate_project",
+			Description: "读取 AI 复刻项目详情、镜头、生成版本和整体进度。",
+			Method:      http.MethodGet,
+			Path:        "/api/replicate/{id}",
+			Params:      map[string]Param{"id": pathID("复刻项目 id")},
+		},
+	}
 }
 
 func imageStudioTools() []Tool {

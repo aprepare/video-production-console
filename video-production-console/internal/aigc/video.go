@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"video-production-console/internal/runninghub"
+	consoleSettings "video-production-console/internal/settings"
 	"video-production-console/internal/store"
 )
 
@@ -197,51 +198,44 @@ func (s *Service) ConfirmImageToVideo(ctx context.Context, jobID string) (store.
 	if err != nil {
 		return job, err
 	}
-	python := pythonBinary(rt.MachineProfilePath)
-	scripts := s.HypitScriptsDir
-	if env := strings.TrimSpace(os.Getenv("VIDEO_CONSOLE_HYPIT_SCRIPTS")); env != "" {
-		scripts = env
+	keys := consoleSettings.ParseRunningHubAPIKeys(rt.RunningHubAPIKeys)
+	if len(keys) == 0 {
+		return job, errors.New("还没配置 RunningHub Key，请到设置填写")
 	}
 	if err = s.jobs.ClaimJob(ctx, job.ID); err != nil {
 		return job, err
 	}
 	job.Status = "running"
-	go s.runVideo(job, p, parents, python, filepath.Join(scripts, "runninghub_batch.py"), rt.ImageAPIKey)
+	go s.runVideo(job, p, shots, parents, keys)
 	return job, nil
 }
 
-func pythonBinary(profilePath string) string {
-	if strings.TrimSpace(profilePath) == "" {
-		return "python"
-	}
-	raw, err := os.ReadFile(profilePath)
-	if err != nil {
-		return "python"
-	}
-	var profile struct {
-		PythonBinary string `json:"python_binary"`
-	}
-	if json.Unmarshal(raw, &profile) != nil {
-		return "python"
-	}
-	candidate := strings.TrimSpace(profile.PythonBinary)
-	if candidate == "" || !filepath.IsAbs(candidate) {
-		return "python"
-	}
-	if info, err := os.Stat(candidate); err != nil || !info.Mode().IsRegular() {
-		return "python"
-	}
-	return candidate
-}
-
-func (s *Service) runVideo(job store.AIGCJob, p videoParams, parents map[string]store.MerchantMaterial, python, script, key string) {
+func (s *Service) runVideo(job store.AIGCJob, p videoParams, shots []shot, parents map[string]store.MerchantMaterial, keys []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	_, stderr, processErr := s.Execute(ctx, python, script, "--shots", p.ShotsPath, "--output-dir", p.OutputDir)
+	failures := []string{}
+	httpClient, ok := s.HTTPClient.(*http.Client)
+	if !ok {
+		resultCtx, resultCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer resultCancel()
+		_ = s.finish(resultCtx, job.ID, nil, []string{"RunningHub HTTP 客户端不可用"})
+		return
+	}
+	client := runninghub.Client{HTTP: httpClient}
+	for _, item := range shots {
+		imagePath := filepath.Join(filepath.Dir(p.ShotsPath), item.Image)
+		image, err := os.ReadFile(imagePath)
+		if err != nil {
+			failures = append(failures, item.Name+"：读取首帧失败")
+			continue
+		}
+		if err := s.generateRunningHubVideo(ctx, client, keys, item, p.Aspect, image, filepath.Join(p.OutputDir, item.Name+".mp4")); err != nil {
+			failures = append(failures, item.Name+"："+redact(err.Error(), keys...))
+		}
+	}
 	resultCtx, resultCancel := context.WithTimeout(context.Background(), time.Minute)
 	defer resultCancel()
 	ids := []string{}
-	failures := []string{}
 	files, err := filepath.Glob(filepath.Join(p.OutputDir, "*.mp4"))
 	if err != nil {
 		failures = append(failures, "扫描生成视频失败")
@@ -279,28 +273,89 @@ func (s *Service) runVideo(job store.AIGCJob, p videoParams, parents map[string]
 	if len(ids) < p.EstimatedShots {
 		failures = append(failures, fmt.Sprintf("已生成 %d/%d 个视频", len(ids), p.EstimatedShots))
 	}
-	if processErr != nil || len(ids) == 0 {
-		code := 0
-		if processErr != nil {
-			code = -1
-			var exitErr *exec.ExitError
-			if errors.As(processErr, &exitErr) {
-				code = exitErr.ExitCode()
-			}
-		}
-		diagnostic := redact(string(stderr), key)
-		if len(diagnostic) > 500 {
-			diagnostic = diagnostic[len(diagnostic)-500:]
-			for len(diagnostic) > 0 && !utf8.ValidString(diagnostic) {
-				diagnostic = diagnostic[1:]
-			}
-		}
-		failures = append(failures, fmt.Sprintf("视频生成进程退出码 %d：%s", code, diagnostic))
-	}
 	for i := range failures {
-		failures[i] = redact(failures[i], key)
+		failures[i] = redact(failures[i], keys...)
 	}
 	if err := s.finish(resultCtx, job.ID, ids, failures); err != nil {
 		_ = s.jobs.UpdateJobStatus(resultCtx, job.ID, "failed", "保存视频作业结果失败")
+	}
+}
+
+func (s *Service) generateRunningHubVideo(ctx context.Context, client runninghub.Client, keys []string, item shot, aspect string, image []byte, output string) error {
+	attempts := len(keys)
+	if attempts > 2 {
+		attempts = 2
+	}
+	var lastErr error
+	for index := 0; index < attempts; index++ {
+		key := keys[index]
+		uploaded, err := client.Upload(ctx, key, filepath.Base(item.Image), image)
+		if err != nil {
+			lastErr = err
+			if runninghub.ShouldDisable(err) {
+				continue
+			}
+			break
+		}
+		nodes, err := runninghub.BuildH3Nodes(runninghub.H3Request{Prompt: item.Prompt, DurationS: item.Duration, Ratio: aspect, PromptOptimize: true}, uploaded)
+		if err != nil {
+			return err
+		}
+		taskID, err := client.RunApp(ctx, key, runninghub.H3WebappID, nodes, "default")
+		if err != nil {
+			lastErr = err
+			if runninghub.ShouldDisable(err) {
+				continue
+			}
+			break
+		}
+		// Once a task ID exists, never submit another paid task. Query and
+		// download must continue with the same key that created the task.
+		return pollAndDownloadRunningHub(ctx, client, key, taskID, output)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("RunningHub generation failed")
+	}
+	return lastErr
+}
+
+func pollAndDownloadRunningHub(ctx context.Context, client runninghub.Client, key, taskID, output string) error {
+	for {
+		status, err := client.Query(ctx, key, taskID)
+		if err != nil {
+			return err
+		}
+		switch strings.ToUpper(status.State) {
+		case "SUCCESS":
+			videoURL := status.VideoURL()
+			if videoURL == "" {
+				return errors.New("RunningHub 成功响应没有 MP4")
+			}
+			temporary := output + ".download"
+			file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			err = client.Download(ctx, videoURL, file, 2<<30)
+			closeErr := file.Close()
+			if err = errors.Join(err, closeErr); err != nil {
+				_ = os.Remove(temporary)
+				return err
+			}
+			if err := os.Rename(temporary, output); err != nil {
+				_ = os.Remove(temporary)
+				return err
+			}
+			return nil
+		case "FAILED", "FAILURE", "CANCELED":
+			return fmt.Errorf("RunningHub 任务%s", strings.ToLower(status.State))
+		}
+		timer := time.NewTimer(20 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }

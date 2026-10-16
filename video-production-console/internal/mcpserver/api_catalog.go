@@ -75,6 +75,29 @@ GET /api/video-qc/{id} | 审核详情（报告与帧列表）
 GET /api/video-qc/{id}/frames/{n} | 第 n 张审核帧 JPEG
 GET /api/video-qc/{id}/video | 上传来源的原视频（支持 Range）
 DELETE /api/video-qc/{id} | 删除审核记录及文件 | !
+# AI 复刻工作台
+GET /api/replicate/providers | 视频模型供应商及配置状态
+POST /api/replicate | 新建复刻项目 {reference_id, analysis_id, product, ratio, video_provider, image_model, variants} 或 {blank, title}
+GET /api/replicate | 复刻项目列表 ?limit
+GET /api/replicate/{id} | 复刻项目详情
+PATCH /api/replicate/{id} | 修改复刻项目 {title, product, style_lock, ratio, video_provider, image_model, variants}
+DELETE /api/replicate/{id} | 删除复刻项目及文件 | !
+POST /api/replicate/{id}/shots | 新增镜头 {purpose, duration_s, first_frame_prompt, motion_prompt, negative, keep, after_position}
+PATCH /api/replicate/shots/{shot_id} | 修改镜头
+DELETE /api/replicate/shots/{shot_id} | 删除镜头及其版本 | !
+POST /api/replicate/{id}/shots/reorder | 调整镜头顺序 {shot_ids}
+POST /api/replicate/{id}/first-frames | 批量生成首帧 {shot_ids} | $
+POST /api/replicate/shots/{shot_id}/first-frame | 上传镜头首帧（multipart file） | ↑
+POST /api/replicate/shots/{shot_id}/first-frame/reference | 使用拆解关键帧 {frame_index}
+GET /api/replicate/shots/{shot_id}/first-frame | 获取镜头首帧
+POST /api/replicate/{id}/generate | 批量生成镜头视频 {shot_ids, variants, provider} | $
+POST /api/replicate/takes/{take_id}/select | 选中镜头版本
+POST /api/replicate/takes/{take_id}/cancel | 取消镜头版本任务
+DELETE /api/replicate/takes/{take_id} | 删除镜头版本及文件 | !
+GET /api/replicate/takes/{take_id}/video | 获取镜头版本视频（支持 Range）
+POST /api/replicate/{id}/stitch | 拼接选中版本 {audio} | $
+GET /api/replicate/{id}/final | 获取复刻成片（支持 Range，download=1 下载）
+POST /api/replicate/{id}/qc | 发起成片质检 {model} | $
 # 二创：实验与运行
 GET /api/remix-lab/defaults | 创作台默认配置与模型预设
 PUT /api/remix-lab/presets | 保存模型槽位预设 {slots[]}

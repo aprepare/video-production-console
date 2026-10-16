@@ -1,0 +1,4 @@
+$ node C:/Users/prepare/.codex/worktrees/视频号混剪/video-production-console/video-production-console/web/node_modules/typescript/bin/tsc --noEmit --strict --target ES2022 --skipLibCheck web/src/replicate/replicateTypes.ts
+
+exit_code=0
+elapsed_s=0.5

@@ -34,6 +34,9 @@ type PublicSettings struct {
 	ImageStream                 bool     `json:"image_stream"`
 	MaxImageConcurrency         int      `json:"max_image_concurrency"`
 	ImageGenerationAttempts     int      `json:"image_generation_attempts"`
+	RunningHubPerKeyConcurrency int      `json:"runninghub_per_key_concurrency"`
+	ReplicateDefaultProvider    string   `json:"replicate_default_provider"`
+	ReplicateDefaultVariants    int      `json:"replicate_default_variants"`
 	DefaultImageRatio           string   `json:"default_image_ratio"`
 	DefaultImageStyle           string   `json:"default_image_style"`
 	CodexBinaryPath             string   `json:"codex_binary_path"`
@@ -278,6 +281,7 @@ func (s MontageStyle) CaptionTransformY() float64 {
 type SecretStatus struct {
 	Configured bool   `json:"configured"`
 	Masked     string `json:"masked"`
+	Count      int    `json:"count,omitempty"`
 }
 
 type SkillFileSnapshot struct {

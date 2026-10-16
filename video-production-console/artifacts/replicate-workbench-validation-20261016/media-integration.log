@@ -1,0 +1,8 @@
+$ go test ./internal/replicate -run TestStitchRealMedia -count=1 -v
+=== RUN   TestStitchRealMedia
+--- PASS: TestStitchRealMedia (6.01s)
+PASS
+ok  	video-production-console/internal/replicate	6.821s
+
+exit_code=0
+elapsed_s=10.297

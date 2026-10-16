@@ -1,0 +1,14 @@
+{
+  "command": [
+    "go",
+    "test",
+    "./internal/replicate",
+    "-run",
+    "TestStitchRealMedia",
+    "-count=1",
+    "-v"
+  ],
+  "exit_code": 0,
+  "elapsed_s": 10.297,
+  "log": "media-integration.log"
+}

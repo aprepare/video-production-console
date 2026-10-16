@@ -31,6 +31,7 @@ var publicSettingKeys = map[string]struct{}{
 	"image_text_reasoning_effort": {},
 	"image_stream":                {},
 	"max_image_concurrency":       {}, "image_generation_attempts": {}, "default_image_ratio": {}, "default_image_style": {},
+	"runninghub_per_key_concurrency": {}, "replicate_default_provider": {}, "replicate_default_variants": {},
 	"media_index_path": {}, "media_root": {}, "jianying_root": {},
 	"machine_profile_path": {}, "app_server_enabled": {}, "codex_workspace_roots": {}, "codex_task_project_root": {},
 	"volc_speech_speaker_id": {}, "volc_speech_resource_id": {},

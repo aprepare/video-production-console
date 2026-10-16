@@ -40,10 +40,11 @@ type Input struct {
 }
 
 type Options struct {
-	MediaLocator refanalysis.MediaLocator
-	Inspect      func(context.Context, string, string, string) (refanalysis.VideoInfo, []float64, error)
-	ExtractFrame func(context.Context, string, string, float64) ([]byte, error)
-	HTTPClient   refanalysis.HTTPClient
+	ReplicateSource func(context.Context, string, string) (ReplicateMedia, error)
+	MediaLocator    refanalysis.MediaLocator
+	Inspect         func(context.Context, string, string, string) (refanalysis.VideoInfo, []float64, error)
+	ExtractFrame    func(context.Context, string, string, float64) ([]byte, error)
+	HTTPClient      refanalysis.HTTPClient
 }
 
 type runningJob struct {
@@ -137,6 +138,9 @@ func (s *Service) Start(ctx context.Context, in Input) (Check, error) {
 	if err := validateInput(in); err != nil {
 		return Check{}, err
 	}
+	if in.Source == "replicate" || in.Source == "replicate_take" {
+		return s.startReplicate(ctx, in)
+	}
 	if in.Source == "image_video_job" {
 		return Check{}, ErrUnsupportedSource
 	}
@@ -216,7 +220,7 @@ func (s *Service) StartUpload(ctx context.Context, in Input, filename string, re
 	return a, err
 }
 
-func (s *Service) enqueue(ctx context.Context, a store.VideoQCCheck, rt settings.Runtime, cfg refanalysis.ModelConfig, video string) (Check, error) {
+func (s *Service) enqueue(ctx context.Context, a store.VideoQCCheck, rt settings.Runtime, cfg refanalysis.ModelConfig, video string, ranges ...[]ShotRange) (Check, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -245,7 +249,7 @@ func (s *Service) enqueue(ctx context.Context, a store.VideoQCCheck, rt settings
 			defer func() { <-s.slots }()
 			// Queue time does not consume the running task's eight minute budget.
 			runCtx, cancelRun := context.WithTimeout(jobCtx, s.taskTimeout)
-			err = s.run(runCtx, a, rt, cfg, video)
+			err = s.run(runCtx, a, rt, cfg, video, ranges...)
 			cancelRun()
 		case <-jobCtx.Done():
 			err = jobCtx.Err()
@@ -257,7 +261,7 @@ func (s *Service) enqueue(ctx context.Context, a store.VideoQCCheck, rt settings
 	return Check{VideoQCCheck: a, Frames: []Frame{}}, nil
 }
 
-func (s *Service) run(ctx context.Context, a store.VideoQCCheck, rt settings.Runtime, cfg refanalysis.ModelConfig, video string) error {
+func (s *Service) run(ctx context.Context, a store.VideoQCCheck, rt settings.Runtime, cfg refanalysis.ModelConfig, video string, ranges ...[]ShotRange) error {
 	if err := s.repo.MarkRunning(ctx, a.ID); err != nil {
 		return err
 	}
@@ -304,6 +308,12 @@ func (s *Service) run(ctx context.Context, a store.VideoQCCheck, rt settings.Run
 	result, err := s.client.Check(ctx, cfg, info, frames, a.Product)
 	if err != nil {
 		return err
+	}
+	for i := range result.Report.Issues {
+		result.Report.Issues[i].ShotPosition = 0
+		if a.Source == "replicate" && len(ranges) > 0 {
+			result.Report.Issues[i].ShotPosition = shotAt(ranges[0], result.Report.Issues[i].TimeS)
+		}
 	}
 	report, err := json.Marshal(result.Report)
 	if err != nil {
@@ -409,7 +419,7 @@ func (s *Service) OpenVideo(ctx context.Context, id string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Source != "upload" {
+	if a.Source != "upload" && a.Source != "replicate" && a.Source != "replicate_take" {
 		return nil, ErrMediaNotFound
 	}
 	dir, err := s.directory(ctx, id)
