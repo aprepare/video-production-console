@@ -72,7 +72,7 @@ export function generationLabel(generation: ImageGeneration) {
   const ready = generation.outputs.filter((output) => output.status === "ready").length;
   switch (generation.status) {
     case "queued": return "排队中";
-    case "running": return ready ? `已出 ${ready}/${generation.count}` : generation.enhance && !generation.final_prompt ? "正在扩写提示词" : "正在出图";
+    case "running": return ready ? `已出 ${ready}/${generation.count}` : "正在出图";
     case "completed": return `${ready} 张`;
     case "partial": return `出了 ${ready}/${generation.count} 张`;
     default: return "失败";
