@@ -21,7 +21,7 @@ type Props = {
 const workspaces = [
   { id: "references", href: "/references", label: "对标采集" },
   { id: "remix", href: "/", label: "文案二创" },
-  { id: "montage", href: "/projects", label: "混剪" },
+  { id: "montage", href: "/projects", label: "AI 混剪" },
   { id: "replicate", href: "/replicate", label: "AI 复刻" },
   { id: "image", href: "/image-projects", label: "图文制作" },
   { id: "ai-access", href: "/ai-access", label: "MCP 服务" },

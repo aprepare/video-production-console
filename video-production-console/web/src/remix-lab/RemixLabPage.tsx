@@ -900,10 +900,10 @@ export function RemixLabPage({
             <PenLine size={18} strokeWidth={2} />
           </span>
           <div>
-            <span className="eyebrow">{montageSection ? (selectedProjectID && projectView ? "创作工作室 / 混剪 / 项目" : "创作工作室 / 混剪") : "创作工作室 / 文案二创"}</span>
+            <span className="eyebrow">{montageSection ? (selectedProjectID && projectView ? "创作工作室 / AI 混剪 / 项目" : "创作工作室 / AI 混剪") : "创作工作室 / 文案二创"}</span>
             {/* 打开项目后页头跟着切换；h1 的可访问名称保留「文案创作台」，
                 让不打开项目的页面（历史、工作流、实验）仍按原名定位。 */}
-            <h1>{montageSection ? (selectedProjectID && projectView ? "混剪项目" : "混剪") : "文案二创"}</h1>
+            <h1>{montageSection ? (selectedProjectID && projectView ? "AI 混剪项目" : "AI 混剪") : "文案二创"}</h1>
             <p>{montageSection ? (selectedProjectID && projectView ? "口播稿、配音、字幕和剪映草稿，按顺序推进。" : "定稿后的文案在这里配音、混剪，出剪映草稿。") : "贴入对标原文，按账号风格改写成你的文案，审稿后定稿。"}</p>
           </div>
           <nav className="remix-lab-account-switch" aria-label="账号">

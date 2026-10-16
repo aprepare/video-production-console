@@ -313,7 +313,7 @@ test("montage board lists finished copy projects and filters them", async ({ pag
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/projects");
   await expect(page.getByRole("heading", { name: /混剪/, level: 1 })).toBeVisible();
-  await expect(page.getByRole("link", { name: "混剪" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "AI 混剪" })).toHaveAttribute("aria-current", "page");
   const board = page.getByRole("region", { name: "混剪项目" });
   await expect(board.getByRole("listitem")).toHaveCount(4);
   await board.getByRole("tab", { name: "已发布" }).click();
