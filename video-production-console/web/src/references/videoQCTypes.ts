@@ -5,6 +5,7 @@ export type VideoQCIssue = {
   severity: 'high' | 'medium' | 'low';
   description: string;
   suggestion: string;
+  shot_position?: number;
 };
 
 export type VideoQCReport = {
@@ -21,7 +22,7 @@ export type VideoQCFrame = {
 
 export type VideoQCCheck = {
   id: string;
-  source: 'upload' | 'reference' | 'image_video_job';
+  source: 'upload' | 'reference' | 'image_video_job' | 'replicate' | 'replicate_take';
   source_id: string;
   title: string;
   product: string;

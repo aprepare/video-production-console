@@ -10,7 +10,7 @@ test("navigation marks the active workspace and preserves modified link clicks",
   render(<ConsoleNavigation active="image" theme="light" onNavigate={navigate} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
   const image = screen.getByRole("link", { name: "图文制作" });
   expect(image.getAttribute("aria-current")).toBe("page");
-  const remix = screen.getByRole("link", { name: "文案与混剪" });
+  const remix = screen.getByRole("link", { name: "文案二创" });
   expect(remix.getAttribute("href")).toBe("/");
   fireEvent.click(remix);
   expect(navigate).toHaveBeenCalledExactlyOnceWith("/");
@@ -18,11 +18,11 @@ test("navigation marks the active workspace and preserves modified link clicks",
   expect(navigate).toHaveBeenCalledTimes(1);
 });
 
-test("navigation lists the merchant, reference, copy and image workspaces only", () => {
+test("navigation lists merchant, reference, copy, montage, replicate and image workspaces", () => {
   render(<ConsoleNavigation active="remix" theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
   const workspaces = within(screen.getByRole("navigation", { name: "制作空间" }));
-  expect(workspaces.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/image-projects"]);
-  expect(screen.getByRole("link", { name: "文案与混剪" }).getAttribute("aria-current")).toBe("page");
+  expect(workspaces.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/projects", "/replicate", "/image-projects"]);
+  expect(screen.getByRole("link", { name: "文案二创" }).getAttribute("aria-current")).toBe("page");
   expect(screen.queryByRole("link", { name: "二创文档" })).toBeNull();
   expect(screen.queryByRole("link", { name: "AI短片" })).toBeNull();
 });

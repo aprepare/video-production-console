@@ -3663,3 +3663,40 @@
 .publish-package__ai .header-button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .publish-package__ai small { flex: 1 1 240px; color: var(--ds-text-muted); font-size: 12px; line-height: 1.5; }
 .publish-package__ai [data-warn="true"] { color: var(--ds-danger); }
+
+/* 简化后的工具栏与模型弹窗 */
+.wf-advanced { position: relative; }
+.wf-advanced > summary { list-style: none; cursor: pointer; }
+.wf-advanced > summary::-webkit-details-marker { display: none; }
+.wf-advanced__menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: grid; min-width: 160px; padding: 4px; border: 1px solid var(--ds-border); border-radius: var(--radius-sm); background: var(--ds-surface); box-shadow: var(--shadow-sm); }
+.wf-advanced__menu button { padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ds-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wf-advanced__menu button:hover { background: var(--ds-surface-muted); }
+.remix-lab-role-hint { margin: 0 0 8px; color: var(--ds-text-muted); font-size: 12px; line-height: 1.5; }
+.remix-lab-slots--main .remix-lab-slot > legend, .remix-lab-advanced-models .remix-lab-slot > legend { float: left; width: 100%; margin: 0 0 6px; padding: 0; justify-content: flex-start; font-size: 15px; }
+.remix-lab-slots--main .remix-lab-slot > legend + *, .remix-lab-advanced-models .remix-lab-slot > legend + * { clear: both; }
+.remix-lab-advanced-models { margin-top: var(--space-3); padding: 10px 12px; border: 1px dashed var(--ds-border-strong); border-radius: var(--radius-sm); }
+.remix-lab-advanced-models > summary { color: var(--ds-text-muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.remix-lab-advanced-models[open] > summary { margin-bottom: 10px; }
+
+.remix-lab-production-steps--copy { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+.montage-board { display: grid; align-content: start; gap: var(--space-4); padding: var(--space-5); }
+.montage-board__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.montage-board__only { display: inline-flex; align-items: center; gap: 6px; color: var(--ds-text-muted); font-size: 13px; cursor: pointer; }
+.montage-board__count { margin-left: auto; color: var(--ds-text-muted); font: 12px/1 var(--font-mono); }
+.montage-board__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.montage-board__grid button { display: grid; align-content: start; gap: 8px; width: 100%; height: 100%; padding: 14px; border: 1px solid var(--ds-border); border-radius: var(--radius-md); background: var(--ds-surface); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color 150ms ease, transform 150ms ease; }
+.montage-board__grid button:hover { border-color: var(--ds-accent); transform: translateY(-1px); }
+.montage-board__grid strong { font-size: 15px; line-height: 1.4; }
+.montage-board__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.montage-board__top small, .montage-board__time { color: var(--ds-text-muted); font-size: 12px; }
+.montage-board__empty { display: grid; justify-items: center; gap: 8px; padding: var(--space-7) var(--space-4); border: 1px dashed var(--ds-border-strong); border-radius: var(--radius-lg); color: var(--ds-text-muted); text-align: center; }
+.montage-board__empty strong { color: var(--ds-text); }
+@media (prefers-reduced-motion: reduce) { .montage-board__grid button { transition: none; } }
+
+/* 混剪看板不需要左侧历史栏：看板本身就是项目列表 */
+.remix-lab__body--board { grid-template-columns: minmax(0, 1fr) !important; }
+.remix-lab__body--board .remix-lab__main { overflow: auto; }
+.montage-board__grid li { position: relative; }
+.montage-board__delete { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ds-text-muted); cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.montage-board__grid li:hover .montage-board__delete, .montage-board__delete:focus-visible { opacity: 1; }
+.montage-board__delete:hover { border-color: color-mix(in srgb, var(--ds-danger) 35%, var(--ds-border)); color: var(--ds-danger); }

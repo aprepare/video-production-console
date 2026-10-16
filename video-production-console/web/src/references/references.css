@@ -103,3 +103,21 @@
 .analysis-table-wrap { overflow-x: auto; }
 .analysis-table-wrap .studio-table { font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .reference-spin { animation: none; } }
+
+/* AI 复刻提示词 */
+.analysis-card--prompts { border-color: color-mix(in srgb, var(--ds-accent) 40%, var(--ds-border)); }
+.analysis-style-lock { margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--ds-accent-soft); font-size: 13px; line-height: 1.6; }
+.analysis-style-lock strong { margin-right: 8px; color: var(--ds-accent); font-size: 12px; }
+.analysis-prompts { display: grid; gap: 10px; margin: 0; padding: 0 !important; list-style: none; }
+.analysis-prompts > li { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--ds-border); border-radius: var(--radius-md); background: var(--ds-surface); }
+.analysis-prompts header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.analysis-prompts header strong { font-size: 13px; }
+.analysis-prompts__no { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--ds-accent); color: var(--ds-on-accent); font: 700 12px/1 var(--font-mono); }
+.analysis-prompts__line { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.analysis-prompts__line > span { padding-top: 2px; color: var(--ds-text-muted); font-size: 12px; font-weight: 650; }
+.analysis-prompts__line p { margin: 0; font-size: 13px; line-height: 1.6; }
+.analysis-prompts__line .studio-button { min-height: 28px; padding: 2px 6px; }
+.analysis-prompts__meta { display: flex; gap: 8px; margin: 0; color: var(--ds-text-muted); font-size: 12px; line-height: 1.55; }
+.analysis-prompts__meta span { flex: 0 0 64px; font-weight: 650; }
+.analysis-prompts__actions { padding-top: 6px; border-top: 1px solid var(--ds-border); }
+.reference-analysis__form > input { width: 100%; }

@@ -22,6 +22,8 @@ import { useProjectActions } from "./projects/useProjectActions";
 import { RemixLabPage } from "./remix-lab/RemixLabPage";
 import { ConsoleNavigation } from "./shell/ConsoleNavigation";
 import { ReferencesPage } from "./references/ReferencesPage";
+import { ReplicatePage } from "./replicate/ReplicatePage";
+import { AIAccessPage } from "./ai-access/AIAccessPage";
 import { MerchantsPage } from "./merchants/MerchantsPage";
 import { SetupPage, type SetupStatus } from "./setup/SetupPage";
 import { GuidePage } from "./guide/GuidePage";
@@ -618,6 +620,9 @@ function App() {
       || route.view === "image-video"
       || route.view === "remix-lab"
       || route.view === "references"
+      || route.view === "replicate"
+      || route.view === "replicate-project"
+      || route.view === "ai-access"
       || route.view === "merchants"
       || route.view === "merchant"
       || route.view === "setup"
@@ -1012,7 +1017,7 @@ function App() {
     <div className={imageRoute ? "shell console-shell shell--image" : "shell console-shell"}>
       <a className="studio-skip-link" href="#studio-content">跳到工作区</a>
       <ConsoleNavigation
-        active={imageRoute ? "image" : route.view === "references" ? "references" : route.view === "setup" ? "setup" : route.view === "guide" ? "guide" : merchantRoute ? "merchants" : remixShell ? "remix" : null}
+        active={imageRoute ? "image" : route.view === "references" ? "references" : route.view === "replicate" || route.view === "replicate-project" ? "replicate" : route.view === "ai-access" ? "ai-access" : route.view === "setup" ? "setup" : route.view === "guide" ? "guide" : merchantRoute ? "merchants" : montageRoute ? "montage" : remixShell ? "remix" : null}
         setupPending={setupPending}
         guideUnseen={!guideSeen}
         theme={theme}
@@ -1042,6 +1047,10 @@ function App() {
         <SetupPage api={api} onOpenSettings={() => void settingsPanel.openDialog()} onStatusChange={updateSetupStatus} />
       ) : route.view === "references" ? (
         <ReferencesPage api={api} onNavigate={navigate} onOpenSettings={() => void settingsPanel.openDialog()} />
+      ) : route.view === "replicate" || route.view === "replicate-project" ? (
+        <ReplicatePage api={api} projectID={route.view === "replicate-project" ? route.projectID : undefined} onNavigate={navigate} />
+      ) : route.view === "ai-access" ? (
+        <AIAccessPage api={api} />
       ) : imageRoute ? (
         <>
           <ImageModeWorkbench
@@ -1074,6 +1083,7 @@ function App() {
           onThemeChange={setTheme}
           selectedProjectID={routedProjectID}
           globalMontageStyle={settings?.public.montage_style}
+          section={montageRoute ? "montage" : "copy"}
           projectView={
             routedProjectID && selected && detail && detailReady && selected.id === routedProjectID ? (
         <ProjectWorkbench

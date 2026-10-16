@@ -9,7 +9,7 @@ export function RoleModelFields({ id, label, value, onChange, modelLabel = `${la
   return <>
     <label className="wf-field"><span>模型</span><ModelCombo id={id} aria-label={modelLabel} value={value.model}
       onChange={model => onChange({...value, model})} /></label>
-    <label className="wf-field"><span>推理强度</span><select aria-label={`${label}推理强度`} value={value.reasoning_effort}
+    <label className="wf-field"><span>思考强度</span><select aria-label={`${label}思考强度`} value={value.reasoning_effort}
       onChange={event => onChange({...value, reasoning_effort:event.target.value})}>
       {REASONING_EFFORT_OPTIONS.map(effort =>
         <option key={effort} value={effort}>{effort || "沿用默认强度"}</option>)}

@@ -113,6 +113,9 @@ export type PublicSettings = {
   image_base_url: string;
   image_model: string;
   image_use_text_key?: boolean;
+  runninghub_per_key_concurrency?: number;
+  replicate_default_provider?: "runninghub_h3" | "grok";
+  replicate_default_variants?: number;
   image_text_base_url: string;
   image_text_model: string;
   image_text_reasoning_effort: ReasoningEffort | "";

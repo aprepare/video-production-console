@@ -519,7 +519,7 @@ function ReferenceDetail({ api, post, onChange, onDeleted, onNavigate, onMessage
       </div>
     </> : null}
 
-    {view === "analysis" ? <ReferenceAnalysis api={api} post={post} onSeek={seek} onMessage={onMessage} /> : null}
+    {view === "analysis" ? <ReferenceAnalysis api={api} post={post} onSeek={seek} onMessage={onMessage} onReplicate={(analysisID) => onNavigate(`/replicate?analysis=${encodeURIComponent(analysisID)}`)} /> : null}
 
     {view === "insight" ? <CommentInsightPanel api={api} post={post} onMessage={onMessage} /> : null}
 

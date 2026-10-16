@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ClipboardCopy, Download, Film, Loader2, ScanSearch, Trash2 } from "lucide-react";
+import { Clapperboard, ClipboardCopy, Copy, Download, Film, Loader2, ScanSearch, Sparkles, Trash2 } from "lucide-react";
 import type { ReferenceApi, ReferencePost } from "./ReferencesPage";
 import { formatClock } from "./ReferenceMedia";
 
 type StructureBeat = { start_s: number; end_s: number; beat: string; what_happens: string; purpose: string };
 type ShotPlan = { shot: string; duration_s: number; how_to_shoot: string; line: string };
+export type AIPrompt = { shot_index: number; start_s: number; end_s: number; purpose: string; first_frame_prompt: string; motion_prompt: string; t2v_prompt: string; negative: string; keep: string };
 export type AnalysisReport = {
   summary?: string;
   audience?: string;
@@ -14,7 +15,7 @@ export type AnalysisReport = {
   audio?: { voice?: string; music?: string; sfx?: string };
   persuasion?: string[];
   conversion?: string;
-  replicate?: { shot_list?: ShotPlan[]; script_skeleton?: string[]; editing_tips?: string[]; variables?: string[]; avoid?: string[] };
+  replicate?: { shot_list?: ShotPlan[]; script_skeleton?: string[]; editing_tips?: string[]; variables?: string[]; avoid?: string[]; style_lock?: string; ai_prompts?: AIPrompt[] };
   difficulty?: string;
 };
 export type AnalysisFrame = { index: number; time_s: number; shot: number; url: string };
@@ -24,6 +25,7 @@ export type ReferenceAnalysisRecord = {
   status: "queued" | "running" | "completed" | "failed";
   model: string;
   focus: string;
+  product: string;
   frame_count: number;
   error: string;
   created_at: string;
@@ -71,27 +73,51 @@ export function analysisMarkdown(post: ReferencePost, record: ReferenceAnalysisR
   bullets("剪辑要点", rep?.editing_tips);
   bullets("需要替换的变量", rep?.variables);
   bullets("不要照搬", rep?.avoid);
+  if (rep?.ai_prompts?.length) {
+    lines.push("## AI 复刻提示词", "");
+    if (rep.style_lock?.trim()) lines.push(`统一画风：${rep.style_lock.trim()}`, "");
+    rep.ai_prompts.forEach((item) => {
+      lines.push(`### 镜头 ${item.shot_index} · ${clock(item.start_s)}–${clock(item.end_s)}${item.purpose ? ` · ${item.purpose}` : ""}`, "");
+      if (item.first_frame_prompt) lines.push(`- 首帧图：${item.first_frame_prompt}`);
+      if (item.motion_prompt) lines.push(`- 运动：${item.motion_prompt}`);
+      if (item.t2v_prompt) lines.push(`- 文生视频：${item.t2v_prompt}`);
+      if (item.negative) lines.push(`- 避免：${item.negative}`);
+      if (item.keep) lines.push(`- 商品保持：${item.keep}`);
+      lines.push("");
+    });
+  }
   section("复刻难度", r.difficulty);
   return lines.join("\n");
 }
 
 type ModelOption = { id: string };
 
+function PromptLine({ label, text, onCopy }: { label: string; text: string; onCopy: (text: string) => void }) {
+  if (!text?.trim()) return null;
+  return <div className="analysis-prompts__line">
+    <span>{label}</span>
+    <p>{text}</p>
+    <button type="button" className="studio-button studio-button--quiet" aria-label={`复制${label}提示词`} onClick={() => onCopy(text)}><Copy size={14} aria-hidden="true" /></button>
+  </div>;
+}
+
 type Props = {
   api: ReferenceApi;
   post: ReferencePost;
   onSeek: (seconds: number) => void;
   onMessage: (message: { tone: "ok" | "error" | "info"; text: string }) => void;
+  onReplicate?: (analysisID: string) => void;
 };
 
 /** 拆解：切镜抽帧 + 口播时间轴交给多模态模型，产出「怎么做的、怎么模仿」。 */
-export function ReferenceAnalysis({ api, post, onSeek, onMessage }: Props) {
+export function ReferenceAnalysis({ api, post, onSeek, onMessage, onReplicate }: Props) {
   const [records, setRecords] = useState<ReferenceAnalysisRecord[]>([]);
   const [selectedID, setSelectedID] = useState("");
   const [detail, setDetail] = useState<ReferenceAnalysisRecord | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState("");
   const [focus, setFocus] = useState("");
+  const [product, setProduct] = useState("");
   const [busy, setBusy] = useState<"" | "start" | "delete">("");
 
   const loadList = useCallback(async () => {
@@ -138,7 +164,7 @@ export function ReferenceAnalysis({ api, post, onSeek, onMessage }: Props) {
       const response = await api("/api/reference-analyses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reference_id: post.id, ...(model ? { model } : {}), ...(focus.trim() ? { focus: focus.trim() } : {}) }),
+        body: JSON.stringify({ reference_id: post.id, ...(model ? { model } : {}), ...(focus.trim() ? { focus: focus.trim() } : {}), ...(product.trim() ? { product: product.trim() } : {}) }),
       });
       if (!response.ok) throw new Error(await readError(response, "拆解提交失败。"));
       const record = (await response.json()) as ReferenceAnalysisRecord;
@@ -168,6 +194,10 @@ export function ReferenceAnalysis({ api, post, onSeek, onMessage }: Props) {
   };
 
   const markdown = useMemo(() => detail?.status === "completed" ? analysisMarkdown(post, detail) : "", [detail, post]);
+  const copyText = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); onMessage({ tone: "ok", text: "提示词已复制。" }); }
+    catch { onMessage({ tone: "error", text: "复制失败。" }); }
+  };
   const copy = async () => {
     try { await navigator.clipboard.writeText(markdown); onMessage({ tone: "ok", text: "拆解报告已复制。" }); }
     catch { onMessage({ tone: "error", text: "复制失败，请改用下载。" }); }
@@ -200,6 +230,7 @@ export function ReferenceAnalysis({ api, post, onSeek, onMessage }: Props) {
           <ScanSearch size={15} aria-hidden="true" />{busy === "start" ? "正在提交…" : pending ? "分析中…" : "开始拆解"}
         </button>
       </div>
+      <input aria-label="我的产品或场景（可选）" maxLength={300} value={product} onChange={(event) => setProduct(event.target.value)} placeholder="我的产品或场景（可选）：例如「岚山海鲜大排档，主打现捞梭子蟹」，复刻提示词会换成你的" />
       {!mediaReady ? <p className="studio-notice" role="status">{post.has_video ? "原视频下载到本机后才能拆解，请先在「原片与口播」里下载。" : "这条内容没有视频，无法拆解画面。"}</p> : null}
     </div>
 
@@ -283,6 +314,30 @@ export function ReferenceAnalysis({ api, post, onSeek, onMessage }: Props) {
           {list(report.replicate.variables).length ? <div><h4>换成你的内容</h4><ul>{list(report.replicate.variables).map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           {list(report.replicate.avoid).length ? <div><h4>不要照搬</h4><ul>{list(report.replicate.avoid).map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
         </div>
+      </section> : null}
+      {report.replicate?.ai_prompts?.length ? <section className="analysis-card analysis-card--prompts" aria-label="AI 复刻提示词">
+        <h3><Sparkles size={15} aria-hidden="true" /> AI 复刻提示词<span className="analysis-tag">{report.replicate.ai_prompts.length} 个镜头</span></h3>
+        <p className="studio-metrics">每个镜头两段：先用「首帧图」出一张图，再用「运动」交给图生视频模型；「文生视频」可以直接贴到可灵、即梦、海螺。</p>
+        {report.replicate.style_lock ? <p className="analysis-style-lock"><strong>统一画风</strong>{report.replicate.style_lock}</p> : null}
+        <ol className="analysis-prompts">
+          {report.replicate.ai_prompts.map((item) => <li key={item.shot_index}>
+            <header>
+              <span className="analysis-prompts__no">{String(item.shot_index).padStart(2, "0")}</span>
+              <button type="button" className="analysis-time" onClick={() => onSeek(item.start_s)}>{clock(item.start_s)}–{clock(item.end_s)}</button>
+              {item.purpose ? <strong>{item.purpose}</strong> : null}
+            </header>
+            <PromptLine label="首帧图" text={item.first_frame_prompt} onCopy={copyText} />
+            <PromptLine label="运动" text={item.motion_prompt} onCopy={copyText} />
+            <PromptLine label="文生视频" text={item.t2v_prompt} onCopy={copyText} />
+            {item.negative ? <p className="analysis-prompts__meta"><span>避免</span>{item.negative}</p> : null}
+            {item.keep ? <p className="analysis-prompts__meta"><span>商品保持</span>{item.keep}</p> : null}
+          </li>)}
+        </ol>
+        {onReplicate ? <div className="studio-row analysis-prompts__actions">
+          <span className="studio-metrics">{detail.product ? `已按「${detail.product}」替换` : "没有填写你的产品，提示词里用的是通用描述"}</span>
+          <span className="grow" />
+          <button type="button" className="studio-button studio-button--primary" onClick={() => onReplicate(detail.id)}><Clapperboard size={15} aria-hidden="true" />用这些提示词开始 AI 复刻</button>
+        </div> : null}
       </section> : null}
     </article> : null}
 

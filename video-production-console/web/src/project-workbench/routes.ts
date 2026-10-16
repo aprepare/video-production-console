@@ -9,6 +9,9 @@ export type AppLocation =
   | { view: "remix-lab" }
   | { view: "remix-lab"; experimentID: string }
   | { view: "references" }
+  | { view: "replicate" }
+  | { view: "replicate-project"; projectID: string }
+  | { view: "ai-access" }
   | { view: "merchants" }
   | { view: "merchant"; merchantID: string }
   | { view: "setup" }
@@ -24,6 +27,10 @@ export function isRemovedWorkspacePath(pathname: string): boolean {
 export function parseLocation(pathname: string): AppLocation {
   if (pathname === "/" || isRemovedWorkspacePath(pathname)) return { view: "remix-lab" };
   if (pathname === "/references" || pathname === "/references/") return { view: "references" };
+  if (pathname === "/replicate" || pathname === "/replicate/") return { view: "replicate" };
+  const replicateMatch = pathname.match(/^\/replicate\/([^/]+)\/?$/);
+  if (replicateMatch) return uuidPattern.test(replicateMatch[1]) ? { view: "replicate-project", projectID: replicateMatch[1].toLowerCase() } : { view: "not-found" };
+  if (pathname === "/ai-access" || pathname === "/ai-access/") return { view: "ai-access" };
   if (pathname === "/setup" || pathname === "/setup/") return { view: "setup" };
   if (pathname === "/guide" || pathname === "/guide/") return { view: "guide" };
   if (pathname === "/merchants" || pathname === "/merchants/") return { view: "merchants" };

@@ -19,7 +19,7 @@ test("rerun submits the chosen reference count, models, effort and Fast without 
   fireEvent.click(screen.getByRole("button",{name:"添加参考模型"}));
   fireEvent.click(screen.getByRole("button",{name:"添加参考模型"}));
   fireEvent.change(screen.getByLabelText("参考模型2模型"),{target:{value:"second-reference"}});
-  fireEvent.change(screen.getByLabelText("参考模型2推理强度"),{target:{value:"medium"}});
+  fireEvent.change(screen.getByLabelText("参考模型2思考强度"),{target:{value:"medium"}});
   fireEvent.click(screen.getByRole("button",{name:"参考模型2 Fast"}));
   fireEvent.click(screen.getByRole("button",{name:"移除参考模型3"}));
   fireEvent.click(screen.getByRole("button",{name:"开始新一轮"}));

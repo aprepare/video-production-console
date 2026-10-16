@@ -40,7 +40,7 @@ test("desktop studio leaves room to edit and settings remain usable in both them
   await mockStudio(page);
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "文案创作台", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "文案二创", exact: true })).toBeVisible();
   await expect(page.getByLabel("对标原文", { exact: true })).toBeVisible();
   const editor = await page.getByLabel("对标原文", { exact: true }).boundingBox();
   expect(editor?.width).toBeGreaterThan(380);
@@ -57,13 +57,13 @@ test("desktop studio leaves room to edit and settings remain usable in both them
   await page.screenshot({ path: "../artifacts/frontend-studio-20260930/settings-dark.png" });
   await page.getByRole("button", { name: "关闭设置" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "模型配置", exact: true }).click();
+  await page.getByRole("button", { name: "模型", exact: true }).click();
   await page.getByLabel("写手模型", {exact:true}).fill("");
   await expect(page.getByLabel("写手模型", {exact:true})).toHaveValue("");
   await page.getByLabel("写手模型", {exact:true}).fill("custom-writer");
   await page.getByLabel("写手模型候选", {exact:true}).selectOption("gpt-5.6-sol");
   await expect(page.getByLabel("写手模型", {exact:true})).toHaveValue("gpt-5.6-sol");
-  await page.getByLabel("写手推理强度", {exact:true}).selectOption("high");
+  await page.getByLabel("写手思考强度", {exact:true}).selectOption("high");
   await expect(page.getByRole("group", {name:"审稿",exact:true})).toHaveCount(0);
   await noPageOverflow(page);
   await page.screenshot({ path: "../artifacts/console-fixes-20261015/model-settings.png" });
@@ -92,7 +92,7 @@ test("mobile studio, image creation and settings fit without horizontal overflow
   await mockStudio(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "文案创作台", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "文案二创", exact: true })).toBeVisible();
   await noPageOverflow(page);
   await page.screenshot({ path: "../artifacts/frontend-studio-20260930/workbench-mobile.png", fullPage: true });
   await page.getByRole("link", { name: "图文制作", exact: true }).click();
@@ -105,6 +105,6 @@ test("mobile studio, image creation and settings fit without horizontal overflow
   await expect(page.getByRole("dialog", { name: "控制台设置" })).toBeVisible();
   await noPageOverflow(page);
   await page.getByRole("tab", { name: "系统", exact: true }).click();
-  await expect(page.getByRole("button", {name:"复制 Codex 配置"})).toBeVisible();
+  await expect(page.getByText("AI 接入（MCP）已移到左侧导航的「AI 接入」页面。")).toBeVisible();
   await page.screenshot({ path: "../artifacts/frontend-studio-20260930/settings-mobile.png" });
 });

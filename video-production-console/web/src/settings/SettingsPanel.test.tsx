@@ -89,6 +89,7 @@ const emptySecretDraft = {
   embedding_api_key: "",
   pixabay_api_key: "",
   platform_api_token: "",
+  runninghub_api_keys: "",
 };
 
 const settings: Settings = {

@@ -79,6 +79,8 @@ type RemixLabPageProps = {
   selectedProjectID?: string;
   projectView?: ReactNode;
   globalMontageStyle?: MontageStyle;
+  /** copy = 文案二创（/），montage = 混剪（/projects）。 */
+  section?: "copy" | "montage";
 };
 
 type DraftSlot = {
@@ -244,7 +246,9 @@ export function RemixLabPage({
   selectedProjectID,
   projectView,
   globalMontageStyle,
+  section = "copy",
 }: RemixLabPageProps) {
+  const montageSection = section === "montage";
   const [defaults, setDefaults] = useState<RemixLabDefaults | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -325,18 +329,22 @@ export function RemixLabPage({
     let cancelled = false;
     void (async () => {
       try {
-        const [nextPrompts, active, nextAgent, chatHistory] = await Promise.all([
+        const [nextPrompts, active] = await Promise.all([
           fetchRemixLabPrompts(api),
           fetchRemixLabActivePrompt(api),
-          fetchRemixLabAgentSettings(api),
-          fetchRemixLabAgentHistory(api).catch(() => []),
         ]);
         if (cancelled) return;
         setPrompts(nextPrompts);
         setActivePromptID(active.prompt?.id || DEFAULT_PROMPT_ID);
-        setAgentSettings(nextAgent);
-        if (chatHistory.length > 0) {
-          setAgentTurns(turnsFromAgentHistory(chatHistory));
+        // 智能体面板隐藏时不请求它的设置和历史，免得这两个接口出错把整页拖成“加载失败”。
+        if (!AGENT_PANEL_HIDDEN) {
+          const [nextAgent, chatHistory] = await Promise.all([
+            fetchRemixLabAgentSettings(api),
+            fetchRemixLabAgentHistory(api).catch(() => []),
+          ]);
+          if (cancelled) return;
+          setAgentSettings(nextAgent);
+          if (chatHistory.length > 0) setAgentTurns(turnsFromAgentHistory(chatHistory));
         }
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "创作台加载失败。");
@@ -892,11 +900,11 @@ export function RemixLabPage({
             <PenLine size={18} strokeWidth={2} />
           </span>
           <div>
-            <span className="eyebrow">{selectedProjectID && projectView ? "创作工作室 / 文案与混剪 / 项目" : "创作工作室 / 文案与混剪"}</span>
+            <span className="eyebrow">{montageSection ? (selectedProjectID && projectView ? "创作工作室 / 混剪 / 项目" : "创作工作室 / 混剪") : "创作工作室 / 文案二创"}</span>
             {/* 打开项目后页头跟着切换；h1 的可访问名称保留「文案创作台」，
                 让不打开项目的页面（历史、工作流、实验）仍按原名定位。 */}
-            <h1>{selectedProjectID && projectView ? "项目工作台" : "文案创作台"}</h1>
-            <p>{selectedProjectID && projectView ? "配音、混剪与剪映草稿，按阶段推进。" : "编辑文案，确认定稿，继续制作。"}</p>
+            <h1>{montageSection ? (selectedProjectID && projectView ? "混剪项目" : "混剪") : "文案二创"}</h1>
+            <p>{montageSection ? (selectedProjectID && projectView ? "口播稿、配音、字幕和剪映草稿，按顺序推进。" : "定稿后的文案在这里配音、混剪，出剪映草稿。") : "贴入对标原文，按账号风格改写成你的文案，审稿后定稿。"}</p>
           </div>
           <nav className="remix-lab-account-switch" aria-label="账号">
             <label>
@@ -965,11 +973,10 @@ export function RemixLabPage({
         </div>
       </header>
       {/* 打开项目后由工作台自己的五段生产轨表达进度，这里不再叠一条。 */}
-      {selectedProjectID && projectView ? null : <ol className="remix-lab-production-steps" aria-label="内容生产流程">
-        <li aria-current={currentProductionStep === 1 ? "step" : undefined}><span>01</span><strong>原文创作</strong><small>选择账号与工作流</small></li>
-        <li aria-current={currentProductionStep === 2 ? "step" : undefined}><span>02</span><strong>审稿定稿</strong><small>核对内容与发布包</small></li>
-        <li aria-current={currentProductionStep === 3 ? "step" : undefined}><span>03</span><strong>确认生产</strong><small>配音与混剪草稿</small></li>
-        <li aria-current={currentProductionStep === 4 ? "step" : undefined}><span>04</span><strong>交付复盘</strong><small>人工确认发布</small></li>
+      {montageSection || (selectedProjectID && projectView) ? null : <ol className="remix-lab-production-steps remix-lab-production-steps--copy" aria-label="文案二创流程">
+        <li aria-current={currentProductionStep === 1 ? "step" : undefined}><span>01</span><strong>贴入原文</strong><small>选账号，贴对标原文</small></li>
+        <li aria-current={currentProductionStep === 2 ? "step" : undefined}><span>02</span><strong>二创与审稿</strong><small>写手改写，审稿把关</small></li>
+        <li aria-current={currentProductionStep >= 3 ? "step" : undefined}><span>03</span><strong>定稿交给混剪</strong><small>确认后进入「混剪」</small></li>
       </ol>}
       <div
         className={[
@@ -978,8 +985,10 @@ export function RemixLabPage({
           agentCollapsed ? "remix-lab__body--agent-collapsed" : "",
           AGENT_PANEL_HIDDEN ? "remix-lab__body--agent-hidden" : "",
           projectView && !experimentID ? "remix-lab__body--project" : "",
+          montageSection && !projectView && !experimentID ? "remix-lab__body--board" : "",
         ].join(" ")}
       >
+        {montageSection && !projectView && !experimentID ? null : (
         <aside className={historyCollapsed ? "remix-lab__history remix-lab__side--collapsed" : "remix-lab__history"}>
           <button
             type="button"
@@ -1119,9 +1128,12 @@ export function RemixLabPage({
             </div>
           ) : null}
         </aside>
+        )}
         <main className="remix-lab__main" id="studio-content" tabIndex={-1}>
           {projectView && !experimentID ? (
             <div className="remix-lab__project">{projectView}</div>
+          ) : montageSection && !experimentID ? (
+            <MontageBoard projects={projects} accounts={accounts} accountID={accountID} onOpen={(id) => onNavigate(`/projects/${id}`)} onGoCopy={() => onNavigate("/")} onDelete={(id) => void removeProject(id)} />
           ) : (
             <section className="remix-lab__designer" aria-label="工作流设计">
               <WorkflowCanvas
@@ -1755,4 +1767,47 @@ export function RemixLabPage({
       ) : null}
     </div>
   );
+}
+
+
+const montageStageLabels: Record<string, { label: string; tone: string }> = {
+  topic: { label: "待开始", tone: "draft" }, ready: { label: "待开始", tone: "draft" }, script: { label: "口播稿", tone: "working" },
+  assets: { label: "配音字幕", tone: "working" }, mixing: { label: "混剪中", tone: "working" }, review: { label: "待审核", tone: "attention" }, published: { label: "已发布", tone: "ready" },
+};
+
+/** 混剪：所有已定稿的项目，点开进入配音、字幕、剪映草稿。 */
+function MontageBoard({ projects, accounts, accountID, onOpen, onGoCopy, onDelete }: {
+  projects: Project[]; accounts: Account[]; accountID: string; onOpen: (id: string) => void; onGoCopy: () => void; onDelete: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState<"all" | "active" | "published">("all");
+  const [onlyAccount, setOnlyAccount] = useState(Boolean(accountID));
+  const visible = projects
+    .filter((project) => !onlyAccount || !accountID || project.account_id === accountID)
+    .filter((project) => filter === "all" || (filter === "published" ? project.stage === "published" : project.stage !== "published"))
+    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+  const accountName = (id?: string | null) => accounts.find((item) => item.id === id)?.name || "未分配账号";
+  return <section className="montage-board" aria-label="混剪项目">
+    <div className="montage-board__bar">
+      <div className="studio-tabs" role="tablist" aria-label="筛选混剪项目">
+        {([["all", "全部"], ["active", "进行中"], ["published", "已发布"]] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
+      </div>
+      {accountID ? <label className="montage-board__only"><input type="checkbox" checked={onlyAccount} onChange={(event) => setOnlyAccount(event.target.checked)} />只看当前账号</label> : null}
+      <span className="montage-board__count">{visible.length} 个项目</span>
+    </div>
+    {visible.length === 0 ? <div className="montage-board__empty">
+      <strong>{projects.length ? "没有符合条件的项目" : "还没有混剪项目"}</strong>
+      <span>在「文案二创」里定稿后点「确认开始混剪」，项目就会出现在这里。</span>
+      <button type="button" className="header-button" onClick={onGoCopy}>去文案二创</button>
+    </div> : <ul className="montage-board__grid">{visible.map((project) => {
+      const stage = montageStageLabels[project.stage] ?? { label: project.stage, tone: "draft" };
+      return <li key={project.id}>
+        <button type="button" onClick={() => onOpen(project.id)}>
+          <span className="montage-board__top"><span className="studio-status" data-status={stage.tone}>{stage.label}</span><small>{accountName(project.account_id)}</small></span>
+          <strong>{project.title || "未命名项目"}</strong>
+          <small className="montage-board__time">{project.updated_at ? new Date(project.updated_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</small>
+        </button>
+        <button type="button" className="montage-board__delete" aria-label={`删除项目 ${project.title || project.id}`} onClick={() => onDelete(project.id)}><Trash2 size={14} strokeWidth={2} aria-hidden="true" /></button>
+      </li>;
+    })}</ul>}
+  </section>;
 }

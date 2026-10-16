@@ -1,10 +1,10 @@
-import { Clapperboard, Compass, Images, LogOut, Moon, PenLine, Radar, Settings2, ShieldCheck, Store, Sun } from "lucide-react";
+import { Bot, Clapperboard, Compass, Film, Images, LogOut, Moon, PenLine, Radar, Scissors, Settings2, ShieldCheck, Store, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Theme } from "../types";
 import "./console-navigation.css";
 
 type Props = {
-  active: "remix" | "image" | "references" | "merchants" | "setup" | "guide" | null;
+  active: "remix" | "montage" | "replicate" | "image" | "references" | "merchants" | "setup" | "guide" | "ai-access" | null;
   theme: Theme;
   onNavigate: (href: string) => void;
   onThemeChange: (theme: Theme) => void;
@@ -21,7 +21,9 @@ type Props = {
 const workspaces = [
   { id: "merchants", href: "/merchants", label: "商户与订单", description: "交付、授权与成本", icon: Store },
   { id: "references", href: "/references", label: "对标采集", description: "爆款口播与热评", icon: Radar },
-  { id: "remix", href: "/", label: "文案与混剪", description: "从灵感到成片", icon: PenLine },
+  { id: "remix", href: "/", label: "文案二创", description: "改写爆款文案", icon: PenLine },
+  { id: "montage", href: "/projects", label: "混剪", description: "配音字幕剪映草稿", icon: Scissors },
+  { id: "replicate", href: "/replicate", label: "AI 复刻", description: "分镜生成与质检", icon: Film },
   { id: "image", href: "/image-projects", label: "图文制作", description: "让内容被看见", icon: Images },
 ] as const;
 
@@ -57,6 +59,18 @@ export function ConsoleNavigation({ active, theme, onNavigate, onThemeChange, on
           onNavigate("/guide");
         }}
       ><Compass size={18} aria-hidden="true" /><span>新手引导</span>{guideUnseen ? <span className="console-nav__dot console-nav__dot--info" aria-hidden="true" /> : null}</a>
+      <a
+        href="/ai-access"
+        className="console-nav__utility console-nav__setup"
+        aria-current={active === "ai-access" ? "page" : undefined}
+        aria-label="AI 接入（MCP）"
+        title="AI 接入（MCP）"
+        onClick={(event) => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          onNavigate("/ai-access");
+        }}
+      ><Bot size={18} aria-hidden="true" /><span>AI 接入</span></a>
       {footerSlot}
       <a
         href="/setup"

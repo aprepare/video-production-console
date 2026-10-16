@@ -49,7 +49,7 @@ test("小红书 image notes say there is no video", () => {
 });
 
 const report: ReferenceAnalysisRecord = {
-  id: "a1", reference_id: "r1", status: "completed", model: "grok-4.6-fast", focus: "", frame_count: 2, error: "",
+  id: "a1", reference_id: "r1", status: "completed", model: "grok-4.6-fast", focus: "", product: "", frame_count: 2, error: "",
   created_at: "2026-10-13T01:00:00Z", updated_at: "2026-10-13T01:02:00Z",
   frames: [{ index: 0, time_s: 0.3, shot: 1, url: "/api/reference-analyses/a1/frames/0" }, { index: 1, time_s: 4.5, shot: 2, url: "/api/reference-analyses/a1/frames/1" }],
   report: {

@@ -111,23 +111,23 @@ test("root opens the workflow canvas and the header switches to image mode", asy
   window.history.replaceState({}, "", "/");
   vi.stubGlobal("fetch", baseFetch((path) => path === "/api/projects" ? json([]) : path === "/api/image-projects" ? json([]) : undefined));
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   await waitFor(() => expect(window.location.pathname).toBe("/"));
   document.documentElement.scrollTop = 500;
   fireEvent.click(screen.getByRole("link", { name: "图文制作" }));
   expect(window.location.pathname).toBe("/image-projects");
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
   expect(document.documentElement.scrollTop).toBe(0);
-  fireEvent.click(screen.getByRole("link", { name: "文案与混剪" }));
+  fireEvent.click(screen.getByRole("link", { name: "文案二创" }));
   expect(window.location.pathname).toBe("/");
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
 });
 
 test("shielded image-video URLs redirect to the workflow home", async () => {
   window.history.replaceState({}, "", "/image-videos");
   vi.stubGlobal("fetch", baseFetch((path) => path === "/api/projects" ? json([]) : undefined));
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   await waitFor(() => expect(window.location.pathname).toBe("/"));
   expect(screen.queryByRole("heading", { name: "口播拆段生图", level: 1 })).toBeNull();
   expect(screen.queryByRole("button", { name: "进入图文视频" })).toBeNull();
@@ -153,7 +153,7 @@ test("remix-lab path stays on the evolution lab page", async () => {
     }),
   );
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   expect(window.location.pathname).toBe("/remix-lab");
   expect(screen.queryByRole("heading", { name: "404" })).toBeNull();
 });
@@ -191,7 +191,7 @@ test("remix-lab experiment path is not rewritten to projects", async () => {
     }),
   );
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   expect(window.location.pathname).toBe(`/remix-lab/${remixExperimentID}`);
   expect(screen.queryByRole("heading", { name: "404" })).toBeNull();
 });
@@ -206,7 +206,7 @@ test("the workflow home loads accounts and projects", async () => {
 
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   await waitFor(() => {
     expect(requests).toContain("/api/auth/me");
     expect(requests).toContain("/api/accounts");
@@ -240,7 +240,7 @@ test("popstate from image mode returns to the scenic board", async () => {
   render(<App />);
   await screen.findByRole("heading", { name: "图文项目", level: 1 });
   window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate"));
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
 });
 
 test("a direct image project path restores detail and popstate returns to the image list", async () => {
@@ -376,13 +376,13 @@ test("production pages switch between scenic and image from the header", async (
   }));
 
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/ })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
   fireEvent.click(screen.getByRole("link", { name: "图文制作" }));
   expect(await screen.findByRole("heading", { name: "图文项目", level: 1 })).toBeTruthy();
   expect(screen.queryByRole("group", { name: "生产模式" })).toBeNull();
-  fireEvent.click(screen.getByRole("link", { name: "文案与混剪" }));
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "文案二创" }));
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
 });
 
 test("the standalone Codex conversation entry is not exposed", async () => {
@@ -391,7 +391,7 @@ test("the standalone Codex conversation entry is not exposed", async () => {
 
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "文案创作台" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Codex 对话" })).toBeNull();
 });
 
@@ -608,7 +608,7 @@ test("movie and image-video query modes stay on scenic mixing", async () => {
   }));
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "文案创作台", level: 1 })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/, level: 1 })).toBeTruthy();
   await waitFor(() => expect(window.location.pathname).toBe("/"));
   expect(screen.queryByRole("button", { name: "开始电影混剪" })).toBeNull();
 });
@@ -1135,7 +1135,7 @@ test.each([false, true])("deletes only after confirmation=%s and returns to the 
   if (confirmed) {
     await waitFor(() => expect(deletes).toEqual([`/api/projects/${routedProjectID}`]));
     await waitFor(() => expect(window.location.pathname).toBe("/"));
-    expect(screen.getByRole("heading", { name: "文案创作台" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /^(文案二创|混剪)$/ })).toBeTruthy();
   } else {
     expect(deletes).toEqual([]);
     expect(window.location.pathname).toBe(`/projects/${routedProjectID}`);
@@ -1295,7 +1295,7 @@ test("uses the light theme by default and restores the selected theme", async ()
   }));
 
   const firstRender = render(<App />);
-  await screen.findByRole("heading", { name: "文案创作台" });
+  await screen.findByRole("heading", { name: /^(文案二创|混剪)$/ });
   expect(document.documentElement.dataset.theme).toBe("light");
 
   fireEvent.change(screen.getByRole("combobox", { name: "选择界面主题" }), {
@@ -1309,7 +1309,7 @@ test("uses the light theme by default and restores the selected theme", async ()
   firstRender.unmount();
   cleanup();
   render(<App />);
-  await screen.findByRole("heading", { name: "文案创作台" });
+  await screen.findByRole("heading", { name: /^(文案二创|混剪)$/ });
   expect(document.documentElement.dataset.theme).toBe("dark");
 });
 
@@ -1775,7 +1775,7 @@ test("the home board no longer exposes topic planning", async () => {
     if (path === "/api/projects") return json([]);
   }));
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "文案创作台" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: /^(文案二创|混剪)$/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "给我选题" })).toBeNull();
   expect(screen.queryByRole("heading", { name: "选题准备" })).toBeNull();
 });

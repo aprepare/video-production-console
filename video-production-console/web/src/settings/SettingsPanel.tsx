@@ -8,7 +8,6 @@ import { modelOptionsList, reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { BgmLibrary, BgmTrack, MontageStyle, PublicSettings, Settings } from "../types";
 import { formatTrackDuration, montageFonts, normalizeStyleColor, withMontageStyleDefaults } from "./montageStyle";
-import { AIAccessCard } from "./AIAccessCard";
 import { JianyingHealthCard } from "./JianyingHealthCard";
 
 const restartFieldLabels: Partial<Record<keyof PublicSettings, string>> = {
@@ -51,12 +50,14 @@ type SecretDraft = {
   embedding_api_key: string;
   pixabay_api_key: string;
   platform_api_token: string;
+  runninghub_api_keys: string;
 };
 
 const settingsTabs = [
   { id: "remix", label: "二创" },
   { id: "image", label: "图文" },
   { id: "voice", label: "配音" },
+  { id: "replicate", label: "AI 复刻" },
   { id: "montage", label: "混剪" },
   { id: "style", label: "混剪样式" },
   { id: "system", label: "系统" },
@@ -474,6 +475,38 @@ export function SettingsPanel({
               </div>
             </>
           ) : null}
+          {tab === "replicate" ? (
+            <>
+              <p className="settings-section-title">视频模型（AI 复刻）</p>
+              <Field label="默认视频模型">
+                <select aria-label="默认视频模型" value={draft.replicate_default_provider || "runninghub_h3"} onChange={(event) => onDraftChange({ ...draft, replicate_default_provider: event.target.value as PublicSettings["replicate_default_provider"] })}>
+                  <option value="runninghub_h3">MiniMax H3（RunningHub，质量好）</option>
+                  <option value="grok">Grok Video（快、便宜）</option>
+                </select>
+              </Field>
+              <Field label="每个镜头默认出几版">
+                <select aria-label="每个镜头默认出几版" value={draft.replicate_default_variants || 1} onChange={(event) => onDraftChange({ ...draft, replicate_default_variants: Number(event.target.value) })}>
+                  {[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value} 版</option>)}
+                </select>
+              </Field>
+              <Field label="RunningHub API Key" wide>
+                <small>{settings?.secrets.runninghub_api_keys?.configured ? "已配置，输入新内容会整体替换" : "未配置，MiniMax H3 用不了"}。一行一把，多把 Key 可以同时生成更多镜头。</small>
+                <textarea
+                  aria-label="RunningHub API Key"
+                  rows={4}
+                  value={secretDraft.runninghub_api_keys}
+                  placeholder="留空保持不变"
+                  onChange={(event) => onSecretDraftChange({ ...secretDraft, runninghub_api_keys: event.target.value })}
+                />
+              </Field>
+              <Field label="每把 Key 同时跑几条">
+                <select aria-label="每把 Key 同时跑几条" value={draft.runninghub_per_key_concurrency || 1} onChange={(event) => onDraftChange({ ...draft, runninghub_per_key_concurrency: Number(event.target.value) })}>
+                  {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} 条</option>)}
+                </select>
+                <small>普通账号一般是 1；会员账号可以调高。</small>
+              </Field>
+            </>
+          ) : null}
           {tab === "voice" ? (
             <>
               <Field label="配音接口">
@@ -881,7 +914,7 @@ export function SettingsPanel({
           ) : null}
           {tab === "system" ? (
             <>
-              {api ? <AIAccessCard api={api} /> : null}
+              <p className="settings-hint">AI 接入（MCP）已移到左侧导航的「AI 接入」页面。</p>
               <p className="settings-section-title">平台接口（对标采集与口播转写）</p>
               <Field label="平台接口地址">
                 <input

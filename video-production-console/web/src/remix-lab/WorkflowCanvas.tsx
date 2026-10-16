@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "@xyflow/react";
 import {
   BookOpenText,
+  Cpu,
   Clapperboard,
   FileText,
   FolderPlus,
@@ -11,12 +12,10 @@ import {
   Minimize2,
   PenLine,
   Play,
-  Redo2,
   ScanSearch,
   Sparkles,
   Stamp,
   Trash2,
-  Undo2,
   Volume2,
   X,
 } from "lucide-react";
@@ -210,7 +209,7 @@ function toRfEdges(workflow: RemixLabWorkflow): Edge[] {
   }));
 }
 
-export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun, onRerunCreated, modelDefaults, onOpenConnections, onOpenLibrary, defaultServiceTier = "" }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshToken, accountID: accountIDProp, onAccountIDChange, resumeExperiment, onEditPackage, onLeaveRun, onRerunCreated, modelDefaults, onOpenConnections, defaultServiceTier = "" }: WorkflowCanvasProps) {
   const [meta, setMeta] = useState<{ version: number; name: string }>({ version: 1, name: "默认二创工作流" });
   const [rfNodes, setRfNodes] = useState<Node[]>([]);
   const [rfEdges, setRfEdges] = useState<Edge[]>([]);
@@ -270,7 +269,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
   });
   const [autoProduce, setAutoProduce] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [histTick, setHistTick] = useState(0);
+  const [, setHistTick] = useState(0);
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
   const prodRef = useRef<RemixLabWorkflowProduction>({});
@@ -747,13 +746,7 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
       ) {
         return;
       }
-      if (event.key === "z" && !event.shiftKey) {
-        event.preventDefault();
-        undo();
-      } else if (event.key === "y" || (event.key === "z" && event.shiftKey)) {
-        event.preventDefault();
-        redo();
-      }
+      void event;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -807,43 +800,19 @@ export function WorkflowCanvas({ api, prompts, onMessage, runWorkflow, refreshTo
           <strong>{meta.name}</strong>
         </div>
         <div className="wf-designer__actions">
-          {onOpenLibrary ? <button type="button" className="header-button remix-lab-icon-btn" onClick={onOpenLibrary}><BookOpenText size={14} aria-hidden="true" />提示词库</button> : null}
           {loaded ? (
             <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void openStylePicker()}>
               <Sparkles size={14} aria-hidden="true" />风格与简报
             </button>
           ) : null}
+          {loaded ? <button type="button" className="header-button remix-lab-icon-btn" onClick={() => void openModels()}><Cpu size={14} aria-hidden="true" />模型</button> : null}
           {loaded ? (
-            <button type="button" className="header-button" onClick={() => void openPromptEditor()}>
-              编辑二创提示词
-            </button>
-          ) : null}
-          {loaded ? <button type="button" className="header-button" onClick={() => void openModels()}>模型配置</button> : null}
-          {!liveRun ? (
-            <>
-              <button
-                type="button"
-                className="header-button remix-lab-icon-btn"
-                disabled={histTick >= 0 && historyRef.current.length === 0}
-                onClick={undo}
-                aria-label="撤销"
-                title="撤销（Ctrl+Z）"
-              >
-                <Undo2 size={14} strokeWidth={2} />
-                撤销
-              </button>
-              <button
-                type="button"
-                className="header-button remix-lab-icon-btn"
-                disabled={histTick >= 0 && futureRef.current.length === 0}
-                onClick={redo}
-                aria-label="重做"
-                title="重做（Ctrl+Y）"
-              >
-                <Redo2 size={14} strokeWidth={2} />
-                重做
-              </button>
-            </>
+            <details className="wf-advanced">
+              <summary className="header-button">高级</summary>
+              <div className="wf-advanced__menu">
+                <button type="button" onClick={() => void openPromptEditor()}>编辑二创提示词</button>
+              </div>
+            </details>
           ) : null}
           <button
             type="button"

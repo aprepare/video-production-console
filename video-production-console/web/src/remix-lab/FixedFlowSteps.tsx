@@ -1,4 +1,5 @@
-import { Check, ChevronRight, Circle, LoaderCircle } from "lucide-react";
+import { useState } from "react";
+import { Check, ChevronDown, ChevronRight, Circle, LoaderCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import "./fixed-flow-steps.css";
 
@@ -23,6 +24,8 @@ export function FixedFlowSteps({ steps, selectedID, onSelect, label = "流程步
   onSelect: (id: string) => void;
   label?: string;
 }) {
+  const produceActive = steps.some((step) => step.group === "produce" && (step.id === selectedID || (step.status && step.status !== "config")));
+  const [produceOpen, setProduceOpen] = useState(produceActive);
   return (
     <nav className="fixed-flow-steps" aria-label={label}>
       <div className="fixed-flow-steps__intro">
@@ -32,10 +35,15 @@ export function FixedFlowSteps({ steps, selectedID, onSelect, label = "流程步
       {(["create", "produce"] as const).map((group, phase) => {
         const items = steps.filter((step) => step.group === group);
         if (!items.length) return null;
+        const collapsed = group === "produce" && !produceOpen && !produceActive;
         return (
           <section className="fixed-flow-steps__group" key={group} aria-label={group === "create" ? "文案创作步骤" : "混剪制作步骤"}>
-            <header><span>0{phase + 1}</span><h3>{group === "create" ? "文案创作" : "混剪制作"}</h3></header>
-            <ol>
+            {group === "produce"
+              ? <button type="button" className="fixed-flow-steps__toggle" aria-expanded={!collapsed} onClick={() => setProduceOpen((open) => !open)}>
+                <span>0{phase + 1}</span><h3>定稿后的混剪设置</h3>{collapsed ? <ChevronRight size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+              </button>
+              : <header><span>0{phase + 1}</span><h3>文案创作</h3></header>}
+            {collapsed ? null : <ol>
               {items.map((step, index) => {
                 const Icon = step.icon || Circle;
                 const done = step.status === "ok" || step.status === "completed";
@@ -54,7 +62,7 @@ export function FixedFlowSteps({ steps, selectedID, onSelect, label = "流程步
                   </li>
                 );
               })}
-            </ol>
+            </ol>}
           </section>
         );
       })}

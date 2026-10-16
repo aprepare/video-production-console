@@ -43,10 +43,10 @@ test("rerun selects both models and parameters, stays in the existing project an
  fireEvent.click(await screen.findByRole("button",{name:"重新生成文案"}));
   fireEvent.change(await screen.findByLabelText("重跑写手模型"),{target:{value:"claude-writer"}});
   fireEvent.change(screen.getByLabelText("重跑二创策划模型"),{target:{value:"claude-planner"}});
-  fireEvent.change(screen.getByLabelText("二创策划推理强度"),{target:{value:"medium"}});
+  fireEvent.change(screen.getByLabelText("二创策划思考强度"),{target:{value:"medium"}});
   fireEvent.click(screen.getByRole("button",{name:"二创策划 Fast"}));
  fireEvent.change(screen.getByLabelText("重跑审稿模型"),{target:{value:"claude-reviewer"}});
- fireEvent.change(screen.getByLabelText("写手推理强度"),{target:{value:"low"}});
+ fireEvent.change(screen.getByLabelText("写手思考强度"),{target:{value:"low"}});
  fireEvent.click(screen.getByRole("button",{name:"审稿 Fast"}));
  fireEvent.click(screen.getByRole("button",{name:"开始新一轮"}));
   await waitFor(()=>expect(posted).toEqual({planner:{model:"claude-planner",reasoning_effort:"medium",service_tier:"default"},writer:{model:"claude-writer",reasoning_effort:"low",service_tier:"default"},reviewer:{model:"claude-reviewer",reasoning_effort:"medium",service_tier:"priority"}}));

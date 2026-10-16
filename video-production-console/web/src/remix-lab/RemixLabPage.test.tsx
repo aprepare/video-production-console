@@ -135,41 +135,6 @@ const agentPromptsFixture = {
   },
 };
 
-test("creation studio edits and saves agent prompts", async () => {
-  const puts: Array<Record<string, string>> = [];
-  const api = vi.fn(withLabExtras(async (path: string, init?: RequestInit) => {
-    if (path === "/api/remix-lab/defaults") return json(defaults);
-    if (path === "/api/remix-lab/experiments") return json([]);
-    if (path === "/api/remix-lab/agent-prompts" && (init?.method || "GET") === "GET") {
-      return json(agentPromptsFixture);
-    }
-    if (path === "/api/remix-lab/agent-prompts" && init?.method === "PUT") {
-      const body = JSON.parse(String(init.body)) as Record<string, string>;
-      puts.push(body);
-      return json({
-        ...agentPromptsFixture,
-        prompts: { ...agentPromptsFixture.prompts, reviewer_system: body.reviewer_system },
-        overridden: { ...agentPromptsFixture.overridden, reviewer_system: true },
-      });
-    }
-    throw new Error(`unexpected ${init?.method || "GET"} ${path}`);
-  }));
-
-  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "提示词库" }));
-  expect(await screen.findByRole("dialog", { name: "提示词库" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "节点提示词" }));
-  expect(await screen.findByDisplayValue("内置钩子提示词")).toBeTruthy();
-
-  fireEvent.change(screen.getByLabelText("审稿终审提示词"), {
-    target: { value: "自定义审稿规则：只查课尾和互动段。" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "保存节点提示词" }));
-  await waitFor(() => expect(puts).toHaveLength(1));
-  expect(puts[0].reviewer_system).toBe("自定义审稿规则：只查课尾和互动段。");
-  expect(puts[0].hook_system).toBe("内置钩子提示词");
-});
-
 test("remix-lab shows the workflow canvas with start button after loading", async () => {
   const api = vi.fn(withLabExtras(async (path: string) => {
     if (path === "/api/remix-lab/defaults") return json(defaults);
@@ -177,11 +142,13 @@ test("remix-lab shows the workflow canvas with start button after loading", asyn
     throw new Error(`unexpected ${path}`);
   }));
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  expect(screen.getByRole("heading", { name: "文案创作台" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: /^(文案二创|混剪)$/ })).toBeTruthy();
   // 画布节点渲染出来了（写手节点上类型标签和标题同名，取全部）
   expect(await screen.findByText("钩子分析")).toBeTruthy();
   expect(screen.getAllByText("写手").length).toBeGreaterThan(0);
   expect(screen.getByText("审稿终审")).toBeTruthy();
+  expect(screen.queryByText("确认二创")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /定稿后的混剪设置/ }));
   expect(screen.getByText("确认二创")).toBeTruthy();
   expect(screen.getByText("混剪草稿")).toBeTruthy();
   expect(screen.queryByText("字幕关键词")).toBeNull();
@@ -194,7 +161,9 @@ test("remix-lab shows the workflow canvas with start button after loading", asyn
   expect(await screen.findByRole("button", { name: "开始二创" })).toBeTruthy();
   expect(screen.getByText(/对比写手模型/)).toBeTruthy();
   expect(screen.getByText(/审稿沿用已有设置/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "撤销" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "撤销" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "重做" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "提示词库" })).toBeNull();
 });
 
 test("creation studio keeps account overview and history available without a published library entry", async () => {
@@ -249,10 +218,10 @@ test("remix-lab can remove an extra model slot", async () => {
     throw new Error(`unexpected ${path}`);
   }));
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  await screen.findByRole("button", { name: "模型配置" });
+  await screen.findByRole("button", { name: "模型" });
   expect(screen.queryByText("写手预设 2")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "模型配置" }));
-  expect(screen.getByRole("dialog", { name: "模型配置" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "模型" }));
+  expect(screen.getByRole("dialog", { name: "模型" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
   expect(screen.getByText("写手预设 2")).toBeTruthy();
   expect(screen.getByLabelText("模型槽 1 模型候选")).toBeTruthy();
@@ -279,7 +248,7 @@ test("Fast preset saves and survives reopening model settings", async () => {
     throw new Error(`unexpected ${path}`);
   }));
   const page = render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "模型配置" }));
+  fireEvent.click(await screen.findByRole("button", { name: "模型" }));
   fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
   const fast = screen.getByRole("button", { name: "模型槽 1 Fast 加速模式" });
   expect(fast.getAttribute("aria-pressed")).toBe("true");
@@ -288,23 +257,9 @@ test("Fast preset saves and survives reopening model settings", async () => {
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "连接与旧版预设" })).toBeNull());
   page.unmount();
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "模型配置" }));
+  fireEvent.click(await screen.findByRole("button", { name: "模型" }));
   fireEvent.click(screen.getByRole("button", { name: "连接与旧版预设" }));
   expect(screen.getByRole("button", { name: "模型槽 1 Fast 加速模式" }).getAttribute("aria-pressed")).toBe("false");
-});
-
-test("remix-lab opens prompt editor from the library dialog", async () => {
-  const api = vi.fn(withLabExtras(async (path: string) => {
-    if (path === "/api/remix-lab/defaults") return json(defaults);
-    if (path === "/api/remix-lab/experiments") return json([]);
-    throw new Error(`unexpected ${path}`);
-  }));
-  render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "提示词库" }));
-  expect(screen.getByRole("dialog", { name: "提示词库" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-  expect(screen.getByRole("dialog", { name: "编辑提示词" })).toBeTruthy();
-  expect(screen.getByLabelText("系统提示词")).toBeTruthy();
 });
 
 test("remix-lab can delete a history project from the sidebar", async () => {
@@ -457,12 +412,7 @@ test("workflow canvas edits a node prompt in the drawer and saves the graph", as
   expect(hook?.config.system_prompt).toBe("改过的钩子分析规则");
   const edges = puts[0].edges as Array<[string, string]>;
   expect(edges).toContainEqual(["hook", "writer"]);
-
-  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
-  await waitFor(() => {
-    const undone = puts[puts.length - 1].nodes as Array<{ id: string; config: { system_prompt?: string } }>;
-    expect(undone.find((node) => node.id === "hook")?.config.system_prompt).toBe("钩子分析规则");
-  }, { timeout: 2000 });
+  expect(screen.queryByRole("button", { name: "撤销" })).toBeNull();
 });
 
 test("workflow canvas hides captions by default and saves production params", async () => {
@@ -479,6 +429,7 @@ test("workflow canvas hides captions by default and saves production params", as
   }));
 
   render(<RemixLabPage api={api} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /定稿后的混剪设置/ }));
   await screen.findByText("混剪草稿");
   expect(screen.queryByText("字幕关键词")).toBeNull();
 
@@ -1623,7 +1574,7 @@ test("global settings live outside the copy workspace", async () => {
   }));
 
   render(<RemixLabPage api={api} onNavigate={vi.fn()} onOpenSettings={onOpenSettings} />);
-  expect(screen.getByRole("list", { name: "内容生产流程" })).toBeTruthy();
+  expect(screen.getByRole("list", { name: "文案二创流程" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "设置" })).toBeNull();
   expect(onOpenSettings).not.toHaveBeenCalled();
 });
