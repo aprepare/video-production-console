@@ -48,7 +48,7 @@ button.preview-thumb:hover .preview-thumb__play { opacity: 1; }
 /* 监控 */
 .monitor-layout { grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); align-items: start; }
 .monitor-layout > .studio-panel + .studio-panel { margin-top: 0; }
-.monitor-tasks { position: sticky; top: var(--space-4); }
+.monitor-tasks { position: sticky; top: calc(var(--console-nav-height, 0px) + var(--space-4)); }
 .monitor-all { width: 100%; margin-bottom: var(--space-2); padding: 7px 12px; border: 1px solid var(--ds-border); border-radius: var(--radius-md); background: var(--ds-surface); color: var(--ds-text-muted); font: 600 13px/1.4 var(--font-body); text-align: left; cursor: pointer; }
 .monitor-all[aria-current="true"] { border-color: var(--ds-accent); background: var(--ds-accent-soft); color: var(--ds-text); }
 .monitor-task-list { max-height: calc(100dvh - 260px); overflow: auto; scrollbar-width: thin; }

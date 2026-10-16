@@ -18,10 +18,11 @@ test("navigation marks the active workspace and preserves modified link clicks",
   expect(navigate).toHaveBeenCalledTimes(1);
 });
 
-test("navigation lists merchant, reference, copy, montage, replicate and image workspaces", () => {
+test("top tabs list reference, copy, montage, replicate, image and MCP without merchants", () => {
   render(<ConsoleNavigation active="remix" theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
   const workspaces = within(screen.getByRole("navigation", { name: "制作空间" }));
-  expect(workspaces.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/merchants", "/references", "/", "/projects", "/replicate", "/image-projects"]);
+  expect(workspaces.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual(["/references", "/", "/projects", "/replicate", "/image-projects", "/ai-access"]);
+  expect(screen.queryByRole("link", { name: /商户/ })).toBeNull();
   expect(screen.getByRole("link", { name: "文案二创" }).getAttribute("aria-current")).toBe("page");
   expect(screen.queryByRole("link", { name: "二创文档" })).toBeNull();
   expect(screen.queryByRole("link", { name: "AI短片" })).toBeNull();

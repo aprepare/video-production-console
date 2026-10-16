@@ -10,18 +10,18 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  --font-display: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
-  --font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Manrope", "PingFang SC", "Microsoft YaHei UI", "Segoe UI Variable Display", sans-serif;
+  --font-body: "Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI Variable Text", system-ui, sans-serif;
   --font-mono: "Cascadia Code", Consolas, monospace;
-  --ds-canvas: #f3f5f9;
+  --ds-canvas: #fbfbfe;
   --ds-surface: #ffffff;
-  --ds-surface-muted: #f0f2f7;
-  --ds-text: #20283f;
-  --ds-text-muted: #67718b;
-  --ds-border: #dde2ec;
-  --ds-border-strong: #b9c3d8;
-  --ds-accent: #2954dc;
-  --ds-accent-soft: #edf1ff;
+  --ds-surface-muted: #f4f5fb;
+  --ds-text: #252532;
+  --ds-text-muted: #686779;
+  --ds-border: #e6e7f0;
+  --ds-border-strong: #c6c8d9;
+  --ds-accent: #3567ee;
+  --ds-accent-soft: #eef3ff;
   --ds-on-accent: #ffffff;
   --ds-success: #20876c;
   --ds-warning: #a87219;
@@ -2656,7 +2656,7 @@ summary:focus-visible,
   .layout > aside {
     position: sticky;
     z-index: 3;
-    top: 0;
+    top: var(--console-nav-height, 0px);
     flex-direction: row;
     gap: 7px;
     padding: 9px;

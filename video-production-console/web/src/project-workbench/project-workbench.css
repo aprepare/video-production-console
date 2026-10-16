@@ -28,7 +28,7 @@
 }
 
 .project-workbench {
-  height: 100vh;
+  height: calc(100vh - var(--console-nav-height, 0px));
   display: flex;
   flex-direction: column;
   gap: 10px;

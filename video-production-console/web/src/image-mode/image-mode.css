@@ -155,7 +155,7 @@
 .image-mode-workbench:has(.image-mode-start) {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  height: calc(100vh - 78px);
+  height: calc(100vh - 78px - var(--console-nav-height, 0px));
   overflow: hidden;
 }
 

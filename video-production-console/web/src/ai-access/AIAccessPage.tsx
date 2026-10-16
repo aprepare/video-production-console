@@ -23,7 +23,7 @@ const capabilities = [
   { no: "01", title: "对标采集与监控", items: ["贴链接采集抖音、小红书、视频号", "按关键词搜同行爆款", "建监控任务，看飙升和高分视频", "读评论找痛点和机会"] },
   { no: "02", title: "拆解与复刻", items: ["拆解爆款的钩子、结构、镜头", "生成每个镜头的复刻提示词", "建复刻项目、批量生成视频", "拼接成片并做 AI 质检"] },
   { no: "03", title: "文案与混剪", items: ["按账号风格二创文案", "审稿、定稿、出发布包", "配音、字幕、出剪映草稿", "出封面、查任务进度"] },
-  { no: "04", title: "商户与经营", items: ["建商户、记订单和成本", "上传授权素材", "单张出图、图文制作", "导出经营总览"] },
+  { no: "04", title: "图文与出图", items: ["单张出图、一次出多张", "AI 扩写出图提示词", "图文笔记配图", "查任务进度、下载成品"] },
 ];
 
 const examples = [
@@ -87,15 +87,15 @@ export function AIAccessPage({ api }: { api: API }) {
       <div className="aa-hero__text">
         <span className="aa-badge"><Bot size={13} aria-hidden="true" />MCP 服务 <em>本机一键接入</em></span>
         <h1>一键接入控制台 MCP，<br /><span>让 AI 帮你跑完整条流水线</span></h1>
-        <p>接好以后，在 Claude Code、Codex 里用一句话就能采集对标、拆解爆款、批量复刻、混剪出草稿。只允许本机连接，花钱和删除的操作会先问你。</p>
+        <p>接好以后，在 WorkBuddy、Claude Code、Codex 里用一句话就能采集对标、拆解爆款、批量复刻、混剪出草稿。只允许本机连接，花钱和删除的操作会先问你。</p>
         <div className="studio-row aa-hero__actions">
-          {access ? <CopyButton text={access.claude} id="claude-hero" label="复制 Claude Code 命令" primary /> : null}
-          {access ? <CopyButton text={access.codex} id="codex-hero" label="复制 Codex 配置" /> : null}
+          {access ? <CopyButton text={access.json} id="workbuddy-hero" label="复制 WorkBuddy 配置" primary /> : null}
+          {access ? <CopyButton text={access.claude} id="claude-hero" label="复制 Claude Code 命令" /> : null}
         </div>
         <ul className="aa-checks"><li><Check size={13} aria-hidden="true" />84 个工具</li><li><Check size={13} aria-hidden="true" />只在本机</li><li><Check size={13} aria-hidden="true" />花钱先确认</li></ul>
       </div>
       <div className="aa-chat" aria-hidden="true">
-        <div className="aa-chat__bar"><span /><span /><span /><em>claude_code · jiying-console</em></div>
+        <div className="aa-chat__bar"><span /><span /><span /><em>workbuddy · jiying-console</em></div>
         <div className="aa-chat__ask">监控里「岚山海鲜」今天有没有飙升的视频？有的话拆解一下，给我复刻提示词。</div>
         <div className="aa-chat__answer">
           <div className="aa-chat__head"><strong>查询结果</strong><span>监控 · 今天</span></div>
@@ -110,7 +110,7 @@ export function AIAccessPage({ api }: { api: API }) {
       <p>用 AI 干活，一句话就够。MCP 是 AI 和控制台之间的连接，接上以后，AI 就能替你操作这里的每个功能。</p>
       <div className="aa-what__cards">
         <article><span className="aa-icon"><Link2 size={18} aria-hidden="true" /></span><h3>MCP</h3><strong>连接 AI 和控制台的「数据线」</strong><p>接上后，AI 才能替你采集、拆解、复刻、混剪。</p></article>
-        <article><span className="aa-icon"><Monitor size={18} aria-hidden="true" /></span><h3>客户端</h3><strong>你平时用的 AI 软件</strong><p>例如 Claude Code、Codex，在本机运行。</p></article>
+        <article><span className="aa-icon"><Monitor size={18} aria-hidden="true" /></span><h3>客户端</h3><strong>你平时用的 AI 软件</strong><p>例如 WorkBuddy、Claude Code、Codex，在本机运行。</p></article>
         <article><span className="aa-icon"><KeyRound size={18} aria-hidden="true" /></span><h3>令牌</h3><strong>打开控制台的专属钥匙</strong><p>只给你自己用；泄露了就点「重置令牌」，旧的立即失效。</p></article>
       </div>
       <div className="aa-tip"><div><strong>接好以后，使用就和聊天一样简单</strong><span>你负责提问，AI 通过 MCP 操作控制台，把结果整理好告诉你。</span></div><p>例如直接问：帮我把点赞最高的三条海鲜视频采集下来并拆解。</p></div>
@@ -122,8 +122,8 @@ export function AIAccessPage({ api }: { api: API }) {
       {access ? <ol className="aa-steps">
         <li>
           <span className="aa-step-no">1</span>
-          <div><h3>复制接入配置</h3><p>用 Claude Code 就复制命令，在终端运行一次；用 Codex 就复制配置，粘贴到 <code>~/.codex/config.toml</code>。</p>
-            <div className="studio-row"><CopyButton text={access.claude} id="claude" label="Claude Code 命令" /><CopyButton text={access.codex} id="codex" label="Codex 配置" /><CopyButton text={access.json} id="json" label="通用 JSON 配置" /></div>
+          <div><h3>复制接入配置</h3><p>用 WorkBuddy 就复制配置，粘贴到 <code>~/.workbuddy/mcp.json</code>（也可以在 WorkBuddy 里点「插件 → MCP 服务器 → 配置 MCP」打开），保存后在连接器管理里点「信任」；用 Claude Code 就复制命令，在终端运行一次；用 Codex 就复制配置，粘贴到 <code>~/.codex/config.toml</code>。</p>
+            <div className="studio-row"><CopyButton text={access.json} id="workbuddy" label="WorkBuddy 配置" primary /><CopyButton text={access.claude} id="claude" label="Claude Code 命令" /><CopyButton text={access.codex} id="codex" label="Codex 配置" /><CopyButton text={access.json} id="json" label="通用 JSON 配置" /></div>
           </div>
         </li>
         <li>
@@ -139,7 +139,7 @@ export function AIAccessPage({ api }: { api: API }) {
         </li>
         <li>
           <span className="aa-step-no">3</span>
-          <div><h3>重启 AI 客户端，开始提问</h3><p>重启后在对话里说「用极影控制台……」，AI 会自动调用这里的工具。</p></div>
+          <div><h3>重启 AI 客户端，开始提问</h3><p>WorkBuddy 里看到「jiying-console」亮绿点就是接好了。重启后在对话里说「用极影控制台……」，AI 会自动调用这里的工具。</p></div>
         </li>
       </ol> : !error ? <p className="studio-empty" role="status">正在读取接入信息…</p> : null}
       {access ? <div className="aa-rotate">

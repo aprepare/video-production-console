@@ -26,7 +26,7 @@
 .reference-platform[data-platform="xhs"] { color: var(--ds-danger); }
 .reference-platform[data-platform="channels"] { color: var(--ds-success); }
 
-.reference-detail { align-self: start; position: sticky; top: var(--space-4); display: grid; gap: var(--space-4); }
+.reference-detail { align-self: start; position: sticky; top: calc(var(--console-nav-height, 0px) + var(--space-4)); display: grid; gap: var(--space-4); }
 .reference-detail > header { margin-bottom: 0; align-items: flex-start; }
 .reference-detail h2 { margin: 2px 0 6px !important; font-size: 18px !important; line-height: 1.35; }
 .reference-caption { padding: 8px 12px; border-radius: var(--radius-sm); background: var(--ds-surface-muted); font-size: 13px; }

@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 const now = Date.now();
 const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60000).toISOString();
-const shotsDir = "../artifacts/replicate-20261016";
+const shotsDir = "../artifacts/topnav-20261016";
 
 const P1 = "6b0c2a8e-3f51-4c1d-9a77-2c5e8f3d1a01";
 const P2 = "6b0c2a8e-3f51-4c1d-9a77-2c5e8f3d1a02";
@@ -266,12 +266,12 @@ for (const theme of ["light", "dark"] as const) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto("/ai-access");
     await expect(page.getByRole("heading", { level: 1 })).toContainText("一键接入控制台 MCP");
-    await expect(page.getByRole("link", { name: "AI 接入" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("link", { name: "MCP 服务" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByText("fixture-token-0123456789abcdef")).toHaveCount(0);
     await page.getByRole("button", { name: "显示令牌" }).click();
     await expect(page.getByText("fixture-token-0123456789abcdef")).toBeVisible();
     await page.getByRole("button", { name: "隐藏令牌" }).click();
-    await page.getByRole("button", { name: "复制 Claude Code 命令" }).click();
+    await page.getByRole("button", { name: "复制 WorkBuddy 配置" }).click();
     await expect(page.getByRole("button", { name: "已复制" }).first()).toBeVisible();
     await noPageOverflow(page);
     await page.screenshot({ path: `${shotsDir}/ai-access-${theme}.png`, fullPage: true });

@@ -24,7 +24,7 @@
 .image-library-empty p, .image-library-feedback { margin: 0; font-size: 12px; line-height: 1.7; color: var(--ds-text-muted); }
 @media (min-width: 1600px) {
   .image-mode-workbench .image-mode-start--with-list { grid-template-columns: minmax(0, 1fr) 280px; }
-  .image-mode-workbench .image-project-list { position: sticky; top: 24px; }
+  .image-mode-workbench .image-project-list { position: sticky; top: calc(var(--console-nav-height, 0px) + 24px); }
   .image-project-list__items { grid-template-columns: minmax(0, 1fr); max-height: calc(100dvh - 240px); overflow-y: auto; padding-right: 3px; }
 }
 @media (max-width: 640px) {
