@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { ImageStudio, STUDIO_DRAFT_KEY, generationLabel, relativeTime } from "./ImageStudio";
+import { ImageStudio, STUDIO_DRAFT_KEY, generationLabel, relativeTime, retryWontHelp } from "./ImageStudio";
 import type { ImageGeneration, ImageModelsResponse } from "./imageStudioTypes";
 
 const json = (value: unknown, status = 200) => new Response(value === null ? null : JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -237,4 +237,18 @@ test("search and the favorites filter are sent to the history query", async () =
   fireEvent.change(screen.getByLabelText("搜索出图历史"), { target: { value: "封面" } });
   await waitFor(() => expect(api.mock.calls.some(([path]) => String(path).includes("q=%E5%B0%81%E9%9D%A2"))).toBe(true));
   expect(await screen.findByText("没有匹配的出图")).toBeTruthy();
+});
+
+test("retrying is not offered when the model or key itself is the problem", async () => {
+  const badModel = generation({ status: "failed", error: "图片模型「gpt-image-2」网关不支持，换一个模型试试", outputs: [output(0, "failed", { error: "图片模型「gpt-image-2」网关不支持，换一个模型试试" }), output(1, "failed", { error: "图片模型「gpt-image-2」网关不支持，换一个模型试试" })] });
+  expect(retryWontHelp(badModel)).toBe(true);
+  expect(retryWontHelp(generation({ status: "partial", outputs: [output(0, "ready"), output(1, "failed")] }))).toBe(false);
+  const api = routedApi({
+    "GET /api/image-studio/models": () => json(models),
+    "GET /api/image-studio/generations?": () => json({ items: [badModel], has_more: false }),
+  });
+  render(<ImageStudio api={api} />);
+  expect((await screen.findAllByText("图片模型「gpt-image-2」网关不支持，换一个模型试试")).length).toBe(2);
+  expect(screen.queryByRole("button", { name: /补出/ })).toBeNull();
+  expect(screen.getByRole("button", { name: /再来一组/ })).toBeTruthy();
 });
