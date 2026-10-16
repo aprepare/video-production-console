@@ -7,8 +7,10 @@ import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, ImageProjectDetail, ImageProjectItem, PublishingCandidate, Settings } from "../types";
 import { ImageTextConnectionSettings } from "./ImageTextConnectionSettings";
 import { PublishingDialog, publishingCandidatesFrom, selectedPublishingFrom } from "./PublishingDialog";
-import { DEFAULT_IMAGE_MODEL, QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
+import { QuickGenerateForm, resolveImageModel, resolveImageTextModel } from "./QuickGenerateForm";
 import { ImageProjectLibrary } from "./ImageProjectLibrary";
+import { ImageStudio } from "./ImageStudio";
+import { ImageModelField } from "./ImageModelField";
 import "./image-mode.css";
 
 type API = (path: string, init?: RequestInit) => Promise<Response>;
@@ -29,6 +31,7 @@ type Props = {
   onAdvancedMode?: () => void;
   settings?: Settings | null;
   onSettingsSaved?: (settings: Settings) => void;
+  onOpenSettings?: () => void;
 };
 type EditableItemField = "source_text" | "title" | "prompt";
 type DraftSegment = {
@@ -115,7 +118,13 @@ export function ImageModeWorkbench({
   onAdvancedMode,
   settings = null,
   onSettingsSaved,
+  onOpenSettings,
 }: Props) {
+  const [tab, setTab] = useState<"script" | "single">(() => (typeof window !== "undefined" && window.location.hash === "#single" ? "single" : "script"));
+  const switchTab = (next: "script" | "single") => {
+    setTab(next);
+    try { window.history.replaceState(null, "", next === "single" ? "#single" : window.location.pathname + window.location.search); } catch { /* history unavailable */ }
+  };
   const [projects, setProjects] = useState<ImageProject[]>([]);
   const [listState, setListState] = useState("loading");
   const [detail, setDetail] = useState<ImageProjectDetail | null>(null);
@@ -692,10 +701,15 @@ export function ImageModeWorkbench({
       <div className="image-mode-head">
         <div>
           <span className="eyebrow">创作工作室 / 图文制作</span>
-          <h1>图文项目</h1>
-          <p>{mode === "quick" ? "粘贴最终文案后直接生成图片。项目名称由模型生成，无需确认分段。" : "粘贴最终文案，先看 AI 分段建议，确认后再生成提示词和图片。最多 18 张，第一张是封面。"}</p>
+          <h1>{tab === "single" ? "单张出图" : "图文项目"}</h1>
+          <p>{tab === "single" ? "写一段画面需求，一次出 1–4 张。适合单独做封面、配图，出过的图都在下面的出图历史里。" : mode === "quick" ? "粘贴最终文案后直接生成图片。项目名称由模型生成，无需确认分段。" : "粘贴最终文案，先看 AI 分段建议，确认后再生成提示词和图片。最多 18 张，第一张是封面。"}</p>
+        </div>
+        <div className="image-mode-tabs" role="tablist" aria-label="图文制作方式">
+          <button type="button" role="tab" aria-selected={tab === "script"} onClick={() => switchTab("script")}>文案配图</button>
+          <button type="button" role="tab" aria-selected={tab === "single"} onClick={() => switchTab("single")}>单张出图</button>
         </div>
       </div>
+      {tab === "single" ? <ImageStudio api={api} onOpenSettings={onOpenSettings} /> : <>
       {onSettingsSaved ? <ImageTextConnectionSettings api={api} settings={settings} onSaved={onSettingsSaved} /> : null}
       {message ? <div className="image-mode-notice" role="status">{message}</div> : null}
       <div className="image-mode-start image-mode-start--with-list">
@@ -729,16 +743,7 @@ export function ImageModeWorkbench({
             <label>每张图片最多请求次数<select aria-label="每张图片最多请求次数" value={imageAttempts} onChange={(event) => { editedDefaults.current.imageAttempts = true; setImageAttempts(Number(event.target.value)); }}>{attemptOptions.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
           </div>
           <div className="image-fixed-models">
-            <label>
-              图片模型
-              <input
-                aria-label="图片模型"
-                value={imageModel}
-                onChange={(event) => { editedDefaults.current.imageModel = true; setImageModel(event.target.value); }}
-                placeholder={DEFAULT_IMAGE_MODEL}
-                maxLength={128}
-              />
-            </label>
+            <ImageModelField api={api} value={imageModel} onChange={(value) => { editedDefaults.current.imageModel = true; setImageModel(value); }} />
             <label>
               文本模型
               <ModelSelect
@@ -770,6 +775,7 @@ export function ImageModeWorkbench({
         )}
         {projectList}
       </div>
+      </>}
     </main>
   );
 }

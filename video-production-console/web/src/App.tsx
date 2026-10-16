@@ -1055,11 +1055,12 @@ function App() {
             defaultConcurrency={settings?.public.max_image_concurrency}
             defaultTextModel={settings?.public.image_text_model || "gpt-5.6-sol"}
             defaultReasoningEffort={settings?.public.image_text_reasoning_effort || ""}
-            defaultImageModel={settings?.public.image_model || "gpt-image-2"}
+            defaultImageModel={settings?.public.image_model || "grok-imagine-image-2.0"}
             defaultImageAttempts={settings?.public.image_generation_attempts}
             settings={settings}
             onSettingsSaved={(next) => client.setQueryData(queryKeys.settings(), next)}
             onAdvancedMode={() => navigate("/image-projects/advanced")}
+            onOpenSettings={() => void settingsPanel.openDialog()}
           />
         </>
       ) : (

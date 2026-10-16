@@ -184,7 +184,9 @@ test("image tab keeps image generation connection and moves text connection to i
   renderPanel();
   openTab("图文");
   expect(screen.getByRole("textbox", { name: "生图服务地址" })).toBeTruthy();
-  expect(screen.getByLabelText("生图 API Key")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "默认图片模型" })).toBeTruthy();
+  expect((screen.getByRole("checkbox", { name: "和图文文本模型共用同一把 Key" }) as HTMLInputElement).checked).toBe(true);
+  expect(screen.queryByLabelText("生图 API Key")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "图文文本模型地址" })).toBeNull();
   expect(screen.queryByLabelText("图文文本模型 API Key")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "生图模型" })).toBeNull();
@@ -324,17 +326,26 @@ test("the Volcengine API key is masked and only sent when a new value is typed",
 });
 
 test("image generation settings and secret are editable", () => {
-  const { onDraftChange, onSecretDraftChange } = renderPanel();
+  const { onDraftChange } = renderPanel();
   openTab("图文");
   const baseURL = screen.getByRole("textbox", { name: "生图服务地址" });
   fireEvent.change(baseURL, { target: { value: "https://images.example.test/v1" } });
   expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_base_url: "https://images.example.test/v1" });
+  fireEvent.change(screen.getByRole("textbox", { name: "默认图片模型" }), { target: { value: "grok-imagine-image" } });
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_model: "grok-imagine-image" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "和图文文本模型共用同一把 Key" }));
+  expect(onDraftChange).toHaveBeenCalledWith({ ...draft, image_use_text_key: false });
+  expect(screen.getByText(/当前地址使用 HTTP，密钥会明文传输/)).toBeTruthy();
+});
+
+test("a separate image key is editable only when sharing is turned off", () => {
+  const { onSecretDraftChange } = renderPanel({ draft: { ...draft, image_use_text_key: false } });
+  openTab("图文");
   fireEvent.change(screen.getByLabelText(/生图 API Key/), { target: { value: "new-image-key" } });
   expect(onSecretDraftChange).toHaveBeenCalledWith({
     ...emptySecretDraft,
     image_api_key: "new-image-key",
   });
-  expect(screen.getByText(/当前地址使用 HTTP，密钥会明文传输/)).toBeTruthy();
 });
 
 test("the montage tab keeps tool paths in a closed advanced section", () => {

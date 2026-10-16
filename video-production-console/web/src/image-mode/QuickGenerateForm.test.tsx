@@ -2,10 +2,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { QuickGenerateForm } from "./QuickGenerateForm";
+import { resetImageModelsCache } from "./ImageModelField";
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
-afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); resetImageModelsCache(); });
+
+const modelList = { default_model: "grok-imagine-image-2.0", key_configured: true, key_source: "image_text", models: [
+  { id: "grok-imagine-image-2.0", label: "Grok Imagine 2.0", note: "细节最好 · 约 15 秒", available: true },
+  { id: "grok-imagine-image", label: "Grok Imagine", note: "快 · 约 7 秒", available: true },
+  { id: "gemini-3.1-flash-image", label: "Gemini Flash Image", note: "网关暂不支持生图接口", available: false },
+] };
 
 const defaults = {
   defaultRatio: "3:4" as const,
@@ -25,7 +32,7 @@ describe("QuickGenerateForm", () => {
     expect((screen.getByLabelText("图片比例") as HTMLSelectElement).value).toBe("3:4");
     expect((screen.getByLabelText("视觉风格") as HTMLSelectElement).value).toBe("finance_documentary");
     expect((screen.getByLabelText("项目并发") as HTMLSelectElement).value).toBe("3");
-    expect((screen.getByRole("textbox", { name: "图片模型" }) as HTMLInputElement).value).toBe("gpt-image-2");
+    expect((screen.getByLabelText("图片模型") as HTMLInputElement).value).toBe("gpt-image-2");
     expect((screen.getByRole("combobox", { name: "文本模型" }) as HTMLSelectElement).value).toBe("gpt-5.6-sol");
     expect(screen.queryByLabelText("每张图片最多请求次数")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "高级参数" }));
@@ -35,7 +42,8 @@ describe("QuickGenerateForm", () => {
   test("lets the user pick a different text model and submits that name", async () => {
     const onCreated = vi.fn();
     let request: RequestInit | undefined;
-    const api = vi.fn(async (_path: string, init?: RequestInit) => {
+    const api = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/api/image-studio/models") return json(modelList);
       request = init;
       return json({ project_id: "new-project", run_status: "running" }, 202);
     });
@@ -88,7 +96,7 @@ describe("QuickGenerateForm", () => {
   });
 
   test("shows the server message with a request-failure label", async () => {
-    const api = vi.fn(async () => json({ code: "invalid_image_project", message: "Image project settings are invalid." }, 400));
+    const api = vi.fn(async (path: string) => path === "/api/image-studio/models" ? json(modelList) : json({ code: "invalid_image_project", message: "Image project settings are invalid." }, 400));
     render(<QuickGenerateForm api={api} {...defaults} onCreated={vi.fn()} onAdvancedMode={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("最终文案"), { target: { value: "完整文案" } });
     fireEvent.click(screen.getByRole("button", { name: "开始生成图片" }));
@@ -119,4 +127,23 @@ test("keeps creation script across page unmount", () => {
   view.unmount();
   render(<QuickGenerateForm {...props} />);
   expect((screen.getByLabelText("最终文案") as HTMLTextAreaElement).value).toBe("离开页面仍保留");
+});
+
+test("the image model is a dropdown of gateway models once the list loads", async () => {
+  const api = vi.fn(async (path: string) => path === "/api/image-studio/models" ? json(modelList) : json({ project_id: "p" }, 202));
+  render(<QuickGenerateForm api={api} {...defaults} defaultImageModel="grok-imagine-image-2.0" onCreated={vi.fn()} onAdvancedMode={vi.fn()} />);
+  const select = await screen.findByRole("combobox", { name: "图片模型" }) as HTMLSelectElement;
+  expect(select.value).toBe("grok-imagine-image-2.0");
+  expect(screen.getByText("细节最好 · 约 15 秒")).toBeTruthy();
+  expect((screen.getByRole("option", { name: /Gemini Flash Image · 不可用/ }) as HTMLOptionElement).disabled).toBe(true);
+  fireEvent.change(select, { target: { value: "__custom" } });
+  expect(screen.getByRole("textbox", { name: "图片模型" })).toBeTruthy();
+});
+
+test("an unknown saved model stays editable as free text", async () => {
+  const api = vi.fn(async () => json(modelList));
+  render(<QuickGenerateForm api={api} {...defaults} defaultImageModel="my-private-model" onCreated={vi.fn()} onAdvancedMode={vi.fn()} />);
+  await waitFor(() => expect(api).toHaveBeenCalledWith("/api/image-studio/models"));
+  expect((await screen.findByRole("textbox", { name: "图片模型" }) as HTMLInputElement).value).toBe("my-private-model");
+  expect(screen.getByRole("button", { name: "从列表选择" })).toBeTruthy();
 });

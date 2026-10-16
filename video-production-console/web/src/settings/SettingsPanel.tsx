@@ -438,22 +438,40 @@ export function SettingsPanel({
           {tab === "image" ? (
             <>
               <Field label="生图服务地址">
-                <input value={draft.image_base_url || ""} placeholder="OpenAI 兼容地址" onChange={setText("image_base_url")} />
+                <input value={draft.image_base_url || ""} placeholder={draft.image_text_base_url ? `留空则用图文文本地址 ${draft.image_text_base_url}` : "OpenAI 兼容地址"} onChange={setText("image_base_url")} />
               </Field>
-              <Field label="生图 API Key">
+              <Field label="默认图片模型">
+                <input aria-label="默认图片模型" value={draft.image_model || ""} placeholder="grok-imagine-image-2.0" onChange={setText("image_model")} />
+                <small>图文项目和单张出图都默认用它；单次出图时也能临时换。</small>
+              </Field>
+              <div className="settings-field settings-field--wide" role="group" aria-label="生图 Key">
+                生图 Key
+                <label className="settings-inline-check">
+                  <input
+                    type="checkbox"
+                    aria-label="和图文文本模型共用同一把 Key"
+                    checked={draft.image_use_text_key !== false}
+                    onChange={(event) => onDraftChange({ ...draft, image_use_text_key: event.target.checked })}
+                  />
+                  和图文文本模型共用同一把 Key（推荐，换 Key 只要改一处）
+                </label>
                 <small>
-                  {settings?.secrets.image_api_key?.configured ? "已配置，输入新值才会替换" : "未配置"}
+                  {draft.image_use_text_key !== false
+                    ? settings?.secrets.image_text_api_key?.configured ? "正在使用图文文本模型的 Key。" : "图文文本模型的 Key 还没配置，请到图文制作页的「文本模型连接」填写。"
+                    : settings?.secrets.image_api_key?.configured ? "单独的生图 Key 已配置，输入新值才会替换" : "单独的生图 Key 未配置"}
                 </small>
-                <input
-                  type="password"
-                  aria-label="生图 API Key"
-                  value={secretDraft.image_api_key}
-                  placeholder="留空保持不变"
-                  onChange={(event) =>
-                    onSecretDraftChange({ ...secretDraft, image_api_key: event.target.value })
-                  }
-                />
-              </Field>
+                {draft.image_use_text_key === false ? (
+                  <input
+                    type="password"
+                    aria-label="生图 API Key"
+                    value={secretDraft.image_api_key}
+                    placeholder="留空保持不变"
+                    onChange={(event) =>
+                      onSecretDraftChange({ ...secretDraft, image_api_key: event.target.value })
+                    }
+                  />
+                ) : null}
+              </div>
             </>
           ) : null}
           {tab === "voice" ? (
