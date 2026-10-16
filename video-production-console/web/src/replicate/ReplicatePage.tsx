@@ -412,9 +412,9 @@ function ProjectWorkspace({ api, projectID, onBack, onMessage }: { api: API; pro
       <div className="rp-settings__grid">
         <label className="studio-field">视频模型
           <select aria-label="视频模型" value={project.video_provider} onChange={(event) => void patchProject({ video_provider: event.target.value as ReplicateProject["video_provider"] })}>
-            {(providers?.providers ?? [{ id: "runninghub_h3", label: "MiniMax H3（RunningHub）", available: true } as ReplicateProvider, { id: "grok", label: "Grok Video", available: true } as ReplicateProvider]).map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 未配置"}</option>)}
+            {(providers?.providers ?? [{ id: "runninghub_h3", label: "MiniMax H3", available: true } as ReplicateProvider, { id: "grok", label: "Grok Video", available: true } as ReplicateProvider]).map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 未配置"}</option>)}
           </select>
-          <small>{provider?.note}{provider?.id === "runninghub_h3" && provider.keys ? ` · ${provider.keys} 把 Key 并行` : ""}</small>
+          <small>{provider?.note}</small>
         </label>
         <label className="studio-field">首帧图模型
           <select aria-label="首帧图模型" value={project.image_model} onChange={(event) => void patchProject({ image_model: event.target.value })}>

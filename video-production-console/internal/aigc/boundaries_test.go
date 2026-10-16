@@ -197,7 +197,7 @@ func TestImageToVideoRequiresRunningHubKeysBeforeClaimingJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "RunningHub Key") {
+	if _, err = s.ConfirmImageToVideo(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "视频接口暂不可用") {
 		t.Fatalf("missing key error=%v", err)
 	}
 	job, err = s.GetJob(context.Background(), job.ID)

@@ -27,7 +27,7 @@ const project = (extra: Partial<ReplicateProject> = {}): ReplicateProject => ({
   progress: { takes_total: 0, takes_done: 0, takes_failed: 0, takes_running: 0 }, ...extra,
 });
 const providers = { default_provider: "runninghub_h3", providers: [
-  { id: "runninghub_h3", label: "MiniMax H3（RunningHub）", note: "质量好 · 每条约 3 分钟", available: true, keys: 3, durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], default_duration: 6 },
+  { id: "runninghub_h3", label: "MiniMax H3", note: "质量好 · 每条约 3 分钟", available: true, keys: 3, durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], default_duration: 6 },
   { id: "grok", label: "Grok Video", note: "快 · 便宜 · 480p", available: true, durations: [6, 10, 15], default_duration: 6 },
 ] };
 

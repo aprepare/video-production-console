@@ -156,7 +156,7 @@ func (f *fakeReplicateAPI) Providers(context.Context) (replicate.ProvidersRespon
 	if f.err != nil {
 		return replicate.ProvidersResponse{}, f.err
 	}
-	return replicate.ProvidersResponse{Providers: []replicate.Provider{{ID: "runninghub_h3", Label: "MiniMax H3（RunningHub）", Available: true, Keys: 2, Durations: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, DefaultDuration: 6}}, DefaultProvider: "runninghub_h3"}, nil
+	return replicate.ProvidersResponse{Providers: []replicate.Provider{{ID: "runninghub_h3", Label: "MiniMax H3", Available: true, Keys: 2, Durations: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, DefaultDuration: 6}}, DefaultProvider: "runninghub_h3"}, nil
 }
 func (f *fakeReplicateAPI) open() (*os.File, error) {
 	if f.err != nil {

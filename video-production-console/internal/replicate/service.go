@@ -463,7 +463,7 @@ func (s *Service) Providers(ctx context.Context) (ProvidersResponse, error) {
 	if !validProvider(def) {
 		def = "runninghub_h3"
 	}
-	return ProvidersResponse{DefaultProvider: def, Providers: []Provider{{ID: "runninghub_h3", Label: "MiniMax H3（RunningHub）", Note: "质量好 · 每条约 3 分钟 · 约 35 币", Available: len(keys) > 0, Keys: len(keys), Durations: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, DefaultDuration: 6}, {ID: "grok", Label: "Grok Video", Note: "快 · 便宜 · 480p", Available: strings.TrimSpace(rt.GrokAPIKey) != "", Durations: []int{6, 10, 15}, DefaultDuration: 6}}}, nil
+	return ProvidersResponse{DefaultProvider: def, Providers: []Provider{{ID: "runninghub_h3", Label: "MiniMax H3", Note: "质量好 · 每条约 3 分钟", Available: len(keys) > 0, Keys: len(keys), Durations: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, DefaultDuration: 6}, {ID: "grok", Label: "Grok Video", Note: "快 · 便宜 · 480p", Available: strings.TrimSpace(rt.GrokAPIKey) != "", Durations: []int{6, 10, 15}, DefaultDuration: 6}}}, nil
 }
 func parseKeys(raw string) []string {
 	out := []string{}

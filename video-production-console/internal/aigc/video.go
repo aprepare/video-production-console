@@ -200,7 +200,7 @@ func (s *Service) ConfirmImageToVideo(ctx context.Context, jobID string) (store.
 	}
 	keys := consoleSettings.ParseRunningHubAPIKeys(rt.RunningHubAPIKeys)
 	if len(keys) == 0 {
-		return job, errors.New("还没配置 RunningHub Key，请到设置填写")
+		return job, errors.New("MiniMax 视频接口暂不可用，请联系管理员")
 	}
 	if err = s.jobs.ClaimJob(ctx, job.ID); err != nil {
 		return job, err

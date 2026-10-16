@@ -117,7 +117,7 @@ export function PublishPackage({ api, runID, publishing, onCopy, onMessage }: Pr
       setAIJob(await response.json());
       watchingRef.current = true;
       setNow(Date.now());
-      onMessage("已交给 RunningHub 出图。平台常要排队，可以先去做别的，出好会自动放进来。");
+      onMessage("已交给 AI 出图。平台常要排队，可以先去做别的，出好会自动放进来。");
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "AI 出图提交失败。");
     }
@@ -187,7 +187,7 @@ export function PublishPackage({ api, runID, publishing, onCopy, onMessage }: Pr
       <div className="publish-package__ai">
         <button type="button" className="header-button" disabled={aiRunning} onClick={() => void generateAI()}>
           <Sparkles size={14} aria-hidden="true" />
-          {aiRunning ? "AI 出图中…" : "AI 出图（RunningHub）"}
+          {aiRunning ? "AI 出图中…" : "AI 出图"}
         </button>
         <small>
           {aiRunning

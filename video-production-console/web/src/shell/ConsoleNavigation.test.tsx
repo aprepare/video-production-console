@@ -50,11 +50,7 @@ test("配置体检 shows a dot only while required setup items are pending", () 
   expect(screen.getByRole("link", { name: "配置体检" }).getAttribute("aria-current")).toBe("page");
 });
 
-test("新手引导 carries a hint dot until the guide has been opened once", () => {
-  const navigate = vi.fn();
-  const { rerender } = render(<ConsoleNavigation active={null} theme="light" onNavigate={navigate} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} guideUnseen />);
-  fireEvent.click(screen.getByRole("link", { name: "新手引导，第一次使用先看这里" }));
-  expect(navigate).toHaveBeenCalledWith("/guide");
-  rerender(<ConsoleNavigation active="guide" theme="light" onNavigate={navigate} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} />);
-  expect(screen.getByRole("link", { name: "新手引导" }).getAttribute("aria-current")).toBe("page");
+test("新手引导 is hidden from the navigation for now", () => {
+  render(<ConsoleNavigation active={null} theme="light" onNavigate={vi.fn()} onThemeChange={vi.fn()} onOpenSettings={vi.fn()} onLogout={vi.fn()} guideUnseen />);
+  expect(screen.queryByRole("link", { name: /新手引导/ })).toBeNull();
 });

@@ -128,10 +128,10 @@ export function AigcStudio({ api, merchantID, materials, orders, onMaterialsChan
       ...(orderID ? { order_id: orderID } : {}),
     }, "准备失败。");
     setPicked(new Set());
-  }, "已生成镜头清单，确认后才会提交到 RunningHub。");
+  }, "已生成镜头清单，确认后才会提交到 MiniMax 视频模型。");
   const confirm = (job: AigcJob) => {
     const shots = Number(parseParams(job).estimated_shots) || job.input_material_ids.length;
-    if (!window.confirm(`提交 ${shots} 个镜头到 RunningHub 生成视频？这一步会产生费用，提交后不能撤回。`)) return;
+    if (!window.confirm(`提交 ${shots} 个镜头到 MiniMax 视频模型生成视频？这一步会产生费用，提交后不能撤回。`)) return;
     void run(`confirm-${job.id}`, () => post(api, `/api/aigc/jobs/${job.id}/confirm`, {}, "提交失败。"), "已提交生成，完成后视频会进入素材台账。");
   };
   const showLineage = async (id: string) => {
@@ -190,7 +190,7 @@ export function AigcStudio({ api, merchantID, materials, orders, onMaterialsChan
       </section>
 
       <section className="aigc-step" aria-labelledby="aigc-step-4">
-        <h3 id="aigc-step-4"><span>4</span><Clapperboard size={15} aria-hidden="true" /> 图生视频（RunningHub H3）</h3>
+        <h3 id="aigc-step-4"><span>4</span><Clapperboard size={15} aria-hidden="true" /> 图生视频（MiniMax H3）</h3>
         <label className="studio-field">镜头动作<textarea rows={3} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} placeholder="例：镜头缓慢推近，蟹钳轻微动，热气上升；不要出现人物" /></label>
         <div className="studio-row">
           <label className="aigc-inline">时长<select value={duration} onChange={(event) => setDuration(Number(event.target.value))}>{[3, 5, 6, 8, 10].map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label>

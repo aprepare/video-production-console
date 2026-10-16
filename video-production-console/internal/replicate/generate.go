@@ -44,7 +44,7 @@ func buildPrompt(p store.ReplicateProject, sh store.ReplicateShot) (string, stri
 }
 func providerConfigured(rt settings.Runtime, p string) error {
 	if p == "runninghub_h3" && len(parseKeys(rt.RunningHubAPIKeys)) == 0 {
-		return &Error{"video_provider_not_configured", "还没配置 RunningHub Key，请到设置填写"}
+		return &Error{"video_provider_not_configured", "MiniMax 视频接口暂不可用，请联系管理员"}
 	}
 	if p == "grok" && strings.TrimSpace(rt.GrokAPIKey) == "" {
 		return &Error{"video_provider_not_configured", "还没配置 Grok Key，请到设置填写"}
