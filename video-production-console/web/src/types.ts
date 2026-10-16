@@ -112,6 +112,7 @@ export type PublicSettings = {
   codex_task_project_root: string;
   image_base_url: string;
   image_model: string;
+  image_use_text_key?: boolean;
   image_text_base_url: string;
   image_text_model: string;
   image_text_reasoning_effort: ReasoningEffort | "";

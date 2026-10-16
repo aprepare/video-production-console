@@ -5,6 +5,7 @@ import { ModelSelect } from "../ModelSelect";
 import { reasoningEfforts } from "../taskModel";
 import type { ReasoningEffort } from "../taskModel";
 import type { ImageProject, QuickImageProjectRequest, QuickImageProjectResponse } from "../types";
+import { ImageModelField } from "./ImageModelField";
 
 type API = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -36,7 +37,7 @@ const ratios: ImageProject["ratio"][] = ["3:4", "4:3", "9:16", "1:1"];
 const concurrencyOptions = Array.from({ length: 18 }, (_, index) => index + 1);
 const attemptOptions = [1, 2, 3, 4];
 export const DEFAULT_IMAGE_TEXT_MODEL = "gpt-5.6-sol";
-export const DEFAULT_IMAGE_MODEL = "gpt-image-2";
+export const DEFAULT_IMAGE_MODEL = "grok-imagine-image-2.0";
 
 export function resolveImageTextModel(value?: string) {
   const trimmed = value?.trim() ?? "";
@@ -152,16 +153,7 @@ export function QuickGenerateForm({
             onChange={setTextModel}
           />
         </label>
-        <label>
-          图片模型
-          <input
-            aria-label="图片模型"
-            value={imageModel}
-            onChange={(event) => setImageModel(event.target.value)}
-            placeholder={DEFAULT_IMAGE_MODEL}
-            maxLength={128}
-          />
-        </label>
+        <ImageModelField api={api} value={imageModel} onChange={setImageModel} />
         <label>
           思考强度
           <select aria-label="思考强度" value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")}>

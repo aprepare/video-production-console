@@ -56,3 +56,6 @@
 .ai-access .jianying-health__facts code { font: 600 12px/1.4 var(--font-mono); word-break: break-all; }
 .ai-access__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: 13px; }
 .ai-access__actions .settings-inline-button { display: inline-flex; align-items: center; gap: 4px; }
+
+.settings-inline-check { display: flex; align-items: center; gap: 8px; color: var(--ds-text); font-weight: 500; cursor: pointer; }
+.settings-inline-check input { width: auto; min-height: 0; }
