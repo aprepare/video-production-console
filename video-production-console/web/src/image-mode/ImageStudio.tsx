@@ -59,6 +59,11 @@ async function readError(response: Response, fallback: string) {
   }
 }
 
+/** 换模型或换 Key 之前，原样重试注定失败。 */
+export function retryWontHelp(generation: ImageGeneration) {
+  return /网关不支持|Key 无效|没有权限|内容安全/.test(generation.error || generation.outputs.find((output) => output.status === "failed")?.error || "");
+}
+
 export function isActive(generation: ImageGeneration) {
   return generation.status === "queued" || generation.status === "running";
 }
@@ -139,9 +144,10 @@ function GenerationCard({ generation, busy, onOpen, onReuse, onRetry, onFavorite
 }) {
   const failed = generation.outputs.filter((output) => output.status === "failed").length;
   const ready = generation.outputs.filter((output) => output.status === "ready");
+  const allFailed = generation.status === "failed" && failed === generation.outputs.length;
   const tone = generation.status === "failed" ? "attention" : generation.status === "partial" ? "attention" : isActive(generation) ? "working" : "ready";
   return <article className="studio-generation" data-status={generation.status} aria-label={`出图：${generation.prompt.slice(0, 30)}`}>
-    <div className="studio-generation__tiles" data-count={generation.count}>
+    <div className="studio-generation__tiles" data-count={generation.count} data-all-failed={allFailed ? "true" : undefined}>
       {generation.outputs.map((output) => <OutputTile key={output.id} generation={generation} output={output} onOpen={() => onOpen(output)} />)}
     </div>
     <div className="studio-generation__body">
@@ -156,7 +162,7 @@ function GenerationCard({ generation, busy, onOpen, onReuse, onRetry, onFavorite
       </div>
       <div className="studio-generation__actions">
         <button type="button" onClick={onReuse} title="把这次的提示词和参数填回上面"><RotateCcw size={14} aria-hidden="true" />再来一组</button>
-        {failed && !isActive(generation) ? <button type="button" disabled={busy} onClick={onRetry}><RefreshCw size={14} aria-hidden="true" />补出 {failed} 张</button> : null}
+        {failed && !isActive(generation) && !retryWontHelp(generation) ? <button type="button" disabled={busy} onClick={onRetry}><RefreshCw size={14} aria-hidden="true" />补出 {failed} 张</button> : null}
         {ready.length > 1 ? <a href={`/api/image-studio/generations/${generation.id}/download`} download><Download size={14} aria-hidden="true" />全部</a> : null}
         <span className="studio-grow" />
         <button type="button" className="studio-icon" aria-pressed={generation.favorite} aria-label={generation.favorite ? "取消收藏这次出图" : "收藏这次出图"} disabled={busy} onClick={onFavorite}><Heart size={15} aria-hidden="true" fill={generation.favorite ? "currentColor" : "none"} /></button>

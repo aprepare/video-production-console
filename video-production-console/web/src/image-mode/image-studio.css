@@ -71,6 +71,7 @@
 .image-mode-workbench .studio-tile--placeholder[data-state="failed"], .studio-tile--placeholder[data-state="failed"] { color: var(--workbench-danger); background: color-mix(in srgb, var(--workbench-danger) 6%, var(--workbench-surface)); animation: none; }
 .studio-tile--placeholder span { max-width: 22ch; line-height: 1.45; }
 @keyframes studio-shimmer { to { background-position: -140% 0; } }
+.studio-generation__tiles[data-all-failed="true"] .studio-tile--placeholder { aspect-ratio: auto !important; min-height: 120px; }
 .studio-generation__body { display: grid; gap: 8px; padding: 12px 14px 10px; }
 .studio-generation__prompt { display: -webkit-box; margin: 0; overflow: hidden; color: var(--workbench-ink); font-size: 13px; line-height: 1.55; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .studio-generation__error { margin: 0; color: var(--workbench-danger); font-size: 12px; line-height: 1.5; }
