@@ -1546,6 +1546,27 @@ CREATE TABLE image_generation_outputs (
   updated_at TEXT NOT NULL,
   UNIQUE(generation_id, position)
 );`,
+	`ALTER TABLE reference_analyses ADD COLUMN product TEXT NOT NULL DEFAULT '';
+CREATE TABLE video_qc_checks (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL CHECK (source IN ('upload','reference','image_video_job')),
+  source_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  product TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),
+  duration_s REAL NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  frame_count INTEGER NOT NULL DEFAULT 0,
+  verdict TEXT NOT NULL DEFAULT '',
+  score INTEGER NOT NULL DEFAULT 0,
+  report_json TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_video_qc_created ON video_qc_checks(created_at DESC);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

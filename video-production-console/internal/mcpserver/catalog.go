@@ -212,10 +212,16 @@ func referenceTools() []Tool {
 			"id": pathID("对标 id"), "transcript": str("口播全文"), "notes": str("备注"), "merchant_id": str("商户 id"),
 		}},
 		{Name: "delete_reference", Description: "删除一条对标。", Method: http.MethodDelete, Path: "/api/references/{id}", Confirm: "删除这条对标", Params: map[string]Param{"id": pathID("对标 id")}},
-		{Name: "analyze_reference", Description: "对对标视频做拆解分析（抽关键帧给视觉模型，异步）。要求原视频已缓存。", Method: http.MethodPost, Path: "/api/reference-analyses", Confirm: "调用视觉/拆解模型（产生模型费用）", Params: map[string]Param{
-			"reference_id": reqStr("对标 id"), "model": str("模型（可选）"), "focus": str("重点关注什么（可选）"),
+		{Name: "analyze_reference", Description: "对对标视频做拆解分析（抽关键帧给视觉模型，异步），并生成逐镜头首帧、运动和文生视频复刻提示词。要求原视频已缓存。", Method: http.MethodPost, Path: "/api/reference-analyses", Confirm: "调用视觉/拆解模型（产生模型费用）", Params: map[string]Param{
+			"reference_id": reqStr("对标 id"), "model": str("模型（可选）"), "focus": str("重点关注什么（可选）"), "product": str("要替换进复刻提示词的用户产品或场景描述，最多 300 字（可选）"),
 		}},
 		{Name: "list_reference_analyses", Description: "某条对标的拆解分析列表与结果。", Method: http.MethodGet, Path: "/api/reference-analyses", Params: map[string]Param{"reference_id": query("对标 id")}},
+		{Name: "check_video_quality", Description: "审核已下载的对标视频，检查抽样帧中的手指、肢体、面部、商品、文字、穿模、水印和清晰度（异步）。image_video_job 暂不支持直接审核，请先导出视频并通过上传接口提交。", Method: http.MethodPost, Path: "/api/video-qc", Confirm: "会调用看图模型（花钱）", Params: map[string]Param{
+			"source":    {Type: "string", Required: true, Description: "视频来源", Enum: []string{"reference", "image_video_job"}},
+			"source_id": reqStr("来源记录 id（对标 id 或图生视频任务 id）"),
+			"product":   str("商品外观和包装描述，供模型核对一致性（可选）"),
+			"model":     str("看图模型（可选，空值使用系统配置）"),
+		}},
 	}
 }
 

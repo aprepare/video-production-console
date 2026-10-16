@@ -36,6 +36,18 @@ type Report struct {
 	Persuasion []string `json:"persuasion"`
 	Conversion string   `json:"conversion"`
 	Replicate  struct {
+		StyleLock string `json:"style_lock"`
+		AIPrompts []struct {
+			ShotIndex        int     `json:"shot_index"`
+			StartS           float64 `json:"start_s"`
+			EndS             float64 `json:"end_s"`
+			Purpose          string  `json:"purpose"`
+			FirstFramePrompt string  `json:"first_frame_prompt"`
+			MotionPrompt     string  `json:"motion_prompt"`
+			T2VPrompt        string  `json:"t2v_prompt"`
+			Negative         string  `json:"negative"`
+			Keep             string  `json:"keep"`
+		} `json:"ai_prompts"`
 		ShotList []struct {
 			Shot       string  `json:"shot"`
 			DurationS  float64 `json:"duration_s"`

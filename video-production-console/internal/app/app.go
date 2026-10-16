@@ -40,6 +40,7 @@ import (
 	"video-production-console/internal/setup"
 	"video-production-console/internal/skillregistry"
 	"video-production-console/internal/store"
+	"video-production-console/internal/videoqc"
 	"video-production-console/internal/webui"
 )
 
@@ -296,6 +297,17 @@ func New(options Options) *App {
 			analysesHandler := httpapi.NewReferenceAnalysesHandler(analysisService)
 			mux.Handle("/api/reference-analyses", analysesHandler)
 			mux.Handle("/api/reference-analyses/", analysesHandler)
+
+			qcService := videoqc.New(store.NewVideoQCRepository(options.DB), referenceRepo, options.Settings)
+			resumeCtx, cancelResume = context.WithTimeout(context.Background(), 10*time.Second)
+			if err := qcService.Resume(resumeCtx); err != nil {
+				slog.Error("恢复视频审核状态失败")
+			}
+			cancelResume()
+			qcHandler := httpapi.NewVideoQCHandler(qcService)
+			mux.Handle("/api/video-qc", qcHandler)
+			mux.Handle("/api/video-qc/", qcHandler)
+			closers = append(closers, qcService.Close)
 
 			insightService := commentinsight.New(store.NewCommentInsightRepository(options.DB), referenceRepo, options.Settings, referenceService)
 			monitorService := monitor.New(store.NewMonitorRepository(options.DB), referenceService, referenceRepo, options.Settings, monitor.Options{

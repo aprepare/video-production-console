@@ -16,6 +16,7 @@ import (
 	"video-production-console/internal/domain"
 	"video-production-console/internal/imagestudio"
 	"video-production-console/internal/store"
+	"video-production-console/internal/videoqc"
 )
 
 // Go response structs and the frontend types that read them are both written by
@@ -57,6 +58,10 @@ var responseContracts = []struct {
 	{"image generation output", domain.ImageGenerationOutput{}, "image-mode/imageStudioTypes.ts", "ImageGenerationOutput"},
 	{"image model option", imagestudio.ImageModelOption{}, "image-mode/imageStudioTypes.ts", "ImageModelOption"},
 	{"image models response", imagestudio.ImageModelsResponse{}, "image-mode/imageStudioTypes.ts", "ImageModelsResponse"},
+	{"video qc check", videoqc.Check{}, "references/videoQCTypes.ts", "VideoQCCheck"},
+	{"video qc issue", videoqc.Issue{}, "references/videoQCTypes.ts", "VideoQCIssue"},
+	{"video qc frame", videoqc.Frame{}, "references/videoQCTypes.ts", "VideoQCFrame"},
+	{"video qc report", videoqc.Report{}, "references/videoQCTypes.ts", "VideoQCReport"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

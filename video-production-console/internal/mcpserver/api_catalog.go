@@ -63,11 +63,18 @@ POST /api/comment-insights | 评论洞察 {reference_id, model} | $
 GET /api/comment-insights | 评论洞察历史 ?reference_id
 GET /api/comment-insights/{id} | 评论洞察报告
 DELETE /api/comment-insights/{id} | 删除评论洞察 | !
-POST /api/reference-analyses | 拆解分析 {reference_id, model, focus}（视觉模型，异步） | $
+POST /api/reference-analyses | 拆解分析 {reference_id, model, focus, product}（视觉模型，异步；生成逐镜头 AI 复刻提示词） | $
 GET /api/reference-analyses | 拆解列表 ?reference_id
 GET /api/reference-analyses/{id} | 拆解详情
 GET /api/reference-analyses/{id}/frames/{n} | 第 n 张关键帧
 DELETE /api/reference-analyses/{id} | 删除拆解 | !
+# AI 视频审核
+POST /api/video-qc | 创建视频审核 {source, source_id, product, model}（视觉模型，异步；上传来源使用 multipart） | $
+GET /api/video-qc | 审核记录列表 ?limit
+GET /api/video-qc/{id} | 审核详情（报告与帧列表）
+GET /api/video-qc/{id}/frames/{n} | 第 n 张审核帧 JPEG
+GET /api/video-qc/{id}/video | 上传来源的原视频（支持 Range）
+DELETE /api/video-qc/{id} | 删除审核记录及文件 | !
 # 二创：实验与运行
 GET /api/remix-lab/defaults | 创作台默认配置与模型预设
 PUT /api/remix-lab/presets | 保存模型槽位预设 {slots[]}

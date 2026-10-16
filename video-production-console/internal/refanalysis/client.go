@@ -32,8 +32,8 @@ func NewClient(client HTTPClient) *Client {
 	return &Client{http: client}
 }
 
-func (c *Client) Analyze(ctx context.Context, cfg ModelConfig, post store.ReferencePost, info VideoInfo, shots []Shot, frames []Frame, focus string) (Report, error) {
-	payload, err := buildRequest(cfg, post, info, shots, frames, focus)
+func (c *Client) Analyze(ctx context.Context, cfg ModelConfig, post store.ReferencePost, info VideoInfo, shots []Shot, frames []Frame, focus string, products ...string) (Report, error) {
+	payload, err := buildRequest(cfg, post, info, shots, frames, focus, products...)
 	if err != nil {
 		return Report{}, err
 	}

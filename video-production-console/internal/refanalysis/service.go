@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"video-production-console/internal/settings"
@@ -68,10 +69,17 @@ func New(repo *store.ReferenceAnalysisRepository, references *store.ReferenceRep
 }
 
 // Start 返回创建时的 queued 快照；请求结束或断开不取消后台任务。
-func (s *Service) Start(ctx context.Context, referenceID, model, focus string) (store.ReferenceAnalysis, error) {
+func (s *Service) Start(ctx context.Context, referenceID, model, focus string, products ...string) (store.ReferenceAnalysis, error) {
 	referenceID, model = strings.TrimSpace(referenceID), strings.TrimSpace(model)
 	if !validID(referenceID) || len(model) > 256 {
 		return store.ReferenceAnalysis{}, ErrInvalidInput
+	}
+	product := ""
+	if len(products) > 0 {
+		if !utf8.ValidString(products[0]) || utf8.RuneCountInString(products[0]) > 300 {
+			return store.ReferenceAnalysis{}, ErrInvalidInput
+		}
+		product = strings.TrimSpace(products[0])
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,7 +115,7 @@ func (s *Service) Start(ctx context.Context, referenceID, model, focus string) (
 	if err != nil {
 		return store.ReferenceAnalysis{}, err
 	}
-	a := store.ReferenceAnalysis{ID: uuid.NewString(), ReferenceID: referenceID, Model: cfg.Model, Focus: truncateFocus(focus)}
+	a := store.ReferenceAnalysis{ID: uuid.NewString(), ReferenceID: referenceID, Model: cfg.Model, Focus: truncateFocus(focus), Product: product}
 	if _, err := analysisPath(rt.DataRoot, a, ""); err != nil {
 		return store.ReferenceAnalysis{}, err
 	}
@@ -203,7 +211,7 @@ func (s *Service) run(ctx context.Context, a store.ReferenceAnalysis, post store
 		return err
 	}
 	framesReady = true
-	report, err := s.client.Analyze(ctx, cfg, post, info, shots, frames, a.Focus)
+	report, err := s.client.Analyze(ctx, cfg, post, info, shots, frames, a.Focus, a.Product)
 	if err != nil {
 		return err
 	}

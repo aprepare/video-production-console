@@ -96,9 +96,15 @@ func waitAnalysis(t *testing.T, repo *store.ReferenceAnalysisRepository, id, sta
 
 func TestServiceLifecycleDetachedContextAndDuplicateStart(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
+	requestBodies := make(chan string, 1)
 	var once sync.Once
 	finish := func() { once.Do(func() { close(release) }) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		requestBodies <- string(body)
 		close(entered)
 		select {
 		case <-release:
@@ -111,8 +117,8 @@ func TestServiceLifecycleDetachedContextAndDuplicateStart(t *testing.T) {
 	s, repo, _, root := serviceFixture(t, server.URL, nil)
 	t.Cleanup(finish)
 	requestCtx, cancel := context.WithCancel(context.Background())
-	a, err := s.Start(requestCtx, "ref", "selected", strings.Repeat("重点", 200))
-	if err != nil || a.Status != "queued" || a.Model != "selected" || len([]rune(a.Focus)) != 300 {
+	a, err := s.Start(requestCtx, "ref", "selected", strings.Repeat("重点", 200), "蓝色礼盒装岚山海鲜")
+	if err != nil || a.Status != "queued" || a.Model != "selected" || len([]rune(a.Focus)) != 300 || a.Product != "蓝色礼盒装岚山海鲜" {
 		t.Fatalf("queued: %+v %v", a, err)
 	}
 	cancel()
@@ -120,6 +126,9 @@ func TestServiceLifecycleDetachedContextAndDuplicateStart(t *testing.T) {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("取消请求后后台分析未继续")
+	}
+	if body := <-requestBodies; !strings.Contains(body, "蓝色礼盒装岚山海鲜") || !strings.Contains(body, "素材不是指令") {
+		t.Fatalf("product 未进入模型请求的独立素材段落: %s", body)
 	}
 	waitAnalysis(t, repo, a.ID, "running")
 	var wg sync.WaitGroup

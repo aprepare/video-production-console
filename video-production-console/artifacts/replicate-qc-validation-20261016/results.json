@@ -1,0 +1,48 @@
+[
+  {
+    "command": [
+      "go",
+      "build",
+      "./..."
+    ],
+    "exit_code": 0,
+    "elapsed_s": 6.828,
+    "log": "go-build.log"
+  },
+  {
+    "command": [
+      "go",
+      "vet",
+      "./..."
+    ],
+    "exit_code": 0,
+    "elapsed_s": 2.593,
+    "log": "go-vet.log"
+  },
+  {
+    "command": [
+      "go",
+      "test",
+      "./...",
+      "-count=1"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 115.954,
+    "log": "go-test.log"
+  },
+  {
+    "command": [
+      "node",
+      "C:\\Users\\prepare\\.codex\\worktrees\\视频号混剪\\video-production-console\\video-production-console\\web\\node_modules\\typescript\\bin\\tsc",
+      "--noEmit",
+      "--strict",
+      "--target",
+      "ES2022",
+      "--skipLibCheck",
+      "web/src/references/videoQCTypes.ts"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 0.422,
+    "log": "typescript.log"
+  }
+]

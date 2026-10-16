@@ -1,0 +1,71 @@
+$ go test ./... -count=1
+ok  	video-production-console/cmd/catalog-builder	0.187s
+ok  	video-production-console/cmd/console	19.585s
+?   	video-production-console/cmd/editor-acceptance	[no test files]
+ok  	video-production-console/cmd/maintenance	0.298s
+?   	video-production-console/cmd/mintsession	[no test files]
+?   	video-production-console/cmd/remix-policy	[no test files]
+ok  	video-production-console/cmd/repair-startup	0.293s
+ok  	video-production-console/cmd/spoken-qc	0.217s
+ok  	video-production-console/internal/agentruntime	1.368s
+ok  	video-production-console/internal/agentruntime/montageplan	11.620s
+ok  	video-production-console/internal/agentruntime/montagescript	4.101s
+ok  	video-production-console/internal/agentruntime/openaicompat	1.995s
+ok  	video-production-console/internal/agentruntime/piruntime	0.342s
+ok  	video-production-console/internal/aigc	6.888s
+ok  	video-production-console/internal/app	6.985s
+ok  	video-production-console/internal/assets	2.993s
+ok  	video-production-console/internal/auth	3.949s
+ok  	video-production-console/internal/baokuan	0.454s
+ok  	video-production-console/internal/bgmlibrary	0.400s
+?   	video-production-console/internal/buildinfo	[no test files]
+ok  	video-production-console/internal/catalogbuilder	13.737s
+ok  	video-production-console/internal/codex	48.589s
+ok  	video-production-console/internal/codexapp	0.990s
+ok  	video-production-console/internal/commentinsight	1.763s
+ok  	video-production-console/internal/config	0.230s
+ok  	video-production-console/internal/conversation	14.505s
+ok  	video-production-console/internal/cover	0.626s
+ok  	video-production-console/internal/domain	0.274s
+?   	video-production-console/internal/grokvideo	[no test files]
+ok  	video-production-console/internal/httpapi	51.821s
+ok  	video-production-console/internal/imageproject	0.861s
+ok  	video-production-console/internal/imagestudio	3.640s
+ok  	video-production-console/internal/imagevideo	0.748s
+?   	video-production-console/internal/imagevideoruntime	[no test files]
+ok  	video-production-console/internal/jianyingdraft	8.052s
+?   	video-production-console/internal/localpath	[no test files]
+ok  	video-production-console/internal/logging	0.302s
+ok  	video-production-console/internal/mcpserver	0.277s
+ok  	video-production-console/internal/mediacatalog	21.011s
+?   	video-production-console/internal/medialibrary	[no test files]
+ok  	video-production-console/internal/monitor	18.626s
+ok  	video-production-console/internal/monitorai	0.418s
+ok  	video-production-console/internal/montage	11.570s
+ok  	video-production-console/internal/narration	1.296s
+?   	video-production-console/internal/obsidian	[no test files]
+ok  	video-production-console/internal/platformapi	0.992s
+ok  	video-production-console/internal/progress	0.999s
+ok  	video-production-console/internal/publishing	0.495s
+ok  	video-production-console/internal/realtime	0.450s
+ok  	video-production-console/internal/refanalysis	3.236s
+ok  	video-production-console/internal/references	6.266s
+ok  	video-production-console/internal/remixlab	13.128s
+ok  	video-production-console/internal/remixproducer	28.542s
+ok  	video-production-console/internal/security	0.643s
+ok  	video-production-console/internal/settings	16.821s
+ok  	video-production-console/internal/setup	11.610s
+ok  	video-production-console/internal/skillregistry	1.101s
+ok  	video-production-console/internal/spokenlines	0.232s
+ok  	video-production-console/internal/store	84.637s
+?   	video-production-console/internal/taskcompletion	[no test files]
+ok  	video-production-console/internal/taskmodel	0.770s
+?   	video-production-console/internal/testutil/citylib	[no test files]
+ok  	video-production-console/internal/timing	0.294s
+ok  	video-production-console/internal/videoqc	4.951s
+ok  	video-production-console/internal/webui	0.274s
+ok  	video-production-console/internal/workflow	4.251s
+ok  	video-production-console/schemas	0.801s
+
+exit_code=0
+elapsed_s=115.954

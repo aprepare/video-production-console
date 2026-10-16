@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"video-production-console/internal/refanalysis"
 	"video-production-console/internal/store"
@@ -59,12 +62,24 @@ func (h *referenceAnalysesHandler) start(w http.ResponseWriter, r *http.Request)
 		ReferenceID string `json:"reference_id"`
 		Model       string `json:"model"`
 		Focus       string `json:"focus"`
+		Product     string `json:"product"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxNormalJSONRequest)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeDecodeError(w, err, "invalid_analysis", "拆解请求格式不正确。")
+		return
+	}
+	if !utf8.Valid(raw) {
+		writeError(w, http.StatusBadRequest, "invalid_analysis", "拆解请求格式不正确。")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
 	if err := decodeJSON(w, r, maxNormalJSONRequest, &input); err != nil {
 		writeDecodeError(w, err, "invalid_analysis", "拆解请求格式不正确。")
 		return
 	}
-	a, err := h.service.Start(r.Context(), input.ReferenceID, input.Model, input.Focus)
+	a, err := h.service.Start(r.Context(), input.ReferenceID, input.Model, input.Focus, input.Product)
 	if err != nil {
 		h.error(w, err)
 		return

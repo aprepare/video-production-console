@@ -16,6 +16,7 @@ type ReferenceAnalysis struct {
 	Status      string    `json:"status"`
 	Model       string    `json:"model"`
 	Focus       string    `json:"focus"`
+	Product     string    `json:"product"`
 	FrameCount  int       `json:"frame_count"`
 	ReportJSON  string    `json:"-"`
 	Error       string    `json:"error"`
@@ -29,11 +30,11 @@ func NewReferenceAnalysisRepository(db *sql.DB) *ReferenceAnalysisRepository {
 	return &ReferenceAnalysisRepository{db: db}
 }
 
-const referenceAnalysisColumns = `id, reference_id, status, model, focus, frame_count, report_json, error, created_at, updated_at`
+const referenceAnalysisColumns = `id, reference_id, status, model, focus, product, frame_count, report_json, error, created_at, updated_at`
 
 func scanReferenceAnalysis(row interface{ Scan(...any) error }) (ReferenceAnalysis, error) {
 	var a ReferenceAnalysis
-	err := row.Scan(&a.ID, &a.ReferenceID, &a.Status, &a.Model, &a.Focus, &a.FrameCount, &a.ReportJSON, &a.Error, &a.CreatedAt, &a.UpdatedAt)
+	err := row.Scan(&a.ID, &a.ReferenceID, &a.Status, &a.Model, &a.Focus, &a.Product, &a.FrameCount, &a.ReportJSON, &a.Error, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReferenceAnalysis{}, ErrReferenceAnalysisNotFound
 	}
@@ -78,7 +79,7 @@ func (r *ReferenceAnalysisRepository) CreateQueued(ctx context.Context, a Refere
 		}
 		a.Status, a.UpdatedAt = "queued", now
 		a.FrameCount, a.ReportJSON, a.Error = 0, "", ""
-		_, err = conn.ExecContext(ctx, `INSERT INTO reference_analyses(`+referenceAnalysisColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.ReferenceID, a.Status, a.Model, a.Focus, a.FrameCount, a.ReportJSON, a.Error, a.CreatedAt, a.UpdatedAt)
+		_, err = conn.ExecContext(ctx, `INSERT INTO reference_analyses(`+referenceAnalysisColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.ReferenceID, a.Status, a.Model, a.Focus, a.Product, a.FrameCount, a.ReportJSON, a.Error, a.CreatedAt, a.UpdatedAt)
 		if err != nil {
 			return result, false, fmt.Errorf("create reference analysis: %w", err)
 		}

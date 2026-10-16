@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,9 +84,9 @@ func serveAnalysis(handler http.Handler, method, path, body string) *httptest.Re
 
 func TestReferenceAnalysisHTTPRoutesReportFramesAndDelete(t *testing.T) {
 	h, repo, _, root := analysisHTTPFixture(t)
-	start := serveAnalysis(h, "POST", "/api/reference-analyses", `{"reference_id":"ref","model":"chosen","focus":"看开头"}`)
+	start := serveAnalysis(h, "POST", "/api/reference-analyses", `{"reference_id":"ref","model":"chosen","focus":"看开头","product":"蓝色礼盒海鲜"}`)
 	var a store.ReferenceAnalysis
-	if start.Code != 202 || json.Unmarshal(start.Body.Bytes(), &a) != nil || a.Status != "queued" || a.Model != "chosen" {
+	if start.Code != 202 || json.Unmarshal(start.Body.Bytes(), &a) != nil || a.Status != "queued" || a.Model != "chosen" || a.Product != "蓝色礼盒海鲜" {
 		t.Fatalf("POST: %d %s", start.Code, start.Body.String())
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -134,6 +135,42 @@ func TestReferenceAnalysisHTTPRoutesReportFramesAndDelete(t *testing.T) {
 	}
 	if got := serveAnalysis(h, "GET", "/api/reference-analyses/"+a.ID, ""); got.Code != 404 {
 		t.Fatalf("删除后 GET: %d", got.Code)
+	}
+}
+
+func TestReferenceAnalysisHTTPRejectsInvalidProduct(t *testing.T) {
+	h, repo, _, _ := analysisHTTPFixture(t)
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{name: "超过300字", body: []byte(`{"reference_id":"ref","product":"` + strings.Repeat("产", 301) + `"}`)},
+		{name: "非法UTF8", body: append([]byte(`{"reference_id":"ref","product":"`), append([]byte{0xff}, []byte(`"}`)...)...)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/reference-analyses", bytes.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			h.ServeHTTP(w, r)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_analysis") {
+				t.Fatalf("无效 product: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+	rows, err := repo.ListByReference(t.Context(), "ref")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("无效 product 不应创建记录: %+v %v", rows, err)
+	}
+}
+
+func TestReferenceAnalysisHTTPAcceptsProductAt300Characters(t *testing.T) {
+	h, _, _, _ := analysisHTTPFixture(t)
+	product := strings.Repeat("产", 300)
+	got := serveAnalysis(h, http.MethodPost, "/api/reference-analyses", `{"reference_id":"ref","product":"`+product+`"}`)
+	var analysis store.ReferenceAnalysis
+	if got.Code != http.StatusAccepted || json.Unmarshal(got.Body.Bytes(), &analysis) != nil || analysis.Product != product {
+		t.Fatalf("300 字 product 应被接受: %d %s", got.Code, got.Body.String())
 	}
 }
 

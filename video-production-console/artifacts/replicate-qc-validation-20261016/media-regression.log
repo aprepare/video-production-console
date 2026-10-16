@@ -1,0 +1,13 @@
+$ go test ./internal/videoqc -run TestFFmpegIntegration|TestLowResolutionFramesAreNotUpscaled|TestCommandOutputLimitCannotBeBypassedByCopy|TestIncompleteReportsCannotPass -count=1 -v
+=== RUN   TestCommandOutputLimitCannotBeBypassedByCopy
+--- PASS: TestCommandOutputLimitCannotBeBypassedByCopy (0.00s)
+=== RUN   TestLowResolutionFramesAreNotUpscaled
+--- PASS: TestLowResolutionFramesAreNotUpscaled (0.20s)
+=== RUN   TestFFmpegIntegration
+--- PASS: TestFFmpegIntegration (0.80s)
+=== RUN   TestIncompleteReportsCannotPass
+--- PASS: TestIncompleteReportsCannotPass (0.00s)
+PASS
+ok  	video-production-console/internal/videoqc	1.191s
+
+exit_code=0

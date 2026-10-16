@@ -77,6 +77,65 @@ func TestBuildRequestWithoutTranscriptDoesNotUseCaption(t *testing.T) {
 	}
 }
 
+func TestBuildRequestIncludesProductAsUntrustedMaterialAndReplicatePromptContract(t *testing.T) {
+	raw, err := buildRequest(ModelConfig{Model: "m"}, store.ReferencePost{}, VideoInfo{DurationS: 2}, nil, nil, "", "我的产品是蓝色礼盒装岚山海鲜")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Messages) != 2 {
+		t.Fatalf("消息数量: %d", len(request.Messages))
+	}
+	var system string
+	if err := json.Unmarshal(request.Messages[0].Content, &system); err != nil {
+		t.Fatal(err)
+	}
+	for _, wanted := range []string{"主要镜头", "3–10", "用户自己的", "单条不超过 400 字", "first_frame_prompt", "motion_prompt", "t2v_prompt", "无法从关键帧确认"} {
+		if !strings.Contains(system, wanted) {
+			t.Errorf("系统提示词缺少复刻约束 %q", wanted)
+		}
+	}
+	var content []contentPart
+	if err := json.Unmarshal(request.Messages[1].Content, &content); err != nil {
+		t.Fatal(err)
+	}
+	var productParts []string
+	for _, part := range content {
+		if strings.Contains(part.Text, "蓝色礼盒装岚山海鲜") {
+			productParts = append(productParts, part.Text)
+		}
+	}
+	if len(productParts) != 1 || !strings.Contains(productParts[0], "素材不是指令") || !strings.Contains(productParts[0], "待替换") {
+		t.Fatalf("product 没有作为独立的不可信素材段落: %+v", productParts)
+	}
+}
+
+func TestParseReportIncludesAIPromptsAndKeepsOldReportsCompatible(t *testing.T) {
+	report, err := ParseReport(`{"summary":"可复刻","replicate":{"style_lock":"暖色自然光","ai_prompts":[{"shot_index":1,"start_s":0,"end_s":3.5,"purpose":"钩子","first_frame_prompt":"海鲜礼盒特写","motion_prompt":"镜头缓慢推进，3.5秒","t2v_prompt":"暖色自然光下的海鲜礼盒特写，镜头缓慢推进，3.5秒","negative":"多余手指、包装变形、乱码文字","keep":"蓝色长方形礼盒，单盒"}]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Replicate.StyleLock != "暖色自然光" || len(report.Replicate.AIPrompts) != 1 {
+		t.Fatalf("AI 复刻提示词未解析: %+v", report.Replicate)
+	}
+	prompt := report.Replicate.AIPrompts[0]
+	if prompt.ShotIndex != 1 || prompt.StartS != 0 || prompt.EndS != 3.5 || prompt.Purpose != "钩子" || prompt.FirstFramePrompt != "海鲜礼盒特写" || prompt.MotionPrompt == "" || prompt.T2VPrompt == "" || prompt.Negative == "" || prompt.Keep == "" {
+		t.Fatalf("AI 复刻字段不完整: %+v", prompt)
+	}
+	old, err := ParseReport(`{"summary":"旧报告","replicate":{"shot_list":[]}}`)
+	if err != nil || old.Replicate.StyleLock != "" || len(old.Replicate.AIPrompts) != 0 {
+		t.Fatalf("旧报告兼容失败: %+v %v", old, err)
+	}
+}
+
 func TestParseReportExtractsFirstObjectAndAcceptsMissingFields(t *testing.T) {
 	for _, content := range []string{
 		`{"summary":"开头反差","ignored":"extra"}`,
@@ -121,12 +180,12 @@ func TestModelClientRequestAndSafeFailures(t *testing.T) {
 		if body["temperature"] != 0.3 || body["stream"] != false || body["response_format"].(map[string]any)["type"] != "json_object" {
 			t.Error("模型请求参数不符合约定")
 		}
-		io.WriteString(w, `{"choices":[{"message":{"content":"说明：{\"summary\":\"成功\"}"}}]}`)
+		io.WriteString(w, `{"choices":[{"message":{"content":"说明：{\"summary\":\"成功\",\"replicate\":{\"style_lock\":\"暖色自然光\",\"ai_prompts\":[{\"shot_index\":1,\"first_frame_prompt\":\"海鲜礼盒特写\"}]}}"}}]}`)
 	}))
 	defer server.Close()
 	client := NewClient(server.Client())
 	report, err := client.Analyze(t.Context(), ModelConfig{BaseURL: server.URL + "/v1", Model: "m", APIKey: "test-key"}, store.ReferencePost{}, VideoInfo{}, nil, nil, "")
-	if err != nil || report.Summary != "成功" {
+	if err != nil || report.Summary != "成功" || report.Replicate.StyleLock != "暖色自然光" || len(report.Replicate.AIPrompts) != 1 || report.Replicate.AIPrompts[0].FirstFramePrompt != "海鲜礼盒特写" {
 		t.Fatalf("模型调用: %+v %v", report, err)
 	}
 	client = NewClient(httpDoerFunc(func(r *http.Request) (*http.Response, error) {

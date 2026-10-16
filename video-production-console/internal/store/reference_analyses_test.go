@@ -50,7 +50,7 @@ func TestReferenceAnalysisRepositoryLifecycleAndDeduplication(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			a, _, err := repo.CreateQueued(ctx, ReferenceAnalysis{ID: fmt.Sprint("job-", i), ReferenceID: "ref", Model: "model"})
+			a, _, err := repo.CreateQueued(ctx, ReferenceAnalysis{ID: fmt.Sprint("job-", i), ReferenceID: "ref", Model: "model", Product: "蓝色礼盒海鲜"})
 			if err != nil {
 				t.Errorf("创建失败: %v", err)
 				return
@@ -77,7 +77,7 @@ func TestReferenceAnalysisRepositoryLifecycleAndDeduplication(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := repo.Get(ctx, id)
-	if err != nil || got.Status != "completed" || got.FrameCount != 2 || got.ReportJSON != `{"summary":"完整报告"}` {
+	if err != nil || got.Status != "completed" || got.FrameCount != 2 || got.ReportJSON != `{"summary":"完整报告"}` || got.Product != "蓝色礼盒海鲜" {
 		t.Fatalf("完成状态: %+v %v", got, err)
 	}
 	if err := repo.FailInterrupted(ctx); err != nil {
