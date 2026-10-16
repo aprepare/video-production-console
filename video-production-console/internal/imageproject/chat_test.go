@@ -3,12 +3,58 @@ package imageproject
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestCompleteChatWithContextHonorsCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := CompleteChatWithContext(ctx, server.Client(), server.URL+"/v1", "secret-key", ChatRequest{Model: "model", User: "private prompt"})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "secret-key") || strings.Contains(err.Error(), "private prompt") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCompleteChatWithContextDoesNotExposeUpstreamBody(t *testing.T) {
+	const secret = "upstream-private-body"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, secret)
+	}))
+	defer server.Close()
+
+	_, err := CompleteChatWithContext(t.Context(), server.Client(), server.URL+"/v1", "secret-key", ChatRequest{Model: "model", User: "private prompt"})
+	if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "secret-key") || strings.Contains(err.Error(), "private prompt") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCompleteChatWithContextDoesNotExposeBodyReadErrorDetails(t *testing.T) {
+	const secret = "upstream-private-read-error"
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: errorReadCloser{err: errors.New(secret)}}, nil
+	})}
+	_, err := CompleteChatWithContext(t.Context(), client, "https://example.com/v1", "key", ChatRequest{Model: "model", User: "private prompt"})
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type errorReadCloser struct{ err error }
+
+func (r errorReadCloser) Read([]byte) (int, error) { return 0, r.err }
+func (errorReadCloser) Close() error               { return nil }
 
 func TestNewHTTPChatClientDefaultTimeoutAllowsLongPlanning(t *testing.T) {
 	client := NewHTTPChatClient(nil)

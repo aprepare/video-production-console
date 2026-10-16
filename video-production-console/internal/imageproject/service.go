@@ -26,6 +26,11 @@ var styleInstructions = map[string]string{
 	"blackboard":           "黑板讲解风，粉笔关系图、因果箭头、步骤清晰",
 }
 
+func StyleInstruction(style string) (string, bool) {
+	instruction, ok := styleInstructions[strings.TrimSpace(style)]
+	return instruction, ok
+}
+
 func SplitScript(script string, count int) ([]string, error) {
 	if strings.TrimSpace(script) == "" {
 		return nil, errors.New("script is required")

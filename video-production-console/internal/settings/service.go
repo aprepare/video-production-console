@@ -45,7 +45,7 @@ const (
 	SecretPlatformAPIToken = "platform_api_token"
 
 	secretMask                     = "********"
-	defaultImageModel              = "gpt-image-2"
+	defaultImageModel              = "grok-imagine-image-2.0"
 	defaultMaxImageConcurrency     = 3
 	maxImageConcurrency            = 18
 	defaultImageGenerationAttempts = 2
@@ -141,20 +141,21 @@ type View struct {
 // and must never be used as an HTTP response or task snapshot.
 type Runtime struct {
 	domain.PublicSettings
-	GrokAPIKey       string           `json:"-"`
-	RemixAPIKey      string           `json:"-"`
-	CopyAPIKey       string           `json:"-"`
-	PexelsAPIKey     string           `json:"-"`
-	VolcSpeechAPIKey string           `json:"-"`
-	AuraSTDTTsAPIKey string           `json:"-"`
-	ImageAPIKey      string           `json:"-"`
-	ImageTextAPIKey  string           `json:"-"`
-	VisionAPIKey     string           `json:"-"`
-	AnalysisAPIKey   string           `json:"-"`
-	EmbeddingAPIKey  string           `json:"-"`
-	PixabayAPIKey    string           `json:"-"`
-	PlatformAPIToken string           `json:"-"`
-	SecretVersions   map[string]int64 `json:"-"`
+	GrokAPIKey            string           `json:"-"`
+	RemixAPIKey           string           `json:"-"`
+	CopyAPIKey            string           `json:"-"`
+	PexelsAPIKey          string           `json:"-"`
+	VolcSpeechAPIKey      string           `json:"-"`
+	AuraSTDTTsAPIKey      string           `json:"-"`
+	ImageAPIKey           string           `json:"-"`
+	ImageTextAPIKey       string           `json:"-"`
+	VisionAPIKey          string           `json:"-"`
+	AnalysisAPIKey        string           `json:"-"`
+	EmbeddingAPIKey       string           `json:"-"`
+	PixabayAPIKey         string           `json:"-"`
+	PlatformAPIToken      string           `json:"-"`
+	SecretVersions        map[string]int64 `json:"-"`
+	configuredImageAPIKey string
 }
 
 type HealthStatus string
@@ -344,6 +345,7 @@ func (s *Service) Update(ctx context.Context, public domain.PublicSettings, secr
 }
 
 func (s *Service) applyHotSettings(configured domain.PublicSettings) {
+	configured = withImageDefaults(configured)
 	s.activeMu.Lock()
 	defer s.activeMu.Unlock()
 	if s.active == nil {
@@ -362,8 +364,14 @@ func (s *Service) applyHotSettings(configured domain.PublicSettings) {
 	s.active.RemixPromptStyle = configured.RemixPromptStyle
 	s.active.CopyBaseURL = configured.CopyBaseURL
 	s.active.ModelOptions = configured.ModelOptions
+	s.active.ImageModel = configured.ImageModel
+	s.active.ImageUseTextKey = configured.ImageUseTextKey
+	s.active.ImageTextBaseURL = configured.ImageTextBaseURL
+	s.active.ImageTextModel = configured.ImageTextModel
 	s.active.ImageTextReasoningEffort = configured.ImageTextReasoningEffort
 	s.active.ImageStream = configured.ImageStream
+	s.active.ImageBaseURL = effectiveImageBaseURL(configured.ImageBaseURL, configured.ImageTextBaseURL)
+	s.active.ImageAPIKey = effectiveImageAPIKey(configured.ImageUseTextKey, s.active.configuredImageAPIKey, s.active.ImageTextAPIKey)
 	// Montage style and the BGM library directory only affect future task
 	// manifests, so they hot-apply without a restart.
 	s.active.MontageStyle = configured.MontageStyle
@@ -424,9 +432,13 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 	if s.active == nil {
 		return
 	}
-	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken, SecretAnalysisAPIKey} {
-		value, ok := secrets[key]
-		if !ok || value == "" {
+	for _, key := range []string{SecretAuraSTDTTsAPIKey, SecretVolcSpeechAPIKey, SecretPlatformAPIToken, SecretAnalysisAPIKey, SecretImageAPIKey, SecretImageTextAPIKey} {
+		input, ok := secrets[key]
+		if !ok || input == "" {
+			continue
+		}
+		value, version, configured, err := s.secretValue(ctx, key)
+		if err != nil || !configured {
 			continue
 		}
 		switch key {
@@ -438,16 +450,17 @@ func (s *Service) applyHotVoiceSecrets(ctx context.Context, secrets map[string]s
 			s.active.PlatformAPIToken = value
 		case SecretAnalysisAPIKey:
 			s.active.AnalysisAPIKey = value
-		}
-		_, version, configured, err := s.secretValue(ctx, key)
-		if err != nil || !configured {
-			continue
+		case SecretImageAPIKey:
+			s.active.configuredImageAPIKey = value
+		case SecretImageTextAPIKey:
+			s.active.ImageTextAPIKey = value
 		}
 		if s.active.SecretVersions == nil {
 			s.active.SecretVersions = map[string]int64{}
 		}
 		s.active.SecretVersions[key] = version
 	}
+	s.active.ImageAPIKey = effectiveImageAPIKey(s.active.ImageUseTextKey, s.active.configuredImageAPIKey, s.active.ImageTextAPIKey)
 }
 
 func (s *Service) PutSecret(ctx context.Context, key, value string) error {
@@ -551,7 +564,7 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 		case SecretAuraSTDTTsAPIKey:
 			runtime.AuraSTDTTsAPIKey = value
 		case SecretImageAPIKey:
-			runtime.ImageAPIKey = value
+			runtime.configuredImageAPIKey = value
 		case SecretImageTextAPIKey:
 			runtime.ImageTextAPIKey = value
 		case SecretVisionAPIKey:
@@ -567,6 +580,8 @@ func (s *Service) configuredRuntime(ctx context.Context) (Runtime, error) {
 		}
 		runtime.SecretVersions[key] = version
 	}
+	runtime.ImageBaseURL = effectiveImageBaseURL(runtime.ImageBaseURL, runtime.ImageTextBaseURL)
+	runtime.ImageAPIKey = effectiveImageAPIKey(runtime.ImageUseTextKey, runtime.configuredImageAPIKey, runtime.ImageTextAPIKey)
 	applyBundledMediaBinaries(&runtime)
 	return runtime, nil
 }
@@ -644,6 +659,13 @@ func restartSensitiveChanged(configured, active domain.PublicSettings) bool {
 	configured.PlatformAPIBaseURL, active.PlatformAPIBaseURL = "", ""
 	configured.AnalysisBaseURL, active.AnalysisBaseURL = "", ""
 	configured.AnalysisModel, active.AnalysisModel = "", ""
+	configured.ImageBaseURL, active.ImageBaseURL = "", ""
+	configured.ImageModel, active.ImageModel = "", ""
+	configured.ImageUseTextKey, active.ImageUseTextKey = false, false
+	configured.ImageTextBaseURL, active.ImageTextBaseURL = "", ""
+	configured.ImageTextModel, active.ImageTextModel = "", ""
+	configured.ImageTextReasoningEffort, active.ImageTextReasoningEffort = "", ""
+	configured.ImageStream, active.ImageStream = false, false
 	clearVoiceHotSettings(&configured)
 	clearVoiceHotSettings(&active)
 	return !reflect.DeepEqual(configured, active)
@@ -1219,6 +1241,7 @@ func publicValues(value domain.PublicSettings) map[string]string {
 		"copy_base_url":          value.CopyBaseURL,
 		"model_options":          value.ModelOptions,
 		"image_base_url":         value.ImageBaseURL, "image_model": value.ImageModel,
+		"image_use_text_key":  strconv.FormatBool(value.ImageUseTextKey),
 		"image_text_base_url": value.ImageTextBaseURL, "image_text_model": value.ImageTextModel,
 		"image_text_reasoning_effort": value.ImageTextReasoningEffort,
 		"image_stream":                strconv.FormatBool(value.ImageStream),
@@ -1295,6 +1318,20 @@ func withImageDefaults(value domain.PublicSettings) domain.PublicSettings {
 		value.DefaultImageStyle = defaultImageStyle
 	}
 	return value
+}
+
+func effectiveImageAPIKey(useTextKey bool, imageKey, textKey string) string {
+	if useTextKey && textKey != "" {
+		return textKey
+	}
+	return imageKey
+}
+
+func effectiveImageBaseURL(imageBaseURL, textBaseURL string) string {
+	if strings.TrimSpace(imageBaseURL) == "" {
+		return textBaseURL
+	}
+	return imageBaseURL
 }
 
 func withMediaIntelligenceDefaults(value domain.PublicSettings) domain.PublicSettings {
@@ -1419,6 +1456,10 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		_ = json.Unmarshal([]byte(raw), &workspaceRoots)
 	}
 	appServerEnabled, _ := strconv.ParseBool(values["app_server_enabled"])
+	imageUseTextKey := true
+	if raw, ok := values["image_use_text_key"]; ok {
+		imageUseTextKey, _ = strconv.ParseBool(raw)
+	}
 	imageStream, _ := strconv.ParseBool(values["image_stream"])
 	imageConcurrency, _ := strconv.Atoi(values["max_image_concurrency"])
 	if imageConcurrency < 1 || imageConcurrency > maxImageConcurrency {
@@ -1485,7 +1526,7 @@ func publicFromValues(values map[string]string) domain.PublicSettings {
 		RemixPromptStyle:     normalizeRemixPromptStyleSetting(values["remix_prompt_style"]),
 		CopyBaseURL:          strings.TrimSpace(values["copy_base_url"]),
 		ModelOptions:         normalizeModelOptions(values["model_options"]),
-		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel,
+		ImageBaseURL:         values["image_base_url"], ImageModel: imageModel, ImageUseTextKey: imageUseTextKey,
 		ImageTextBaseURL: values["image_text_base_url"], ImageTextModel: strings.TrimSpace(values["image_text_model"]),
 		ImageTextReasoningEffort: strings.ToLower(strings.TrimSpace(values["image_text_reasoning_effort"])),
 		ImageStream:              imageStream,

@@ -27,7 +27,7 @@ var publicSettingKeys = map[string]struct{}{
 	"baokuan_base_url": {}, "baokuan_mcp_executable": {},
 	"obsidian_vault": {}, "topic_cards_dir": {},
 	"grok_base_url": {}, "grok_model": {}, "remix_base_url": {}, "remix_model": {}, "remix_reasoning_effort": {}, "remix_check_model": {}, "spoken_lines_model": {}, "remix_prompt_style": {}, "copy_base_url": {}, "model_options": {}, "codex_binary_path": {},
-	"image_base_url": {}, "image_model": {}, "image_text_base_url": {}, "image_text_model": {},
+	"image_base_url": {}, "image_model": {}, "image_use_text_key": {}, "image_text_base_url": {}, "image_text_model": {},
 	"image_text_reasoning_effort": {},
 	"image_stream":                {},
 	"max_image_concurrency":       {}, "image_generation_attempts": {}, "default_image_ratio": {}, "default_image_style": {},

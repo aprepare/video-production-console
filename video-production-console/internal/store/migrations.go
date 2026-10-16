@@ -1510,6 +1510,42 @@ CREATE TABLE comment_insights (
 );
 CREATE INDEX idx_comment_insights_ref ON comment_insights(reference_id, created_at DESC);
 CREATE UNIQUE INDEX idx_comment_insights_active ON comment_insights(reference_id) WHERE status IN ('queued','running');`,
+	`UPDATE settings
+SET value = 'grok-imagine-image-2.0'
+WHERE key = 'image_model' AND (value = 'gpt-image-2' OR value = '');
+INSERT OR IGNORE INTO settings(key, value) VALUES ('image_use_text_key', 'true');`,
+	`CREATE TABLE image_generations (
+  id TEXT PRIMARY KEY,
+  prompt TEXT NOT NULL,
+  final_prompt TEXT NOT NULL,
+  enhance INTEGER NOT NULL DEFAULT 0,
+  style TEXT NOT NULL DEFAULT '',
+  custom_style TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL,
+  ratio TEXT NOT NULL CHECK (ratio IN ('3:4','4:3','9:16','1:1')),
+  count INTEGER NOT NULL CHECK (count BETWEEN 1 AND 4),
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','partial','failed')),
+  error TEXT NOT NULL DEFAULT '',
+  favorite INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_image_generations_created ON image_generations(created_at DESC);
+CREATE TABLE image_generation_outputs (
+  id TEXT PRIMARY KEY,
+  generation_id TEXT NOT NULL REFERENCES image_generations(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','ready','failed')),
+  path TEXT NOT NULL DEFAULT '',
+  mime_type TEXT NOT NULL DEFAULT '',
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(generation_id, position)
+);`,
 }
 
 const wordTimingAssetsMigrationVersion = 23

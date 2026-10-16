@@ -19,6 +19,41 @@ import (
 	"video-production-console/internal/security"
 )
 
+func TestActivationCodeAllowsImageUseTextKey(t *testing.T) {
+	source, _, _, sourcePublic := newSettingsTestService(t, Options{})
+	sourcePublic.ImageUseTextKey = false
+	if _, err := source.PutPublic(t.Context(), sourcePublic); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := source.ExportCode(t.Context(), ExportCodeRequest{Keys: []string{"image_use_text_key"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(exported.PublicKeys, []string{"image_use_text_key"}) {
+		t.Fatalf("exported public keys=%v", exported.PublicKeys)
+	}
+
+	destination, _, _, destinationPublic := newSettingsTestService(t, Options{})
+	destinationPublic.ImageUseTextKey = true
+	if _, err := destination.PutPublic(t.Context(), destinationPublic); err != nil {
+		t.Fatal(err)
+	}
+	result, err := destination.ActivateCode(t.Context(), exported.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.AppliedPublic, []string{"image_use_text_key"}) {
+		t.Fatalf("applied public keys=%v", result.AppliedPublic)
+	}
+	view, err := destination.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Public.ImageUseTextKey {
+		t.Fatal("activation did not apply image_use_text_key=false")
+	}
+}
+
 type activationFixture struct {
 	Version   int               `json:"v"`
 	IssuedTo  string            `json:"issued_to"`

@@ -14,6 +14,7 @@ import (
 	"video-production-console/internal/aigc"
 	"video-production-console/internal/commentinsight"
 	"video-production-console/internal/domain"
+	"video-production-console/internal/imagestudio"
 	"video-production-console/internal/store"
 )
 
@@ -52,6 +53,10 @@ var responseContracts = []struct {
 	{"comment insight", commentinsight.Insight{}, "references/monitorTypes.ts", "CommentInsight"},
 	{"aigc job", store.AIGCJob{}, "merchants/AigcStudio.tsx", "AigcJob"},
 	{"aigc lineage", aigc.LineageEntry{}, "merchants/AigcStudio.tsx", "LineageStep"},
+	{"image generation", domain.ImageGeneration{}, "image-mode/imageStudioTypes.ts", "ImageGeneration"},
+	{"image generation output", domain.ImageGenerationOutput{}, "image-mode/imageStudioTypes.ts", "ImageGenerationOutput"},
+	{"image model option", imagestudio.ImageModelOption{}, "image-mode/imageStudioTypes.ts", "ImageModelOption"},
+	{"image models response", imagestudio.ImageModelsResponse{}, "image-mode/imageStudioTypes.ts", "ImageModelsResponse"},
 }
 
 func TestResponseTypesCoverFrontendFields(t *testing.T) {

@@ -354,23 +354,9 @@ func (h *imageProjectsHandler) plannerClient(ctx context.Context, requestedModel
 	if err != nil {
 		return nil, "", err
 	}
-	baseURL := strings.TrimSpace(runtime.ImageTextBaseURL)
-	apiKey := strings.TrimSpace(runtime.ImageTextAPIKey)
-	model := strings.TrimSpace(requestedModel)
-	if model == "" {
-		model = strings.TrimSpace(runtime.ImageTextModel)
-	}
-	if model == "" {
-		model = strings.TrimSpace(runtime.GrokModel)
-	}
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(runtime.GrokBaseURL)
-	}
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(runtime.GrokAPIKey)
-	}
-	if baseURL == "" || apiKey == "" || model == "" {
-		return nil, "", consoleSettings.ErrNotConfigured
+	baseURL, apiKey, model, err := imagePlannerConfig(runtime, requestedModel)
+	if err != nil {
+		return nil, "", err
 	}
 	switch planner := h.planner.(type) {
 	case imageproject.ConfiguredChatClient:
@@ -582,11 +568,11 @@ func (h *imageProjectsHandler) generate(ctx context.Context, project domain.Imag
 		}
 		if result.Error != nil {
 			if item.ImagePath != nil {
-				if err := h.repo.MarkItemRegenerationFailed(finalizeCtx, item.ID, item.Status, result.Error.Error(), time.Now().UTC()); err != nil {
+				if err := h.repo.MarkItemRegenerationFailed(finalizeCtx, item.ID, item.Status, imageproject.ImageErrorMessage(result.Error, model), time.Now().UTC()); err != nil {
 					return err
 				}
 			} else {
-				if err := h.repo.MarkItemFailed(finalizeCtx, item.ID, result.Error.Error(), time.Now().UTC()); err != nil {
+				if err := h.repo.MarkItemFailed(finalizeCtx, item.ID, imageproject.ImageErrorMessage(result.Error, model), time.Now().UTC()); err != nil {
 					return err
 				}
 			}
@@ -596,11 +582,11 @@ func (h *imageProjectsHandler) generate(ctx context.Context, project domain.Imag
 		path := filepath.Join(root, fmt.Sprintf("%03d_%s_%s%s", item.Sequence, safeImageName(item.Title), uuid.NewString(), extension))
 		if err := os.WriteFile(path, result.Bytes, 0o600); err != nil {
 			if item.ImagePath != nil {
-				if err := h.repo.MarkItemRegenerationFailed(finalizeCtx, item.ID, item.Status, "generated image could not be saved", time.Now().UTC()); err != nil {
+				if err := h.repo.MarkItemRegenerationFailed(finalizeCtx, item.ID, item.Status, "图片保存失败，请检查数据目录权限和磁盘空间后重试", time.Now().UTC()); err != nil {
 					return err
 				}
 			} else {
-				if err := h.repo.MarkItemFailed(finalizeCtx, item.ID, "generated image could not be saved", time.Now().UTC()); err != nil {
+				if err := h.repo.MarkItemFailed(finalizeCtx, item.ID, "图片保存失败，请检查数据目录权限和磁盘空间后重试", time.Now().UTC()); err != nil {
 					return err
 				}
 			}

@@ -1,0 +1,71 @@
+ok  	video-production-console/cmd/catalog-builder	0.534s
+ok  	video-production-console/cmd/console	3.431s
+?   	video-production-console/cmd/editor-acceptance	[no test files]
+ok  	video-production-console/cmd/maintenance	1.760s
+?   	video-production-console/cmd/mintsession	[no test files]
+?   	video-production-console/cmd/remix-policy	[no test files]
+ok  	video-production-console/cmd/repair-startup	2.213s
+ok  	video-production-console/cmd/spoken-qc	0.585s
+ok  	video-production-console/internal/agentruntime	11.450s
+ok  	video-production-console/internal/agentruntime/montageplan	264.750s
+ok  	video-production-console/internal/agentruntime/montagescript	166.222s
+ok  	video-production-console/internal/agentruntime/openaicompat	5.655s
+ok  	video-production-console/internal/agentruntime/piruntime	4.579s
+ok  	video-production-console/internal/aigc	64.932s
+ok  	video-production-console/internal/app	12.441s
+ok  	video-production-console/internal/assets	10.593s
+ok  	video-production-console/internal/auth	11.726s
+ok  	video-production-console/internal/baokuan	13.436s
+ok  	video-production-console/internal/bgmlibrary	13.345s
+?   	video-production-console/internal/buildinfo	[no test files]
+ok  	video-production-console/internal/catalogbuilder	18.035s
+ok  	video-production-console/internal/codex	221.158s
+ok  	video-production-console/internal/codexapp	6.252s
+ok  	video-production-console/internal/commentinsight	4.610s
+ok  	video-production-console/internal/config	1.336s
+ok  	video-production-console/internal/conversation	34.254s
+ok  	video-production-console/internal/cover	2.151s
+ok  	video-production-console/internal/domain	1.851s
+?   	video-production-console/internal/grokvideo	[no test files]
+ok  	video-production-console/internal/httpapi	336.738s
+ok  	video-production-console/internal/imageproject	3.900s
+ok  	video-production-console/internal/imagestudio	5.323s
+ok  	video-production-console/internal/imagevideo	9.485s
+?   	video-production-console/internal/imagevideoruntime	[no test files]
+ok  	video-production-console/internal/jianyingdraft	13.364s
+?   	video-production-console/internal/localpath	[no test files]
+ok  	video-production-console/internal/logging	6.061s
+ok  	video-production-console/internal/mcpserver	5.992s
+ok  	video-production-console/internal/mediacatalog	55.272s
+?   	video-production-console/internal/medialibrary	[no test files]
+ok  	video-production-console/internal/monitor	44.105s
+ok  	video-production-console/internal/monitorai	5.572s
+ok  	video-production-console/internal/montage	6.753s
+ok  	video-production-console/internal/narration	12.716s
+?   	video-production-console/internal/obsidian	[no test files]
+ok  	video-production-console/internal/platformapi	3.704s
+ok  	video-production-console/internal/progress	3.746s
+ok  	video-production-console/internal/publishing	12.593s
+ok  	video-production-console/internal/realtime	12.207s
+ok  	video-production-console/internal/refanalysis	64.968s
+ok  	video-production-console/internal/references	57.756s
+ok  	video-production-console/internal/remixlab	34.346s
+ok  	video-production-console/internal/remixproducer	33.816s
+ok  	video-production-console/internal/security	5.854s
+ok  	video-production-console/internal/settings	51.829s
+ok  	video-production-console/internal/setup	28.845s
+ok  	video-production-console/internal/skillregistry	10.636s
+ok  	video-production-console/internal/spokenlines	13.715s
+--- FAIL: TestMonitorMigrationsCreateVersionsAndTables (1.06s)
+    monitors_test.go:41: latest migration=48, want 46
+FAIL
+FAIL	video-production-console/internal/store	363.132s
+?   	video-production-console/internal/taskcompletion	[no test files]
+ok  	video-production-console/internal/taskmodel	5.755s
+?   	video-production-console/internal/testutil/citylib	[no test files]
+ok  	video-production-console/internal/timing	8.612s
+ok  	video-production-console/internal/webui	7.793s
+ok  	video-production-console/internal/workflow	33.353s
+ok  	video-production-console/schemas	10.235s
+FAIL
+exit_code=1

@@ -85,7 +85,7 @@ func TestImageStreamDefaultsFalseAndHotUpdates(t *testing.T) {
 	}
 }
 
-func TestImageConcurrencyIsHotButEndpointAndSecretRequireRestart(t *testing.T) {
+func TestImageEndpointAndSecretApplyWithoutRestart(t *testing.T) {
 	service, _, _, configured := newSettingsTestService(t, Options{})
 	if _, err := service.PutPublic(t.Context(), configured); err != nil {
 		t.Fatal(err)
@@ -108,8 +108,15 @@ func TestImageConcurrencyIsHotButEndpointAndSecretRequireRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !view.RestartRequired || view.ActivePublic.ImageBaseURL == configured.ImageBaseURL {
-		t.Fatalf("image endpoint/secret change did not require restart: %+v", view)
+	if view.RestartRequired || view.ActivePublic.ImageBaseURL != configured.ImageBaseURL {
+		t.Fatalf("image endpoint/secret change was not hot-applied: %+v", view)
+	}
+	runtime, err := service.Runtime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.ImageAPIKey != "replacement-test-key" {
+		t.Fatalf("runtime image key=%q", runtime.ImageAPIKey)
 	}
 }
 

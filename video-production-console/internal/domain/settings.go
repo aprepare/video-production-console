@@ -27,6 +27,7 @@ type PublicSettings struct {
 	ModelOptions                string   `json:"model_options"`
 	ImageBaseURL                string   `json:"image_base_url"`
 	ImageModel                  string   `json:"image_model"`
+	ImageUseTextKey             bool     `json:"image_use_text_key"`
 	ImageTextBaseURL            string   `json:"image_text_base_url"`
 	ImageTextModel              string   `json:"image_text_model"`
 	ImageTextReasoningEffort    string   `json:"image_text_reasoning_effort"`

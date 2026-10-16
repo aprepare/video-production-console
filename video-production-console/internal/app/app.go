@@ -208,6 +208,10 @@ func New(options Options) *App {
 			imageProjectsHandler := httpapi.NewImageProjectsHandlerWithImageVideo(options.DB, options.Settings, imageproject.NewClient(nil), imageproject.NewHTTPChatClient(nil), imageVideoService, options.ImageVideoStarter)
 			mux.Handle("/api/image-projects", imageProjectsHandler)
 			mux.Handle("/api/image-projects/", imageProjectsHandler)
+			imageStudioHandler := httpapi.NewImageStudioHandler(options.DB, options.Settings)
+			mux.Handle("/api/image-studio", imageStudioHandler)
+			mux.Handle("/api/image-studio/", imageStudioHandler)
+			closers = append(closers, imageStudioHandler.Close)
 			mux.Handle("/api/image-videos", imageProjectsHandler)
 			mux.Handle("/api/image-videos/", imageProjectsHandler)
 			// The image-projects handler already serves the job routes; mounting

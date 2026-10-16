@@ -15,6 +15,76 @@ import (
 	"video-production-console/internal/domain"
 )
 
+func TestImageStudioMigrationsUpgradeSettingsAndPreserveCustomModel(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		model              string
+		wantModel          string
+		existingUseTextKey string
+		wantUseTextKey     string
+	}{
+		{name: "legacy model", model: "gpt-image-2", wantModel: "grok-imagine-image-2.0", wantUseTextKey: "true"},
+		{name: "empty model", model: "", wantModel: "grok-imagine-image-2.0", wantUseTextKey: "true"},
+		{name: "custom settings", model: "grok-imagine-image", wantModel: "grok-imagine-image", existingUseTextKey: "false", wantUseTextKey: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "image-studio-upgrade.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+				t.Fatal(err)
+			}
+			for i, migration := range migrations[:46] {
+				if _, err := db.Exec(migration); err != nil {
+					t.Fatalf("apply predecessor migration %d: %v", i+1, err)
+				}
+				if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.Exec(`INSERT OR REPLACE INTO settings(key,value) VALUES('image_model',?),('custom_setting','keep-me')`, tc.model); err != nil {
+				t.Fatal(err)
+			}
+			if tc.existingUseTextKey != "" {
+				if _, err := db.Exec(`INSERT OR REPLACE INTO settings(key,value) VALUES('image_use_text_key',?)`, tc.existingUseTextKey); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			db, err = Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if got := scalar(t, db, `SELECT value FROM settings WHERE key='image_model'`); got != tc.wantModel {
+				t.Fatalf("image_model=%q, want %q", got, tc.wantModel)
+			}
+			if got := scalar(t, db, `SELECT value FROM settings WHERE key='image_use_text_key'`); got != tc.wantUseTextKey {
+				t.Fatalf("image_use_text_key=%q, want %q", got, tc.wantUseTextKey)
+			}
+			if got := scalar(t, db, `SELECT value FROM settings WHERE key='custom_setting'`); got != "keep-me" {
+				t.Fatalf("custom setting=%q", got)
+			}
+			if got, want := scalar(t, db, `SELECT MAX(version) FROM schema_migrations`), fmt.Sprint(len(migrations)); got != want {
+				t.Fatalf("migration version=%q, want %s", got, want)
+			}
+			if got := scalar(t, db, `SELECT COUNT(*) FROM schema_migrations WHERE version IN (47,48)`); got != "2" {
+				t.Fatalf("image studio migration count=%s, want 2", got)
+			}
+			for _, table := range []string{"image_generations", "image_generation_outputs"} {
+				if got := scalar(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table); got != "1" {
+					t.Fatalf("missing table %s", table)
+				}
+			}
+		})
+	}
+}
+
 func TestTimingMigrationCreatesPhaseSchemaAndStateVocabulary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "timings.db")
 	db, err := Open(path)

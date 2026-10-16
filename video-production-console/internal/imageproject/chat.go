@@ -64,6 +64,24 @@ func (c ConfiguredChatClient) Complete(ctx context.Context, input ChatRequest) (
 func CompleteChat(ctx context.Context, client *http.Client, baseURL, apiKey string, input ChatRequest) (string, error) {
 	_ = ctx
 	client = chatHTTPClient(client)
+	workCtx, cancel := context.WithTimeout(context.Background(), DefaultChatTimeout)
+	defer cancel()
+	return completeChat(workCtx, client, baseURL, apiKey, input)
+}
+
+// CompleteChatWithContext performs the same OpenAI-compatible chat request as
+// CompleteChat while preserving the caller's cancellation and deadline.
+func CompleteChatWithContext(ctx context.Context, client *http.Client, baseURL, apiKey string, input ChatRequest) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if client == nil {
+		client = chatHTTPClient(nil)
+	}
+	return completeChat(ctx, client, baseURL, apiKey, input)
+}
+
+func completeChat(workCtx context.Context, client *http.Client, baseURL, apiKey string, input ChatRequest) (string, error) {
 	endpoint, err := chatCompletionsURL(baseURL)
 	if err != nil {
 		return "", err
@@ -101,10 +119,6 @@ func CompleteChat(ctx context.Context, client *http.Client, baseURL, apiKey stri
 	if err != nil {
 		return "", err
 	}
-	// Detach from the browser request so a 30s reverse-proxy in front of the
-	// console cannot cancel the CPA call. Only our own budget may stop it.
-	workCtx, cancel := context.WithTimeout(context.Background(), DefaultChatTimeout)
-	defer cancel()
 	request, err := http.NewRequestWithContext(workCtx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return "", err
@@ -115,9 +129,7 @@ func CompleteChat(ctx context.Context, client *http.Client, baseURL, apiKey stri
 	request.Header.Set("User-Agent", outboundUserAgent)
 	started := time.Now()
 	slog.Default().Info("text model request start",
-		"endpoint", endpoint,
 		"model", input.Model,
-		"timeout", DefaultChatTimeout.String(),
 		"client_timeout", client.Timeout.String(),
 		"bytes", len(encoded),
 	)
@@ -127,18 +139,17 @@ func CompleteChat(ctx context.Context, client *http.Client, baseURL, apiKey stri
 		slog.Default().Warn("text model request failed",
 			"elapsed", elapsed.String(),
 			"work_ctx_err", fmt.Sprint(workCtx.Err()),
-			"error", err.Error(),
 		)
 		if workCtx.Err() != nil {
-			return "", fmt.Errorf("text model request canceled after %s: %w", elapsed.Round(time.Millisecond), workCtx.Err())
+			return "", fmt.Errorf("text model request canceled: %w", workCtx.Err())
 		}
-		return "", fmt.Errorf("text model request failed after %s: %v", elapsed.Round(time.Millisecond), err)
+		return "", chatRequestError{cause: err}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxPlannerBodySize+1))
 	if err != nil {
-		slog.Default().Warn("text model body read failed", "elapsed", elapsed.String(), "status", response.StatusCode, "error", err.Error())
-		return "", err
+		slog.Default().Warn("text model body read failed", "elapsed", elapsed.String(), "status", response.StatusCode)
+		return "", chatBodyReadError{cause: err}
 	}
 	if len(body) > maxPlannerBodySize {
 		return "", errors.New("text model response is too large")
@@ -147,19 +158,32 @@ func CompleteChat(ctx context.Context, client *http.Client, baseURL, apiKey stri
 		slog.Default().Warn("text model returned error status",
 			"elapsed", elapsed.String(),
 			"status", response.StatusCode,
-			"body", previewText(body),
 			"work_ctx_err", fmt.Sprint(workCtx.Err()),
 		)
-		return "", fmt.Errorf("text model returned HTTP %d after %s: %s", response.StatusCode, elapsed.Round(time.Millisecond), previewText(body))
+		return "", &HTTPStatusError{StatusCode: response.StatusCode, Operation: "text model"}
 	}
 	content, err := extractChatContent(body)
 	if err != nil {
-		slog.Default().Warn("text model response could not be read", "elapsed", elapsed.String(), "body", previewText(body), "error", err)
+		slog.Default().Warn("text model response could not be read", "elapsed", elapsed.String(), "error", err)
 		return "", err
 	}
 	slog.Default().Info("text model request ok", "elapsed", elapsed.String(), "content_bytes", len(content))
 	return content, nil
 }
+
+type chatRequestError struct {
+	cause error
+}
+
+func (e chatRequestError) Error() string { return "text model request failed" }
+func (e chatRequestError) Unwrap() error { return e.cause }
+
+type chatBodyReadError struct {
+	cause error
+}
+
+func (e chatBodyReadError) Error() string { return "text model response could not be read" }
+func (e chatBodyReadError) Unwrap() error { return e.cause }
 
 func extractChatContent(body []byte) (string, error) {
 	var result struct {
@@ -177,10 +201,10 @@ func extractChatContent(body []byte) (string, error) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("text model response is invalid: %s", previewText(body))
+		return "", errors.New("text model response is invalid")
 	}
 	if msg := strings.TrimSpace(result.Error.Message); msg != "" && len(result.Choices) == 0 && strings.TrimSpace(result.OutputText) == "" {
-		return "", fmt.Errorf("text model error: %s", msg)
+		return "", errors.New("text model returned an error")
 	}
 	candidates := make([]string, 0, 4)
 	if text := strings.TrimSpace(result.OutputText); text != "" {
@@ -205,7 +229,7 @@ func extractChatContent(body []byte) (string, error) {
 	if len(candidates) > 0 {
 		return candidates[0], nil
 	}
-	return "", fmt.Errorf("text model response is empty: %s", previewText(body))
+	return "", errors.New("text model response is empty")
 }
 
 func flattenChatText(raw json.RawMessage) string {

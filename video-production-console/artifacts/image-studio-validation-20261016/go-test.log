@@ -1,0 +1,67 @@
+ok  	video-production-console/cmd/catalog-builder	(cached)
+ok  	video-production-console/cmd/console	(cached)
+?   	video-production-console/cmd/editor-acceptance	[no test files]
+ok  	video-production-console/cmd/maintenance	(cached)
+?   	video-production-console/cmd/mintsession	[no test files]
+?   	video-production-console/cmd/remix-policy	[no test files]
+ok  	video-production-console/cmd/repair-startup	(cached)
+ok  	video-production-console/cmd/spoken-qc	(cached)
+ok  	video-production-console/internal/agentruntime	(cached)
+ok  	video-production-console/internal/agentruntime/montageplan	(cached)
+ok  	video-production-console/internal/agentruntime/montagescript	(cached)
+ok  	video-production-console/internal/agentruntime/openaicompat	(cached)
+ok  	video-production-console/internal/agentruntime/piruntime	(cached)
+ok  	video-production-console/internal/aigc	(cached)
+ok  	video-production-console/internal/app	10.090s
+ok  	video-production-console/internal/assets	(cached)
+ok  	video-production-console/internal/auth	(cached)
+ok  	video-production-console/internal/baokuan	(cached)
+ok  	video-production-console/internal/bgmlibrary	(cached)
+?   	video-production-console/internal/buildinfo	[no test files]
+ok  	video-production-console/internal/catalogbuilder	(cached)
+ok  	video-production-console/internal/codex	(cached)
+ok  	video-production-console/internal/codexapp	(cached)
+ok  	video-production-console/internal/commentinsight	(cached)
+ok  	video-production-console/internal/config	(cached)
+ok  	video-production-console/internal/conversation	(cached)
+ok  	video-production-console/internal/cover	(cached)
+ok  	video-production-console/internal/domain	(cached)
+?   	video-production-console/internal/grokvideo	[no test files]
+ok  	video-production-console/internal/httpapi	109.853s
+ok  	video-production-console/internal/imageproject	0.869s
+ok  	video-production-console/internal/imagestudio	4.922s
+ok  	video-production-console/internal/imagevideo	(cached)
+?   	video-production-console/internal/imagevideoruntime	[no test files]
+ok  	video-production-console/internal/jianyingdraft	(cached)
+?   	video-production-console/internal/localpath	[no test files]
+ok  	video-production-console/internal/logging	(cached)
+ok  	video-production-console/internal/mcpserver	(cached)
+ok  	video-production-console/internal/mediacatalog	(cached)
+?   	video-production-console/internal/medialibrary	[no test files]
+ok  	video-production-console/internal/monitor	(cached)
+ok  	video-production-console/internal/monitorai	(cached)
+ok  	video-production-console/internal/montage	(cached)
+ok  	video-production-console/internal/narration	(cached)
+?   	video-production-console/internal/obsidian	[no test files]
+ok  	video-production-console/internal/platformapi	(cached)
+ok  	video-production-console/internal/progress	(cached)
+ok  	video-production-console/internal/publishing	(cached)
+ok  	video-production-console/internal/realtime	(cached)
+ok  	video-production-console/internal/refanalysis	(cached)
+ok  	video-production-console/internal/references	(cached)
+ok  	video-production-console/internal/remixlab	(cached)
+ok  	video-production-console/internal/remixproducer	(cached)
+ok  	video-production-console/internal/security	(cached)
+ok  	video-production-console/internal/settings	(cached)
+ok  	video-production-console/internal/setup	(cached)
+ok  	video-production-console/internal/skillregistry	(cached)
+ok  	video-production-console/internal/spokenlines	(cached)
+ok  	video-production-console/internal/store	(cached)
+?   	video-production-console/internal/taskcompletion	[no test files]
+ok  	video-production-console/internal/taskmodel	(cached)
+?   	video-production-console/internal/testutil/citylib	[no test files]
+ok  	video-production-console/internal/timing	(cached)
+ok  	video-production-console/internal/webui	(cached)
+ok  	video-production-console/internal/workflow	(cached)
+ok  	video-production-console/schemas	(cached)
+exit_code=0

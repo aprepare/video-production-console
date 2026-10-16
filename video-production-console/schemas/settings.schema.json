@@ -102,8 +102,9 @@
         "image_model": {
           "type": "string",
           "maxLength": 128,
-          "default": "gpt-image-2"
+          "default": "grok-imagine-image-2.0"
         },
+        "image_use_text_key": { "type": "boolean", "default": true },
         "image_text_base_url": {
           "type": "string",
           "maxLength": 2048,
@@ -269,6 +270,7 @@
             "model_options",
             "image_base_url",
             "image_model",
+            "image_use_text_key",
             "image_text_base_url",
             "image_text_model",
             "image_text_reasoning_effort",

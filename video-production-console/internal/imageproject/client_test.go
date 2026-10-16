@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -418,13 +419,17 @@ func TestGenerateBatchRetriesTransientHTTPStatusOncePerItem(t *testing.T) {
 }
 
 func TestGenerateBatchDoesNotRetryPermanentHTTPStatus(t *testing.T) {
-	g := &retryGenerator{errs: []error{&HTTPStatusError{StatusCode: 400, Operation: "image API"}}}
-	results := GenerateBatch(context.Background(), g, []GenerateRequest{{}}, 1, 4)
-	if got := g.calls.Load(); got != 1 {
-		t.Fatalf("calls=%d want 1", got)
-	}
-	if results[0].Error == nil || results[0].Attempts != 1 {
-		t.Fatal("error=nil")
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			g := &retryGenerator{errs: []error{&HTTPStatusError{StatusCode: status, Operation: "image API"}}}
+			results := GenerateBatch(context.Background(), g, []GenerateRequest{{}}, 1, 4)
+			if got := g.calls.Load(); got != 1 {
+				t.Fatalf("calls=%d want 1", got)
+			}
+			if results[0].Error == nil || results[0].Attempts != 1 {
+				t.Fatal("error=nil")
+			}
+		})
 	}
 }
 
@@ -450,5 +455,290 @@ func TestGenerateBatchDoesNotRetryCanceledContext(t *testing.T) {
 	}
 	if !errors.Is(results[0].Error, context.Canceled) {
 		t.Fatalf("error=%v", results[0].Error)
+	}
+}
+
+func TestClientGenerateManyRequestsAndReturnsThreeImages(t *testing.T) {
+	payloads := []string{
+		base64.StdEncoding.EncodeToString(tinyPNG(t, 1, 2)),
+		base64.StdEncoding.EncodeToString(tinyPNG(t, 2, 3)),
+		base64.StdEncoding.EncodeToString(tinyPNG(t, 3, 4)),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["n"] != float64(3) {
+			t.Fatalf("n=%v, want 3", request["n"])
+		}
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+payloads[0]+`"},{"b64_json":"`+payloads[1]+`"},{"b64_json":"`+payloads[2]+`"}]}`)
+	}))
+	defer server.Close()
+
+	results, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt", Count: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 || results[0].Width != 1 || results[1].Width != 2 || results[2].Width != 3 {
+		t.Fatalf("results=%+v", results)
+	}
+}
+
+func TestClientGenerateManyReturnsFewerImagesThanRequested(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(tinyPNG(t, 2, 2))
+	for _, count := range []int{2, 0} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				data := make([]map[string]string, count)
+				for i := range data {
+					data[i] = map[string]string{"b64_json": payload}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			}))
+			defer server.Close()
+			results, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+				BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt", Count: 4,
+			})
+			if err != nil || len(results) != count {
+				t.Fatalf("len=%d want=%d err=%v", len(results), count, err)
+			}
+		})
+	}
+}
+
+func TestClientGenerateManySupportsSSEBatchResult(t *testing.T) {
+	first := base64.StdEncoding.EncodeToString(tinyPNG(t, 2, 3))
+	second := base64.StdEncoding.EncodeToString(tinyPNG(t, 4, 5))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"object":"image.generation.result","data":[{"b64_json":"`+first+`"},{"b64_json":"`+second+`"}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	results, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt", Count: 2, Stream: true,
+	})
+	if err != nil || len(results) != 2 || results[0].Width != 2 || results[1].Width != 4 {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+}
+
+func TestClientGenerateManySupportsBase64AndURLItems(t *testing.T) {
+	b64Image := tinyPNG(t, 2, 4)
+	urlImage := tinyPNG(t, 5, 7)
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodGet {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(urlImage))}, nil
+		}
+		body := `{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(b64Image) + `"},{"url":"https://93.184.216.34/two.png"}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	})})
+
+	results, err := client.GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: "https://api.example.com/v1", APIKey: "key", Model: "model", Prompt: "prompt", Count: 2,
+	})
+	if err != nil || len(results) != 2 || results[0].Width != 2 || results[1].Width != 5 {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+}
+
+func TestClientGenerateManyPreservesCompletedImagesWhenLaterImageFails(t *testing.T) {
+	valid := base64.StdEncoding.EncodeToString(tinyPNG(t, 2, 4))
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "decode", body: `{"data":[{"b64_json":"` + valid + `"},{"b64_json":"not-base64"}]}`},
+		{name: "download", body: `{"data":[{"b64_json":"` + valid + `"},{"url":"https://93.184.216.34/bad.png"}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodGet {
+					return &http.Response{StatusCode: http.StatusBadGateway, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("download-secret"))}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}, nil
+			})})
+			results, err := client.GenerateMany(t.Context(), GenerateRequest{
+				BaseURL: "https://api.example.com/v1", APIKey: "key", Model: "model", Prompt: "prompt", Count: 2,
+			})
+			if err == nil || len(results) != 1 || results[0].Width != 2 || results[0].Height != 4 {
+				t.Fatalf("results=%+v err=%v", results, err)
+			}
+		})
+	}
+}
+
+func TestClientGenerateManyHidesResponseReadErrorAndPreservesCause(t *testing.T) {
+	secretErr := errors.New("response reader leaked api-key-secret")
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: imageErrorReadCloser{err: secretErr}}, nil
+	})})
+	_, err := client.GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: "https://api.example.com/v1", APIKey: "api-key-secret", Model: "model", Prompt: "prompt",
+	})
+	if err == nil || strings.Contains(err.Error(), "api-key-secret") || !errors.Is(err, secretErr) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestClientGenerateManyHidesDownloadReadErrorAndPreservesCause(t *testing.T) {
+	secretErr := errors.New("download reader leaked api-key-secret")
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodGet {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: imageErrorReadCloser{err: secretErr}}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[{"url":"https://93.184.216.34/image.png"}]}`))}, nil
+	})})
+	_, err := client.GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: "https://api.example.com/v1", APIKey: "api-key-secret", Model: "model", Prompt: "prompt",
+	})
+	if err == nil || strings.Contains(err.Error(), "api-key-secret") || !errors.Is(err, secretErr) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type imageErrorReadCloser struct{ err error }
+
+func (r imageErrorReadCloser) Read([]byte) (int, error) { return 0, r.err }
+func (imageErrorReadCloser) Close() error               { return nil }
+
+func TestClientGenerateKeepsSingleImageCompatibility(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(tinyPNG(t, 3, 3))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if request["n"] != float64(1) {
+			t.Fatalf("n=%v, want 1", request["n"])
+		}
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+payload+`"}]}`)
+	}))
+	defer server.Close()
+
+	result, err := NewClient(server.Client()).Generate(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt",
+	})
+	if err != nil || result.Width != 3 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestClientGenerateManyCapsCountAtFour(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(tinyPNG(t, 1, 1))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if request["n"] != float64(4) {
+			t.Fatalf("n=%v, want 4", request["n"])
+		}
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+payload+`"}]}`)
+	}))
+	defer server.Close()
+	_, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt", Count: 99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientStatusErrorClassifiesSafetyWithoutLeakingBody(t *testing.T) {
+	const secret = "upstream-secret-body"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"safety moderation `+secret+`"}}`)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt",
+	})
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || !statusErr.Safety || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err=%v status=%+v", err, statusErr)
+	}
+	if got := ImageErrorMessage(err, "model"); got != "提示词被模型的内容安全拦截，换个说法试试" {
+		t.Fatalf("message=%q", got)
+	}
+}
+
+func TestClientSSEErrorClassifiesSafetyWithoutLeakingBody(t *testing.T) {
+	const secret = "private-moderation-reason"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"error":{"message":"moderation `+secret+`"}}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.Client()).GenerateMany(t.Context(), GenerateRequest{
+		BaseURL: server.URL, APIKey: "key", Model: "model", Prompt: "prompt", Stream: true,
+	})
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || !statusErr.Safety || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err=%v status=%+v", err, statusErr)
+	}
+}
+
+func TestImageErrorMessageMapsStatusesAndHidesUnknownDetails(t *testing.T) {
+	tests := []struct {
+		err   error
+		model string
+		want  string
+	}{
+		{&HTTPStatusError{StatusCode: 401}, "m", "生图 Key 无效或没有权限，请到「设置 → 图片」检查 Key"},
+		{&HTTPStatusError{StatusCode: 403}, "m", "生图 Key 无效或没有权限，请到「设置 → 图片」检查 Key"},
+		{&HTTPStatusError{StatusCode: 400}, "grok", "图片模型「grok」网关不支持，换一个模型试试"},
+		{&HTTPStatusError{StatusCode: 429}, "m", "生图服务繁忙（限流），稍后再试"},
+		{&HTTPStatusError{StatusCode: 503}, "m", "生图服务暂时不可用（上游返回 503），可以重试"},
+		{context.DeadlineExceeded, "m", "生图服务暂时不可用（请求超时），可以重试"},
+		{errors.New("token=top-secret"), "m", "生图失败，请稍后重试"},
+	}
+	for _, test := range tests {
+		if got := ImageErrorMessage(test.err, test.model); got != test.want || strings.Contains(got, "top-secret") {
+			t.Errorf("ImageErrorMessage(%v)=%q, want %q", test.err, got, test.want)
+		}
+	}
+}
+
+func TestGenerateWithRetryStopsDuringBackoffWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	generator := &cancelingRetryGenerator{cancel: cancel}
+	started := time.Now()
+	_, err := GenerateWithRetry(ctx, generator, GenerateRequest{}, 4)
+	if !errors.Is(err, context.Canceled) || generator.calls.Load() != 1 || time.Since(started) > time.Second {
+		t.Fatalf("calls=%d elapsed=%s err=%v", generator.calls.Load(), time.Since(started), err)
+	}
+}
+
+func TestGenerateWithRetryRetriesAnyServerError(t *testing.T) {
+	generator := &retryGenerator{errs: []error{&HTTPStatusError{StatusCode: 500, Operation: "image API"}}}
+	result, err := GenerateWithRetry(t.Context(), generator, GenerateRequest{}, 2)
+	if err != nil || result.Attempts != 2 || generator.calls.Load() != 2 {
+		t.Fatalf("result=%+v calls=%d err=%v", result, generator.calls.Load(), err)
+	}
+}
+
+type cancelingRetryGenerator struct {
+	calls  atomic.Int32
+	cancel context.CancelFunc
+}
+
+func (g *cancelingRetryGenerator) Generate(context.Context, GenerateRequest) (GenerateResult, error) {
+	g.calls.Add(1)
+	time.AfterFunc(5*time.Millisecond, g.cancel)
+	return GenerateResult{}, &HTTPStatusError{StatusCode: 503, Operation: "image API"}
+}
+
+func TestStyleInstructionReturnsOnlyKnownShortInstruction(t *testing.T) {
+	want := styleInstructions["red_ink"]
+	got, ok := StyleInstruction("red_ink")
+	if !ok || got != want || strings.Contains(got, imageTextLayoutRules) || strings.Contains(got, "45—65") {
+		t.Fatalf("instruction=%q ok=%v", got, ok)
+	}
+	if got, ok := StyleInstruction("custom"); ok || got != "" {
+		t.Fatalf("custom instruction=%q ok=%v", got, ok)
 	}
 }

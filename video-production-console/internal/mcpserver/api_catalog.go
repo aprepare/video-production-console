@@ -171,6 +171,16 @@ POST /api/jianying-drafts/detect/apply | 应用剪映草稿目录 {draft_root}
 GET /api/bgm-library | BGM 库
 POST /api/bgm-library/rescan | 重新扫描 BGM
 # 图文、图生视频、AIGC
+GET /api/image-studio/models | 可用图片模型
+POST /api/image-studio/enhance | 同步扩写生图提示词 | $
+POST /api/image-studio/generations | 创建生图任务 | $
+GET /api/image-studio/generations | 出图历史 ?limit&before&favorite&q
+GET /api/image-studio/generations/{id} | 出图任务详情
+PATCH /api/image-studio/generations/{id} | 收藏或取消收藏 {favorite}
+DELETE /api/image-studio/generations/{id} | 删除生图记录及图片 | !
+POST /api/image-studio/generations/{id}/retry | 重试失败图片 | $
+GET /api/image-studio/outputs/{id}/image | 获取或下载单张图片 ?download=1
+GET /api/image-studio/generations/{id}/download | 打包下载本次图片
 GET /api/image-projects | 图文项目列表
 POST /api/image-projects | 新建图文项目 {title, script, ratio, style, concurrency, …} | $
 POST /api/image-projects/quick-generate | 一键图文（规划+提示词+出图） | $

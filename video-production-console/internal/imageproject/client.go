@@ -36,6 +36,7 @@ type GenerateRequest struct {
 	Model   string
 	Prompt  string
 	Ratio   string
+	Count   int
 	Stream  bool
 }
 
@@ -62,9 +63,15 @@ type imageAPIRequestError struct {
 	text  string
 }
 
+type imageAPIReadError struct {
+	cause     error
+	operation string
+}
+
 type HTTPStatusError struct {
 	StatusCode int
 	Operation  string
+	Safety     bool
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -73,6 +80,8 @@ func (e *HTTPStatusError) Error() string {
 
 func (e imageAPIRequestError) Error() string { return e.text }
 func (e imageAPIRequestError) Unwrap() error { return e.cause }
+func (e imageAPIReadError) Error() string    { return e.operation + " response could not be read" }
+func (e imageAPIReadError) Unwrap() error    { return e.cause }
 
 func NewClient(client *http.Client) *Client {
 	if client == nil {
@@ -87,24 +96,43 @@ func NewClient(client *http.Client) *Client {
 }
 
 func (c *Client) Generate(ctx context.Context, input GenerateRequest) (GenerateResult, error) {
-	endpoint, err := generationURL(input.BaseURL)
+	input.Count = 1
+	results, err := c.GenerateMany(ctx, input)
 	if err != nil {
 		return GenerateResult{}, err
 	}
-	if strings.TrimSpace(input.APIKey) == "" || strings.TrimSpace(input.Model) == "" || strings.TrimSpace(input.Prompt) == "" {
-		return GenerateResult{}, errors.New("image generation configuration is incomplete")
+	if len(results) == 0 {
+		return GenerateResult{}, errors.New("image API returned no image")
 	}
-	payload := map[string]any{"model": input.Model, "prompt": input.Prompt, "n": 1, "size": ratioSize(input.Ratio), "response_format": "b64_json"}
+	return results[0], nil
+}
+
+func (c *Client) GenerateMany(ctx context.Context, input GenerateRequest) ([]GenerateResult, error) {
+	endpoint, err := generationURL(input.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.APIKey) == "" || strings.TrimSpace(input.Model) == "" || strings.TrimSpace(input.Prompt) == "" {
+		return nil, errors.New("image generation configuration is incomplete")
+	}
+	count := input.Count
+	if count < 1 {
+		count = 1
+	}
+	if count > 4 {
+		count = 4
+	}
+	payload := map[string]any{"model": input.Model, "prompt": input.Prompt, "n": count, "size": ratioSize(input.Ratio), "response_format": "b64_json"}
 	if input.Stream {
 		payload["stream"] = true
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return GenerateResult{}, err
+		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
-		return GenerateResult{}, err
+		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+input.APIKey)
 	request.Header.Set("Content-Type", "application/json")
@@ -117,30 +145,30 @@ func (c *Client) Generate(ctx context.Context, input GenerateRequest) (GenerateR
 	if err != nil {
 		safe := strings.ReplaceAll(err.Error(), input.APIKey, "[redacted]")
 		safe = strings.ReplaceAll(safe, input.Prompt, "[redacted]")
-		return GenerateResult{}, imageAPIRequestError{cause: err, text: "image API request failed: " + safe}
+		return nil, imageAPIRequestError{cause: err, text: "image API request failed: " + safe}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxImageResponseSize+1))
 	if err != nil {
-		return GenerateResult{}, err
+		return nil, imageAPIReadError{cause: err, operation: "image API"}
 	}
 	if len(body) > maxImageResponseSize {
-		return GenerateResult{}, errors.New("image response is too large")
+		return nil, errors.New("image response is too large")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return GenerateResult{}, &HTTPStatusError{StatusCode: response.StatusCode, Operation: "image API"}
+		return nil, &HTTPStatusError{StatusCode: response.StatusCode, Operation: "image API", Safety: isSafetyResponse(body)}
 	}
 	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		body, err = parseSSE(body)
 		if err != nil {
-			return GenerateResult{}, err
+			return nil, err
 		}
 	}
 	var streamErr struct {
 		Error json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(body, &streamErr) == nil && len(streamErr.Error) > 0 && string(streamErr.Error) != "null" {
-		return GenerateResult{}, errors.New("image API returned an error")
+		return nil, &HTTPStatusError{Operation: "image API", Safety: isSafetyResponse(streamErr.Error)}
 	}
 	var result struct {
 		Data []struct {
@@ -148,29 +176,40 @@ func (c *Client) Generate(ctx context.Context, input GenerateRequest) (GenerateR
 			URL    string `json:"url"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil || len(result.Data) == 0 {
-		return GenerateResult{}, errors.New("image API response is invalid")
+	if err := json.Unmarshal(body, &result); err != nil || result.Data == nil {
+		return nil, errors.New("image API response is invalid")
 	}
-	data := result.Data[0]
-	var imageBytes []byte
-	if data.Base64 != "" {
-		imageBytes, err = base64.StdEncoding.DecodeString(data.Base64)
-		if err != nil {
-			return GenerateResult{}, errors.New("image API returned invalid base64")
+	if len(result.Data) > count {
+		result.Data = result.Data[:count]
+	}
+	results := make([]GenerateResult, 0, len(result.Data))
+	for _, data := range result.Data {
+		var imageBytes []byte
+		if data.Base64 != "" {
+			imageBytes, err = base64.StdEncoding.DecodeString(data.Base64)
+			if err != nil {
+				return results, errors.New("image API returned invalid base64")
+			}
+		} else if data.URL != "" {
+			imageBytes, err = c.download(ctx, data.URL)
+			if err != nil {
+				return results, err
+			}
+		} else {
+			return results, errors.New("image API returned no image")
 		}
-	} else if data.URL != "" {
-		imageBytes, err = c.download(ctx, data.URL)
-		if err != nil {
-			return GenerateResult{}, err
+		configuration, format, err := image.DecodeConfig(bytes.NewReader(imageBytes))
+		if err != nil || configuration.Width < 1 || configuration.Height < 1 {
+			return results, errors.New("generated image could not be decoded")
 		}
-	} else {
-		return GenerateResult{}, errors.New("image API returned no image")
+		results = append(results, GenerateResult{Bytes: imageBytes, MIMEType: formatMIME(format), Width: configuration.Width, Height: configuration.Height})
 	}
-	configuration, format, err := image.DecodeConfig(bytes.NewReader(imageBytes))
-	if err != nil || configuration.Width < 1 || configuration.Height < 1 {
-		return GenerateResult{}, errors.New("generated image could not be decoded")
-	}
-	return GenerateResult{Bytes: imageBytes, MIMEType: formatMIME(format), Width: configuration.Width, Height: configuration.Height}, nil
+	return results, nil
+}
+
+func isSafetyResponse(body []byte) bool {
+	lower := bytes.ToLower(body)
+	return bytes.Contains(lower, []byte("moderation")) || bytes.Contains(lower, []byte("safety"))
 }
 
 func parseSSE(body []byte) ([]byte, error) {
@@ -197,7 +236,7 @@ func parseSSE(body []byte) ([]byte, error) {
 					return nil, errors.New("image API SSE event is invalid")
 				}
 				if len(ev.Error) > 0 && string(ev.Error) != "null" {
-					return nil, errors.New("image API returned an error")
+					return nil, &HTTPStatusError{Operation: "image API", Safety: isSafetyResponse(ev.Error)}
 				}
 				if ev.Object == "image.generation.result" {
 					return v, nil
@@ -248,7 +287,7 @@ func (c *Client) download(ctx context.Context, raw string) ([]byte, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxImageResponseSize+1))
 	if err != nil {
-		return nil, err
+		return nil, imageAPIReadError{cause: err, operation: "image download"}
 	}
 	if len(body) > maxImageResponseSize {
 		return nil, errors.New("downloaded image is too large")
@@ -386,7 +425,7 @@ func GenerateBatch(ctx context.Context, generator Generator, requests []Generate
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
-				result, err := generateWithRetry(ctx, generator, requests[index], totalAttempts)
+				result, err := GenerateWithRetry(ctx, generator, requests[index], totalAttempts)
 				result.Error = err
 				results[index] = result
 			}
@@ -400,7 +439,7 @@ func GenerateBatch(ctx context.Context, generator Generator, requests []Generate
 	return results
 }
 
-func generateWithRetry(ctx context.Context, generator Generator, request GenerateRequest, totalAttempts int) (GenerateResult, error) {
+func GenerateWithRetry(ctx context.Context, generator Generator, request GenerateRequest, totalAttempts int) (GenerateResult, error) {
 	if totalAttempts < 1 {
 		totalAttempts = 1
 	}
@@ -421,8 +460,56 @@ func generateWithRetry(ctx context.Context, generator Generator, request Generat
 		if attempt == totalAttempts-1 || !retryableGenerateError(ctx, err) {
 			return result, err
 		}
+		delay := 25 * time.Millisecond * time.Duration(1<<attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return result, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return result, err
+}
+
+func ImageErrorMessage(err error, model string) string {
+	if err == nil {
+		return ""
+	}
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		if statusErr.Safety {
+			return "提示词被模型的内容安全拦截，换个说法试试"
+		}
+		switch statusErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return "生图 Key 无效或没有权限，请到「设置 → 图片」检查 Key"
+		case http.StatusBadRequest:
+			return fmt.Sprintf("图片模型「%s」网关不支持，换一个模型试试", strings.TrimSpace(model))
+		case http.StatusTooManyRequests:
+			return "生图服务繁忙（限流），稍后再试"
+		}
+		if statusErr.StatusCode >= 500 {
+			return fmt.Sprintf("生图服务暂时不可用（上游返回 %d），可以重试", statusErr.StatusCode)
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "生图服务暂时不可用（请求超时），可以重试"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "生图已取消"
+	}
+	var requestErr imageAPIRequestError
+	var netErr net.Error
+	if errors.As(err, &requestErr) || errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed) {
+		return "生图服务暂时不可用（网络错误），可以重试"
+	}
+	return "生图失败，请稍后重试"
 }
 
 func retryableGenerateError(ctx context.Context, err error) bool {
@@ -431,8 +518,7 @@ func retryableGenerateError(ctx context.Context, err error) bool {
 	}
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		switch statusErr.StatusCode {
-		case 429, 502, 503, 504:
+		if statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode >= 500 {
 			return true
 		}
 		return false

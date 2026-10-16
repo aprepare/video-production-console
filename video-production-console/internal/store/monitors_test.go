@@ -37,8 +37,11 @@ func monitorTaskFixture(id string, created time.Time) MonitorTask {
 
 func TestMonitorMigrationsCreateVersionsAndTables(t *testing.T) {
 	db := openMonitorTestDB(t)
-	if got := scalar(t, db, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`); got != "46" {
-		t.Fatalf("latest migration=%s, want 46", got)
+	if got, want := scalar(t, db, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`), fmt.Sprint(len(migrations)); got != want {
+		t.Fatalf("latest migration=%s, want %s", got, want)
+	}
+	if got := scalar(t, db, `SELECT COUNT(*) FROM schema_migrations WHERE version IN (45,46)`); got != "2" {
+		t.Fatalf("monitor migration count=%s, want 2", got)
 	}
 	for _, table := range []string{"monitor_tasks", "monitor_runs", "monitor_items", "monitor_snapshots", "comment_insights"} {
 		if !tableExists(t, db, table) {

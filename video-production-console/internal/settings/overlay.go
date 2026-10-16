@@ -31,6 +31,7 @@ var publicFieldLabels = map[string]string{
 	"model_options":                  "可选模型列表",
 	"image_base_url":                 "生图服务地址",
 	"image_model":                    "生图模型",
+	"image_use_text_key":             "生图共用图文文本 Key",
 	"image_text_base_url":            "图文文本模型地址",
 	"image_text_model":               "图文文本模型",
 	"image_text_reasoning_effort":    "图文文本思考强度",

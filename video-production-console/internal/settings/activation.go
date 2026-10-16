@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,7 +80,7 @@ var activationPublicKeys = map[string]struct{}{
 	"remix_base_url": {}, "remix_model": {}, "remix_reasoning_effort": {},
 	"remix_check_model": {}, "spoken_lines_model": {}, "model_options": {},
 	"grok_base_url": {}, "grok_model": {}, "copy_base_url": {},
-	"image_base_url": {}, "image_model": {}, "image_text_base_url": {},
+	"image_base_url": {}, "image_model": {}, "image_use_text_key": {}, "image_text_base_url": {},
 	"image_text_model": {}, "image_text_reasoning_effort": {},
 	"vision_base_url": {}, "vision_model": {}, "embedding_base_url": {},
 	"embedding_model": {}, "platform_api_base_url": {}, "tts_provider": {},
@@ -139,7 +140,7 @@ func (s *Service) ActivateCode(ctx context.Context, code string) (ActivationResu
 	sort.Strings(result.AppliedSecrets)
 	sort.Strings(result.Skipped)
 
-	rawPublic, err := json.Marshal(applicablePublic)
+	rawPublic, err := marshalActivationPublic(applicablePublic)
 	if err != nil {
 		return ActivationResult{}, invalidActivationError{message: "配置码设置内容无效"}
 	}
@@ -156,6 +157,26 @@ func (s *Service) ActivateCode(ctx context.Context, code string) (ActivationResu
 	}
 	result.RestartRequired = updated.RestartRequired
 	return result, nil
+}
+
+func marshalActivationPublic(values map[string]string) ([]byte, error) {
+	encoded := make(map[string]json.RawMessage, len(values))
+	for key, value := range values {
+		if key == "image_use_text_key" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return nil, err
+			}
+			encoded[key] = json.RawMessage(strconv.FormatBool(parsed))
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		encoded[key] = raw
+	}
+	return json.Marshal(encoded)
 }
 
 func (s *Service) ExportCode(ctx context.Context, input ExportCodeRequest) (ExportCodeResult, error) {

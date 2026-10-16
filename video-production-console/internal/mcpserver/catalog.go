@@ -30,8 +30,44 @@ func Catalog() []Tool {
 	tools = append(tools, remixTools()...)
 	tools = append(tools, productionTools()...)
 	tools = append(tools, projectTools()...)
+	tools = append(tools, imageStudioTools()...)
 	tools = append(tools, systemTools()...)
 	return tools
+}
+
+func imageStudioTools() []Tool {
+	return []Tool{
+		{
+			Name:        "generate_image",
+			Description: "创建单张出图任务，可生成 1–4 张图片。",
+			Method:      http.MethodPost,
+			Path:        "/api/image-studio/generations",
+			Confirm:     "会调用生图服务（花钱）",
+			Params: map[string]Param{
+				"prompt":       reqStr("用户原始提示词，1–4000 字"),
+				"final_prompt": str("已经扩写或编辑好的最终提示词；传入后跳过扩写"),
+				"enhance":      boolean("是否由文本模型扩写提示词"),
+				"style":        {Type: "string", Description: "风格键；空表示不套风格，custom 表示自定义"},
+				"custom_style": str("style=custom 时的自定义风格，最多 500 字"),
+				"model":        str("图片模型；空值使用系统默认模型"),
+				"ratio":        {Type: "string", Required: true, Description: "图片比例", Enum: []string{"3:4", "4:3", "9:16", "1:1"}},
+				"count":        {Type: "integer", Required: true, Description: "生成张数，1–4"},
+				"text_model":   str("扩写提示词使用的文本模型；空值使用系统默认模型"),
+			},
+		},
+		{
+			Name:        "list_image_generations",
+			Description: "查询单张出图历史。",
+			Method:      http.MethodGet,
+			Path:        "/api/image-studio/generations",
+			Params: map[string]Param{
+				"limit":    {Type: "integer", Description: "返回条数，默认 30", In: "query"},
+				"before":   query("只返回此创建时间之前的记录（RFC3339）"),
+				"favorite": {Type: "integer", Description: "收藏筛选：1 只看收藏，0 只看未收藏", In: "query"},
+				"q":        query("按原始提示词搜索"),
+			},
+		},
+	}
 }
 
 func accountTools() []Tool {

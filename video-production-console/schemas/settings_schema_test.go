@@ -88,7 +88,7 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 	definitions := schema["$defs"].(map[string]any)
 	public := definitions["publicSettings"].(map[string]any)
 	properties := public["properties"].(map[string]any)
-	imageKeys := []string{"image_base_url", "image_model", "image_text_base_url", "image_text_model", "image_text_reasoning_effort", "max_image_concurrency", "image_generation_attempts", "default_image_ratio", "default_image_style"}
+	imageKeys := []string{"image_base_url", "image_model", "image_use_text_key", "image_text_base_url", "image_text_model", "image_text_reasoning_effort", "max_image_concurrency", "image_generation_attempts", "default_image_ratio", "default_image_style"}
 	for _, key := range imageKeys {
 		if properties[key] == nil {
 			t.Fatalf("%s missing from public settings schema", key)
@@ -129,8 +129,12 @@ func TestSettingsSchemaDescribesImageGenerationSettings(t *testing.T) {
 		t.Fatalf("image_base_url schema=%v", baseURL)
 	}
 	model := properties["image_model"].(map[string]any)
-	if model["default"] != "gpt-image-2" || model["maxLength"] != float64(128) {
+	if model["default"] != "grok-imagine-image-2.0" || model["maxLength"] != float64(128) {
 		t.Fatalf("image_model schema=%v", model)
+	}
+	useTextKey := properties["image_use_text_key"].(map[string]any)
+	if useTextKey["type"] != "boolean" || useTextKey["default"] != true {
+		t.Fatalf("image_use_text_key schema=%v", useTextKey)
 	}
 	ratio := properties["default_image_ratio"].(map[string]any)
 	if ratio["default"] != "3:4" {
